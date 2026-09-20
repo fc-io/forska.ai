@@ -945,6 +945,124 @@ test('worker preempts the rebuild chunk batch with a full-budget wake once budge
   ).toHaveLength(1)
 })
 
+test('carrying the admitted-wake clock and rotation offset across a completedChunkLimit restart lets the restarted loop preempt at 30 s total', async () => {
+  const loopStartedAtMs = 1_000_000
+  const maxWakeMs = 1_500
+  let clockMs = loopStartedAtMs
+
+  const runBoundedLoop = async (loopOptions: {
+    abortAfterFirstCycle: boolean
+    componentRotationOffset?: number
+    lastAdmittedWakeAtMs?: number | null
+    maxCompletedRebuildChunksPerRun: number | null
+  }) => {
+    const harness = createWorkerHarness()
+    const controller = new AbortController()
+    const events: Array<{atMs: number; kind: 'chunk' | 'wake'; maxWakeMs: number | null; offset: number | null}> = []
+
+    harness.dependencies.nowMs = () => {
+      return clockMs
+    }
+    harness.dependencies.rebuildChunkService = {
+      ...harness.dependencies.rebuildChunkService,
+      runClaimedChunk: async ({chunk}) => {
+        events.push({atMs: clockMs, kind: 'chunk', maxWakeMs: null, offset: null})
+        harness.runChunkInputs.push(chunk)
+        clockMs += 8_000
+
+        return {status: 'completed' as const}
+      },
+    } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+    harness.dependencies.wakeProjectors = async (wakeInput) => {
+      events.push({
+        atMs: clockMs,
+        kind: 'wake',
+        maxWakeMs: wakeInput.maxWakeMs,
+        offset: wakeInput.componentRotationOffset ?? null,
+      })
+
+      return getFakeWakeResultForBudget(wakeInput.maxWakeMs)
+    }
+    harness.dependencies.sleep = async () => {
+      clockMs += 2_000
+
+      if (loopOptions.abortAfterFirstCycle) {
+        controller.abort()
+      }
+    }
+
+    const result = await runReviewServingProjectorWorker(
+      {
+        cleanupIntervalMs: 600_000,
+        componentRotationOffset: loopOptions.componentRotationOffset,
+        lastAdmittedWakeAtMs: loopOptions.lastAdmittedWakeAtMs,
+        lastCleanupAtMs: loopStartedAtMs,
+        maxCompletedRebuildChunksPerRun: loopOptions.maxCompletedRebuildChunksPerRun,
+        maxWakeMs,
+        signal: controller.signal,
+        workerId: 'worker-1',
+      },
+      harness.dependencies,
+    )
+
+    return {events, result}
+  }
+
+  const firstLoop = await runBoundedLoop({abortAfterFirstCycle: false, maxCompletedRebuildChunksPerRun: 3})
+
+  expect(firstLoop.result).toEqual({
+    componentRotationOffset: 3,
+    lastAdmittedWakeAtMs: loopStartedAtMs,
+    lastCleanupAtMs: loopStartedAtMs,
+    reason: 'completedChunkLimit',
+  })
+  expect(
+    firstLoop.events.filter((event) => {
+      return event.kind === 'wake'
+    }),
+  ).toEqual([
+    {atMs: loopStartedAtMs + 8_000, kind: 'wake', maxWakeMs: 0, offset: 0},
+    {atMs: loopStartedAtMs + 18_000, kind: 'wake', maxWakeMs: 0, offset: 1},
+    {atMs: loopStartedAtMs + 28_000, kind: 'wake', maxWakeMs: 0, offset: 2},
+  ])
+  expect(clockMs).toBe(loopStartedAtMs + 28_000)
+
+  clockMs += 2_000
+
+  const carriedLoop = await runBoundedLoop({
+    abortAfterFirstCycle: true,
+    componentRotationOffset: firstLoop.result.componentRotationOffset,
+    lastAdmittedWakeAtMs: firstLoop.result.lastAdmittedWakeAtMs,
+    maxCompletedRebuildChunksPerRun: null,
+  })
+
+  expect(carriedLoop.events).toEqual([
+    {atMs: loopStartedAtMs + 30_000, kind: 'wake', maxWakeMs, offset: 3},
+    {atMs: loopStartedAtMs + 30_000, kind: 'chunk', maxWakeMs: null, offset: null},
+  ])
+  expect(carriedLoop.result).toEqual({
+    componentRotationOffset: 4,
+    lastAdmittedWakeAtMs: loopStartedAtMs + 30_000,
+    lastCleanupAtMs: loopStartedAtMs,
+    reason: 'aborted',
+  })
+
+  clockMs = loopStartedAtMs + 30_000
+
+  const reseededLoop = await runBoundedLoop({abortAfterFirstCycle: true, maxCompletedRebuildChunksPerRun: null})
+
+  expect(reseededLoop.events).toEqual([
+    {atMs: loopStartedAtMs + 30_000, kind: 'chunk', maxWakeMs: null, offset: null},
+    {atMs: loopStartedAtMs + 38_000, kind: 'wake', maxWakeMs: 0, offset: 0},
+  ])
+  expect(reseededLoop.result).toEqual({
+    componentRotationOffset: 1,
+    lastAdmittedWakeAtMs: loopStartedAtMs + 30_000,
+    lastCleanupAtMs: loopStartedAtMs,
+    reason: 'aborted',
+  })
+})
+
 const runActivationDrainCycle = async (lastAdmittedWakeAtMs: number) => {
   const harness = createWorkerHarness()
   const events: string[] = []
@@ -6233,7 +6351,12 @@ test('worker loop reports its last cleanup timestamp so bounded restarts do not 
       harness.dependencies,
     )
 
-    return {cleanupRuns: harness.dirtyWorkRetentionCleanupInputs.length, loopStartedAtMs, result}
+    return {
+      cleanupRuns: harness.dirtyWorkRetentionCleanupInputs.length,
+      cycleCount: harness.wakeInputs.length,
+      loopStartedAtMs,
+      result,
+    }
   }
 
   try {
@@ -6242,7 +6365,12 @@ test('worker loop reports its last cleanup timestamp so bounded restarts do not 
     const firstLoop = await runBoundedLoop(firstLoopStartAtMs)
 
     expect(firstLoop.cleanupRuns).toBe(0)
-    expect(firstLoop.result).toEqual({lastCleanupAtMs: firstLoopStartAtMs, reason: 'aborted'})
+    expect(firstLoop.result).toEqual({
+      componentRotationOffset: firstLoop.cycleCount,
+      lastAdmittedWakeAtMs: firstLoopStartAtMs,
+      lastCleanupAtMs: firstLoopStartAtMs,
+      reason: 'aborted',
+    })
 
     clockMs += restartDelayMs
 
@@ -6250,7 +6378,12 @@ test('worker loop reports its last cleanup timestamp so bounded restarts do not 
     const reseededLoop = await runBoundedLoop(clockMs)
 
     expect(reseededLoop.cleanupRuns).toBe(0)
-    expect(reseededLoop.result).toEqual({lastCleanupAtMs: reseededLoop.loopStartedAtMs, reason: 'aborted'})
+    expect(reseededLoop.result).toEqual({
+      componentRotationOffset: reseededLoop.cycleCount,
+      lastAdmittedWakeAtMs: reseededLoop.loopStartedAtMs,
+      lastCleanupAtMs: reseededLoop.loopStartedAtMs,
+      reason: 'aborted',
+    })
 
     clockMs += restartDelayMs
 
@@ -6259,7 +6392,12 @@ test('worker loop reports its last cleanup timestamp so bounded restarts do not 
     const carriedLoop = await runBoundedLoop(firstLoop.result.lastCleanupAtMs)
 
     expect(carriedLoop.cleanupRuns).toBe(1)
-    expect(carriedLoop.result).toEqual({lastCleanupAtMs: carriedLoop.loopStartedAtMs, reason: 'aborted'})
+    expect(carriedLoop.result).toEqual({
+      componentRotationOffset: carriedLoop.cycleCount,
+      lastAdmittedWakeAtMs: carriedLoop.loopStartedAtMs,
+      lastCleanupAtMs: carriedLoop.loopStartedAtMs,
+      reason: 'aborted',
+    })
     expect(carriedLoop.result.lastCleanupAtMs).toBeGreaterThan(firstLoopStartAtMs)
   } finally {
     if (previousRetentionCleanupEnabled === undefined) {

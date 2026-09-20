@@ -405,13 +405,13 @@ test('review serving projector worker hard RSS restart cap adds bounded restart 
 
 test('review serving projector worker heartbeat only recycles DuckDB after native-heavy projector work', () => {
   expect(shouldRecycleDuckdbAfterReviewServingProjectorRun(undefined)).toBe(false)
-  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({lastCleanupAtMs: null, reason: 'aborted'})).toBe(false)
-  expect(
-    shouldRecycleDuckdbAfterReviewServingProjectorRun({lastCleanupAtMs: null, reason: 'completedChunkLimit'}),
-  ).toBe(true)
-  expect(
-    shouldRecycleDuckdbAfterReviewServingProjectorRun({lastCleanupAtMs: null, reason: 'nativeHeavyChunkCompleted'}),
-  ).toBe(true)
+  const runResult = {componentRotationOffset: 0, lastAdmittedWakeAtMs: null, lastCleanupAtMs: null}
+
+  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({...runResult, reason: 'aborted'})).toBe(false)
+  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({...runResult, reason: 'completedChunkLimit'})).toBe(true)
+  expect(shouldRecycleDuckdbAfterReviewServingProjectorRun({...runResult, reason: 'nativeHeavyChunkCompleted'})).toBe(
+    true,
+  )
 })
 
 test('review serving projector worker heartbeat keeps soft RSS pressure below the hard recycle cap', () => {
@@ -676,6 +676,131 @@ test('review serving projector worker heartbeat carries the last cleanup timesta
       return 1_000 + index
     }),
   )
+})
+
+test('review serving projector worker heartbeat carries the admitted-wake clock and rotation offset across a completedChunkLimit restart', () => {
+  const runScript = runBunEval(
+    `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async (options) => {
+              const runIndex = events.length
+              const loopStartedAtMs = Date.now()
+
+              if (runIndex === 0) {
+                events.push({
+                  componentRotationOffset: options.componentRotationOffset,
+                  lastAdmittedWakeAtMs: options.lastAdmittedWakeAtMs,
+                  runIndex,
+                  starvedAfterLoopStartMs: null,
+                  wakeStarvationMs: options.wakeStarvationMs,
+                })
+                await sleep(20)
+
+                return {
+                  componentRotationOffset: 3,
+                  lastAdmittedWakeAtMs: options.lastAdmittedWakeAtMs,
+                  lastCleanupAtMs: options.lastCleanupAtMs,
+                  reason: 'completedChunkLimit',
+                }
+              }
+
+              while (Date.now() - options.lastAdmittedWakeAtMs < options.wakeStarvationMs) {
+                await sleep(1)
+              }
+
+              events.push({
+                componentRotationOffset: options.componentRotationOffset,
+                lastAdmittedWakeAtMs: options.lastAdmittedWakeAtMs,
+                runIndex,
+                starvedAfterLoopStartMs: Date.now() - loopStartedAtMs,
+                wakeStarvationMs: options.wakeStarvationMs,
+              })
+
+              return new Promise((resolve) => {
+                options.signal.addEventListener('abort', () => {
+                  resolve({
+                    componentRotationOffset: options.componentRotationOffset + 1,
+                    lastAdmittedWakeAtMs: Date.now(),
+                    lastCleanupAtMs: options.lastCleanupAtMs,
+                    reason: 'aborted',
+                  })
+                }, {once: true})
+              })
+            },
+          }
+        })
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?starvation-carry=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({
+          maxCompletedRebuildChunksPerRun: 1,
+          pollIntervalMs: 1,
+          restartDelayMs: 1,
+          wakeStarvationMs: 30,
+        })
+
+        await sleep(90)
+        stop()
+        await sleep(5)
+
+        console.log(JSON.stringify({events}))
+      `,
+    {DUCKDB_MEMORY_LIMIT: ''},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat starvation carry-over test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: Array<{
+      componentRotationOffset: number
+      lastAdmittedWakeAtMs: number
+      runIndex: number
+      starvedAfterLoopStartMs: number | null
+      wakeStarvationMs: number
+    }>
+  }
+  const [firstRun, restartedRun] = result.events
+
+  expect(result.events).toHaveLength(2)
+  expect(firstRun).toMatchObject({
+    componentRotationOffset: 0,
+    runIndex: 0,
+    starvedAfterLoopStartMs: null,
+    wakeStarvationMs: 30,
+  })
+  expect(firstRun?.lastAdmittedWakeAtMs).toBeGreaterThan(0)
+  expect(restartedRun).toMatchObject({
+    componentRotationOffset: 3,
+    lastAdmittedWakeAtMs: firstRun?.lastAdmittedWakeAtMs,
+    runIndex: 1,
+    wakeStarvationMs: 30,
+  })
+  expect(restartedRun?.starvedAfterLoopStartMs).toBeLessThan(30)
 })
 
 test('review serving projector worker heartbeat skips high-RSS recycle while foreground DuckDB work is active', () => {

@@ -258,6 +258,8 @@ export const startReviewServingProjectorWorkerHeartbeat = (
   // starved cleanup whenever cleanupIntervalMs >= maxRunMs (low-memory mode: both 60s), because the
   // loop was aborted at the exact instant cleanup became eligible and the next loop reset the clock.
   let lastCleanupAtMs: number | null = Date.now()
+  let lastAdmittedWakeAtMs: number | null = Date.now()
+  let componentRotationOffset = 0
 
   reviewServingProjectorWorkerLogger.log(
     'review-serving-projector-worker:loop-start',
@@ -343,6 +345,8 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     }
 
     void runReviewServingProjectorWorker({
+      componentRotationOffset,
+      lastAdmittedWakeAtMs,
       lastCleanupAtMs,
       pollIntervalMs: options.pollIntervalMs,
       rebuildChunkBatchMaxRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options),
@@ -362,6 +366,8 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     })
       .then(async (result) => {
         lastCleanupAtMs = result?.lastCleanupAtMs ?? null
+        lastAdmittedWakeAtMs = result?.lastAdmittedWakeAtMs ?? lastAdmittedWakeAtMs
+        componentRotationOffset = result?.componentRotationOffset ?? componentRotationOffset
 
         if (shouldRecycleDuckdbAfterReviewServingProjectorRun(result)) {
           await recycleDuckdbBeforeReviewServingProjectorRestart(options)

@@ -324,6 +324,16 @@ type ReviewServingProjectorWorkerLoopOptions = ReviewServingProjectorWorkerCycle
 
 type ReviewServingProjectorWorkerRunResult = {
   /**
+   * Rotation offset the next cycle should use. The heartbeat carries it into the next bounded loop
+   * so the tail components keep getting their turn when loops restart after almost every cycle.
+   */
+  componentRotationOffset: number
+  /**
+   * Last admitted (non-blocked) projector wake observed by this loop. Carried like lastCleanupAtMs
+   * so the wake starvation window accumulates across bounded loop restarts.
+   */
+  lastAdmittedWakeAtMs: number | null
+  /**
    * Last successful cleanup timestamp observed by this loop. The heartbeat carries it into the next
    * bounded loop so cleanup eligibility survives loop restarts instead of resetting on every start.
    */
@@ -9929,8 +9939,15 @@ export const runReviewServingProjectorWorker = async (
   options: ReviewServingProjectorWorkerLoopOptions = {},
   dependencies: ReviewServingProjectorWorkerDependencies = defaultReviewServingProjectorWorkerDependencies,
 ): Promise<ReviewServingProjectorWorkerRunResult> => {
+  const componentRotationOffset = getNonNegativeInteger(options.componentRotationOffset, 0)
+
   if (options.signal?.aborted) {
-    return {lastCleanupAtMs: options.lastCleanupAtMs ?? null, reason: 'aborted'}
+    return {
+      componentRotationOffset,
+      lastAdmittedWakeAtMs: options.lastAdmittedWakeAtMs ?? null,
+      lastCleanupAtMs: options.lastCleanupAtMs ?? null,
+      reason: 'aborted',
+    }
   }
 
   const seededOptions = {
@@ -9944,19 +9961,26 @@ export const runReviewServingProjectorWorker = async (
     (options.completedRebuildChunksInRun ?? 0) + getReviewServingProjectorWorkerCompletedChunkRunCharge(cycleResult)
   const maxCompletedRebuildChunksPerRun = getMaxCompletedRebuildChunksPerRun(options.maxCompletedRebuildChunksPerRun)
   const lastCleanupAtMs = cycleResult.nextCleanupAtMs
+  const lastAdmittedWakeAtMs = cycleResult.nextAdmittedWakeAtMs
+  const nextComponentRotationOffset = componentRotationOffset + 1
+  const getRunResult = (
+    reason: ReviewServingProjectorWorkerRunResult['reason'],
+  ): ReviewServingProjectorWorkerRunResult => {
+    return {componentRotationOffset: nextComponentRotationOffset, lastAdmittedWakeAtMs, lastCleanupAtMs, reason}
+  }
 
   if (options.signal?.aborted) {
-    return {lastCleanupAtMs, reason: 'aborted'}
+    return getRunResult('aborted')
   }
 
   if (
     shouldRestartAfterCompletedRebuildChunk(cycleResult.chunk, {dependencies, maxCompletedRebuildChunksPerRun, options})
   ) {
-    return {lastCleanupAtMs, reason: 'nativeHeavyChunkCompleted'}
+    return getRunResult('nativeHeavyChunkCompleted')
   }
 
   if (maxCompletedRebuildChunksPerRun > 0 && completedRebuildChunksInRun >= maxCompletedRebuildChunksPerRun) {
-    return {lastCleanupAtMs, reason: 'completedChunkLimit'}
+    return getRunResult('completedChunkLimit')
   }
 
   const delayMs =
@@ -9970,9 +9994,9 @@ export const runReviewServingProjectorWorker = async (
   const nextOptions = {
     ...seededOptions,
     completedRebuildChunksInRun,
-    componentRotationOffset: getNonNegativeInteger(options.componentRotationOffset, 0) + 1,
+    componentRotationOffset: nextComponentRotationOffset,
     ...getNextForegroundRebuildDrainOptions({chunk: cycleResult.chunk, dependencies, nowMs, options}),
-    lastAdmittedWakeAtMs: cycleResult.nextAdmittedWakeAtMs,
+    lastAdmittedWakeAtMs,
     lastCleanupAtMs,
     previousRssBytes: getReviewServingProjectorWorkerMemoryUsage(dependencies).rss,
   }
@@ -9980,7 +10004,7 @@ export const runReviewServingProjectorWorker = async (
   return delayMs > 0
     ? dependencies.sleep(delayMs).then(() => {
         if (options.signal?.aborted) {
-          return {lastCleanupAtMs, reason: 'aborted' as const}
+          return getRunResult('aborted')
         }
 
         return runReviewServingProjectorWorker(nextOptions, dependencies)
