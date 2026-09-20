@@ -441,6 +441,28 @@ const getEstimatedOutputBytes = (estimatedOutputRows: number) => {
   return estimatedOutputRows * 512
 }
 
+const getReviewServingV4RebuildAdmissionEstimate = (input: {
+  estimate: ReviewServingRebuildRequestEstimate
+  isFreshBootstrap: boolean
+}): ReviewServingRebuildRequestEstimate => {
+  return input.isFreshBootstrap ? input.estimate : {...input.estimate, estimatedSnapshotCount: 0}
+}
+
+const getReviewServingV4RebuildSnapshotCounts = (input: {
+  admissionEstimate: ReviewServingRebuildRequestEstimate
+  stats: ReviewServingV4RebuildStatsRow
+}) => {
+  const queuedSnapshotCount = getSafeCount(input.stats.snapshotCount)
+  const activeSnapshotCount = Math.min(getSafeCount(input.stats.activeSnapshotCount), queuedSnapshotCount)
+
+  return {
+    activeSnapshotCount,
+    candidateSnapshotCount: queuedSnapshotCount - activeSnapshotCount,
+    createdSnapshotCount: getSafeCount(input.admissionEstimate.estimatedSnapshotCount),
+    queuedSnapshotCount,
+  }
+}
+
 const getPositiveBudgetRatio = (estimate: number | null | undefined, budget: number | null | undefined) => {
   return estimate === undefined || estimate === null || budget === undefined || budget === null || budget <= 0
     ? 0
@@ -2061,7 +2083,7 @@ export const requestReviewServingV4RebuildEffect = (
     const requestComponents = bootstrap?.rebuiltComponents ?? components
     const requestArticleRangeBootstrapComponents = getArticleRangeBootstrapComponents(requestComponents)
     const requestFullProjectBootstrapComponents = getFullProjectBootstrapComponents(requestComponents)
-    const requestEstimate =
+    const requestWorkEstimate =
       requestComponents.length === 0
         ? getReviewServingV4BootstrapZeroEstimate()
         : bootstrapChunkCount === 1
@@ -2072,6 +2094,11 @@ export const requestReviewServingV4RebuildEffect = (
               fullProjectComponents: requestFullProjectBootstrapComponents,
               stats: estimateStats,
             })
+    const requestEstimate = getReviewServingV4RebuildAdmissionEstimate({
+      estimate: requestWorkEstimate,
+      isFreshBootstrap,
+    })
+    const snapshotCounts = getReviewServingV4RebuildSnapshotCounts({admissionEstimate: requestEstimate, stats})
     const requestOverBudgetReason = getReviewServingV4RebuildOverBudgetReason(requestEstimate, defaultRequestBudget)
 
     if (isFreshBootstrap && requestOverBudgetReason === null && bootstrap === null) {
@@ -2128,6 +2155,7 @@ export const requestReviewServingV4RebuildEffect = (
             componentReuse: bootstrap?.reuseDiagnostics ?? null,
             bootstrapChunkCount: bootstrap?.chunkCount ?? null,
             bootstrapExecutableChunkCount: chunks?.length ?? null,
+            snapshotCounts,
             source: 'phase5b-v4-rebuild-request-service',
             totalEstimate,
             v4Cutover: true,
