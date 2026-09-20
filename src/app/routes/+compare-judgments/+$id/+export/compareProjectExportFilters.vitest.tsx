@@ -43,7 +43,7 @@ const renderFilters = (showArticleCategoryFilter: boolean) => {
 
 const getTriggerLabels = (container: HTMLElement) => {
   return Array.from(container.querySelectorAll('label')).map((label) => {
-    return label.querySelector('span')?.textContent
+    return label.textContent
   })
 }
 
@@ -81,10 +81,10 @@ describe('CompareProjectExportFilters', () => {
 
     try {
       expect(getTriggerLabels(container).slice(0, 4)).toEqual([
-        'Row filter',
-        'Difference filter',
-        'Conflict resolutions',
-        'Language',
+        'Row filter:',
+        'Difference filter:',
+        'Conflict resolutions:',
+        'Language:',
       ])
       expect(container.querySelector('[aria-label="Conflict resolutions"]')?.textContent).toContain('Not set')
       expect(container.querySelector('[aria-label="Conflict resolutions"]')?.textContent).toContain('yes')

@@ -52,10 +52,10 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
       <div class="mb-4">
         <h2 class="text-lg font-semibold">Export Filters</h2>
       </div>
-      <div class="flex flex-col gap-4 min-[1430px]:flex-row min-[1430px]:items-end min-[1430px]:justify-between">
-        <div class="flex flex-wrap items-end gap-4">
-          <label class="flex w-72 flex-col gap-2 text-sm text-gray-700">
-            <span class="font-medium">Row filter</span>
+      <div class="space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div class="flex flex-col gap-2">
+            <label class="font-medium text-sm truncate">Row filter:</label>
             <MultiSelect
               ariaLabel="Row filter"
               options={props.rowFilterOptions}
@@ -65,9 +65,9 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
                 props.onRowFiltersChange(getNormalizedComparisonProjectRowFilters(values))
               }}
             />
-          </label>
-          <label class="flex w-72 flex-col gap-2 text-sm text-gray-700">
-            <span class="font-medium">Difference filter</span>
+          </div>
+          <div class="flex flex-col gap-2">
+            <label class="font-medium text-sm truncate">Difference filter:</label>
             <MultiSelect
               ariaLabel="Difference filter"
               disabled={props.differenceFilterDisabled}
@@ -78,10 +78,10 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
                 props.onDifferenceFiltersChange(getComparisonProjectDifferenceFilterSelection(values))
               }}
             />
-          </label>
+          </div>
           <Show when={props.showConflictResolutionFilter}>
-            <label class="flex w-72 flex-col gap-2 text-sm text-gray-700">
-              <span class="font-medium">Conflict resolutions</span>
+            <div class="flex flex-col gap-2">
+              <label class="font-medium text-sm truncate">Conflict resolutions:</label>
               <MultiSelect
                 ariaLabel="Conflict resolutions"
                 options={props.conflictResolutionFilterOptions}
@@ -93,11 +93,11 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
                   )
                 }}
               />
-            </label>
+            </div>
           </Show>
           <Show when={props.showArticleCategoryFilter}>
-            <label class="flex w-72 flex-col gap-2 text-sm text-gray-700">
-              <span class="font-medium">Language</span>
+            <div class="flex flex-col gap-2">
+              <label class="font-medium text-sm truncate">Language:</label>
               <MultiSelect
                 ariaLabel="Language"
                 options={articleCategoryFilterOptions}
@@ -107,7 +107,7 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
                   props.onArticleCategoryFiltersChange(getNormalizedComparisonProjectArticleCategoryFilters(values))
                 }}
               />
-            </label>
+            </div>
           </Show>
         </div>
         <div class="flex flex-wrap items-center gap-3">

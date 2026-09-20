@@ -65,16 +65,6 @@ import {
 
 const articleCategoryFilterOptions = getComparisonProjectArticleCategoryFilterOptions()
 
-const getContentSettingsLabel = (contentVariants: Array<{label: string}>) => {
-  return contentVariants.length > 0
-    ? contentVariants
-        .map((contentVariant) => {
-          return contentVariant.label
-        })
-        .join(' · ')
-    : 'none'
-}
-
 const getLoadedRangeLabel = (rowCount: number, totalCount: number) => {
   if (totalCount === 0) {
     return 'Showing 0 results'
@@ -87,10 +77,6 @@ const getLoadedRangeLabel = (rowCount: number, totalCount: number) => {
 
 const getPendingCountRangeLabel = (rowCount: number) => {
   return rowCount === 0 ? 'Counting results' : `Showing 1-${rowCount.toLocaleString()} of`
-}
-
-const getHumanJudgmentModeLabel = (humanJudgmentMode: 'prompt' | 'summary') => {
-  return humanJudgmentMode === 'summary' ? 'Summary overall decisions' : 'Prompt-by-prompt decisions'
 }
 
 const getConflictResolutionPromptLabel = (prompt: {
@@ -722,60 +708,6 @@ const CompareProjectJudgmentsPage = () => {
         {(comparisonProject) => {
           return (
             <div class="space-y-6">
-              <div class="rounded-lg bg-white p-6 shadow">
-                <div class="grid gap-4 md:grid-cols-4">
-                  <div>
-                    <div class="flex flex-wrap items-center gap-2">
-                      <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Description</p>
-                      <span class="rounded bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-600">
-                        ID: {comparisonProject().id}
-                      </span>
-                    </div>
-                    <p class="mt-2 text-sm text-gray-700">
-                      {comparisonProject().description?.trim() || 'No description provided.'}
-                    </p>
-                  </div>
-                  <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Compare Content</p>
-                    <p class="mt-2 text-sm text-gray-700">
-                      {getContentSettingsLabel(comparisonProject().contentVariants)}
-                    </p>
-                  </div>
-                  <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Prompts and Models</p>
-                    <p class="mt-2 text-sm text-gray-700">
-                      {comparisonProject().prompts.length} prompts · {comparisonProject().models.length} models
-                    </p>
-                    <Show when={comparisonProject().sourceProjects.length > 0}>
-                      <p class="mt-1 text-xs text-gray-500">
-                        Included projects:{' '}
-                        {comparisonProject()
-                          .sourceProjects.map((sourceProject) => {
-                            return sourceProject.name
-                          })
-                          .join(' · ')}
-                      </p>
-                    </Show>
-                  </div>
-                  <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Human Comparison</p>
-                    <p class="mt-2 text-sm text-gray-700">
-                      {comparisonProject().compareWithHumans
-                        ? getHumanJudgmentModeLabel(comparisonProject().humanJudgmentMode)
-                        : 'Not included'}
-                    </p>
-                    <Show when={comparisonProject().summarySourceProject}>
-                      {(summarySourceProject) => {
-                        return <p class="mt-1 text-xs text-gray-500">Summary source: {summarySourceProject().name}</p>
-                      }}
-                    </Show>
-                    <p class="mt-1 text-xs text-gray-500">
-                      Conflict resolution: {comparisonProject().allowConflictResolution ? 'Enabled' : 'Disabled'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
               <ComparisonProjectStatsCard
                 columns={orderedColumns()}
                 error={comparisonProjectStatsQuery.error}
@@ -846,88 +778,80 @@ const CompareProjectJudgmentsPage = () => {
                       </select>
                     </label>
                   </div>
-                  <div class="mt-3 flex flex-wrap items-start gap-x-4 gap-y-2">
-                    <label class="flex items-center gap-2 text-sm text-gray-600">
-                      <span>Row filter</span>
-                      <div class="w-72">
+                  <div class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div class="flex flex-col gap-2">
+                      <label class="font-medium text-sm truncate">Row filter:</label>
+                      <MultiSelect
+                        ariaLabel="Row filter"
+                        options={rowFilterOptions()}
+                        placeholder="All rows"
+                        values={rowFilters()}
+                        onChange={(values) => {
+                          setRowFilters((previous) => {
+                            return getStableComparisonProjectFilterSelection(
+                              previous,
+                              getNormalizedComparisonProjectRowFilters(values),
+                            )
+                          })
+                        }}
+                      />
+                    </div>
+                    <Show when={availableDifferenceFilters().length > 1 || differenceFilters().length > 0}>
+                      <div class="flex flex-col gap-2">
+                        <label class="font-medium text-sm truncate">Difference filter:</label>
                         <MultiSelect
-                          ariaLabel="Row filter"
-                          options={rowFilterOptions()}
+                          ariaLabel="Difference filter"
+                          options={differenceFilterOptions()}
                           placeholder="All rows"
-                          values={rowFilters()}
+                          values={differenceFilters()}
                           onChange={(values) => {
-                            setRowFilters((previous) => {
+                            setDifferenceFilters((previous) => {
                               return getStableComparisonProjectFilterSelection(
                                 previous,
-                                getNormalizedComparisonProjectRowFilters(values),
+                                getComparisonProjectDifferenceFilterSelection(values),
                               )
                             })
                           }}
                         />
                       </div>
-                    </label>
-                    <Show when={availableDifferenceFilters().length > 1 || differenceFilters().length > 0}>
-                      <label class="flex items-center gap-2 text-sm text-gray-600">
-                        <span>Difference filter</span>
-                        <div class="w-72">
-                          <MultiSelect
-                            ariaLabel="Difference filter"
-                            options={differenceFilterOptions()}
-                            placeholder="All rows"
-                            values={differenceFilters()}
-                            onChange={(values) => {
-                              setDifferenceFilters((previous) => {
-                                return getStableComparisonProjectFilterSelection(
-                                  previous,
-                                  getComparisonProjectDifferenceFilterSelection(values),
-                                )
-                              })
-                            }}
-                          />
-                        </div>
-                      </label>
                     </Show>
                     <Show when={showConflictResolutionFilter()}>
-                      <label class="flex items-center gap-2 text-sm text-gray-600">
-                        <span>Conflict resolutions</span>
-                        <div class="w-72">
-                          <MultiSelect
-                            ariaLabel="Conflict resolutions"
-                            options={conflictResolutionFilterOptions()}
-                            placeholder="All"
-                            values={conflictResolutionFilters()}
-                            onChange={(values) => {
-                              setConflictResolutionFilters((previous) => {
-                                return getStableComparisonProjectFilterSelection(
-                                  previous,
-                                  getNormalizedComparisonProjectConflictResolutionFilters(values),
-                                )
-                              })
-                            }}
-                          />
-                        </div>
-                      </label>
+                      <div class="flex flex-col gap-2">
+                        <label class="font-medium text-sm truncate">Conflict resolutions:</label>
+                        <MultiSelect
+                          ariaLabel="Conflict resolutions"
+                          options={conflictResolutionFilterOptions()}
+                          placeholder="All"
+                          values={conflictResolutionFilters()}
+                          onChange={(values) => {
+                            setConflictResolutionFilters((previous) => {
+                              return getStableComparisonProjectFilterSelection(
+                                previous,
+                                getNormalizedComparisonProjectConflictResolutionFilters(values),
+                              )
+                            })
+                          }}
+                        />
+                      </div>
                     </Show>
                     <Show when={hasChineseArticles()}>
-                      <label class="flex items-center gap-2 text-sm text-gray-600">
-                        <span>Language</span>
-                        <div class="w-72">
-                          <MultiSelect
-                            ariaLabel="Language"
-                            options={articleCategoryFilterOptions}
-                            placeholder="All"
-                            values={articleCategoryFilters()}
-                            onChange={(values) => {
-                              setArticleCategoryFilters((previous) => {
-                                return getStableComparisonProjectFilterSelection(
-                                  previous,
-                                  getNormalizedComparisonProjectArticleCategoryFilters(values),
-                                )
-                              })
-                            }}
-                          />
-                        </div>
-                      </label>
+                      <div class="flex flex-col gap-2">
+                        <label class="font-medium text-sm truncate">Language:</label>
+                        <MultiSelect
+                          ariaLabel="Language"
+                          options={articleCategoryFilterOptions}
+                          placeholder="All"
+                          values={articleCategoryFilters()}
+                          onChange={(values) => {
+                            setArticleCategoryFilters((previous) => {
+                              return getStableComparisonProjectFilterSelection(
+                                previous,
+                                getNormalizedComparisonProjectArticleCategoryFilters(values),
+                              )
+                            })
+                          }}
+                        />
+                      </div>
                     </Show>
                   </div>
                 </div>
