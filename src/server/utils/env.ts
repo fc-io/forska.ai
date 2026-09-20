@@ -41,6 +41,7 @@ const envShape = arktype({
   PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: 'number | string.integer.parse | null | undefined',
   FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: 'number | string.integer.parse | null | undefined',
   FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
+  FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED: arktype('"true" | "false" | boolean').pipe((v) => {
     return typeof v === 'string' ? v.toLowerCase() === 'true' : v
   }),
@@ -56,6 +57,10 @@ const gibibyte = 1024 ** 3
 const defaultReviewServingRebuildChunkBatchSize = 2
 const elevatedMemoryReviewServingRebuildChunkBatchSize = 4
 const elevatedMemoryReviewServingRebuildChunkBatchSizeThresholdMiB = 12288
+const lowMemoryReviewServingSearchRebuildChunkBatchSizeThresholdMiB = 8192
+const lowMemoryReviewServingSearchRebuildChunkBatchSize = 8
+const standardMemoryReviewServingSearchRebuildChunkBatchSize = 16
+const elevatedMemoryReviewServingSearchRebuildChunkBatchSize = 32
 const minimumReviewServingRebuildChunkBatchMaxRssBytes = 4 * gibibyte
 const maximumReviewServingRebuildChunkBatchMaxRssBytes = 12 * gibibyte
 
@@ -74,6 +79,18 @@ export const getDefaultReviewServingRebuildChunkBatchSize = (duckdbMemoryLimit: 
   return duckdbLimitMiB !== null && duckdbLimitMiB > elevatedMemoryReviewServingRebuildChunkBatchSizeThresholdMiB
     ? elevatedMemoryReviewServingRebuildChunkBatchSize
     : defaultReviewServingRebuildChunkBatchSize
+}
+
+export const getDefaultReviewServingSearchRebuildChunkBatchSize = (duckdbMemoryLimit: string | null | undefined) => {
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(duckdbMemoryLimit)
+
+  if (duckdbLimitMiB === null || duckdbLimitMiB <= lowMemoryReviewServingSearchRebuildChunkBatchSizeThresholdMiB) {
+    return lowMemoryReviewServingSearchRebuildChunkBatchSize
+  }
+
+  return duckdbLimitMiB <= elevatedMemoryReviewServingRebuildChunkBatchSizeThresholdMiB
+    ? standardMemoryReviewServingSearchRebuildChunkBatchSize
+    : elevatedMemoryReviewServingSearchRebuildChunkBatchSize
 }
 
 const readFromFileVar = (envValues: Record<string, string | undefined>, key: string): string | undefined => {
@@ -200,6 +217,14 @@ export const loadEnv = ({
   ) {
     ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE = String(
       getDefaultReviewServingRebuildChunkBatchSize(String(merged.DUCKDB_MEMORY_LIMIT ?? '')),
+    )
+  }
+  if (
+    merged.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE == null
+    || String(merged.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE = String(
+      getDefaultReviewServingSearchRebuildChunkBatchSize(String(merged.DUCKDB_MEMORY_LIMIT ?? '')),
     )
   }
   if (

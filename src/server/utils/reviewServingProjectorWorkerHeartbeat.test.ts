@@ -185,6 +185,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
               events.push({
                 rebuildChunkBatchMaxRssBytes: options.rebuildChunkBatchMaxRssBytes,
                 rebuildChunkBatchSize: options.rebuildChunkBatchSize,
+                searchRebuildChunkBatchSize: options.searchRebuildChunkBatchSize,
               })
             },
           }
@@ -207,6 +208,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
         DUCKDB_MEMORY_LIMIT: '',
         FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: '',
         FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: '',
+        FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE: '',
       },
     },
   )
@@ -220,11 +222,19 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-    events: Array<{rebuildChunkBatchMaxRssBytes: number; rebuildChunkBatchSize: number}>
+    events: Array<{
+      rebuildChunkBatchMaxRssBytes: number
+      rebuildChunkBatchSize: number
+      searchRebuildChunkBatchSize: number
+    }>
   }
 
   expect(result.events).toEqual([
-    {rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(), rebuildChunkBatchSize: 2},
+    {
+      rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+      rebuildChunkBatchSize: 2,
+      searchRebuildChunkBatchSize: 8,
+    },
   ])
 })
 
@@ -258,6 +268,7 @@ test('review serving projector worker heartbeat scales default batch size above 
               events.push({
                 rebuildChunkBatchMaxRssBytes: options.rebuildChunkBatchMaxRssBytes,
                 rebuildChunkBatchSize: options.rebuildChunkBatchSize,
+                searchRebuildChunkBatchSize: options.searchRebuildChunkBatchSize,
               })
             },
           }
@@ -280,6 +291,7 @@ test('review serving projector worker heartbeat scales default batch size above 
         DUCKDB_MEMORY_LIMIT: '16GB',
         FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: '',
         FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: '',
+        FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE: '',
       },
     },
   )
@@ -293,11 +305,19 @@ test('review serving projector worker heartbeat scales default batch size above 
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-    events: Array<{rebuildChunkBatchMaxRssBytes: number; rebuildChunkBatchSize: number}>
+    events: Array<{
+      rebuildChunkBatchMaxRssBytes: number
+      rebuildChunkBatchSize: number
+      searchRebuildChunkBatchSize: number
+    }>
   }
 
   expect(result.events).toEqual([
-    {rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(), rebuildChunkBatchSize: 4},
+    {
+      rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+      rebuildChunkBatchSize: 4,
+      searchRebuildChunkBatchSize: 32,
+    },
   ])
 })
 

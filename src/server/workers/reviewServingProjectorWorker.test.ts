@@ -16,6 +16,7 @@ import {
   defaultReviewServingProjectorWorkerProgressYieldMs,
   getDefaultReviewServingProjectorRunners,
   getReviewServingProjectorWorkerCompletedChunkRunCharge,
+  getReviewServingProjectorWorkerSearchRebuildChunkBatchSize,
   getReviewServingProjectorWorkerWorkloadContext,
   lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs,
   nativeHeavyReviewServingProjectorWorkerProgressYieldMs,
@@ -2082,18 +2083,65 @@ test('worker batches a few small search rebuild ranges while preserving foregrou
   } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
 
   const result = await runReviewServingProjectorWorkerOnce(
-    {maxCompletedRebuildChunksPerRun: 128, rebuildChunkBatchSize: 64, workerId: 'worker-1'},
+    {
+      maxCompletedRebuildChunksPerRun: 128,
+      rebuildChunkBatchSize: 64,
+      searchRebuildChunkBatchSize: 8,
+      workerId: 'worker-1',
+    },
     harness.dependencies,
   )
   const joined = statements.join('\n')
 
-  expect(result.chunk).toMatchObject({chunkId: 'chunk-search-batch-4'})
-  expect(result.chunkBatchCount).toBe(4)
-  expect(harness.claimInputs).toHaveLength(4)
+  expect(result.chunk).toMatchObject({chunkId: 'chunk-search-batch-8'})
+  expect(result.chunkBatchCount).toBe(8)
+  expect(harness.claimInputs).toHaveLength(8)
   expect(harness.runChunkInputs).toEqual([])
+  expect(joined).toContain("scope.article_id >= 'article-057'")
   expect(joined).not.toContain("scope.article_id >= 'article-065'")
   expect(joined).not.toContain("scope.article_id <= 'article-072'")
   expect(joined).toContain('searchBatchWriter')
+})
+
+test('search rebuild chunk batch size follows the DuckDB memory tier and never exceeds the run budget', () => {
+  expect(getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({duckdbMemoryLimit: null})).toBe(8)
+  expect(getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({duckdbMemoryLimit: '6400MiB'})).toBe(8)
+  expect(getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({duckdbMemoryLimit: '8192MiB'})).toBe(8)
+  expect(getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({duckdbMemoryLimit: '8193MiB'})).toBe(16)
+  expect(getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({duckdbMemoryLimit: '12288MiB'})).toBe(16)
+  expect(getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({duckdbMemoryLimit: '12289MiB'})).toBe(32)
+  expect(
+    getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({
+      duckdbMemoryLimit: '6400MiB',
+      searchRebuildChunkBatchSize: 32,
+    }),
+  ).toBe(16)
+  expect(
+    getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({
+      duckdbMemoryLimit: '6400MiB',
+      maxCompletedRebuildChunksPerRun: 4,
+      searchRebuildChunkBatchSize: 32,
+    }),
+  ).toBe(4)
+  expect(
+    getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({
+      duckdbMemoryLimit: '6400MiB',
+      maxCompletedRebuildChunksPerRun: null,
+      searchRebuildChunkBatchSize: 32,
+    }),
+  ).toBe(32)
+  expect(
+    getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({
+      duckdbMemoryLimit: '16GB',
+      searchRebuildChunkBatchSize: 64,
+    }),
+  ).toBe(64)
+  expect(
+    getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({
+      duckdbMemoryLimit: '6400MiB',
+      searchRebuildChunkBatchSize: 0,
+    }),
+  ).toBe(8)
 })
 
 test('worker splits 512-row foreground search rebuild ranges before writer execution', async () => {
@@ -2898,7 +2946,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       component: 'search',
       endKeys: ['article-033', 'article-066', 'article-099'],
       identity: 'search:project-1',
-      preclaimTailLimit: 3,
+      preclaimTailLimit: 7,
       startKeys: ['article-001', 'article-034', 'article-067'],
       validationTable: 'FROM mart.review_title_search_serving_v4 search',
       writerName: 'searchBatchWriter',
@@ -3081,7 +3129,12 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
     } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
 
     const result = await runReviewServingProjectorWorkerOnce(
-      {maxCompletedRebuildChunksPerRun: 128, rebuildChunkBatchSize: 2, workerId: 'worker-1'},
+      {
+        maxCompletedRebuildChunksPerRun: 128,
+        rebuildChunkBatchSize: 2,
+        searchRebuildChunkBatchSize: 8,
+        workerId: 'worker-1',
+      },
       harness.dependencies,
     )
     const joined = statements.join('\n')
