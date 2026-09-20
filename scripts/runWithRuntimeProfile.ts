@@ -263,6 +263,13 @@ export const getAppPortConflictPolicy = (envValues: Record<string, string | unde
 }
 
 const getPortListenerProcesses = (port: string): AppPortListenerProcess[] => {
+  // Container images (Apple container on oven/bun) ship without lsof; treat that as "nothing
+  // observable" instead of failing app startup, which is what Bun.spawnSync does for a missing binary.
+  if (!globalThis.Bun.which('lsof')) {
+    console.warn(`[app:preflight] lsof is not installed; skipping the Vite port ${port} listener check`)
+    return []
+  }
+
   const result = globalThis.Bun.spawnSync(['lsof', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpcn'], {
     stderr: 'pipe',
     stdout: 'pipe',
