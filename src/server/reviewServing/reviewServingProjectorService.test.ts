@@ -8,10 +8,15 @@ import {
   type ReviewServingDirtyWorkScope,
 } from './reviewServingProjectorDomain.ts'
 import {
+  activationReviewServingRebuildPriority,
+  enrichmentReviewServingRebuildPriority,
   ensureReviewServingClaimManifests,
+  getChunkedDirtyWorkRebuildPriority,
+  getMissingSnapshotRepairPriority,
   getReviewServingProjectorComponentRunPlan,
   intakeReviewServingProjectorDirtyWork,
   type ReviewServingProjectorServiceDependencies,
+  searchReviewServingRebuildPriority,
   wakeReviewServingProjectorService,
 } from './reviewServingProjectorService.ts'
 import type {PromoteReviewServingProjectorSnapshotInput} from './reviewServingProjectorWriter.ts'
@@ -554,7 +559,7 @@ test('wake routes search dirty work through chunked rebuilds instead of direct p
   ])
   expect(runnerCalled).toBe(false)
   expect(rebuildRequests).toEqual([
-    {components: ['search'], priority: 50, projectId: 'project-1', reason: 'searchDirtyWork'},
+    {components: ['search'], priority: 100, projectId: 'project-1', reason: 'searchDirtyWork'},
   ])
   expect(completedClaimIds).toEqual(['search-article-1'])
   expect(failedClaimIds).toEqual([])
@@ -1662,4 +1667,38 @@ test('unsupported scopes fail intake instead of falling back to foreground raw s
   })
 
   expect(result).toEqual({reason: 'unsupported dirty kind: unknown.change', status: 'failed'})
+})
+
+test('rebuild priority tiers keep activation above search and search above enrichment', () => {
+  expect(activationReviewServingRebuildPriority).toBe(10_000)
+  expect(searchReviewServingRebuildPriority).toBe(100)
+  expect(enrichmentReviewServingRebuildPriority).toBe(50)
+  expect(activationReviewServingRebuildPriority).toBeGreaterThan(searchReviewServingRebuildPriority)
+  expect(searchReviewServingRebuildPriority).toBeGreaterThan(enrichmentReviewServingRebuildPriority)
+})
+
+test('chunked dirty work rebuild priority ranks activation, search, then enrichment components', () => {
+  for (const component of countReadyReviewServingComponents) {
+    expect(getChunkedDirtyWorkRebuildPriority(component)).toBe(10_000)
+  }
+
+  expect(getChunkedDirtyWorkRebuildPriority('queue')).toBe(10_000)
+  expect(getChunkedDirtyWorkRebuildPriority('search')).toBe(100)
+  expect(getChunkedDirtyWorkRebuildPriority('posting')).toBe(50)
+  expect(getChunkedDirtyWorkRebuildPriority('summary')).toBe(50)
+  expect(getChunkedDirtyWorkRebuildPriority('payload')).toBe(50)
+  expect(getChunkedDirtyWorkRebuildPriority('judgmentInputContent')).toBe(50)
+})
+
+test('missing snapshot repair priority ranks activation, search, then enrichment components', () => {
+  for (const component of countReadyReviewServingComponents) {
+    expect(getMissingSnapshotRepairPriority(component)).toBe(10_000)
+  }
+
+  expect(getMissingSnapshotRepairPriority('queue')).toBe(10_000)
+  expect(getMissingSnapshotRepairPriority('search')).toBe(100)
+  expect(getMissingSnapshotRepairPriority('posting')).toBe(50)
+  expect(getMissingSnapshotRepairPriority('summary')).toBe(50)
+  expect(getMissingSnapshotRepairPriority('payload')).toBe(50)
+  expect(getMissingSnapshotRepairPriority('judgmentInputContent')).toBe(50)
 })
