@@ -2452,26 +2452,151 @@ test('V4 rebuild request service includes placeholder detail rows in payload byt
   expect(request.overBudgetReason).toBe('payload bytes: estimated 71680000 > max 67108864')
 })
 
-test('V4 rebuild request service scales admission estimates by queued snapshots', async () => {
-  const {database} = createFakeRequestDatabase({
+const getQueuedSnapshotAdmissionStats = (snapshotCount: number) => {
+  return {
     ...baseStats,
+    activeSnapshotCount: 1,
     enabledPromptCount: 1,
     humanJudgmentCount: 2,
     judgmentCount: 4,
     scopedArticleCount: 10,
-    snapshotCount: 2,
+    snapshotCount,
     summaryHumanJudgmentCount: 1,
-  })
+  }
+}
 
-  const request = await Effect.runPromise(
+const requestQueuedSnapshotAdmission = (snapshotCount: number) => {
+  const {database} = createFakeRequestDatabase(getQueuedSnapshotAdmissionStats(snapshotCount))
+
+  return Effect.runPromise(
     requestReviewServingV4RebuildEffect(
       {components: ['summary', 'payload'], projectId: 'project-v4', reason: 'requestReviewServingLargeRebuild'},
       database,
     ),
   )
+}
 
-  expect(request.status).toBe('blocked_over_budget')
-  expect(request.overBudgetReason).toBe('snapshot count: estimated 2 > max 1')
+const getChildAdmissionInputRows = (request: {diagnosticsJson: unknown}) => {
+  return (request.diagnosticsJson as {diagnostics: {childAdmissionEstimate: {estimatedInputRows: number}}}).diagnostics
+    .childAdmissionEstimate.estimatedInputRows
+}
+
+test('V4 rebuild request service admits a non-fresh rebuild with only the active snapshot queued', async () => {
+  const request = await requestQueuedSnapshotAdmission(1)
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      bootstrapSnapshot: false,
+      childAdmissionBudget: {maxSnapshotCount: 1},
+      childAdmissionEstimate: {estimatedSnapshotCount: 0},
+      snapshotCounts: {
+        activeSnapshotCount: 1,
+        candidateSnapshotCount: 0,
+        createdSnapshotCount: 0,
+        queuedSnapshotCount: 1,
+      },
+      totalEstimate: {estimatedSnapshotCount: 1},
+    },
+    estimate: {estimatedSnapshotCount: 0},
+  })
+  expect(request.sourceWatermarksJson).toMatchObject({snapshots: {count: 1}})
+})
+
+test('V4 rebuild request service admits a non-fresh rebuild next to one leftover candidate and keeps raw counts in diagnostics', async () => {
+  const request = await requestQueuedSnapshotAdmission(2)
+  const singleSnapshotRequest = await requestQueuedSnapshotAdmission(1)
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      bootstrapSnapshot: false,
+      childAdmissionEstimate: {estimatedSnapshotCount: 0},
+      snapshotCounts: {
+        activeSnapshotCount: 1,
+        candidateSnapshotCount: 1,
+        createdSnapshotCount: 0,
+        queuedSnapshotCount: 2,
+      },
+      totalEstimate: {estimatedSnapshotCount: 2},
+    },
+    estimate: {estimatedSnapshotCount: 0},
+  })
+  expect(request.sourceWatermarksJson).toMatchObject({snapshots: {count: 2}})
+  expect(getChildAdmissionInputRows(request)).toBe(2 * getChildAdmissionInputRows(singleSnapshotRequest))
+})
+
+test('V4 rebuild request service admits a non-fresh rebuild next to five leftover candidates', async () => {
+  const request = await requestQueuedSnapshotAdmission(6)
+
+  expect(request.status).toBe('admitted')
+  expect(request.overBudgetReason).toBeNull()
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      childAdmissionEstimate: {estimatedSnapshotCount: 0},
+      snapshotCounts: {
+        activeSnapshotCount: 1,
+        candidateSnapshotCount: 5,
+        createdSnapshotCount: 0,
+        queuedSnapshotCount: 6,
+      },
+      totalEstimate: {estimatedSnapshotCount: 6},
+    },
+  })
+  expect(request.sourceWatermarksJson).toMatchObject({snapshots: {count: 6}})
+})
+
+test('V4 fresh bootstrap admission still counts the one snapshot it creates', async () => {
+  const noSnapshot = createFakeRequestDatabase({...baseStats, snapshotCount: 0, snapshotUpdatedAt: null})
+  const leftoverCandidate = createFakeRequestDatabase({...baseStats, activeSnapshotCount: 1, snapshotCount: 2})
+
+  const noSnapshotRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      noSnapshot.database,
+    ),
+  )
+  const leftoverCandidateRequest = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      leftoverCandidate.database,
+    ),
+  )
+
+  expect(noSnapshotRequest.status).toBe('admitted')
+  expect(noSnapshotRequest.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      bootstrapSnapshot: true,
+      childAdmissionBudget: {maxSnapshotCount: 1},
+      childAdmissionEstimate: {estimatedSnapshotCount: 1},
+      snapshotCounts: {
+        activeSnapshotCount: 0,
+        candidateSnapshotCount: 0,
+        createdSnapshotCount: 1,
+        queuedSnapshotCount: 0,
+      },
+      totalEstimate: {estimatedSnapshotCount: 1},
+    },
+    estimate: {estimatedSnapshotCount: 1},
+  })
+  expect(leftoverCandidateRequest.status).toBe('admitted')
+  expect(leftoverCandidateRequest.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      bootstrapSnapshot: true,
+      childAdmissionEstimate: {estimatedSnapshotCount: 1},
+      snapshotCounts: {
+        activeSnapshotCount: 1,
+        candidateSnapshotCount: 1,
+        createdSnapshotCount: 1,
+        queuedSnapshotCount: 2,
+      },
+      totalEstimate: {estimatedSnapshotCount: 1},
+    },
+    estimate: {estimatedSnapshotCount: 1},
+  })
+  expect(leftoverCandidate.statements.join('\n')).toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
 
 test('V4 rebuild request service watermarks make changed data produce a new request id', async () => {
