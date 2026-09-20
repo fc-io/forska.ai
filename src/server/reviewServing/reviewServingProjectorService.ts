@@ -56,9 +56,18 @@ export type ReviewServingProjectorIdentityResolver = (input: {
   scope: ReviewServingDirtyWorkScope
 }) => string
 
+export type ReviewServingProjectorWakeBlockedReason =
+  | 'aborted'
+  | 'appendQueue'
+  | 'budget'
+  | 'exclusiveWork'
+  | 'foregroundQueue'
+  | 'projectTransfer'
+
 export type ReviewServingProjectorQueueState = {
   activeImportCount?: number
   blocked?: boolean
+  blockedReason?: ReviewServingProjectorWakeBlockedReason | null
   foregroundDuckdbQueueDepth?: number
   pendingDirtyWorkCount?: number
 }
@@ -125,6 +134,7 @@ export type IntakeReviewServingProjectorDirtyWorkResult =
 export type WakeReviewServingProjectorServiceInput = {
   batchSize: number
   componentOrder?: readonly ReviewServingProjectionComponent[]
+  componentRotationOffset?: number
   maxActiveImportCount?: number
   maxPendingDirtyWorkCount?: number
   maxRetries?: number
@@ -157,6 +167,7 @@ export type ReviewServingProjectorBlockedRebuild = {
 }
 
 export type WakeReviewServingProjectorServiceResult = {
+  blockedReason?: ReviewServingProjectorWakeBlockedReason | null
   blockedRebuilds: readonly ReviewServingProjectorBlockedRebuild[]
   failures: readonly ReviewServingProjectorFailure[]
   promotions: readonly PromoteReviewServingProjectorSnapshotResult[]
@@ -189,6 +200,20 @@ const defaultComponentOrder: readonly ReviewServingProjectionComponent[] = [
 ]
 const projectorFailureLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const blockedRebuildRequestReuseMs = defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds * 1000
+
+const getRotatedComponentOrder = (
+  componentOrder: readonly ReviewServingProjectionComponent[],
+  rotationOffset: number | undefined,
+) => {
+  const normalizedOffset =
+    rotationOffset !== undefined && Number.isFinite(rotationOffset) ? Math.trunc(rotationOffset) : 0
+  const startIndex =
+    componentOrder.length === 0
+      ? 0
+      : ((normalizedOffset % componentOrder.length) + componentOrder.length) % componentOrder.length
+
+  return [...componentOrder.slice(startIndex), ...componentOrder.slice(0, startIndex)]
+}
 
 const getDiagnosticCause = (error: unknown) => {
   if (typeof error !== 'object' || error === null) {
@@ -609,20 +634,35 @@ const runProjectorWithRetry = async (input: {
   return runAttempt(1)
 }
 
-const shouldBlockWake = async (
+const getWakeBlockedReason = async (
   input: WakeReviewServingProjectorServiceInput,
   dependencies: ReviewServingProjectorServiceDependencies,
-) => {
+): Promise<ReviewServingProjectorWakeBlockedReason | null> => {
   const queueState = await dependencies.getQueueState?.()
   const activeImportCount = queueState?.activeImportCount ?? 0
   const foregroundDuckdbQueueDepth = queueState?.foregroundDuckdbQueueDepth ?? 0
   const pendingDirtyWorkCount = queueState?.pendingDirtyWorkCount ?? 0
   const activeImportBlocked = input.maxActiveImportCount !== undefined && activeImportCount > input.maxActiveImportCount
-  const foregroundDuckdbQueueBlocked = foregroundDuckdbQueueDepth > 0
+  const foregroundDuckdbQueueBlocked = queueState?.blocked === undefined && foregroundDuckdbQueueDepth > 0
   const queuePressureBlocked =
     input.maxPendingDirtyWorkCount !== undefined && pendingDirtyWorkCount > input.maxPendingDirtyWorkCount
 
-  return queueState?.blocked === true || activeImportBlocked || foregroundDuckdbQueueBlocked || queuePressureBlocked
+  if (queueState?.blocked === true) {
+    return queueState.blockedReason ?? 'foregroundQueue'
+  }
+
+  if (foregroundDuckdbQueueBlocked) {
+    return 'foregroundQueue'
+  }
+
+  return activeImportBlocked || queuePressureBlocked ? 'budget' : null
+}
+
+const shouldBlockWake = async (
+  input: WakeReviewServingProjectorServiceInput,
+  dependencies: ReviewServingProjectorServiceDependencies,
+) => {
+  return (await getWakeBlockedReason(input, dependencies)) !== null
 }
 
 export const wakeReviewServingProjectorService = async (
@@ -641,11 +681,21 @@ export const wakeReviewServingProjectorService = async (
   const nowMs = dependencies.nowMs ?? Date.now
   const budget = getNormalizedBudget(input)
   const startedAt = nowMs()
-  const componentOrder = input.componentOrder ?? defaultComponentOrder
-  const initialBlocked = await shouldBlockWake(input, dependencies)
+  const componentOrder =
+    input.componentOrder ?? getRotatedComponentOrder(defaultComponentOrder, input.componentRotationOffset)
+  const initialBlockedReason = await getWakeBlockedReason(input, dependencies)
+  const budgetExhausted = budget.batchSize === 0 || budget.maxRowsPerWake === 0 || input.maxWakeMs <= 0
 
-  if (initialBlocked || budget.batchSize === 0 || budget.maxRowsPerWake === 0 || input.maxWakeMs <= 0) {
-    return {blockedRebuilds: [], failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+  if (initialBlockedReason !== null || budgetExhausted) {
+    return {
+      blockedReason: initialBlockedReason ?? 'budget',
+      blockedRebuilds: [],
+      failures: [],
+      promotions: [],
+      releasedClaimIds: [],
+      runs: [],
+      status: 'blocked',
+    }
   }
 
   const wakeState = await componentOrder.reduce<Promise<WakeReviewServingProjectorState>>(
@@ -871,6 +921,7 @@ export const wakeReviewServingProjectorService = async (
   )
 
   return {
+    blockedReason: null,
     blockedRebuilds: wakeState.blockedRebuilds,
     failures: wakeState.failures,
     promotions: wakeState.promotions,

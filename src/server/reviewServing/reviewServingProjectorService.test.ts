@@ -1508,6 +1508,131 @@ test('failed snapshot promotion is reported without replacing last-known-good da
   ])
 })
 
+const wakeFirstClaimedComponent = async (input: {
+  componentOrder?: readonly ReviewServingProjectionComponent[]
+  componentRotationOffset: number
+}) => {
+  const allComponents: readonly ReviewServingProjectionComponent[] = [
+    'projectScope',
+    'selectedImport',
+    'display',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'payload',
+    'posting',
+    'summary',
+    'judgmentInputContent',
+    'search',
+  ]
+  const {claimedComponents, dependencies} = createDependencyHarness({})
+  const nowValues = [0, 0]
+
+  dependencies.nowMs = () => {
+    return nowValues.shift() ?? 2_000
+  }
+  dependencies.runners = allComponents.reduce<ReviewServingProjectorServiceDependencies['runners']>(
+    (runners, component) => {
+      return {
+        ...runners,
+        [component]: async () => {
+          return {processedCount: 1}
+        },
+      }
+    },
+    {},
+  )
+
+  await wakeReviewServingProjectorService(
+    {
+      batchSize: 1,
+      componentOrder: input.componentOrder,
+      componentRotationOffset: input.componentRotationOffset,
+      maxRowsPerWake: 11,
+      maxWakeMs: 1_000,
+      wakeId: `wake-${input.componentRotationOffset}`,
+    },
+    dependencies,
+  )
+
+  return claimedComponents
+}
+
+test('wake rotates the default component order by the rotation offset so tail components periodically go first', async () => {
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 0})).toEqual(['projectScope'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 1})).toEqual(['selectedImport'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 2})).toEqual(['display'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 8})).toEqual(['summary'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 9})).toEqual(['judgmentInputContent'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 10})).toEqual(['search'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 11})).toEqual(['projectScope'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 23})).toEqual(['selectedImport'])
+})
+
+test('wake reports why it was blocked and lets an explicit caller admission override the queue depth rule', async () => {
+  const wakeWithQueueState = async (
+    queueState: Awaited<ReturnType<NonNullable<ReviewServingProjectorServiceDependencies['getQueueState']>>> | null,
+    maxWakeMs = 1_000,
+  ) => {
+    const {claimedComponents, dependencies} = createDependencyHarness({
+      queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
+    })
+
+    dependencies.getQueueState =
+      queueState === null
+        ? undefined
+        : async () => {
+            return queueState
+          }
+    dependencies.runners = {
+      queue: async () => {
+        return {processedCount: 1}
+      },
+    }
+
+    const result = await wakeReviewServingProjectorService(
+      {batchSize: 1, componentOrder: ['queue'], maxRowsPerWake: 1, maxWakeMs, wakeId: 'wake-1'},
+      dependencies,
+    )
+
+    return {blockedReason: result.blockedReason, claimedComponents, status: result.status}
+  }
+
+  expect(await wakeWithQueueState({blocked: true, blockedReason: 'appendQueue'})).toEqual({
+    blockedReason: 'appendQueue',
+    claimedComponents: [],
+    status: 'blocked',
+  })
+  expect(await wakeWithQueueState({blocked: true})).toMatchObject({blockedReason: 'foregroundQueue', status: 'blocked'})
+  expect(await wakeWithQueueState({foregroundDuckdbQueueDepth: 1})).toMatchObject({
+    blockedReason: 'foregroundQueue',
+    status: 'blocked',
+  })
+  expect(await wakeWithQueueState({blocked: false, foregroundDuckdbQueueDepth: 1})).toEqual({
+    blockedReason: null,
+    claimedComponents: ['queue'],
+    status: 'completed',
+  })
+  expect(await wakeWithQueueState({activeImportCount: 1}, 0)).toMatchObject({
+    blockedReason: 'budget',
+    status: 'blocked',
+  })
+  expect(await wakeWithQueueState(null)).toEqual({
+    blockedReason: null,
+    claimedComponents: ['queue'],
+    status: 'completed',
+  })
+})
+
+test('wake never rotates an explicit component order', async () => {
+  expect(
+    await wakeFirstClaimedComponent({componentOrder: ['humanStatus', 'queue'], componentRotationOffset: 1}),
+  ).toEqual(['humanStatus'])
+  expect(await wakeFirstClaimedComponent({componentOrder: ['llmStatus'], componentRotationOffset: 10})).toEqual([
+    'llmStatus',
+  ])
+})
+
 test('unsupported scopes fail intake instead of falling back to foreground raw serving', async () => {
   const scope = {...getScope(), dirtyKind: 'unknown.change'} as unknown as ReviewServingDirtyWorkScope
 

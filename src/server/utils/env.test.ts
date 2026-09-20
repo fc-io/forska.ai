@@ -3,10 +3,12 @@ import {resolve} from 'node:path'
 import {expect, test} from 'bun:test'
 
 import {
+  getClampedReviewServingSearchRebuildChunkBatchSize,
   getDefaultReviewServingRebuildChunkBatchMaxRssBytes,
   getDefaultReviewServingRebuildChunkBatchSize,
   getDefaultReviewServingSearchRebuildChunkBatchSize,
   loadEnv,
+  maximumReviewServingSearchRebuildChunkBatchSize,
 } from './env.ts'
 
 test('uses local dev port defaults without env files', () => {
@@ -63,6 +65,28 @@ test('tiers the default search rebuild chunk batch size by DuckDB memory limit b
 
   expect(lowMemoryEnv.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE).toBe(8)
   expect(elevatedMemoryEnv.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE).toBe(32)
+})
+
+test('clamps the search rebuild chunk batch size override to the hard ceiling and falls back below one', () => {
+  const getSearchBatchSize = (value: string, duckdbMemoryLimit = '6400MiB') => {
+    return loadEnv({
+      envValues: {DUCKDB_MEMORY_LIMIT: duckdbMemoryLimit, FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE: value},
+    }).FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE
+  }
+
+  expect(maximumReviewServingSearchRebuildChunkBatchSize).toBe(64)
+  expect(getSearchBatchSize('100000')).toBe(64)
+  expect(getSearchBatchSize('65')).toBe(64)
+  expect(getSearchBatchSize('64')).toBe(64)
+  expect(getSearchBatchSize('63')).toBe(63)
+  expect(getSearchBatchSize('1')).toBe(1)
+  expect(getSearchBatchSize('0')).toBe(8)
+  expect(getSearchBatchSize('-1', '16GB')).toBe(32)
+  expect(getClampedReviewServingSearchRebuildChunkBatchSize(100_000, '16GB')).toBe(64)
+  expect(getClampedReviewServingSearchRebuildChunkBatchSize(64, '16GB')).toBe(64)
+  expect(getClampedReviewServingSearchRebuildChunkBatchSize(0, '16GB')).toBe(32)
+  expect(getClampedReviewServingSearchRebuildChunkBatchSize(null, '6400MiB')).toBe(8)
+  expect(getClampedReviewServingSearchRebuildChunkBatchSize(undefined, '12288MiB')).toBe(16)
 })
 
 test('scales default review serving rebuild chunk batch size with DuckDB memory headroom', () => {

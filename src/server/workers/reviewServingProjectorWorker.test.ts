@@ -16,6 +16,7 @@ import {
   defaultReviewServingProjectorWorkerProgressYieldMs,
   getDefaultReviewServingProjectorRunners,
   getReviewServingProjectorWorkerCompletedChunkRunCharge,
+  getReviewServingProjectorWorkerCycleLogAttrs,
   getReviewServingProjectorWorkerSearchRebuildChunkBatchSize,
   getReviewServingProjectorWorkerWorkloadContext,
   lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs,
@@ -666,6 +667,174 @@ for (const barrier of ['exclusive', 'transfer', 'aborted'] as const) {
     expect(harness.runChunkInputs).toEqual([])
   })
 }
+
+test('worker admits a starved projector wake once the starvation window passes while only foreground DuckDB work is queued', async () => {
+  const runStarvedCycle = async (input: {abort?: boolean; exclusive?: boolean; nowMs: number; transfer?: boolean}) => {
+    const harness = createWorkerHarness({nowMs: input.nowMs, wakeStatus: 'completed'})
+    const controller = new AbortController()
+
+    harness.dependencies.getForegroundQueueDepth = () => {
+      return 2
+    }
+    harness.dependencies.hasActiveDuckdbExclusiveWork = () => {
+      return input.exclusive ?? false
+    }
+    harness.dependencies.hasActiveProjectTransferBackgroundActivity = () => {
+      return input.transfer ?? false
+    }
+    harness.dependencies.waitForForegroundQueue = async () => {
+      return false
+    }
+    harness.dependencies.rebuildChunkService = {
+      ...harness.dependencies.rebuildChunkService,
+      getNextChunk: async () => {
+        return null
+      },
+    } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+    if (input.abort === true) {
+      controller.abort()
+    }
+
+    const result = await runReviewServingProjectorWorkerOnce(
+      {lastAdmittedWakeAtMs: 1_000, maxWakeMs: 200, signal: controller.signal, workerId: 'worker-1'},
+      harness.dependencies,
+    )
+
+    return {harness, result}
+  }
+
+  const starving = await runStarvedCycle({nowMs: 1_000 + 29_999})
+
+  expect(starving.result.projector).toMatchObject({blockedReason: 'foregroundQueue', status: 'blocked'})
+  expect(starving.result.nextAdmittedWakeAtMs).toBe(1_000)
+  expect(starving.result.admission).toEqual({appendQueueDepth: 0, foregroundQueueDepth: 2, starvationAdmitted: false})
+  expect(starving.harness.wakeInputs).toEqual([])
+  expect(starving.harness.dirtyWorkRetentionCleanupInputs).toEqual([])
+
+  const admitted = await runStarvedCycle({nowMs: 1_000 + 30_000})
+
+  expect(admitted.result.projector).toMatchObject({blockedReason: null, status: 'completed'})
+  expect(admitted.result.nextAdmittedWakeAtMs).toBe(31_000)
+  expect(admitted.result.admission).toEqual({appendQueueDepth: 0, foregroundQueueDepth: 2, starvationAdmitted: true})
+  expect(admitted.harness.wakeInputs).toHaveLength(1)
+  expect(admitted.harness.wakeInputs[0]).toMatchObject({maxWakeMs: 200})
+  expect(admitted.result.cleanup.status).toBe('completed')
+  expect(admitted.harness.dirtyWorkRetentionCleanupInputs).toEqual([{}])
+
+  const exclusive = await runStarvedCycle({exclusive: true, nowMs: 1_000 + 30_000})
+
+  expect(exclusive.result.projector).toMatchObject({blockedReason: 'exclusiveWork', status: 'blocked'})
+  expect(exclusive.harness.wakeInputs).toEqual([])
+
+  const transfer = await runStarvedCycle({nowMs: 1_000 + 30_000, transfer: true})
+
+  expect(transfer.result.projector).toMatchObject({blockedReason: 'projectTransfer', status: 'blocked'})
+  expect(transfer.harness.wakeInputs).toEqual([])
+
+  const aborted = await runStarvedCycle({abort: true, nowMs: 1_000 + 30_000})
+
+  expect(aborted.result.projector).toMatchObject({blockedReason: 'aborted', status: 'blocked'})
+  expect(aborted.harness.wakeInputs).toEqual([])
+})
+
+test('worker loop seeds the starvation clock at loop start and admits one wake per starvation window under sustained foreground pressure', async () => {
+  const harness = createWorkerHarness()
+  const controller = new AbortController()
+  const loopStartedAtMs = 1_000_000
+  const wakeTimes: number[] = []
+  let clockMs = loopStartedAtMs
+
+  harness.dependencies.nowMs = () => {
+    return clockMs
+  }
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return 1
+  }
+  harness.dependencies.waitForForegroundQueue = async () => {
+    return false
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    getNextChunk: async () => {
+      return null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.wakeProjectors = async (wakeInput) => {
+    harness.wakeInputs.push(wakeInput)
+    wakeTimes.push(clockMs)
+
+    return {blockedRebuilds: [], failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+  }
+  harness.dependencies.sleep = async (delayMs: number) => {
+    clockMs += delayMs
+
+    if (clockMs - loopStartedAtMs >= 62_000) {
+      controller.abort()
+    }
+  }
+
+  await runReviewServingProjectorWorker(
+    {
+      cleanupIntervalMs: 600_000,
+      lastCleanupAtMs: loopStartedAtMs,
+      maxWakeMs: 200,
+      pollIntervalMs: 2_000,
+      signal: controller.signal,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(wakeTimes).toEqual([loopStartedAtMs + 30_000, loopStartedAtMs + 60_000])
+})
+
+test('worker cycle log attrs carry the projector block reason and the queue depths at decision time', async () => {
+  const foregroundHarness = createWorkerHarness({wakeStatus: 'completed'})
+  foregroundHarness.dependencies.getForegroundQueueDepth = () => {
+    return 3
+  }
+
+  const foregroundYielded = await runReviewServingProjectorWorkerOnce(
+    {workerId: 'worker-1'},
+    foregroundHarness.dependencies,
+  )
+
+  expect(foregroundYielded.projector.blockedReason).toBe('foregroundQueue')
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(foregroundYielded)).toMatchObject({
+    appendQueueDepth: 0,
+    event: 'cycle',
+    foregroundQueueDepth: 3,
+    projectorBlockedReason: 'foregroundQueue',
+    projectorStarvationAdmitted: false,
+    projectorStatus: 'blocked',
+    status: 'idle',
+  })
+
+  const appendHarness = createWorkerHarness({wakeStatus: 'completed'})
+  appendHarness.dependencies.getAppendQueueDepth = () => {
+    return 2
+  }
+
+  const appendYielded = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, appendHarness.dependencies)
+
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(appendYielded)).toMatchObject({
+    appendQueueDepth: 2,
+    foregroundQueueDepth: 0,
+    projectorBlockedReason: 'appendQueue',
+  })
+
+  const admittedHarness = createWorkerHarness({wakeStatus: 'completed'})
+  const admitted = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, admittedHarness.dependencies)
+
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(admitted)).toMatchObject({
+    appendQueueDepth: 0,
+    foregroundQueueDepth: 0,
+    projectorBlockedReason: null,
+    projectorStarvationAdmitted: false,
+    projectorStatus: 'completed',
+  })
+})
 
 test('worker leaves sustained foreground pressure blocked when its wake budget expires', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
@@ -2138,10 +2307,209 @@ test('search rebuild chunk batch size follows the DuckDB memory tier and never e
   ).toBe(64)
   expect(
     getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({
+      duckdbMemoryLimit: '16GB',
+      searchRebuildChunkBatchSize: 65,
+    }),
+  ).toBe(64)
+  expect(
+    getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({
+      duckdbMemoryLimit: '16GB',
+      searchRebuildChunkBatchSize: 100_000,
+    }),
+  ).toBe(64)
+  expect(
+    getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({
       duckdbMemoryLimit: '6400MiB',
       searchRebuildChunkBatchSize: 0,
     }),
   ).toBe(8)
+})
+
+test('worker caps search rebuild chunk batches at the RSS-governed batch size under soft memory pressure', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const firstChunkInput = {
+    ...chunkInput,
+    chunkEndKey: 'article-008',
+    chunkStartKey: 'article-001',
+    estimatedInputRows: 64,
+    estimatedOutputRows: 64,
+    projectionComponent: 'search' as const,
+    projectionIdentity: 'search:project-1',
+    requestId: 'request-search-batch',
+  }
+  const chunkInputs = Array.from({length: 9}, (_, index) => {
+    const start = index * 8 + 1
+    const end = start + 7
+
+    return {
+      ...firstChunkInput,
+      chunkEndKey: `article-${end.toString().padStart(3, '0')}`,
+      chunkStartKey: `article-${start.toString().padStart(3, '0')}`,
+    }
+  })
+  const chunks = chunkInputs.map((input, index) => {
+    return {
+      ...chunkManifest,
+      ...input,
+      chunkId: `chunk-search-pressure-${index + 1}`,
+      leaseExpiresAt: '2099-01-01T00:00:00.000Z',
+      parentChunkId: 'chunk-search-parent',
+      splitDepth: 1,
+    } satisfies ReviewServingRebuildChunkManifest
+  })
+  const firstChunk = chunks[0]
+
+  if (firstChunk === undefined) {
+    throw new Error('expected search pressure test chunk')
+  }
+
+  const chunksByStartKey = new Map<string, ReviewServingRebuildChunkManifest>(
+    chunks.map((chunk) => {
+      return [chunk.chunkStartKey, chunk]
+    }),
+  )
+  const chunksById = new Map<string, ReviewServingRebuildChunkManifest>(
+    chunks.map((chunk) => {
+      return [chunk.chunkId, chunk]
+    }),
+  )
+  const componentState = {
+    optional: [{baseGeneration: '2', component: 'search', projectionIdentity: 'search:project-1'}],
+    required: [
+      {baseGeneration: '2', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '2', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+    ],
+  }
+  let nextIndex = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 1}] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId')) {
+      return [] as T[]
+    }
+
+    if (statement.includes('SELECT DISTINCT') && statement.includes('output_base_generation AS outputBaseGeneration')) {
+      return [] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      const chunkId = [...chunksById.keys()].find((id) => {
+        return statement.includes(id)
+      })
+
+      return [chunksById.get(chunkId ?? firstChunk.chunkId) ?? firstChunk] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      return [
+        {
+          componentStateJson: componentState,
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-search-pressure-1',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM mart.review_title_search_serving_v4 search')) {
+      return [{actualChecksum: 'checksum-search-pressure', actualCount: 2}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+  harness.dependencies.getMemoryUsage = () => {
+    return {rss: 900}
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {
+      maxCompletedRebuildChunksPerRun: 128,
+      rebuildChunkBatchMaxRssBytes: 1_000,
+      rebuildChunkBatchSize: 2,
+      searchRebuildChunkBatchSize: 8,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.chunk).toMatchObject({chunkId: 'chunk-search-pressure-2'})
+  expect(result.chunkBatchCount).toBe(2)
+  expect(harness.claimInputs).toHaveLength(2)
+  expect(harness.runChunkInputs).toEqual([])
+  expect(joined).toContain("scope.article_id >= 'article-009'")
+  expect(joined).not.toContain("scope.article_id >= 'article-017'")
+  expect(joined).toContain('searchBatchWriter')
+})
+
+test('worker passes an incrementing component rotation offset to successive projector wakes', async () => {
+  const harness = createWorkerHarness()
+  const controller = new AbortController()
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    getNextChunk: async () => {
+      return null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.sleep = async () => {
+    if (harness.wakeInputs.length >= 3) {
+      controller.abort()
+    }
+  }
+
+  await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
+
+  expect(
+    harness.wakeInputs.map((wakeInput) => {
+      return (wakeInput as {componentOrder?: unknown; componentRotationOffset?: number}).componentRotationOffset
+    }),
+  ).toEqual([0, 1, 2])
+  expect(
+    harness.wakeInputs.map((wakeInput) => {
+      return (wakeInput as {componentOrder?: unknown}).componentOrder
+    }),
+  ).toEqual([undefined, undefined, undefined])
+
+  const explicitOffsetHarness = createWorkerHarness()
+  await runReviewServingProjectorWorkerOnce(
+    {componentRotationOffset: 7, workerId: 'worker-1'},
+    explicitOffsetHarness.dependencies,
+  )
+
+  expect(explicitOffsetHarness.wakeInputs[0]).toMatchObject({componentRotationOffset: 7})
 })
 
 test('worker splits 512-row foreground search rebuild ranges before writer execution', async () => {

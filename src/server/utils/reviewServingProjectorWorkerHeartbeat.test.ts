@@ -186,6 +186,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
                 rebuildChunkBatchMaxRssBytes: options.rebuildChunkBatchMaxRssBytes,
                 rebuildChunkBatchSize: options.rebuildChunkBatchSize,
                 searchRebuildChunkBatchSize: options.searchRebuildChunkBatchSize,
+                wakeStarvationMs: options.wakeStarvationMs,
               })
             },
           }
@@ -209,6 +210,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
         FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: '',
         FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: '',
         FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE: '',
+        FORSKA_REVIEW_SERVING_WAKE_STARVATION_MS: '',
       },
     },
   )
@@ -226,6 +228,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
       rebuildChunkBatchMaxRssBytes: number
       rebuildChunkBatchSize: number
       searchRebuildChunkBatchSize: number
+      wakeStarvationMs: number
     }>
   }
 
@@ -234,6 +237,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
       rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
       rebuildChunkBatchSize: 2,
       searchRebuildChunkBatchSize: 8,
+      wakeStarvationMs: 30_000,
     },
   ])
 })
@@ -269,6 +273,7 @@ test('review serving projector worker heartbeat scales default batch size above 
                 rebuildChunkBatchMaxRssBytes: options.rebuildChunkBatchMaxRssBytes,
                 rebuildChunkBatchSize: options.rebuildChunkBatchSize,
                 searchRebuildChunkBatchSize: options.searchRebuildChunkBatchSize,
+                wakeStarvationMs: options.wakeStarvationMs,
               })
             },
           }
@@ -292,6 +297,7 @@ test('review serving projector worker heartbeat scales default batch size above 
         FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: '',
         FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE: '',
         FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE: '',
+        FORSKA_REVIEW_SERVING_WAKE_STARVATION_MS: '45000',
       },
     },
   )
@@ -309,6 +315,7 @@ test('review serving projector worker heartbeat scales default batch size above 
       rebuildChunkBatchMaxRssBytes: number
       rebuildChunkBatchSize: number
       searchRebuildChunkBatchSize: number
+      wakeStarvationMs: number
     }>
   }
 
@@ -317,6 +324,7 @@ test('review serving projector worker heartbeat scales default batch size above 
       rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
       rebuildChunkBatchSize: 4,
       searchRebuildChunkBatchSize: 32,
+      wakeStarvationMs: 45_000,
     },
   ])
 })
