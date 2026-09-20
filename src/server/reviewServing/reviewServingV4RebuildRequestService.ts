@@ -38,6 +38,7 @@ import {activateReviewServingProjectorSnapshot} from './reviewServingProjectorWr
 import {
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
+  defaultRebuildMaxAdmissionSplitCount,
   getActiveReviewServingRebuildRequestForProject,
   getBlockedOverBudgetReviewServingRebuildRequestForProject,
   getNonSplittableDefaultRebuildComponents,
@@ -211,9 +212,11 @@ type ReviewServingV4AdmissionSplit = {
   applied: boolean
   chunkCount: number
   chunkEstimate: ReviewServingRebuildRequestEstimate
+  maxChunkCount: number | null
   mode: 'bootstrapArticleRange' | 'defaultArticleRange'
   nonSplittableComponents: readonly ReviewServingProjectionComponent[]
   overBudgetReason: string
+  requestedChunkCount: number
 }
 
 export type RequestReviewServingV4RebuildInput = {
@@ -570,9 +573,11 @@ const getReviewServingV4BootstrapAdmissionSplit = (input: {
         applied: true,
         chunkCount: input.chunkCount,
         chunkEstimate: input.chunkEstimate,
+        maxChunkCount: null,
         mode: 'bootstrapArticleRange',
         nonSplittableComponents: [],
         overBudgetReason: input.singleChunkOverBudgetReason,
+        requestedChunkCount: input.chunkCount,
       }
 }
 
@@ -582,24 +587,27 @@ const getReviewServingV4DefaultAdmissionSplit = (input: {
   components: readonly ReviewServingProjectionComponent[]
   estimate: ReviewServingRebuildRequestEstimate
 }): ReviewServingV4AdmissionSplit | null => {
-  const chunkCount = getReviewServingV4BootstrapChunkCount({
+  const requestedChunkCount = getReviewServingV4BootstrapChunkCount({
     articleCount: input.articleCount,
     budget: input.budget,
     fixedEstimate: getReviewServingV4BootstrapZeroEstimate(),
     scalableEstimate: input.estimate,
   })
+  const chunkCount = Math.min(requestedChunkCount, defaultRebuildMaxAdmissionSplitCount)
   const overBudgetReason = getReviewServingV4RebuildOverBudgetReason(input.estimate, input.budget)
   const nonSplittableComponents = getNonSplittableDefaultRebuildComponents(input.components)
 
-  return chunkCount <= 1 || overBudgetReason === null
+  return requestedChunkCount <= 1 || overBudgetReason === null
     ? null
     : {
         applied: nonSplittableComponents.length === 0,
         chunkCount,
         chunkEstimate: getReviewServingRebuildChunkEstimate({chunkCount, estimate: input.estimate}),
+        maxChunkCount: defaultRebuildMaxAdmissionSplitCount,
         mode: 'defaultArticleRange',
         nonSplittableComponents,
         overBudgetReason,
+        requestedChunkCount,
       }
 }
 
@@ -2214,7 +2222,7 @@ export const requestReviewServingV4RebuildEffect = (
       return createReviewServingRebuildRequest(
         {
           articleRangeChunkCount:
-            admissionSplit?.mode === 'defaultArticleRange' ? admissionSplit.chunkCount : undefined,
+            admissionSplit?.mode === 'defaultArticleRange' ? admissionSplit.requestedChunkCount : undefined,
           budget: defaultRequestBudget,
           chunks,
           diagnostics: {

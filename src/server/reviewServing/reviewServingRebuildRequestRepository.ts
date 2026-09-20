@@ -296,16 +296,33 @@ const getOverBudgetReason = (
   return exceeded[0] ?? null
 }
 
-const getRefusedArticleRangeSplitOverBudgetReason = (input: {
+type DefaultRebuildArticleRangeSplit = {
+  chunkCount: number
+  maxChunkCount: number
   nonSplittableComponents: readonly ReviewServingProjectionComponent[]
+  requestedChunkCount: number
+}
+
+const getArticleRangeSplitRefusalSuffix = (split: DefaultRebuildArticleRangeSplit) => {
+  const nonSplittableSuffix =
+    split.nonSplittableComponents.length === 0
+      ? ''
+      : `; cannot split ${split.nonSplittableComponents.join(', ')} into article-range chunks`
+  const overCapSuffix =
+    split.requestedChunkCount > split.maxChunkCount
+      ? `; needs ${split.requestedChunkCount} article-range chunks, max ${split.maxChunkCount}`
+      : ''
+
+  return nonSplittableSuffix === '' ? overCapSuffix : nonSplittableSuffix
+}
+
+const getRefusedArticleRangeSplitOverBudgetReason = (input: {
   overBudgetReason: string | null
-  requestedArticleRangeChunkCount: number
+  split: DefaultRebuildArticleRangeSplit
 }) => {
-  return input.overBudgetReason === null
-    || input.requestedArticleRangeChunkCount <= 1
-    || input.nonSplittableComponents.length === 0
+  return input.overBudgetReason === null || input.split.requestedChunkCount <= 1
     ? input.overBudgetReason
-    : `${input.overBudgetReason}; cannot split ${input.nonSplittableComponents.join(', ')} into article-range chunks`
+    : `${input.overBudgetReason}${getArticleRangeSplitRefusalSuffix(input.split)}`
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -387,7 +404,7 @@ const getDefaultRebuildArticleBounds = async (
     : {chunkEndKey: row.chunkEndKey, chunkStartKey: row.chunkStartKey}
 }
 
-const defaultRebuildMaxAdmissionSplitCount = 64
+export const defaultRebuildMaxAdmissionSplitCount = 64
 const selectedImportDefaultRebuildMaxAdmissionSplitCount = 512
 const defaultRebuildNonPresplittableComponents = new Set<ReviewServingProjectionComponent>([
   'display',
@@ -539,12 +556,14 @@ const getNormalizedArticleRangeChunkCount = (value: number | undefined) => {
 const getDefaultRebuildArticleRangeSplit = (input: {
   articleRangeChunkCount: number | undefined
   requestedComponents: readonly ReviewServingProjectionComponent[]
-}) => {
+}): DefaultRebuildArticleRangeSplit => {
   const requestedChunkCount = getNormalizedArticleRangeChunkCount(input.articleRangeChunkCount)
   const nonSplittableComponents = getNonSplittableDefaultRebuildComponents(input.requestedComponents)
 
   return {
-    chunkCount: nonSplittableComponents.length === 0 ? requestedChunkCount : 1,
+    chunkCount:
+      nonSplittableComponents.length === 0 ? Math.min(requestedChunkCount, defaultRebuildMaxAdmissionSplitCount) : 1,
+    maxChunkCount: defaultRebuildMaxAdmissionSplitCount,
     nonSplittableComponents,
     requestedChunkCount,
   }
@@ -1942,9 +1961,8 @@ export const createReviewServingRebuildRequestEffect = (
           ))
         const admissionEstimate = getChunkedAdmissionEstimate({chunks, estimate: input.estimate})
         const overBudgetReason = getRefusedArticleRangeSplitOverBudgetReason({
-          nonSplittableComponents: articleRangeSplit.nonSplittableComponents,
           overBudgetReason: getOverBudgetReason(admissionEstimate, input.budget),
-          requestedArticleRangeChunkCount: articleRangeSplit.requestedChunkCount,
+          split: articleRangeSplit,
         })
         const admissionState: ReviewServingRebuildRequestAdmissionState =
           overBudgetReason === null ? 'admitted' : 'blocked_over_budget'

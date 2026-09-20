@@ -1,5 +1,7 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import type {
   ReviewServingChunkManifestRepositoryDatabase,
   ReviewServingChunkManifestRepositoryTransaction,
@@ -8,6 +10,7 @@ import {
   boostActiveReviewServingRebuildRequestForProject,
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
+  defaultRebuildMaxAdmissionSplitCount,
   getActiveReviewServingRebuildRequestForProject,
   getBlockedOverBudgetReviewServingRebuildRequestForProject,
   getNonSplittableDefaultRebuildComponents,
@@ -994,6 +997,96 @@ test('blocked over-budget rebuild request lookup matches only a recent identical
   expect(joined).toContain("AND updated_at > TIMESTAMPTZ '2026-06-20T10:05:00.000Z' - INTERVAL '3600000 milliseconds'")
   expect(joined).toContain('LIMIT 1')
   expect(joined).not.toContain('FROM app.review_rebuild_chunk_manifest chunk')
+})
+
+test('blocked over-budget rebuild request lookup in DuckDB reuses a request blocked 3599 s ago but not 3600 s ago', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+  const now = new Date('2026-06-20T10:05:00.000Z')
+  const secondsAgo = (seconds: number) => {
+    return new Date(now.getTime() - seconds * 1000).toISOString()
+  }
+  const lookupInput = {
+    blockedWithinMs: 3_600_000,
+    projectId: 'project-v4',
+    reason: 'selectedImportDirtyWork',
+    requestedComponents: ['selectedImport'] as const,
+    reviewConfigHash: 'review:current',
+  }
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE TABLE app.review_rebuild_request (
+        request_id VARCHAR PRIMARY KEY,
+        project_id VARCHAR NOT NULL,
+        reason VARCHAR NOT NULL,
+        requested_components_json JSON NOT NULL DEFAULT '[]',
+        source_watermarks_json JSON NOT NULL DEFAULT '{}',
+        identity_json JSON NOT NULL DEFAULT '{}',
+        priority INTEGER NOT NULL DEFAULT 100,
+        status VARCHAR NOT NULL,
+        admission_state VARCHAR NOT NULL,
+        retry_policy_json JSON NOT NULL DEFAULT '{}',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        retry_after TIMESTAMPTZ,
+        oom_category VARCHAR,
+        over_budget_reason VARCHAR,
+        diagnostics_json JSON,
+        lease_owner VARCHAR,
+        lease_expires_at TIMESTAMPTZ,
+        admitted_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        failed_at TIMESTAMPTZ,
+        last_error VARCHAR,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+      );
+      INSERT INTO app.review_rebuild_request (
+        request_id, project_id, reason, requested_components_json, identity_json, status, admission_state,
+        over_budget_reason, updated_at
+      )
+      VALUES
+        ('request-3599', 'project-v4', 'selectedImportDirtyWork', '["selectedImport"]', '{"reviewConfigHash":"review:current"}', 'blocked_over_budget', 'blocked_over_budget', 'input rows: estimated 300000 > max 250000', TIMESTAMPTZ '${secondsAgo(3_599)}'),
+        ('request-3600', 'project-v4', 'selectedImportDirtyWork', '["selectedImport"]', '{"reviewConfigHash":"review:current"}', 'blocked_over_budget', 'blocked_over_budget', 'input rows: estimated 300000 > max 250000', TIMESTAMPTZ '${secondsAgo(3_600)}'),
+        ('request-other-components', 'project-v4', 'selectedImportDirtyWork', '["display", "selectedImport"]', '{"reviewConfigHash":"review:current"}', 'blocked_over_budget', 'blocked_over_budget', 'input rows: estimated 300000 > max 250000', TIMESTAMPTZ '${secondsAgo(60)}'),
+        ('request-other-hash', 'project-v4', 'selectedImportDirtyWork', '["selectedImport"]', '{"reviewConfigHash":"review:previous"}', 'blocked_over_budget', 'blocked_over_budget', 'input rows: estimated 300000 > max 250000', TIMESTAMPTZ '${secondsAgo(60)}'),
+        ('request-admitted', 'project-v4', 'selectedImportDirtyWork', '["selectedImport"]', '{"reviewConfigHash":"review:current"}', 'admitted', 'admitted', NULL, TIMESTAMPTZ '${secondsAgo(60)}');
+    `)
+
+    const reused = await getBlockedOverBudgetReviewServingRebuildRequestForProject({...lookupInput, now}, database)
+
+    expect(reused).toMatchObject({
+      admissionState: 'blocked_over_budget',
+      identityJson: {reviewConfigHash: 'review:current'},
+      overBudgetReason: 'input rows: estimated 300000 > max 250000',
+      requestId: 'request-3599',
+      requestedComponents: ['selectedImport'],
+      status: 'blocked_over_budget',
+    })
+
+    const oneSecondLater = new Date(now.getTime() + 1000).toISOString()
+
+    expect(
+      await getBlockedOverBudgetReviewServingRebuildRequestForProject({...lookupInput, now: oneSecondLater}, database),
+    ).toBeNull()
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })
 
 test('boosting an active project rebuild request uses a lightweight foreground update', async () => {
@@ -2493,6 +2586,77 @@ test('default rebuild request ignores an article-range chunk count of one and ke
     status: 'blocked_over_budget',
   })
   expect(statements.join('\n')).not.toContain('NTILE(')
+})
+
+const getArticleRangeRows = (chunkCount: number) => {
+  return Array.from({length: chunkCount}, (_, index) => {
+    return {
+      chunkEndKey: `article-${String(index).padStart(3, '0')}-z`,
+      chunkStartKey: `article-${String(index).padStart(3, '0')}-a`,
+      scopedArticleCount: 1,
+    }
+  })
+}
+
+test('default rebuild request applies a request-level article-range chunk count equal to the admission split cap', async () => {
+  const {database, statements} = createFakeRequestDatabase({articleRangeRows: getArticleRangeRows(64)})
+
+  const request = await createReviewServingRebuildRequest(
+    {
+      articleRangeChunkCount: 64,
+      budget: {maxInputRows: 250_000},
+      estimate: {estimatedInputRows: 16_000_000},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['summary', 'payload'],
+      requestId: 'rebuild:article-range-split-at-cap',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+  const payloadChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'payload'")
+  })
+
+  expect(defaultRebuildMaxAdmissionSplitCount).toBe(64)
+  expect(request).toMatchObject({admissionState: 'admitted', overBudgetReason: null, status: 'admitted'})
+  expect(joined).toContain('NTILE(64)')
+  expect(payloadChunkInserts).toHaveLength(128)
+  expect(payloadChunkInserts[0]).toContain('"articleRangeChunkCount":64')
+  expect(payloadChunkInserts[0]).toContain('250000')
+  expect(payloadChunkInserts[0]).toContain("'pending'")
+})
+
+test('default rebuild request clamps a request-level article-range chunk count above the cap and stays blocked with the cap reason', async () => {
+  const {database, statements} = createFakeRequestDatabase({articleRangeRows: getArticleRangeRows(64)})
+
+  const request = await createReviewServingRebuildRequest(
+    {
+      articleRangeChunkCount: 65,
+      budget: {maxInputRows: 250_000},
+      estimate: {estimatedInputRows: 16_000_004},
+      projectId: 'project-v4',
+      reason: 'requestReviewServingLargeRebuild',
+      requestedComponents: ['summary', 'payload'],
+      requestId: 'rebuild:article-range-split-over-cap',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+  const payloadChunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest') && statement.includes("'payload'")
+  })
+
+  expect(request).toMatchObject({
+    admissionState: 'blocked_over_budget',
+    overBudgetReason: 'input rows: estimated 250001 > max 250000; needs 65 article-range chunks, max 64',
+    status: 'blocked_over_budget',
+  })
+  expect(joined).toContain('NTILE(64)')
+  expect(joined).not.toContain('NTILE(65)')
+  expect(payloadChunkInserts).toHaveLength(128)
+  expect(payloadChunkInserts[0]).toContain('"articleRangeChunkCount":64')
+  expect(payloadChunkInserts[0]).toContain("'blocked_over_budget'")
 })
 
 test('default rebuild request re-admission deletes obsolete non-running chunks from an earlier plan', async () => {

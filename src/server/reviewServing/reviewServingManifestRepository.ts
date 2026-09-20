@@ -710,6 +710,25 @@ const getSqlBoolean = (value: boolean | number | string | null | undefined) => {
   return value === true || value === 1 || value === 'true' || value === 't' || value === '1'
 }
 
+const getCandidateSnapshotInFlightRebuildSql = (candidateAlias: string) => {
+  const nonTerminalRequestStatusSql = nonTerminalReviewServingRebuildRequestStatuses.map(getSqlLiteral).join(', ')
+  const inFlightChunkStatusSql = inFlightReviewServingRebuildChunkStatuses.map(getSqlLiteral).join(', ')
+
+  return `EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        LEFT JOIN app.review_rebuild_request request
+          ON chunk.request_id IS NOT NULL
+          AND (request.request_id || '') = chunk.request_id
+        WHERE chunk.project_id IS NOT DISTINCT FROM ${candidateAlias}.project_id
+          AND chunk.snapshot_id IS NOT DISTINCT FROM ${candidateAlias}.snapshot_id
+          AND (
+            chunk.status IN (${inFlightChunkStatusSql})
+            OR request.status IN (${nonTerminalRequestStatusSql})
+          )
+      )`
+}
+
 const getCandidateSnapshotSupersessionRowFromRow = (
   row: CandidateSnapshotSupersessionRow,
 ): ReviewServingCandidateSnapshotSupersessionRow => {
@@ -747,8 +766,6 @@ export const getCandidateReviewServingSnapshotSupersessionRows = async (
     input.snapshotId === null || input.snapshotId === undefined
       ? ''
       : `AND candidate.snapshot_id = ${getSqlLiteral(input.snapshotId)}`
-  const nonTerminalRequestStatusSql = nonTerminalReviewServingRebuildRequestStatuses.map(getSqlLiteral).join(', ')
-  const inFlightChunkStatusSql = inFlightReviewServingRebuildChunkStatuses.map(getSqlLiteral).join(', ')
   const rows = await database.queryJson<CandidateSnapshotSupersessionRow>(`
     WITH reference_snapshot AS (
       SELECT
@@ -767,19 +784,7 @@ export const getCandidateReviewServingSnapshotSupersessionRows = async (
       candidate.last_error AS lastError,
       reference.snapshot_id AS referenceSnapshotId,
       CAST(COALESCE(candidate.created_at < reference.reference_at, FALSE) AS BOOLEAN) AS isOlderThanReference,
-      CAST(EXISTS (
-        SELECT 1
-        FROM app.review_rebuild_chunk_manifest chunk
-        LEFT JOIN app.review_rebuild_request request
-          ON chunk.request_id IS NOT NULL
-          AND (request.request_id || '') = chunk.request_id
-        WHERE chunk.project_id IS NOT DISTINCT FROM candidate.project_id
-          AND chunk.snapshot_id IS NOT DISTINCT FROM candidate.snapshot_id
-          AND (
-            chunk.status IN (${inFlightChunkStatusSql})
-            OR request.status IN (${nonTerminalRequestStatusSql})
-          )
-      ) AS BOOLEAN) AS hasInFlightRebuild
+      CAST(${getCandidateSnapshotInFlightRebuildSql('candidate')} AS BOOLEAN) AS hasInFlightRebuild
     FROM app.review_serving_snapshot_manifest candidate
     INNER JOIN reference_snapshot reference
       ON reference.project_id = candidate.project_id
@@ -934,51 +939,71 @@ export const failStaleCandidateReviewServingSnapshotManifests = async (
   }
 }
 
-export type ReviewServingQueuedSnapshotProjectRow = {
-  activeSnapshotCount: number
+export type ReviewServingStaleCandidateSnapshotProjectRow = {
   projectId: string
-  queuedSnapshotCount: number
   reviewConfigHash: string | null
+  staleCandidateCount: number
 }
 
-type QueuedSnapshotProjectRow = {
-  activeSnapshotCount: number | string
+type StaleCandidateSnapshotProjectRow = {
   projectId: string
-  queuedSnapshotCount: number | string
   reviewConfigHash: string | null
+  staleCandidateCount: number | string
 }
 
 /**
- * Projects (per review config hash) that currently queue more than one candidate/active snapshot
- * next to an active one. Those are the only places a stale candidate can exist, so the worker
- * cleanup scopes its per-project supersession scan to them.
+ * Projects (per review config hash) that currently hold at least one candidate snapshot the
+ * cleanup will actually fail: created before the active snapshot with the same review config hash
+ * was activated and not referenced by an in-flight rebuild (the same rules as
+ * `isSupersededCandidateReviewServingSnapshot`). Groups whose candidates are all newer than the
+ * active snapshot or still being built are not returned, and the order follows each group's oldest
+ * stale candidate, so the selection advances as the cleanup fails candidates instead of pinning the
+ * same groups every call.
  */
-export const getReviewServingProjectsWithMultipleQueuedSnapshots = async (
+export const getReviewServingProjectsWithStaleCandidateSnapshots = async (
   input: {limit: number},
   database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
-): Promise<ReviewServingQueuedSnapshotProjectRow[]> => {
+): Promise<ReviewServingStaleCandidateSnapshotProjectRow[]> => {
   const limit = Math.max(1, Math.trunc(input.limit))
-  const rows = await database.queryJson<QueuedSnapshotProjectRow>(`
+  const rows = await database.queryJson<StaleCandidateSnapshotProjectRow>(`
+    WITH reference_snapshot AS (
+      SELECT
+        project_id,
+        review_config_hash,
+        MAX(COALESCE(activated_at, created_at)) AS reference_at
+      FROM app.review_serving_snapshot_manifest
+      WHERE snapshot_status = 'active'
+      GROUP BY project_id, review_config_hash
+    ),
+    stale_candidate AS (
+      SELECT
+        candidate.project_id,
+        candidate.review_config_hash,
+        candidate.snapshot_id,
+        candidate.updated_at
+      FROM app.review_serving_snapshot_manifest candidate
+      INNER JOIN reference_snapshot reference
+        ON reference.project_id = candidate.project_id
+        AND reference.review_config_hash IS NOT DISTINCT FROM candidate.review_config_hash
+      WHERE candidate.snapshot_status = 'candidate'
+        AND candidate.created_at < reference.reference_at
+        AND NOT ${getCandidateSnapshotInFlightRebuildSql('candidate')}
+    )
     SELECT
       project_id AS projectId,
       review_config_hash AS reviewConfigHash,
-      CAST(COUNT(DISTINCT snapshot_id) AS INTEGER) AS queuedSnapshotCount,
-      CAST(COUNT(DISTINCT snapshot_id) FILTER (WHERE snapshot_status = 'active') AS INTEGER) AS activeSnapshotCount
-    FROM app.review_serving_snapshot_manifest
-    WHERE snapshot_status IN ('candidate', 'active')
+      CAST(COUNT(DISTINCT snapshot_id) AS INTEGER) AS staleCandidateCount
+    FROM stale_candidate
     GROUP BY project_id, review_config_hash
-    HAVING COUNT(DISTINCT snapshot_id) > 1
-      AND COUNT(DISTINCT snapshot_id) FILTER (WHERE snapshot_status = 'active') > 0
     ORDER BY MIN(updated_at) ASC NULLS FIRST, project_id ASC, review_config_hash ASC NULLS FIRST
     LIMIT ${getSqlLiteral(limit)}
   `)
 
   return rows.map((row) => {
     return {
-      activeSnapshotCount: Number(row.activeSnapshotCount ?? 0),
       projectId: row.projectId,
-      queuedSnapshotCount: Number(row.queuedSnapshotCount ?? 0),
       reviewConfigHash: row.reviewConfigHash ?? null,
+      staleCandidateCount: Number(row.staleCandidateCount ?? 0),
     }
   })
 }
@@ -999,7 +1024,7 @@ export type CleanupStaleCandidateReviewServingSnapshotManifestsResult = {
 export const defaultStaleCandidateCleanupProjectLimit = 10
 export const defaultStaleCandidateCleanupSnapshotLimit = 25
 
-const getUniqueProjectIds = (rows: readonly ReviewServingQueuedSnapshotProjectRow[]) => {
+const getUniqueProjectIds = (rows: readonly ReviewServingStaleCandidateSnapshotProjectRow[]) => {
   return [
     ...new Set(
       rows.map((row) => {
@@ -1015,11 +1040,11 @@ const getBoundedCleanupLimit = (value: number | undefined, fallback: number) => 
 
 /**
  * Bounded, automatic variant of `failStaleCandidateReviewServingSnapshotManifests` for the
- * projector worker cleanup cycle: only projects with more than one queued snapshot for the same
- * review config hash are scanned, at most `maxProjects` projects and `maxSnapshots` candidates
- * are touched per call, and each project is applied in its own transaction. The same safety rules
- * apply: the active snapshot and candidates referenced by pending/running chunks or non-terminal
- * requests are never touched.
+ * projector worker cleanup cycle: only projects that hold a stale candidate for some review config
+ * hash are scanned (oldest stale candidate first, so the selection rotates as candidates are
+ * failed), at most `maxProjects` projects and `maxSnapshots` candidates are touched per call, and
+ * each project is applied in its own transaction. The same safety rules apply: the active snapshot
+ * and candidates referenced by pending/running chunks or non-terminal requests are never touched.
  */
 export const cleanupStaleCandidateReviewServingSnapshotManifests = async (
   params: CleanupStaleCandidateReviewServingSnapshotManifestsParams,
@@ -1027,7 +1052,7 @@ export const cleanupStaleCandidateReviewServingSnapshotManifests = async (
 ): Promise<CleanupStaleCandidateReviewServingSnapshotManifestsResult> => {
   const maxProjects = getBoundedCleanupLimit(params.maxProjects, defaultStaleCandidateCleanupProjectLimit)
   const maxSnapshots = getBoundedCleanupLimit(params.maxSnapshots, defaultStaleCandidateCleanupSnapshotLimit)
-  const projectRows = await getReviewServingProjectsWithMultipleQueuedSnapshots({limit: maxProjects}, database)
+  const projectRows = await getReviewServingProjectsWithStaleCandidateSnapshots({limit: maxProjects}, database)
   const projectIds = getUniqueProjectIds(projectRows)
 
   return projectIds.reduce<Promise<CleanupStaleCandidateReviewServingSnapshotManifestsResult>>(
