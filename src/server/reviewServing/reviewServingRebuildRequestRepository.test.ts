@@ -2,9 +2,10 @@ import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
-import type {
-  ReviewServingChunkManifestRepositoryDatabase,
-  ReviewServingChunkManifestRepositoryTransaction,
+import {
+  getNextClaimableReviewServingRebuildChunk,
+  type ReviewServingChunkManifestRepositoryDatabase,
+  type ReviewServingChunkManifestRepositoryTransaction,
 } from './reviewServingChunkManifestRepository.ts'
 import {
   boostActiveReviewServingRebuildRequestForProject,
@@ -2682,4 +2683,162 @@ test('default rebuild request re-admission deletes obsolete non-running chunks f
   expect(deleteStatements[0]).toContain("WHERE request_id = 'rebuild:article-range-readmission'")
   expect(deleteStatements[0]).toContain('AND chunk_id NOT IN (')
   expect(deleteStatements[0]).toContain("AND status <> 'running'")
+})
+
+test('pending rebuild chunks are claimed activation first, then search, then enrichment for one project', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+  const now = '2026-06-20T10:05:00.000Z'
+  const claimNextChunk = async () => {
+    const next = await getNextClaimableReviewServingRebuildChunk({now, projectId: 'project-v4'}, database)
+
+    if (next === null) {
+      return null
+    }
+
+    await connection.run(`
+      UPDATE app.review_rebuild_chunk_manifest
+      SET status = 'completed', completed_at = TIMESTAMPTZ '${now}'
+      WHERE chunk_id = '${next.chunkId}'
+    `)
+
+    return next.requestId
+  }
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE TABLE app.project (id VARCHAR PRIMARY KEY, archived BOOLEAN NOT NULL DEFAULT FALSE, delete_pending_at TIMESTAMPTZ);
+      CREATE TABLE app.review_rebuild_request (
+        request_id VARCHAR PRIMARY KEY,
+        project_id VARCHAR NOT NULL,
+        reason VARCHAR NOT NULL,
+        requested_components_json JSON NOT NULL DEFAULT '[]',
+        source_watermarks_json JSON NOT NULL DEFAULT '{}',
+        identity_json JSON NOT NULL DEFAULT '{}',
+        priority INTEGER NOT NULL DEFAULT 100,
+        status VARCHAR NOT NULL,
+        admission_state VARCHAR NOT NULL,
+        retry_policy_json JSON NOT NULL DEFAULT '{}',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        retry_after TIMESTAMPTZ,
+        oom_category VARCHAR,
+        over_budget_reason VARCHAR,
+        diagnostics_json JSON,
+        lease_owner VARCHAR,
+        lease_expires_at TIMESTAMPTZ,
+        admitted_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        failed_at TIMESTAMPTZ,
+        last_error VARCHAR,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+      );
+      CREATE TABLE app.review_serving_snapshot_manifest (
+        project_id VARCHAR NOT NULL,
+        snapshot_id VARCHAR NOT NULL,
+        snapshot_status VARCHAR NOT NULL DEFAULT 'candidate',
+        review_config_hash VARCHAR,
+        composed_identity_json JSON NOT NULL DEFAULT '{}',
+        component_state_json JSON NOT NULL DEFAULT '{}',
+        required_components_json JSON NOT NULL DEFAULT '[]',
+        optional_components_json JSON NOT NULL DEFAULT '[]',
+        source_watermarks_json JSON NOT NULL DEFAULT '{}',
+        validation_result_json JSON,
+        selected_import_snapshot_id VARCHAR,
+        last_known_good_snapshot_id VARCHAR,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        activated_at TIMESTAMPTZ,
+        failed_at TIMESTAMPTZ,
+        last_error VARCHAR
+      );
+      CREATE TABLE app.review_rebuild_chunk_manifest (
+        chunk_id VARCHAR NOT NULL,
+        project_id VARCHAR,
+        projection_component VARCHAR NOT NULL,
+        projection_identity VARCHAR NOT NULL,
+        input_digest VARCHAR,
+        input_watermark BIGINT NOT NULL DEFAULT 0,
+        chunk_start_key VARCHAR NOT NULL,
+        chunk_end_key VARCHAR NOT NULL,
+        output_base_generation BIGINT NOT NULL DEFAULT 0,
+        status VARCHAR NOT NULL DEFAULT 'pending',
+        checksum VARCHAR,
+        lease_owner VARCHAR,
+        lease_expires_at TIMESTAMPTZ,
+        last_error VARCHAR,
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        request_id VARCHAR,
+        parent_chunk_id VARCHAR,
+        split_depth INTEGER DEFAULT 0,
+        snapshot_id VARCHAR,
+        snapshot_count INTEGER DEFAULT 1,
+        retry_count INTEGER DEFAULT 0,
+        retry_after TIMESTAMPTZ,
+        oom_category VARCHAR,
+        over_budget_reason VARCHAR,
+        estimated_input_rows BIGINT,
+        max_input_rows BIGINT,
+        actual_input_rows BIGINT,
+        estimated_output_rows BIGINT,
+        max_output_rows BIGINT,
+        actual_output_rows BIGINT,
+        estimated_output_bytes BIGINT,
+        max_output_bytes BIGINT,
+        actual_output_bytes BIGINT,
+        estimated_payload_bytes BIGINT,
+        max_payload_bytes BIGINT,
+        actual_payload_bytes BIGINT,
+        estimated_prompt_count BIGINT,
+        max_prompt_count BIGINT,
+        actual_prompt_count BIGINT,
+        estimated_temp_bytes BIGINT,
+        max_temp_bytes BIGINT,
+        actual_temp_bytes BIGINT,
+        duration_ms BIGINT,
+        workload_class VARCHAR,
+        admission_state VARCHAR DEFAULT 'admitted',
+        budget_json JSON DEFAULT '{}',
+        diagnostics_json JSON DEFAULT '{}'
+      );
+      INSERT INTO app.project (id) VALUES ('project-v4');
+      INSERT INTO app.review_serving_snapshot_manifest (project_id, snapshot_id, snapshot_status, required_components_json, optional_components_json)
+      VALUES ('project-v4', 'snapshot-1', 'active', '["display"]', '["search", "posting"]');
+      INSERT INTO app.review_rebuild_request (request_id, project_id, reason, requested_components_json, priority, status, admission_state, created_at, updated_at)
+      VALUES
+        ('rebuild:enrichment', 'project-v4', 'postingDirtyWork', '["posting"]', 50, 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:00:00.000Z', TIMESTAMPTZ '2026-06-20T10:00:00.000Z'),
+        ('rebuild:search', 'project-v4', 'searchDirtyWork', '["search"]', 100, 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:01:00.000Z', TIMESTAMPTZ '2026-06-20T10:01:00.000Z'),
+        ('rebuild:activation', 'project-v4', 'displayDirtyWork', '["display"]', 10000, 'admitted', 'admitted', TIMESTAMPTZ '2026-06-20T10:02:00.000Z', TIMESTAMPTZ '2026-06-20T10:02:00.000Z');
+      INSERT INTO app.review_rebuild_chunk_manifest (chunk_id, project_id, projection_component, projection_identity, chunk_start_key, chunk_end_key, request_id, snapshot_id, created_at, updated_at)
+      VALUES
+        ('chunk:enrichment', 'project-v4', 'posting', 'posting:identity', 'article-a', 'article-z', 'rebuild:enrichment', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:00:00.000Z', TIMESTAMPTZ '2026-06-20T10:00:00.000Z'),
+        ('chunk:search', 'project-v4', 'search', 'search:identity', 'article-a', 'article-z', 'rebuild:search', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:01:00.000Z', TIMESTAMPTZ '2026-06-20T10:01:00.000Z'),
+        ('chunk:activation', 'project-v4', 'display', 'display:identity', 'article-a', 'article-z', 'rebuild:activation', 'snapshot-1', TIMESTAMPTZ '2026-06-20T10:02:00.000Z', TIMESTAMPTZ '2026-06-20T10:02:00.000Z');
+    `)
+
+    expect(await claimNextChunk()).toBe('rebuild:activation')
+    expect(await claimNextChunk()).toBe('rebuild:search')
+    expect(await claimNextChunk()).toBe('rebuild:enrichment')
+    expect(await claimNextChunk()).toBeNull()
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })

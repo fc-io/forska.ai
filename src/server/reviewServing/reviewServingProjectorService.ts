@@ -101,10 +101,9 @@ type ReviewServingClaimManifestEnsurer = (
 ) => Promise<void>
 
 const countReadyRepairComponents = new Set<ReviewServingProjectionComponent>(countReadyReviewServingComponents)
-const activationMissingSnapshotRepairPriority = 10_000
-const enrichmentMissingSnapshotRepairPriority = 50
-const searchDirtyWorkRebuildPriority = enrichmentMissingSnapshotRepairPriority
-const queueDirtyWorkRebuildPriority = activationMissingSnapshotRepairPriority
+export const activationReviewServingRebuildPriority = 10_000
+export const searchReviewServingRebuildPriority = 100
+export const enrichmentReviewServingRebuildPriority = 50
 // Only components with bounded article-range rebuild admission belong here; non-presplittable components stay direct.
 const highFanoutDirtyWorkRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'humanStatus',
@@ -342,10 +341,14 @@ const getMissingSnapshotRepairComponents = (
   return [...new Set<ReviewServingProjectionComponent>([...countReadyReviewServingComponents, component])]
 }
 
-const getMissingSnapshotRepairPriority = (component: ReviewServingProjectionComponent) => {
+const getOptionalComponentRebuildPriority = (component: ReviewServingProjectionComponent) => {
+  return component === 'search' ? searchReviewServingRebuildPriority : enrichmentReviewServingRebuildPriority
+}
+
+export const getMissingSnapshotRepairPriority = (component: ReviewServingProjectionComponent) => {
   return countReadyRepairComponents.has(component)
-    ? activationMissingSnapshotRepairPriority
-    : enrichmentMissingSnapshotRepairPriority
+    ? activationReviewServingRebuildPriority
+    : getOptionalComponentRebuildPriority(component)
 }
 
 const getClaimProjectIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
@@ -484,12 +487,10 @@ const getChunkedDirtyWorkProjectIds = (
     : []
 }
 
-const getChunkedDirtyWorkRebuildPriority = (component: ReviewServingProjectionComponent) => {
-  if (component === 'queue' || countReadyRepairComponents.has(component)) {
-    return queueDirtyWorkRebuildPriority
-  }
-
-  return searchDirtyWorkRebuildPriority
+export const getChunkedDirtyWorkRebuildPriority = (component: ReviewServingProjectionComponent) => {
+  return countReadyRepairComponents.has(component)
+    ? activationReviewServingRebuildPriority
+    : getOptionalComponentRebuildPriority(component)
 }
 
 const getChunkedDirtyWorkRebuildReason = (component: ReviewServingProjectionComponent) => {

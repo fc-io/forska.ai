@@ -374,7 +374,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   expect(rebuildRequests).toEqual([
     {
       components: ['search'],
-      priority: 50,
+      priority: 100,
       projectId: 'project-1',
       reason: 'searchDirtyWork',
       reuseBlockedRequestWithinMs: 3_600_000,
