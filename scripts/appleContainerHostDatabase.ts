@@ -3,8 +3,8 @@ import {dirname, join} from 'node:path'
 
 import {getRuntimeProfileDataRoot} from '../src/utils/runtimeProfile.ts'
 
-export const getAppleContainerHostDatabase = (repositoryRoot: string) => {
-  const directory = realpathSync(getRuntimeProfileDataRoot({profileName: 'primary'}))
+export const getAppleContainerHostDatabase = (repositoryRoot: string, hostDatabaseDirectory?: string) => {
+  const directory = realpathSync(hostDatabaseDirectory ?? getRuntimeProfileDataRoot({profileName: 'primary'}))
   const databasePath = join(directory, 'forska.duckdb')
   const assetsDirectory = realpathSync(join(repositoryRoot, 'assets'))
   if (!statSync(databasePath).isFile()) {

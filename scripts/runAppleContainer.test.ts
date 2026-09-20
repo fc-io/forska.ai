@@ -15,12 +15,27 @@ test('validates custom host ports before starting any containers', () => {
   }
 })
 
-test('uses 8 GiB by default and accepts whole GiB comparison budgets', () => {
+test('uses 8 GiB by default and accepts whole GiB or MiB comparison budgets', () => {
   const defaultRun = getAppleContainerCommands()[2]
   const comparisonRun = getAppleContainerCommands({memory: '16G'})[2]
+  const mebibyteRun = getAppleContainerCommands({memory: '6554M'})[2] ?? []
   expect(defaultRun[defaultRun.indexOf('--memory') + 1]).toBe('8G')
   expect(comparisonRun[comparisonRun.indexOf('--memory') + 1]).toBe('16G')
-  for (const memory of ['', '0G', '-1G', '8', '8GB', '0.5G', '8G --privileged', '9007199254740992G']) {
+  expect(mebibyteRun[mebibyteRun.indexOf('--memory') + 1]).toBe('6554M')
+  for (const memory of [
+    '',
+    '0G',
+    '-1G',
+    '8',
+    '8GB',
+    '0.5G',
+    '8G --privileged',
+    '9007199254740992G',
+    '0M',
+    '6554MB',
+    '6554m',
+    '6554MiB',
+  ]) {
     expect(() => {
       return getAppleContainerCommands({memory})
     }).toThrow('FORSKA_CONTAINER_MEMORY')
