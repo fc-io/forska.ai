@@ -1,8 +1,24 @@
 export type ReviewsWarningsPayloadMemoMode = 'bypass' | 'memo' | 'refresh'
 
-type ReviewsWarningsPayloadMemoEntry<T> = {expiresAtMs: number; value: Promise<T>}
+type ReviewsWarningsPayloadMemoEntry<T> = {expiresAtMs: number | null; value: Promise<T>}
 
 type ReviewsWarningsPayloadMemoRead<T> = {compute: () => Promise<T>; key: string; mode: ReviewsWarningsPayloadMemoMode}
+
+export const getReviewsWarningsPayloadMemoKey = (input: {
+  projectId: string
+  projectUpdatedAt: string | null
+  reviewConfigHash: string | null
+}) => {
+  return [input.projectId, input.reviewConfigHash ?? '', input.projectUpdatedAt ?? ''].join('|')
+}
+
+const isInFlightEntry = <T>(entry: ReviewsWarningsPayloadMemoEntry<T>) => {
+  return entry.expiresAtMs === null
+}
+
+const isFreshSettledEntry = <T>(entry: ReviewsWarningsPayloadMemoEntry<T>, nowMs: number) => {
+  return entry.expiresAtMs !== null && entry.expiresAtMs > nowMs
+}
 
 export const createReviewsWarningsPayloadMemo = <T>(input: {now?: () => number; ttlMs: number}) => {
   const entries = new Map<string, ReviewsWarningsPayloadMemoEntry<T>>()
@@ -11,31 +27,45 @@ export const createReviewsWarningsPayloadMemo = <T>(input: {now?: () => number; 
   const getExpiredKeys = (nowMs: number) => {
     return [...entries]
       .filter(([, entry]) => {
-        return entry.expiresAtMs <= nowMs
+        return entry.expiresAtMs !== null && entry.expiresAtMs <= nowMs
       })
       .map(([key]) => {
         return key
       })
   }
 
-  const forgetRejectedEntry = (key: string, entry: ReviewsWarningsPayloadMemoEntry<T>) => {
-    if (entries.get(key) === entry) {
+  const settleEntry = (key: string, entry: ReviewsWarningsPayloadMemoEntry<T>, fulfilled: boolean) => {
+    const isCurrentEntry = entries.get(key) === entry
+
+    if (isCurrentEntry && fulfilled) {
+      entry.expiresAtMs = now() + input.ttlMs
+    }
+
+    if (isCurrentEntry && !fulfilled) {
       entries.delete(key)
     }
   }
 
   const store = (key: string, compute: () => Promise<T>) => {
-    const nowMs = now()
-    getExpiredKeys(nowMs).map((expiredKey) => {
+    getExpiredKeys(now()).map((expiredKey) => {
       return entries.delete(expiredKey)
     })
-    const entry = {expiresAtMs: nowMs + input.ttlMs, value: compute()}
+    const entry: ReviewsWarningsPayloadMemoEntry<T> = {expiresAtMs: null, value: compute()}
     entries.set(key, entry)
-    entry.value.catch(() => {
-      forgetRejectedEntry(key, entry)
-    })
+    void entry.value.then(
+      () => {
+        settleEntry(key, entry, true)
+      },
+      () => {
+        settleEntry(key, entry, false)
+      },
+    )
 
     return entry.value
+  }
+
+  const isReusableEntry = (entry: ReviewsWarningsPayloadMemoEntry<T> | undefined, mode: 'memo' | 'refresh') => {
+    return entry !== undefined && (isInFlightEntry(entry) || (mode === 'memo' && isFreshSettledEntry(entry, now())))
   }
 
   const read = (request: ReviewsWarningsPayloadMemoRead<T>) => {
@@ -44,9 +74,10 @@ export const createReviewsWarningsPayloadMemo = <T>(input: {now?: () => number; 
     }
 
     const entry = entries.get(request.key)
-    const isReusable = request.mode === 'memo' && entry !== undefined && entry.expiresAtMs > now()
 
-    return isReusable ? entry.value : store(request.key, request.compute)
+    return entry !== undefined && isReusableEntry(entry, request.mode)
+      ? entry.value
+      : store(request.key, request.compute)
   }
 
   return {

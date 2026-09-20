@@ -4,13 +4,19 @@ await mock.module('../../../services/apiClient.ts', () => {
   return {apiClient: {}}
 })
 
-const {createReviewServingStatusQueryOptions, createReviewsWarningsQueryOptions, reviewsWarningsPollingIntervalMs} =
-  await import('./reviewsWarningsQuery.ts')
+const {
+  createReviewServingStatusQueryOptions,
+  createReviewsWarningsQueryOptions,
+  invalidateReviewsWarningsQueries,
+  reviewServingStatusQueryKey,
+  reviewsWarningsPollingIntervalMs,
+  reviewsWarningsQueryKeyPrefix,
+} = await import('./reviewsWarningsQuery.ts')
 
-test('reviews warnings and review-serving status poll every 30 s and refetch on mount, focus, and reconnect', () => {
+test('reviews warnings and review-serving status poll every 30 s and always refetch on mount, focus, and reconnect', () => {
   const expectedPolling = {
     refetchInterval: 30_000,
-    refetchOnMount: true,
+    refetchOnMount: 'always',
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
     staleTime: 30_000,
@@ -19,10 +25,23 @@ test('reviews warnings and review-serving status poll every 30 s and refetch on 
   expect(reviewsWarningsPollingIntervalMs).toBe(30_000)
   expect(createReviewsWarningsQueryOptions('project-1')).toMatchObject({
     ...expectedPolling,
-    queryKey: ['project-reviews-warnings', 'project-1'],
+    queryKey: [reviewsWarningsQueryKeyPrefix, 'project-1'],
   })
   expect(createReviewServingStatusQueryOptions()).toMatchObject({
     ...expectedPolling,
-    queryKey: ['review-serving-status'],
+    queryKey: reviewServingStatusQueryKey,
   })
+})
+
+test('invalidating review warnings queries targets the warnings prefix and the review-serving status key', async () => {
+  const invalidatedQueryKeys: unknown[] = []
+  const queryClient = {
+    invalidateQueries: async (filters: {queryKey: unknown}) => {
+      invalidatedQueryKeys.push(filters.queryKey)
+    },
+  }
+
+  await invalidateReviewsWarningsQueries(queryClient as never)
+
+  expect(invalidatedQueryKeys).toEqual([['project-reviews-warnings'], ['review-serving-status']])
 })

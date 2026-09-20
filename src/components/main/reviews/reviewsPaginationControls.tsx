@@ -5,6 +5,7 @@ import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
+import {invalidateReviewsWarningsQueries} from './reviewsWarningsQuery.ts'
 
 type ListType = 'llm' | 'human' | 'both' | 'unassessed'
 
@@ -238,6 +239,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
     if (isTerminalAddArticlesJobStatus(status)) {
       void queryClient.invalidateQueries({queryKey: ['projects-without-jobs']})
       void queryClient.invalidateQueries({queryKey: ['project-curated-articles']})
+      void invalidateReviewsWarningsQueries(queryClient)
     }
   })
 

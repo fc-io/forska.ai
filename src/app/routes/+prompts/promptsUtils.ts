@@ -1,5 +1,6 @@
 import type {QueryClient} from '@tanstack/solid-query'
 
+import {invalidateReviewsWarningsQueries} from '../../../components/main/reviews/reviewsWarningsQuery.ts'
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
@@ -32,6 +33,7 @@ const invalidatePromptsQueries = async (queryClient: QueryClient): Promise<void>
   await Promise.all([
     queryClient.invalidateQueries({queryKey: ['prompts']}),
     queryClient.invalidateQueries({queryKey: ['prompts', 'archived']}),
+    invalidateReviewsWarningsQueries(queryClient),
   ])
 }
 

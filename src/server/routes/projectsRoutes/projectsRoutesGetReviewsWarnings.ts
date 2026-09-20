@@ -26,7 +26,11 @@ import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {isReviewServingProjectorPaused} from '../../utils/reviewServingProjectorPause.ts'
 import {shouldDisableServerMutationWork} from '../../utils/serverMutationMode.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
-import {createReviewsWarningsPayloadMemo, type ReviewsWarningsPayloadMemoMode} from './reviewsWarningsPayloadMemo.ts'
+import {
+  createReviewsWarningsPayloadMemo,
+  getReviewsWarningsPayloadMemoKey,
+  type ReviewsWarningsPayloadMemoMode,
+} from './reviewsWarningsPayloadMemo.ts'
 
 type ReviewsIndexingBlockedReason =
   | 'duckdb_exclusive_work_active'
@@ -889,10 +893,6 @@ export const resetReviewsWarningsPayloadMemoForTests = () => {
   reviewsWarningsPayloadMemo.clear()
 }
 
-const getReviewsWarningsPayloadMemoKey = (projectId: string, reviewConfigHash: string | null) => {
-  return `${projectId} ${reviewConfigHash ?? ''}`
-}
-
 const getReviewsWarningsPayloadMemoMode = (body: {
   fresh?: boolean
   includeDiagnosticDetails?: boolean
@@ -908,7 +908,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
   '/api/projectsreviewswarnings',
   async ({body}) => {
     const projectId = body.projectId
-    await assertProjectIsActive(projectId, getReviewWarningsWorkloadContext(projectId, 'projectAccess'))
+    const project = await assertProjectIsActive(projectId, getReviewWarningsWorkloadContext(projectId, 'projectAccess'))
     const reviewConfigHash = await getCurrentReviewConfigHash(projectId, {
       database: getApiReadOnlyAppDatabaseService(),
       workloadContext: getReviewWarningsWorkloadContext(projectId, 'reviewConfigHash'),
@@ -922,7 +922,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           reviewConfigHash,
         })
       },
-      key: getReviewsWarningsPayloadMemoKey(projectId, reviewConfigHash),
+      key: getReviewsWarningsPayloadMemoKey({projectId, projectUpdatedAt: project.updatedAt ?? null, reviewConfigHash}),
       mode: getReviewsWarningsPayloadMemoMode(body),
     })
   },

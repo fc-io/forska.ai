@@ -1,3 +1,5 @@
+import type {QueryClient} from '@tanstack/solid-query'
+
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 
@@ -107,18 +109,27 @@ export type ReviewServingStatusData = {
 }
 
 export const reviewsWarningsPollingIntervalMs = 30_000
+export const reviewsWarningsQueryKeyPrefix = 'project-reviews-warnings'
+export const reviewServingStatusQueryKey = ['review-serving-status'] as const
 
 const reviewsWarningsPollingOptions = {
   refetchInterval: reviewsWarningsPollingIntervalMs,
-  refetchOnMount: true,
+  refetchOnMount: 'always',
   refetchOnReconnect: true,
   refetchOnWindowFocus: true,
   staleTime: reviewsWarningsPollingIntervalMs,
 } as const
 
+export const invalidateReviewsWarningsQueries = (queryClient: QueryClient) => {
+  return Promise.all([
+    queryClient.invalidateQueries({queryKey: [reviewsWarningsQueryKeyPrefix]}),
+    queryClient.invalidateQueries({queryKey: reviewServingStatusQueryKey}),
+  ])
+}
+
 export const createReviewsWarningsQueryOptions = (projectId: string) => {
   return {
-    queryKey: ['project-reviews-warnings', projectId],
+    queryKey: [reviewsWarningsQueryKeyPrefix, projectId],
     queryFn: async () => {
       const response = await apiClient.api.projectsreviewswarnings.post({projectId})
       const data = handleApiResponse(response, 'Failed to load project warnings')
@@ -131,7 +142,7 @@ export const createReviewsWarningsQueryOptions = (projectId: string) => {
 
 export const createReviewServingStatusQueryOptions = () => {
   return {
-    queryKey: ['review-serving-status'],
+    queryKey: reviewServingStatusQueryKey,
     queryFn: async () => {
       const response = await fetch('/api/review-serving/status')
       if (!response.ok) throw new Error(`Failed to load review-serving status (${response.status})`)
