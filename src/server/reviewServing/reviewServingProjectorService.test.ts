@@ -9,8 +9,9 @@ import {
 } from './reviewServingProjectorDomain.ts'
 import {
   activationReviewServingRebuildPriority,
-  enrichmentReviewServingRebuildPriority,
+  detailReadinessReviewServingRebuildPriority,
   ensureReviewServingClaimManifests,
+  facetEnrichmentReviewServingRebuildPriority,
   getChunkedDirtyWorkRebuildPriority,
   getMissingSnapshotRepairPriority,
   getReviewServingProjectorComponentRunPlan,
@@ -462,6 +463,13 @@ test('wake requests page-first V4 rebuild and blocks claims when a snapshot is n
   expect(failedClaimIds).toEqual([])
 })
 
+const chunkedDirtyWorkRebuildPriorityByComponent = {
+  judgmentInputContent: 100,
+  payload: 100,
+  posting: 50,
+  summary: 50,
+} as const
+
 for (const component of ['payload', 'posting', 'summary', 'judgmentInputContent'] as const) {
   test(`wake routes article-scoped ${component} dirty work through chunked rebuilds before direct projection`, async () => {
     const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
@@ -507,7 +515,7 @@ for (const component of ['payload', 'posting', 'summary', 'judgmentInputContent'
       {
         components: [component],
         pageFirstOnly: undefined,
-        priority: 50,
+        priority: chunkedDirtyWorkRebuildPriorityByComponent[component],
         projectId: 'project-1',
         reason: `${component}DirtyWork`,
       },
@@ -1669,39 +1677,41 @@ test('unsupported scopes fail intake instead of falling back to foreground raw s
   expect(result).toEqual({reason: 'unsupported dirty kind: unknown.change', status: 'failed'})
 })
 
-test('rebuild priority tiers keep activation above the generic default, the generic default above search, and search above enrichment', () => {
+test('rebuild priority tiers rank activation, then detail readiness with the generic default, then search, then facet enrichment', () => {
   const genericDefaultRebuildRequestPriority = 100
 
   expect(activationReviewServingRebuildPriority).toBe(10_000)
+  expect(detailReadinessReviewServingRebuildPriority).toBe(100)
   expect(searchReviewServingRebuildPriority).toBe(75)
-  expect(enrichmentReviewServingRebuildPriority).toBe(50)
-  expect(activationReviewServingRebuildPriority).toBeGreaterThan(genericDefaultRebuildRequestPriority)
-  expect(genericDefaultRebuildRequestPriority).toBeGreaterThan(searchReviewServingRebuildPriority)
-  expect(searchReviewServingRebuildPriority).toBeGreaterThan(enrichmentReviewServingRebuildPriority)
+  expect(facetEnrichmentReviewServingRebuildPriority).toBe(50)
+  expect(activationReviewServingRebuildPriority).toBeGreaterThan(detailReadinessReviewServingRebuildPriority)
+  expect(detailReadinessReviewServingRebuildPriority).toBe(genericDefaultRebuildRequestPriority)
+  expect(detailReadinessReviewServingRebuildPriority).toBeGreaterThan(searchReviewServingRebuildPriority)
+  expect(searchReviewServingRebuildPriority).toBeGreaterThan(facetEnrichmentReviewServingRebuildPriority)
 })
 
-test('chunked dirty work rebuild priority ranks activation, search, then enrichment components', () => {
+test('chunked dirty work rebuild priority ranks activation, detail readiness, search, then facet enrichment components', () => {
   for (const component of countReadyReviewServingComponents) {
     expect(getChunkedDirtyWorkRebuildPriority(component)).toBe(10_000)
   }
 
   expect(getChunkedDirtyWorkRebuildPriority('queue')).toBe(10_000)
+  expect(getChunkedDirtyWorkRebuildPriority('payload')).toBe(100)
+  expect(getChunkedDirtyWorkRebuildPriority('judgmentInputContent')).toBe(100)
   expect(getChunkedDirtyWorkRebuildPriority('search')).toBe(75)
   expect(getChunkedDirtyWorkRebuildPriority('posting')).toBe(50)
   expect(getChunkedDirtyWorkRebuildPriority('summary')).toBe(50)
-  expect(getChunkedDirtyWorkRebuildPriority('payload')).toBe(50)
-  expect(getChunkedDirtyWorkRebuildPriority('judgmentInputContent')).toBe(50)
 })
 
-test('missing snapshot repair priority ranks activation, search, then enrichment components', () => {
+test('missing snapshot repair priority ranks activation, detail readiness, search, then facet enrichment components', () => {
   for (const component of countReadyReviewServingComponents) {
     expect(getMissingSnapshotRepairPriority(component)).toBe(10_000)
   }
 
   expect(getMissingSnapshotRepairPriority('queue')).toBe(10_000)
+  expect(getMissingSnapshotRepairPriority('payload')).toBe(100)
+  expect(getMissingSnapshotRepairPriority('judgmentInputContent')).toBe(100)
   expect(getMissingSnapshotRepairPriority('search')).toBe(75)
   expect(getMissingSnapshotRepairPriority('posting')).toBe(50)
   expect(getMissingSnapshotRepairPriority('summary')).toBe(50)
-  expect(getMissingSnapshotRepairPriority('payload')).toBe(50)
-  expect(getMissingSnapshotRepairPriority('judgmentInputContent')).toBe(50)
 })

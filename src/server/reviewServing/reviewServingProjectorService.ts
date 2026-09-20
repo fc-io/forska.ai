@@ -101,9 +101,11 @@ type ReviewServingClaimManifestEnsurer = (
 ) => Promise<void>
 
 const countReadyRepairComponents = new Set<ReviewServingProjectionComponent>(countReadyReviewServingComponents)
+const detailReadinessRebuildComponents = new Set<ReviewServingProjectionComponent>(['judgmentInputContent', 'payload'])
 export const activationReviewServingRebuildPriority = 10_000
+export const detailReadinessReviewServingRebuildPriority = 100
 export const searchReviewServingRebuildPriority = 75
-export const enrichmentReviewServingRebuildPriority = 50
+export const facetEnrichmentReviewServingRebuildPriority = 50
 // Only components with bounded article-range rebuild admission belong here; non-presplittable components stay direct.
 const highFanoutDirtyWorkRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'humanStatus',
@@ -342,7 +344,11 @@ const getMissingSnapshotRepairComponents = (
 }
 
 const getOptionalComponentRebuildPriority = (component: ReviewServingProjectionComponent) => {
-  return component === 'search' ? searchReviewServingRebuildPriority : enrichmentReviewServingRebuildPriority
+  if (detailReadinessRebuildComponents.has(component)) {
+    return detailReadinessReviewServingRebuildPriority
+  }
+
+  return component === 'search' ? searchReviewServingRebuildPriority : facetEnrichmentReviewServingRebuildPriority
 }
 
 export const getMissingSnapshotRepairPriority = (component: ReviewServingProjectionComponent) => {
