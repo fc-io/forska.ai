@@ -352,7 +352,15 @@ const bootstrapReuseSourceWatermarkKeys = {
     'projectScope',
     'project-scope',
   ],
-  payload: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  payload: [
+    'reviewChange',
+    'review-change',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+    'judgmentSqliteOutboxImport',
+  ],
   posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   projectScope: [
     'reviewChange',
@@ -362,7 +370,15 @@ const bootstrapReuseSourceWatermarkKeys = {
     'projectScope',
     'project-scope',
   ],
-  queue: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  queue: [
+    'reviewChange',
+    'review-change',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+    'judgmentSqliteOutboxImport',
+  ],
   search: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
   selectedImport: [
     'reviewChange',
@@ -372,7 +388,15 @@ const bootstrapReuseSourceWatermarkKeys = {
     'projectScope',
     'project-scope',
   ],
-  summary: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  summary: [
+    'reviewChange',
+    'review-change',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+    'judgmentSqliteOutboxImport',
+  ],
 } satisfies Record<ReviewServingProjectionComponent, readonly string[]>
 
 const getArticleScaledComponentFanOut = (components: readonly ReviewServingProjectionComponent[]) => {
@@ -976,6 +1000,7 @@ const getReviewServingV4BootstrapReusableComponent = async (
 const getReviewServingV4BootstrapReusableComponents = async (
   input: {
     components: readonly ReviewServingProjectionComponent[]
+    dirtyWorkComponents: ReadonlySet<ReviewServingProjectionComponent>
     projectId: string
     reviewConfigHash: string | null
     selectedImportSnapshotId: string
@@ -1011,6 +1036,10 @@ const getReviewServingV4BootstrapReusableComponents = async (
   for (const reusableSnapshot of reusableSnapshots) {
     for (const component of input.components) {
       if (reusableByComponent.has(component)) {
+        continue
+      }
+
+      if (reusableSnapshot.snapshotId !== input.snapshotId && input.dirtyWorkComponents.has(component)) {
         continue
       }
 
@@ -1359,6 +1388,7 @@ const prepareReviewServingV4Bootstrap = async (
   input: {
     articleRanges: readonly ReviewServingV4BootstrapArticleRange[]
     components: readonly ReviewServingProjectionComponent[]
+    dirtyWorkComponents?: readonly ReviewServingProjectionComponent[]
     pageFirstOnly?: boolean
     projectId: string
     requestedOnly?: boolean
@@ -1408,6 +1438,7 @@ const prepareReviewServingV4Bootstrap = async (
   const reusableComponents = await getReviewServingV4BootstrapReusableComponents(
     {
       components,
+      dirtyWorkComponents: new Set(input.dirtyWorkComponents ?? []),
       projectId: input.projectId,
       reviewConfigHash: input.reviewConfigHash,
       selectedImportSnapshotId,
@@ -2129,6 +2160,7 @@ export const requestReviewServingV4RebuildEffect = (
             {
               articleRanges: bootstrapArticleRanges,
               components,
+              dirtyWorkComponents: isRequestedOptionalDirtyWorkBootstrap ? requestedComponents : [],
               pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
               requestedOnly: isRequestedComponentBootstrap,
               projectId: input.projectId,
