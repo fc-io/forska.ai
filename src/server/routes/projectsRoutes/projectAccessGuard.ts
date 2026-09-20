@@ -8,7 +8,13 @@ import {duckdbOwnerPrivateApiPrefix} from '../apiRouteClassification.ts'
 export const archivedProjectAccessErrorMessage = 'Archived projects must be unarchived before use'
 
 type HumanJudgmentMode = 'prompt' | 'summary' | null
-type ProjectAccessRow = {archived: boolean; humanJudgmentMode: HumanJudgmentMode; id: string; name: string}
+type ProjectAccessRow = {
+  archived: boolean
+  humanJudgmentMode: HumanJudgmentMode
+  id: string
+  name: string
+  updatedAt?: string | null
+}
 type ProjectAccessResponse = {data?: ProjectAccessRow | null; error?: unknown}
 
 const projectAccessUnavailableErrorMessage = 'Project access read model is unavailable'
@@ -53,7 +59,7 @@ const getProjectAccessFromLocalDuckdb = async (
 ): Promise<ProjectAccessRow | null> => {
   const [project] = await getAppDatabaseService().queryJson<ProjectAccessRow>(
     `
-    SELECT id, name, archived, human_judgment_mode AS humanJudgmentMode
+    SELECT id, name, archived, human_judgment_mode AS humanJudgmentMode, updated_at AS updatedAt
     FROM app.project
     WHERE id = '${escapeSqlString(projectId)}'
       AND delete_pending_at IS NULL
