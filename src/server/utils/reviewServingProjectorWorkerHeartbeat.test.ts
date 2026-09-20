@@ -803,6 +803,87 @@ test('review serving projector worker heartbeat carries the admitted-wake clock 
   expect(restartedRun?.starvedAfterLoopStartMs).toBeLessThan(30)
 })
 
+test('review serving projector worker heartbeat treats a thrown loop as the last admitted wake before restarting', () => {
+  const runScript = runBunEval(
+    `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async (options) => {
+              const runIndex = events.length
+
+              if (runIndex === 0) {
+                await sleep(5)
+                events.push({lastAdmittedWakeAtMs: options.lastAdmittedWakeAtMs, runIndex, thrownAtMs: Date.now()})
+                throw new Error('cycle exploded')
+              }
+
+              events.push({lastAdmittedWakeAtMs: options.lastAdmittedWakeAtMs, runIndex, thrownAtMs: null})
+
+              return new Promise((resolve) => {
+                options.signal.addEventListener('abort', () => {
+                  resolve({
+                    componentRotationOffset: options.componentRotationOffset,
+                    lastAdmittedWakeAtMs: options.lastAdmittedWakeAtMs,
+                    lastCleanupAtMs: options.lastCleanupAtMs,
+                    reason: 'aborted',
+                  })
+                }, {once: true})
+              })
+            },
+          }
+        })
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?thrown-loop=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({pollIntervalMs: 1, restartDelayMs: 1})
+
+        await sleep(40)
+        stop()
+        await sleep(5)
+
+        console.log(JSON.stringify({events}))
+      `,
+    {DUCKDB_MEMORY_LIMIT: ''},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat thrown-loop test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: Array<{lastAdmittedWakeAtMs: number; runIndex: number; thrownAtMs: number | null}>
+  }
+  const [thrownRun, restartedRun] = result.events
+
+  expect(result.events).toHaveLength(2)
+  expect(thrownRun).toMatchObject({runIndex: 0})
+  expect(restartedRun).toMatchObject({runIndex: 1, thrownAtMs: null})
+  expect(restartedRun?.lastAdmittedWakeAtMs).toBeGreaterThan(thrownRun?.lastAdmittedWakeAtMs ?? 0)
+  expect(restartedRun?.lastAdmittedWakeAtMs).toBeGreaterThanOrEqual(thrownRun?.thrownAtMs ?? 0)
+})
+
 test('review serving projector worker heartbeat skips high-RSS recycle while foreground DuckDB work is active', () => {
   const runScript = runBunEval(
     `

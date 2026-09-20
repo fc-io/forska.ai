@@ -9,6 +9,7 @@ import {buildReviewConfigHash} from '../reviewServing/reviewProjectionIdentity.t
 import type {ReviewServingRebuildChunkManifest} from '../reviewServing/reviewServingChunkManifestRepository.ts'
 import {countReadyReviewServingComponents} from '../reviewServing/reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim} from '../reviewServing/reviewServingDirtyWorkService.ts'
+import {wakeReviewServingProjectorService} from '../reviewServing/reviewServingProjectorService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   defaultReviewServingProjectorWorkerActiveYieldMs,
@@ -1061,6 +1062,254 @@ test('carrying the admitted-wake clock and rotation offset across a completedChu
     lastCleanupAtMs: loopStartedAtMs,
     reason: 'aborted',
   })
+})
+
+test('an admitted sweep that claims nothing reports idle and still resets the starvation clock under sustained pressure', async () => {
+  const harness = createWorkerHarness()
+  const controller = new AbortController()
+  const loopStartedAtMs = 1_000_000
+  const wakeResults: Array<{atMs: number; blockedReason: string | null; status: string}> = []
+  let clockMs = loopStartedAtMs
+
+  harness.dependencies.nowMs = () => {
+    return clockMs
+  }
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return 1
+  }
+  harness.dependencies.waitForForegroundQueue = async () => {
+    return false
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    getNextChunk: async () => {
+      return null
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.projectorServiceDependencies = {
+    claimDirtyWork: async () => {
+      return []
+    },
+    runners: {
+      display: async () => {
+        return {processedCount: 1}
+      },
+    },
+  }
+  harness.dependencies.wakeProjectors = async (wakeInput, serviceDependencies) => {
+    const result = await wakeReviewServingProjectorService(wakeInput, serviceDependencies)
+
+    wakeResults.push({atMs: clockMs, blockedReason: result.blockedReason ?? null, status: result.status})
+
+    return result
+  }
+  harness.dependencies.sleep = async () => {
+    clockMs += 2_000
+
+    if (clockMs - loopStartedAtMs >= 62_000) {
+      controller.abort()
+    }
+  }
+
+  await runReviewServingProjectorWorker(
+    {
+      cleanupIntervalMs: 600_000,
+      lastCleanupAtMs: loopStartedAtMs,
+      maxWakeMs: 200,
+      pollIntervalMs: 2_000,
+      signal: controller.signal,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(wakeResults).toEqual([
+    {atMs: loopStartedAtMs + 30_000, blockedReason: null, status: 'idle'},
+    {atMs: loopStartedAtMs + 60_000, blockedReason: null, status: 'idle'},
+  ])
+
+  const idleHarness = createWorkerHarness({nowMs: 31_000})
+  idleHarness.dependencies.projectorServiceDependencies = harness.dependencies.projectorServiceDependencies
+  idleHarness.dependencies.wakeProjectors = wakeReviewServingProjectorService
+
+  const idleCycle = await runReviewServingProjectorWorkerOnce(
+    {lastAdmittedWakeAtMs: 1_000, maxWakeMs: 200, workerId: 'worker-1'},
+    idleHarness.dependencies,
+  )
+
+  expect(idleCycle.projector).toMatchObject({blockedReason: null, status: 'idle'})
+  expect(idleCycle.nextAdmittedWakeAtMs).toBe(31_000)
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(idleCycle)).toMatchObject({
+    projectorBlockedReason: 'idle',
+    projectorStarvationAdmitted: true,
+    projectorStatus: 'idle',
+  })
+})
+
+test('starved cycles under continuous foreground pressure skip the chunk batch and are separated by a full starvation window of yielding cycles', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const controller = new AbortController()
+  const loopStartedAtMs = 1_000_000
+  const wakeTimes: number[] = []
+  let clockMs = loopStartedAtMs
+
+  harness.dependencies.nowMs = () => {
+    return clockMs
+  }
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return 1
+  }
+  harness.dependencies.waitForForegroundQueue = async () => {
+    return false
+  }
+  harness.dependencies.cleanupDirtyWorkRetention = async (cleanupInput) => {
+    harness.dirtyWorkRetentionCleanupInputs.push(cleanupInput)
+    clockMs += 6_000
+
+    return {
+      compactedAcknowledgements: [],
+      compactedLaneCount: 0,
+      deletedAcknowledgementCount: 0,
+      deletedDirtyWorkCount: 0,
+    }
+  }
+  harness.dependencies.wakeProjectors = async (wakeInput) => {
+    harness.wakeInputs.push(wakeInput)
+    wakeTimes.push(clockMs)
+
+    return getFakeWakeResultForBudget(wakeInput.maxWakeMs)
+  }
+  harness.dependencies.sleep = async () => {
+    clockMs += 2_000
+
+    if (clockMs - loopStartedAtMs >= 105_000) {
+      controller.abort()
+    }
+  }
+
+  await runReviewServingProjectorWorker(
+    {
+      cleanupIntervalMs: 1,
+      lastCleanupAtMs: null,
+      maxWakeMs: 1_500,
+      pollIntervalMs: 2_000,
+      signal: controller.signal,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(wakeTimes).toEqual([loopStartedAtMs + 30_000, loopStartedAtMs + 66_000, loopStartedAtMs + 102_000])
+  expect(harness.dirtyWorkRetentionCleanupInputs).toEqual([{}, {}, {}])
+  expect(harness.getNextChunkInputs).toEqual([])
+  expect(harness.runChunkInputs).toEqual([])
+})
+
+const runStarvedChunkCycle = async (input: {foregroundQueueDepth: number; pendingLlmStatusWakeMs?: number}) => {
+  const harness = createWorkerHarness()
+  const events: string[] = []
+  let nowMs = 31_000
+
+  harness.dependencies.nowMs = () => {
+    return nowMs
+  }
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return input.foregroundQueueDepth
+  }
+  harness.dependencies.waitForForegroundQueue = async () => {
+    return false
+  }
+  harness.database.queryJson = async <T>(statement: string) => {
+    return (
+      input.pendingLlmStatusWakeMs !== undefined && statement.includes('AS pendingCount') ? [{pendingCount: 1}] : []
+    ) as T[]
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    runClaimedChunk: async ({chunk}) => {
+      events.push('chunk')
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+  harness.dependencies.wakeProjectors = async (wakeInput) => {
+    const componentOrder = (wakeInput as {componentOrder?: readonly string[]}).componentOrder
+
+    events.push(componentOrder === undefined ? 'wake' : `wake:${componentOrder.join(',')}`)
+    harness.wakeInputs.push(wakeInput)
+
+    if (componentOrder !== undefined && input.pendingLlmStatusWakeMs !== undefined) {
+      nowMs += input.pendingLlmStatusWakeMs
+    }
+
+    return getFakeWakeResultForBudget(wakeInput.maxWakeMs)
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {lastAdmittedWakeAtMs: 1_000, maxWakeMs: 1_500, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  return {events, harness, result}
+}
+
+test('a starved cycle skips the chunk batch while foreground work is still queued and runs it after the wake when the queue is empty', async () => {
+  const pressured = await runStarvedChunkCycle({foregroundQueueDepth: 1})
+
+  expect(pressured.events).toEqual(['wake'])
+  expect(pressured.harness.getNextChunkInputs).toEqual([])
+  expect(pressured.harness.runChunkInputs).toEqual([])
+  expect(pressured.harness.dirtyWorkRetentionCleanupInputs).toEqual([{}])
+  expect(pressured.result.chunk).toMatchObject({status: 'idle'})
+  expect(pressured.result.projector).toMatchObject({blockedReason: null, status: 'completed'})
+  expect(pressured.result.admission).toEqual({
+    appendQueueDepth: 0,
+    foregroundQueueDepth: 1,
+    ranBeforeChunks: true,
+    starvationAdmitted: true,
+  })
+  expect(pressured.result.nextAdmittedWakeAtMs).toBe(31_000)
+
+  const drained = await runStarvedChunkCycle({foregroundQueueDepth: 0})
+
+  expect(drained.events).toEqual(['wake', 'chunk'])
+  expect(drained.harness.runChunkInputs).toHaveLength(1)
+  expect(drained.result.chunk).toMatchObject({status: 'completed'})
+  expect(drained.result.nextAdmittedWakeAtMs).toBe(31_000)
+})
+
+test('the job-driven llmStatus pre-wake and the preempted backlog wake share one cycle deadline on a starved cycle', async () => {
+  const shared = await runStarvedChunkCycle({foregroundQueueDepth: 1, pendingLlmStatusWakeMs: 1_000})
+
+  expect(shared.events).toEqual(['wake:llmStatus', 'wake'])
+  expect(
+    shared.harness.wakeInputs.map((wakeInput) => {
+      return (wakeInput as {maxWakeMs: number}).maxWakeMs
+    }),
+  ).toEqual([1_500, 500])
+  expect(shared.result.projector).toMatchObject({blockedReason: null, status: 'completed'})
+
+  const exhausted = await runStarvedChunkCycle({foregroundQueueDepth: 1, pendingLlmStatusWakeMs: 1_500})
+
+  expect(exhausted.events).toEqual(['wake:llmStatus', 'wake'])
+  expect(
+    exhausted.harness.wakeInputs.map((wakeInput) => {
+      return (wakeInput as {maxWakeMs: number}).maxWakeMs
+    }),
+  ).toEqual([1_500, 0])
+  expect(exhausted.result.nextAdmittedWakeAtMs).toBe(1_000)
+})
+
+test('a failed rebuild chunk blocks the backlog wake with an explicit failedChunk reason', async () => {
+  const harness = createWorkerHarness({runChunkThrows: true, wakeStatus: 'completed'})
+
+  const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  expect(result.chunk.status).toBe('failed')
+  expect(result.projector).toMatchObject({blockedReason: 'failedChunk', status: 'blocked'})
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(result)).toMatchObject({projectorBlockedReason: 'failedChunk'})
+  expect(harness.wakeInputs).toEqual([])
 })
 
 const runActivationDrainCycle = async (lastAdmittedWakeAtMs: number) => {

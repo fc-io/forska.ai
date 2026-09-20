@@ -851,10 +851,20 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       })
       .slice(0, getLimit(statement))
   }
+  const hasRepairableProjectionKey = (row: FakeDirtyWorkRow) => {
+    try {
+      return getProjectionFromKey(row.projectionKey).projectionComponent !== undefined
+    } catch {
+      return false
+    }
+  }
   const getLaneRepairRows = (statement: string) => {
     return [...dirtyWork.values()]
       .filter((row) => {
-        return row.projectionComponent === null || row.projectionIdentity === null
+        return (row.projectionComponent === null || row.projectionIdentity === null) && hasRepairableProjectionKey(row)
+      })
+      .sort((left, right) => {
+        return Number(left.storageRowId ?? 0) - Number(right.storageRowId ?? 0)
       })
       .slice(0, getLimit(statement))
       .map((row) => {
@@ -869,6 +879,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
         return (
           row.status === 'pending'
           && row.projectionComponent === null
+          && !hasRepairableProjectionKey(row)
           && new Date(row.createdAt).getTime() < now.getTime() - 60 * 60 * 1000
         )
       })
@@ -1979,7 +1990,7 @@ const insertDuckdbProjectDirtyWork = async (
 
 const insertDuckdbOrphanDirtyWork = async (
   database: ReviewServingDirtyWorkDatabase,
-  input: {createdAt: string; dirtyWorkId: string; projectId: string},
+  input: {createdAt: string; dirtyWorkId: string; projectId: string; projectionKey?: string},
 ) => {
   await database.run(`
     INSERT INTO app.review_serving_dirty_work (
@@ -2005,7 +2016,7 @@ const insertDuckdbOrphanDirtyWork = async (
       'article',
       ${getSqlLiteral(`${input.projectId}:${input.dirtyWorkId}`)},
       ${getSqlLiteral(input.dirtyWorkId)},
-      '{}',
+      ${getSqlLiteral(input.projectionKey ?? '{}')},
       NULL,
       NULL,
       'projectScope.article.added',
@@ -3247,6 +3258,7 @@ test('default retention cleanup avoids broad retention compaction and delete sca
   expect(coalesceSelect).toContain('LIMIT 2000')
   expect(orphanSelect).toContain('LIMIT 2000')
   expect(orphanSelect).toContain("INTERVAL '3600 seconds'")
+  expect(orphanSelect).toContain("json_extract_string(orphan.projection_key, '$.projectionComponent') IS NULL")
   expect(cleanupStatements.join('\n')).not.toContain("lifecycle_reason = 'superseded_by_high_water'")
   expect(cleanupStatements.join('\n')).not.toContain("lifecycle_reason = 'orphan_missing_component'")
   expect(cleanupStatements.join('\n')).not.toContain('WITH retention_ready_dirty_work AS')
@@ -3317,6 +3329,8 @@ test('default retention cleanup repairs lane columns with a bounded per-cycle li
   expect(result.repairedLaneColumnCount).toBe(1)
   expect(repaired).toMatchObject({projectionComponent: 'display', projectionIdentity: 'display:identity-1'})
   expect(repairSelect).toContain('LIMIT 256')
+  expect(repairSelect).toContain("json_extract_string(projection_key, '$.projectionComponent') IS NOT NULL")
+  expect(repairSelect).toContain('ORDER BY rowid ASC')
 
   const explicitZero = await cleanupReviewServingDirtyWorkRetention({laneRepairLimit: 0}, database)
 
@@ -3737,7 +3751,7 @@ test('retention cleanup completes NULL-component orphans older than one hour wit
     const bounded = await cleanupReviewServingDirtyWorkRetention({...cleanupParams, orphanCompletionLimit: 2}, database)
 
     expect(bounded.completedOrphanDirtyWorkCount).toBe(2)
-    expect(bounded.repairedLaneColumnCount).toBe(5)
+    expect(bounded.repairedLaneColumnCount).toBe(0)
     expect(await getDuckdbDirtyWorkStatuses(database)).toEqual([
       {dirtyWorkId: 'component-row', lifecycleReason: null, status: 'pending'},
       {dirtyWorkId: 'orphan-boundary', lifecycleReason: null, status: 'pending'},
@@ -3766,6 +3780,70 @@ test('retention cleanup completes NULL-component orphans older than one hour wit
       (await cleanupReviewServingDirtyWorkRetention({...cleanupParams, orphanCompletionLimit: 0}, database))
         .completedOrphanDirtyWorkCount,
     ).toBe(0)
+  } finally {
+    close()
+  }
+})
+
+test('lane column repair only selects repairable rows by rowid and orphan completion only targets unrepairable rows', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+  const now = new Date('2026-06-16T12:00:00.000Z')
+  const twoHoursBeforeNow = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString()
+  const repairableKey = JSON.stringify({projectionComponent: 'display', projectionIdentity: 'display:project-1'})
+  const cleanupParams = {
+    blockedByRebuildRequeueLimit: 0,
+    coalesceDirtyWorkLimit: 0,
+    laneRepairLimit: 1,
+    laneStateRepairLimit: 0,
+    now,
+  }
+
+  try {
+    await insertDuckdbOrphanDirtyWork(database, {
+      createdAt: twoHoursBeforeNow,
+      dirtyWorkId: 'unrepairable-first',
+      projectId: 'project-1',
+    })
+    await insertDuckdbOrphanDirtyWork(database, {
+      createdAt: twoHoursBeforeNow,
+      dirtyWorkId: 'repairable-second',
+      projectId: 'project-1',
+      projectionKey: repairableKey,
+    })
+    await insertDuckdbOrphanDirtyWork(database, {
+      createdAt: twoHoursBeforeNow,
+      dirtyWorkId: 'unrepairable-third',
+      projectId: 'project-1',
+    })
+    await insertDuckdbOrphanDirtyWork(database, {
+      createdAt: twoHoursBeforeNow,
+      dirtyWorkId: 'repairable-fourth',
+      projectId: 'project-1',
+      projectionKey: repairableKey,
+    })
+
+    const result = await cleanupReviewServingDirtyWorkRetention(cleanupParams, database)
+
+    expect(result.repairedLaneColumnCount).toBe(1)
+    expect(result.completedOrphanDirtyWorkCount).toBe(2)
+    expect(
+      await database.queryJson<{dirtyWorkId: string; projectionComponent: string | null; status: string}>(`
+        SELECT dirty_work_id AS dirtyWorkId, projection_component AS projectionComponent, status
+        FROM app.review_serving_dirty_work
+        ORDER BY dirty_work_id ASC
+      `),
+    ).toEqual([
+      {dirtyWorkId: 'repairable-fourth', projectionComponent: null, status: 'pending'},
+      {dirtyWorkId: 'repairable-second', projectionComponent: 'display', status: 'pending'},
+      {dirtyWorkId: 'unrepairable-first', projectionComponent: null, status: 'completed'},
+      {dirtyWorkId: 'unrepairable-third', projectionComponent: null, status: 'completed'},
+    ])
+    expect(await getDuckdbClaimStateStatuses(database)).toEqual([{dirtyWorkId: 'repairable-second', status: 'pending'}])
+
+    const secondPass = await cleanupReviewServingDirtyWorkRetention(cleanupParams, database)
+
+    expect(secondPass.repairedLaneColumnCount).toBe(1)
+    expect(secondPass.completedOrphanDirtyWorkCount).toBe(0)
   } finally {
     close()
   }

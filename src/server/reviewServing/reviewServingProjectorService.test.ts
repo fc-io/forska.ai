@@ -1624,6 +1624,24 @@ test('wake reports why it was blocked and lets an explicit caller admission over
   })
 })
 
+test('wake reports idle instead of blocked when the admitted sweep claims nothing', async () => {
+  const {claimedComponents, dependencies} = createDependencyHarness({})
+
+  dependencies.runners = {
+    queue: async () => {
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['queue'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(claimedComponents).toEqual(['queue'])
+  expect(result).toMatchObject({blockedReason: null, runs: [], status: 'idle'})
+})
+
 test('wake never rotates an explicit component order', async () => {
   expect(
     await wakeFirstClaimedComponent({componentOrder: ['humanStatus', 'queue'], componentRotationOffset: 1}),

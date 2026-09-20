@@ -2031,6 +2031,8 @@ const repairReviewServingDirtyWorkLaneColumns = async (
     SELECT rowid AS storageRowId
     FROM app.review_serving_dirty_work
     WHERE (projection_component IS NULL OR projection_identity IS NULL)
+      AND json_extract_string(projection_key, '$.projectionComponent') IS NOT NULL
+    ORDER BY rowid ASC
     LIMIT ${params.limit}
   `)
   const rowIds = rows
@@ -2139,6 +2141,7 @@ const completeReviewServingDirtyWorkOrphans = async (
     FROM app.review_serving_dirty_work orphan
     WHERE orphan.status = 'pending'
       AND orphan.projection_component IS NULL
+      AND json_extract_string(orphan.projection_key, '$.projectionComponent') IS NULL
       AND orphan.created_at < ${getNowSql(params.now)} - INTERVAL '${orphanDirtyWorkMinAgeSeconds} seconds'
     ORDER BY orphan.created_at ASC, orphan.dirty_work_id ASC
     LIMIT ${params.limit}
@@ -2161,6 +2164,7 @@ const completeReviewServingDirtyWorkOrphans = async (
     WHERE rowid IN (${rowIds.map(getStorageRowIdSql).join(', ')})
       AND status = 'pending'
       AND projection_component IS NULL
+      AND json_extract_string(projection_key, '$.projectionComponent') IS NULL
     RETURNING
       CAST(NULL AS BIGINT) AS storageRowId,
       dirty_work_id AS dirtyWorkId,
