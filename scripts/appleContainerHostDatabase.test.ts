@@ -1,4 +1,4 @@
-import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs'
+import {mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -7,6 +7,7 @@ import {afterEach, expect, spyOn, test} from 'bun:test'
 import {
   assertAppleContainerDatabaseHasNoLocks,
   assertAppleContainerDatabaseIsIdle,
+  getAppleContainerHostDatabase,
 } from './appleContainerHostDatabase.ts'
 import {getAppleContainerCommands} from './runAppleContainer.ts'
 
@@ -41,6 +42,23 @@ test('refuses owner, writer and journal locks without deleting them', () => {
   expect(() => {
     return assertAppleContainerDatabaseHasNoLocks(databasePath)
   }).toThrow('Stop the host DB owner cleanly')
+})
+
+test('mounts an explicit host database directory instead of the primary profile directory', () => {
+  const repositoryRoot = mkdtempSync(join(tmpdir(), 'forska-container-repo-test-'))
+  const directory = mkdtempSync(join(tmpdir(), 'forska-container-clone-test-'))
+  temporaryDirectories.push(repositoryRoot, directory)
+  mkdirSync(join(repositoryRoot, 'assets'))
+  expect(() => {
+    return getAppleContainerHostDatabase(repositoryRoot, directory)
+  }).toThrow()
+  writeFileSync(join(directory, 'forska.duckdb'), '')
+  const hostDatabase = getAppleContainerHostDatabase(repositoryRoot, directory)
+  expect(hostDatabase.directory).toBe(realpathSync(directory))
+  expect(hostDatabase.databasePath).toBe(join(realpathSync(directory), 'forska.duckdb'))
+  expect(hostDatabase.assetsDirectory).toBe(join(realpathSync(repositoryRoot), 'assets'))
+  const run = getAppleContainerCommands({hostDatabase}).at(-1) ?? []
+  expect(run).toContain(`${realpathSync(directory)}:/data/share/forska/runtime/primary`)
 })
 
 test('maps the primary DB directory with spaces to the Linux profile path without shell splitting', () => {

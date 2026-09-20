@@ -20,8 +20,8 @@ export const getAppleContainerCommands = ({
     throw new Error('FORSKA_CONTAINER_PORT must be a port between 1 and 65535')
   }
 
-  if (!/^[1-9]\d*G$/.test(memory) || !Number.isSafeInteger(Number(memory.slice(0, -1)))) {
-    throw new Error('FORSKA_CONTAINER_MEMORY must be a positive whole GiB value, such as 8G or 16G')
+  if (!/^[1-9]\d*[GM]$/.test(memory) || !Number.isSafeInteger(Number(memory.slice(0, -1)))) {
+    throw new Error('FORSKA_CONTAINER_MEMORY must be a positive whole GiB or MiB value, such as 8G, 16G or 6554M')
   }
 
   return [
@@ -98,7 +98,9 @@ const runAppleContainer = async () => {
     ? globalThis.Bun.spawnSync(['git', 'rev-parse', 'HEAD'], {cwd: repositoryRoot})
     : null
   const commitSha = git?.exitCode === 0 ? git.stdout.toString().trim() : 'unknown'
-  const hostDatabase = process.argv.includes('--host-db') ? getAppleContainerHostDatabase(repositoryRoot) : undefined
+  const hostDatabase = process.argv.includes('--host-db')
+    ? getAppleContainerHostDatabase(repositoryRoot, process.env.FORSKA_CONTAINER_HOST_DB_DIR || undefined)
+    : undefined
   const memory = process.env.FORSKA_CONTAINER_MEMORY ?? '8G'
   const commands = getAppleContainerCommands({port: process.env.FORSKA_CONTAINER_PORT, memory, commitSha, hostDatabase})
   if (hostDatabase) {
