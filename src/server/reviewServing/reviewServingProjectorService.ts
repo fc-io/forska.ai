@@ -8,6 +8,7 @@ import {
   claimReviewServingDirtyWork,
   type ClaimReviewServingDirtyWorkParams,
   completeReviewServingDirtyWorkClaims,
+  defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds,
   failReviewServingDirtyWorkClaims,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
@@ -148,12 +149,29 @@ export type ReviewServingProjectorFailure = {
   status: 'failed'
 }
 
+export type ReviewServingProjectorBlockedRebuild = {
+  claimIds: readonly string[]
+  component: ReviewServingProjectionComponent
+  diagnostic: string
+  status: 'blocked_by_rebuild'
+}
+
 export type WakeReviewServingProjectorServiceResult = {
+  blockedRebuilds: readonly ReviewServingProjectorBlockedRebuild[]
   failures: readonly ReviewServingProjectorFailure[]
   promotions: readonly PromoteReviewServingProjectorSnapshotResult[]
   releasedClaimIds: readonly string[]
   runs: readonly ReviewServingProjectorComponentRun[]
   status: 'blocked' | 'completed' | 'failed' | 'partial'
+}
+
+type WakeReviewServingProjectorState = {
+  blockedRebuilds: ReviewServingProjectorBlockedRebuild[]
+  failures: ReviewServingProjectorFailure[]
+  processedRows: number
+  promotions: PromoteReviewServingProjectorSnapshotResult[]
+  releasedClaimIds: string[]
+  runs: ReviewServingProjectorComponentRun[]
 }
 
 const defaultComponentOrder: readonly ReviewServingProjectionComponent[] = [
@@ -170,6 +188,7 @@ const defaultComponentOrder: readonly ReviewServingProjectionComponent[] = [
   'search',
 ]
 const projectorFailureLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const blockedRebuildRequestReuseMs = defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds * 1000
 
 const getDiagnosticCause = (error: unknown) => {
   if (typeof error !== 'object' || error === null) {
@@ -316,6 +335,20 @@ const getClaimProjectIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
+const getDirtyWorkClaimLogEntries = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims.map((claim) => {
+    return {
+      dirtyKind: claim.dirtyKind,
+      dirtyWorkId: claim.dirtyWorkId,
+      latestSourceHighWaterMark: claim.latestSourceHighWaterMark,
+      projectId: claim.projectId,
+      projectionIdentity: claim.projectionIdentity,
+      scopeId: claim.scopeId,
+      sourcePartition: claim.sourcePartition,
+    }
+  })
+}
+
 const logDirtyWorkProjectorFailure = (input: {
   claimIds: readonly string[]
   claims: readonly ReviewServingDirtyWorkClaim[]
@@ -329,19 +362,57 @@ const logDirtyWorkProjectorFailure = (input: {
       claimIds: input.claimIds,
       component: input.component,
       diagnostic: input.diagnostic,
-      claims: input.claims.map((claim) => {
-        return {
-          dirtyKind: claim.dirtyKind,
-          dirtyWorkId: claim.dirtyWorkId,
-          latestSourceHighWaterMark: claim.latestSourceHighWaterMark,
-          projectId: claim.projectId,
-          projectionIdentity: claim.projectionIdentity,
-          scopeId: claim.scopeId,
-          sourcePartition: claim.sourcePartition,
-        }
-      }),
+      claims: getDirtyWorkClaimLogEntries(input.claims),
     },
   )
+}
+
+const logDirtyWorkProjectorBlockedByRebuild = (input: {
+  claimIds: readonly string[]
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  component: ReviewServingProjectionComponent
+  diagnostic: string
+}) => {
+  return projectorFailureLogger.warn(
+    `review-serving-projector:dirty-work-blocked-by-rebuild:${input.component}`,
+    '[reviewServingProjector] dirty work parked until its rebuild request is admissible; recorded claim outcome',
+    {
+      claimIds: input.claimIds,
+      component: input.component,
+      diagnostic: input.diagnostic,
+      claims: getDirtyWorkClaimLogEntries(input.claims),
+      requeueAfterMs: blockedRebuildRequestReuseMs,
+    },
+  )
+}
+
+const parkDirtyWorkClaimsBlockedByRebuild = async (input: {
+  blockDirtyWorkForRebuild: typeof blockReviewServingDirtyWorkClaimsForRebuild
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  component: ReviewServingProjectionComponent
+  database: ReviewServingProjectorServiceDatabase
+  diagnostic: string
+  state: WakeReviewServingProjectorState
+}): Promise<WakeReviewServingProjectorState> => {
+  const claimIds = getDirtyWorkIds(input.claims)
+
+  await input.blockDirtyWorkForRebuild(claimIds, input.database)
+  logDirtyWorkProjectorBlockedByRebuild({
+    claimIds,
+    claims: input.claims,
+    component: input.component,
+    diagnostic: input.diagnostic,
+  })
+
+  return {
+    ...input.state,
+    blockedRebuilds: [
+      ...input.state.blockedRebuilds,
+      {claimIds, component: input.component, diagnostic: input.diagnostic, status: 'blocked_by_rebuild' as const},
+    ],
+    processedRows: input.state.processedRows + input.claims.length,
+    releasedClaimIds: [...input.state.releasedClaimIds, ...claimIds],
+  }
 }
 
 const isMissingSnapshotDiagnostic = (diagnostic: string) => {
@@ -574,18 +645,10 @@ export const wakeReviewServingProjectorService = async (
   const initialBlocked = await shouldBlockWake(input, dependencies)
 
   if (initialBlocked || budget.batchSize === 0 || budget.maxRowsPerWake === 0 || input.maxWakeMs <= 0) {
-    return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+    return {blockedRebuilds: [], failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
   }
 
-  const wakeState = await componentOrder.reduce<
-    Promise<{
-      failures: ReviewServingProjectorFailure[]
-      processedRows: number
-      promotions: PromoteReviewServingProjectorSnapshotResult[]
-      releasedClaimIds: string[]
-      runs: ReviewServingProjectorComponentRun[]
-    }>
-  >(
+  const wakeState = await componentOrder.reduce<Promise<WakeReviewServingProjectorState>>(
     async (previousState, component) => {
       const state = await previousState
       const runner = dependencies.runners[component]
@@ -593,13 +656,7 @@ export const wakeReviewServingProjectorService = async (
       const elapsedMs = nowMs() - startedAt
       const blocked = await shouldBlockWake(input, dependencies)
 
-      if (
-        runner === undefined
-        || remainingRows <= 0
-        || elapsedMs >= input.maxWakeMs
-        || blocked
-        || state.failures.length > 0
-      ) {
+      if (runner === undefined || remainingRows <= 0 || elapsedMs >= input.maxWakeMs || blocked) {
         return state
       }
 
@@ -634,6 +691,7 @@ export const wakeReviewServingProjectorService = async (
                     priority: getChunkedDirtyWorkRebuildPriority(component),
                     projectId,
                     reason: getChunkedDirtyWorkRebuildReason(component),
+                    reuseBlockedRequestWithinMs: blockedRebuildRequestReuseMs,
                   },
                   database,
                 )
@@ -661,18 +719,14 @@ export const wakeReviewServingProjectorService = async (
         const blockedRebuildRequests = getBlockedRebuildRequests(rebuildResult.right)
 
         if (blockedRebuildRequests.length > 0) {
-          const blockedDiagnostic = getBlockedRebuildRequestDiagnostic(blockedRebuildRequests)
-          await failDirtyWork(claimIds, database)
-          logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: blockedDiagnostic})
-
-          return {
-            ...state,
-            failures: [
-              ...state.failures,
-              {attempts: 1, claimIds, component, diagnostic: blockedDiagnostic, status: 'failed' as const},
-            ],
-            processedRows: state.processedRows + claims.length,
-          }
+          return parkDirtyWorkClaimsBlockedByRebuild({
+            blockDirtyWorkForRebuild,
+            claims,
+            component,
+            database,
+            diagnostic: getBlockedRebuildRequestDiagnostic(blockedRebuildRequests),
+            state,
+          })
         }
 
         if (!areClaimsCoveredByRebuildRequests(claims, rebuildResult.right)) {
@@ -744,6 +798,7 @@ export const wakeReviewServingProjectorService = async (
                       priority: getMissingSnapshotRepairPriority(component),
                       projectId,
                       reason: 'missingReviewServingSnapshot',
+                      reuseBlockedRequestWithinMs: blockedRebuildRequestReuseMs,
                     },
                     database,
                   )
@@ -777,24 +832,14 @@ export const wakeReviewServingProjectorService = async (
           const blockedRebuildRequests = getBlockedRebuildRequests(rebuildResult.right)
 
           if (blockedRebuildRequests.length > 0) {
-            const blockedDiagnostic = getBlockedRebuildRequestDiagnostic(blockedRebuildRequests)
-            await failDirtyWork(claimIds, database)
-            logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: blockedDiagnostic})
-
-            return {
-              ...state,
-              failures: [
-                ...state.failures,
-                {
-                  attempts: budget.maxRetries + 1,
-                  claimIds,
-                  component,
-                  diagnostic: blockedDiagnostic,
-                  status: 'failed' as const,
-                },
-              ],
-              processedRows: state.processedRows + claims.length,
-            }
+            return parkDirtyWorkClaimsBlockedByRebuild({
+              blockDirtyWorkForRebuild,
+              claims,
+              component,
+              database,
+              diagnostic: getBlockedRebuildRequestDiagnostic(blockedRebuildRequests),
+              state,
+            })
           }
 
           await blockDirtyWorkForRebuild(claimIds, database)
@@ -815,10 +860,18 @@ export const wakeReviewServingProjectorService = async (
         }
       }
     },
-    Promise.resolve({failures: [], processedRows: 0, promotions: [], releasedClaimIds: [], runs: []}),
+    Promise.resolve({
+      blockedRebuilds: [],
+      failures: [],
+      processedRows: 0,
+      promotions: [],
+      releasedClaimIds: [],
+      runs: [],
+    }),
   )
 
   return {
+    blockedRebuilds: wakeState.blockedRebuilds,
     failures: wakeState.failures,
     promotions: wakeState.promotions,
     releasedClaimIds: wakeState.releasedClaimIds,

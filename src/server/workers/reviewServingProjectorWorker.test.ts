@@ -272,7 +272,7 @@ const createWorkerHarness = (input?: {
       wakeInputs.push(wakeInput)
       await serviceDependencies.database?.run('SELECT 1')
 
-      return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: wakeStatus}
+      return {blockedRebuilds: [], failures: [], promotions: [], releasedClaimIds: [], runs: [], status: wakeStatus}
     },
   }
 
@@ -375,6 +375,7 @@ test('worker publishes judgment visibility before selecting rebuild chunks', asy
 
 test('worker runs fresh job-driven llmStatus dirty work before rebuild backlog chunks without starving chunks', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const pendingLlmStatusStatements: string[] = []
 
   harness.database.queryJson = async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
     if (statement.includes('candidate_job_visibility')) {
@@ -390,6 +391,8 @@ test('worker runs fresh job-driven llmStatus dirty work before rebuild backlog c
       && statement.includes("state.projection_component = 'llmStatus'")
       && statement.includes('judgmentSqliteOutboxImport:')
     ) {
+      pendingLlmStatusStatements.push(statement)
+
       return [{pendingCount: 1}] as T[]
     }
 
@@ -413,6 +416,9 @@ test('worker runs fresh job-driven llmStatus dirty work before rebuild backlog c
   expect(harness.getNextChunkInputs).toHaveLength(1)
   expect(harness.claimInputs).toHaveLength(1)
   expect(harness.runChunkInputs).toHaveLength(1)
+  expect(pendingLlmStatusStatements).toHaveLength(1)
+  expect(pendingLlmStatusStatements[0]).toContain('project.archived = FALSE')
+  expect(pendingLlmStatusStatements[0]).toContain('project.delete_pending_at IS NULL')
 })
 
 test('rebuild timing summaries keep compact aggregate phase stats', () => {
@@ -5590,7 +5596,7 @@ test('worker yields after background request chunks before continuing maintenanc
   harness.dependencies.wakeProjectors = async (wakeInput) => {
     harness.wakeInputs.push(wakeInput)
 
-    return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+    return {blockedRebuilds: [], failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
   }
 
   await runReviewServingProjectorWorker({signal: controller.signal, workerId: 'worker-1'}, harness.dependencies)
@@ -7843,7 +7849,7 @@ test('requestless bootstrap adoption skips duplicate insert for existing request
         },
         sleep: async () => {},
         wakeProjectors: async () => {
-          return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+          return {blockedRebuilds: [], failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
         },
       },
     )
@@ -8095,7 +8101,7 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
         },
         sleep: async () => {},
         wakeProjectors: async () => {
-          return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+          return {blockedRebuilds: [], failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
         },
       },
     )
@@ -8437,7 +8443,7 @@ test('request snapshot finalization resolves mixed direct and component-state ch
         },
         sleep: async () => {},
         wakeProjectors: async () => {
-          return {failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
+          return {blockedRebuilds: [], failures: [], promotions: [], releasedClaimIds: [], runs: [], status: 'blocked'}
         },
       },
     )

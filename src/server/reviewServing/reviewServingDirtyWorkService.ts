@@ -49,8 +49,15 @@ export type ClaimReviewServingDirtyWorkParams = {
 }
 
 export const defaultReviewServingDirtyWorkStaleClaimSeconds = 15 * 60
+export const defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds = 60 * 60
 const reviewServingDirtyWorkLaneWindowLimit = 2_048
 const reviewServingDirtyWorkCoverageCompletionLimit = 2_048
+
+export type RequeueReviewServingDirtyWorkBlockedByRebuildParams = {
+  limit: number
+  minBlockedSeconds?: number
+  now?: Date
+}
 
 export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
   completedSourceHighWaterMark: number
@@ -61,6 +68,7 @@ export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
 
 export type CleanupReviewServingDirtyWorkRetentionParams = {
   acknowledgementDeleteLimit?: number
+  blockedByRebuildRequeueLimit?: number
   coalesceDirtyWorkLimit?: number
   dirtyWorkDeleteLimit?: number
   laneCompactionLimit?: number
@@ -80,6 +88,7 @@ export type CleanupReviewServingDirtyWorkRetentionResult = {
   deletedDirtyWorkCount: number
   repairedLaneColumnCount?: number
   repairedLaneStateCount?: number
+  requeuedBlockedByRebuildCount?: number
 }
 
 export type ReviewServingDirtyWorkCoverage = {
@@ -184,6 +193,19 @@ const getProjectionIdentitySql = (dirtyWorkSql: string) => {
   return `${dirtyWorkSql}.projection_identity`
 }
 
+export const getReviewServingDirtyWorkActiveProjectPredicate = (projectIdSql: string) => {
+  return `(
+      ${projectIdSql} = ''
+      OR EXISTS (
+        SELECT 1
+        FROM app.project project
+        WHERE project.id = ${projectIdSql}
+          AND project.archived = FALSE
+          AND project.delete_pending_at IS NULL
+      )
+    )`
+}
+
 const getEligibleDirtyWorkPredicate = (params: ClaimReviewServingDirtyWorkParams, claimNowSql: string) => {
   const staleRunningClaimSeconds = getStaleRunningClaimSeconds(params)
 
@@ -239,6 +261,7 @@ const getNormalizedLimit = (params: {limit: number; maxWakeCount?: number}) => {
 
 const defaultLaneRepairLimit = 256
 const defaultLaneStateRepairLimit = 256
+const defaultBlockedByRebuildRequeueLimit = 256
 
 const getNormalizedCleanupLimit = (value: number | undefined, fallback: number) => {
   return Math.max(0, Math.floor(value ?? fallback))
@@ -289,8 +312,12 @@ const getStaleRunningClaimSeconds = (params: ClaimReviewServingDirtyWorkParams) 
   return Math.max(0, Math.floor(params.staleRunningClaimSeconds ?? defaultReviewServingDirtyWorkStaleClaimSeconds))
 }
 
+const getNowSql = (now: Date | undefined) => {
+  return now === undefined ? 'current_timestamp' : `TIMESTAMPTZ ${getSqlLiteral(now.toISOString())}`
+}
+
 const getClaimNowSql = (params: ClaimReviewServingDirtyWorkParams) => {
-  return params.now === undefined ? 'current_timestamp' : `TIMESTAMPTZ ${getSqlLiteral(params.now.toISOString())}`
+  return getNowSql(params.now)
 }
 
 const getClaimNowMs = (params: ClaimReviewServingDirtyWorkParams) => {
@@ -1181,6 +1208,7 @@ export const claimReviewServingDirtyWork = async (
             AND state.updated_at <= ${claimNowSql} - INTERVAL '${getStaleRunningClaimSeconds(params)} seconds'
           )
         )
+        AND ${getReviewServingDirtyWorkActiveProjectPredicate('state.project_id')}
       LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
     `)
 
@@ -1307,6 +1335,77 @@ export const blockReviewServingDirtyWorkClaimsForRebuild = async (
   }
 
   return {blockedCount: uniqueDirtyWorkIds.length}
+}
+
+export const requeueReviewServingDirtyWorkBlockedByRebuild = async (
+  params: RequeueReviewServingDirtyWorkBlockedByRebuildParams,
+  database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),
+) => {
+  const limit = Math.max(0, Math.floor(params.limit))
+
+  if (limit === 0) {
+    return {requeuedCount: 0}
+  }
+
+  const minBlockedSeconds = Math.max(
+    0,
+    Math.floor(params.minBlockedSeconds ?? defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds),
+  )
+  const retryCutoffSql = `${getNowSql(params.now)} - INTERVAL '${minBlockedSeconds} seconds'`
+  const candidates = await database.queryJson<Pick<DirtyWorkClaimStateRow, 'dirtyWorkId' | 'storageRowId'>>(`
+    SELECT
+      blocked_state.dirty_work_id AS dirtyWorkId,
+      blocked_state.storage_row_id AS storageRowId
+    FROM app.review_serving_dirty_work_claim_state blocked_state
+    WHERE blocked_state.status = 'blocked_by_rebuild'
+      AND blocked_state.updated_at <= ${retryCutoffSql}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request request
+        WHERE request.project_id = blocked_state.project_id
+          AND (
+            request.status IN ('pending_admission', 'admitted', 'running')
+            OR (request.status = 'blocked_over_budget' AND request.updated_at > ${retryCutoffSql})
+          )
+      )
+    ORDER BY blocked_state.updated_at ASC, blocked_state.dirty_work_id ASC
+    LIMIT ${limit}
+  `)
+
+  if (candidates.length === 0) {
+    return {requeuedCount: 0}
+  }
+
+  const rows = await database.queryJson<DirtyWorkRow>(`
+    UPDATE app.review_serving_dirty_work
+    SET status = 'pending', lifecycle_reason = 'released', updated_at = current_timestamp
+    WHERE ${getDirtyWorkClaimStatePredicate(candidates)}
+      AND status = 'blocked_by_rebuild'
+    RETURNING
+      CAST(NULL AS BIGINT) AS storageRowId,
+      dirty_work_id AS dirtyWorkId,
+      project_id AS projectId,
+      scope_kind AS scopeKind,
+      scope_id AS scopeId,
+      article_id AS articleId,
+      projection_key AS projectionKey,
+      dirty_kind AS dirtyKind,
+      source_partition AS sourcePartition,
+      first_source_high_water_mark AS firstSourceHighWaterMark,
+      latest_source_high_water_mark AS latestSourceHighWaterMark,
+      lifecycle_reason AS lifecycleReason,
+      latest_delta_id AS latestDeltaId,
+      dirty_range_start AS dirtyRangeStart,
+      dirty_range_end AS dirtyRangeEnd,
+      projection_component AS projectionComponent,
+      projection_identity AS projectionIdentity,
+      status,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+  `)
+  await maintainReviewServingDirtyWorkClaimStates(rows.map(getDirtyWorkRecordFromRow), database)
+
+  return {requeuedCount: rows.length}
 }
 
 export const failReviewServingDirtyWorkClaims = async (
@@ -2009,10 +2108,18 @@ export const cleanupReviewServingDirtyWorkRetention = async (
   // lane state repair; a 0 default meant production rows were never repaired.
   const laneRepairLimit = getNormalizedCleanupLimit(params.laneRepairLimit, defaultLaneRepairLimit)
   const laneStateRepairLimit = getNormalizedCleanupLimit(params.laneStateRepairLimit, defaultLaneStateRepairLimit)
+  const blockedByRebuildRequeueLimit = getNormalizedCleanupLimit(
+    params.blockedByRebuildRequeueLimit,
+    defaultBlockedByRebuildRequeueLimit,
+  )
 
   return database.transaction(async (tx) => {
     const repairedLaneColumnCount = await repairReviewServingDirtyWorkLaneColumns({limit: laneRepairLimit}, tx)
     const repairedLaneStateCount = await repairReviewServingDirtyWorkLaneState({limit: laneStateRepairLimit}, tx)
+    const {requeuedCount: requeuedBlockedByRebuildCount} = await requeueReviewServingDirtyWorkBlockedByRebuild(
+      {limit: blockedByRebuildRequeueLimit},
+      tx,
+    )
     const coalescedDirtyWorkCount = await coalesceReviewServingDirtyWorkHighWaterRows(
       {limit: coalesceDirtyWorkLimit},
       tx,
@@ -2071,6 +2178,7 @@ export const cleanupReviewServingDirtyWorkRetention = async (
       deletedDirtyWorkCount,
       repairedLaneColumnCount,
       repairedLaneStateCount,
+      requeuedBlockedByRebuildCount,
     }
   })
 }

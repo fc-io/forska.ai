@@ -951,14 +951,19 @@ test('wake keeps article-scoped queue dirty work on the direct patch path', asyn
   expect(releasedClaimIds).toEqual([])
 })
 
-test('wake fails claimed work when missing-snapshot rebuild request is blocked', async () => {
-  const {dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+test('wake parks claimed work when a missing-snapshot rebuild request is blocked over budget', async () => {
+  const {blockedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
   })
-  const rebuildRequests: Array<{projectId: string; reason: string}> = []
+  const rebuildRequests: Array<{projectId: string; reason: string; reuseBlockedRequestWithinMs: number | undefined}> =
+    []
 
   dependencies.requestRebuild = (input) => {
-    rebuildRequests.push({projectId: input.projectId, reason: input.reason})
+    rebuildRequests.push({
+      projectId: input.projectId,
+      reason: input.reason,
+      reuseBlockedRequestWithinMs: input.reuseBlockedRequestWithinMs,
+    })
 
     return Effect.succeed({
       overBudgetReason: 'estimated input rows exceed default request budget',
@@ -976,19 +981,187 @@ test('wake fails claimed work when missing-snapshot rebuild request is blocked',
     dependencies,
   )
 
-  expect(result.status).toBe('failed')
-  expect(result.failures).toEqual([
+  expect(result.status).toBe('partial')
+  expect(result.failures).toEqual([])
+  expect(result.blockedRebuilds).toEqual([
     {
-      attempts: 2,
       claimIds: ['queue-1'],
       component: 'queue',
       diagnostic: 'estimated input rows exceed default request budget',
-      status: 'failed',
+      status: 'blocked_by_rebuild',
     },
   ])
-  expect(rebuildRequests).toEqual([{projectId: 'project-1', reason: 'missingReviewServingSnapshot'}])
-  expect(failedClaimIds).toEqual(['queue-1'])
+  expect(result.releasedClaimIds).toEqual(['queue-1'])
+  expect(rebuildRequests).toEqual([
+    {projectId: 'project-1', reason: 'missingReviewServingSnapshot', reuseBlockedRequestWithinMs: 3_600_000},
+  ])
+  expect(blockedClaimIds).toEqual(['queue-1'])
+  expect(failedClaimIds).toEqual([])
   expect(releasedClaimIds).toEqual([])
+})
+
+test('wake parks chunked dirty work blocked over budget and keeps serving later components', async () => {
+  const {blockedClaimIds, completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
+    display: [getClaim({component: 'display', dirtyWorkId: 'display-1'})],
+    selectedImport: [
+      getClaim({
+        articleId: null,
+        component: 'selectedImport',
+        dirtyWorkId: 'selected-import-project-1',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ],
+  })
+  const rebuildRequests: Array<{
+    components: readonly ReviewServingProjectionComponent[] | undefined
+    projectId: string
+    reason: string
+    reuseBlockedRequestWithinMs: number | undefined
+  }> = []
+
+  dependencies.requestRebuild = (input) => {
+    rebuildRequests.push({
+      components: input.components,
+      projectId: input.projectId,
+      reason: input.reason,
+      reuseBlockedRequestWithinMs: input.reuseBlockedRequestWithinMs,
+    })
+
+    return Effect.succeed({
+      overBudgetReason: 'snapshot count: estimated 2 > max 1',
+      projectId: 'project-1',
+      status: 'blocked_over_budget',
+    } as never)
+  }
+  dependencies.runners = {
+    display: async () => {
+      return {processedCount: 1}
+    },
+    selectedImport: async () => {
+      throw new Error('runner should not execute')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {
+      batchSize: 1,
+      componentOrder: ['selectedImport', 'display'],
+      maxRowsPerWake: 2,
+      maxWakeMs: 1_000,
+      wakeId: 'wake-1',
+    },
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(result.failures).toEqual([])
+  expect(result.blockedRebuilds).toEqual([
+    {
+      claimIds: ['selected-import-project-1'],
+      component: 'selectedImport',
+      diagnostic: 'snapshot count: estimated 2 > max 1',
+      status: 'blocked_by_rebuild',
+    },
+  ])
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'display', processedCount: 1, status: 'completed'},
+  ])
+  expect(result.releasedClaimIds).toEqual(['selected-import-project-1'])
+  expect(rebuildRequests).toEqual([
+    {
+      components: ['selectedImport'],
+      projectId: 'project-1',
+      reason: 'selectedImportDirtyWork',
+      reuseBlockedRequestWithinMs: 3_600_000,
+    },
+  ])
+  expect(blockedClaimIds).toEqual(['selected-import-project-1'])
+  expect(completedClaimIds).toEqual([])
+  expect(failedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual([])
+})
+
+test('wake counts parked chunked dirty work against the row budget', async () => {
+  const {claimedComponents, dependencies} = createDependencyHarness({
+    display: [getClaim({component: 'display', dirtyWorkId: 'display-1'})],
+    selectedImport: [
+      getClaim({
+        articleId: null,
+        component: 'selectedImport',
+        dirtyWorkId: 'selected-import-project-1',
+        scopeId: 'project-1',
+        scopeKind: 'project',
+      }),
+    ],
+  })
+
+  dependencies.requestRebuild = () => {
+    return Effect.succeed({
+      overBudgetReason: 'snapshot count: estimated 2 > max 1',
+      status: 'blocked_over_budget',
+    } as never)
+  }
+  dependencies.runners = {
+    display: async () => {
+      throw new Error('runner should not execute')
+    },
+    selectedImport: async () => {
+      throw new Error('runner should not execute')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {
+      batchSize: 1,
+      componentOrder: ['selectedImport', 'display'],
+      maxRowsPerWake: 1,
+      maxWakeMs: 1_000,
+      wakeId: 'wake-1',
+    },
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(result.runs).toEqual([])
+  expect(claimedComponents).toEqual(['selectedImport'])
+})
+
+test('wake keeps running later components after an earlier component fails', async () => {
+  const {dependencies, failedClaimIds} = createDependencyHarness({
+    display: [getClaim({component: 'display', dirtyWorkId: 'display-1'})],
+    queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
+  })
+
+  dependencies.runners = {
+    display: async () => {
+      return {processedCount: 1}
+    },
+    queue: async () => {
+      throw new Error('queue projector crashed')
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {
+      batchSize: 1,
+      componentOrder: ['queue', 'display'],
+      maxRetries: 0,
+      maxRowsPerWake: 2,
+      maxWakeMs: 1_000,
+      wakeId: 'wake-1',
+    },
+    dependencies,
+  )
+
+  expect(result.status).toBe('failed')
+  expect(result.failures).toEqual([
+    {attempts: 1, claimIds: ['queue-1'], component: 'queue', diagnostic: 'queue projector crashed', status: 'failed'},
+  ])
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'display', processedCount: 1, status: 'completed'},
+  ])
+  expect(failedClaimIds).toEqual(['queue-1'])
 })
 
 test('wake fails claimed work when missing-snapshot rebuild admission fails', async () => {

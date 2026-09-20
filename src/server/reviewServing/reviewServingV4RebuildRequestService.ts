@@ -39,6 +39,7 @@ import {
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
   getActiveReviewServingRebuildRequestForProject,
+  getBlockedOverBudgetReviewServingRebuildRequestForProject,
   getReviewServingRebuildRequestId,
   type ReviewServingRebuildRequest,
   type ReviewServingRebuildRequestBudget,
@@ -210,6 +211,7 @@ export type RequestReviewServingV4RebuildInput = {
   priority?: number
   projectId: string
   reason: string
+  reuseBlockedRequestWithinMs?: number
 }
 
 type PreparedReviewServingV4Bootstrap = {
@@ -1963,6 +1965,24 @@ export const requestReviewServingV4RebuildEffect = (
       }
 
       return activeRequest
+    }
+
+    const blockedRequest =
+      input.reuseBlockedRequestWithinMs !== undefined && input.reuseBlockedRequestWithinMs > 0
+        ? await getBlockedOverBudgetReviewServingRebuildRequestForProject(
+            {
+              blockedWithinMs: input.reuseBlockedRequestWithinMs,
+              projectId: input.projectId,
+              reason: input.reason,
+              requestedComponents,
+              reviewConfigHash,
+            },
+            requestDatabase,
+          )
+        : null
+
+    if (blockedRequest !== null) {
+      return blockedRequest
     }
 
     const stats = await getReviewServingV4RebuildStats({projectId: input.projectId, reviewConfigHash}, requestDatabase)

@@ -14,6 +14,7 @@ import {
   failReviewServingDirtyWorkClaims,
   getReviewServingDirtyWork,
   releaseReviewServingDirtyWorkClaims,
+  requeueReviewServingDirtyWorkBlockedByRebuild,
   type ReviewServingDirtyWorkDatabase,
   type ReviewServingDirtyWorkRecord,
   upsertReviewServingDirtyWork,
@@ -144,6 +145,23 @@ const createDuckdbDirtyWorkDatabase = async () => {
   const connection = await duckdbInstance.connect()
 
   await connection.run('CREATE SCHEMA app')
+  await connection.run(`
+    CREATE TABLE app.project (
+      id VARCHAR PRIMARY KEY,
+      archived BOOLEAN NOT NULL DEFAULT FALSE,
+      delete_pending_at TIMESTAMPTZ
+    )
+  `)
+  await connection.run("INSERT INTO app.project (id) VALUES ('project-1')")
+  await connection.run(`
+    CREATE TABLE app.review_rebuild_request (
+      request_id VARCHAR PRIMARY KEY,
+      project_id VARCHAR,
+      status VARCHAR NOT NULL,
+      admission_state VARCHAR NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+    )
+  `)
   await connection.run('CREATE TABLE app.review_serving_dirty_work_id_lookup (dirty_work_id VARCHAR NOT NULL)')
   await connection.run(`
     CREATE TABLE app.review_serving_dirty_work (
@@ -1784,6 +1802,295 @@ test('blocked rebuild claims wait for rebuild coverage instead of being reclaime
 
   expect(completed?.status).toBe('completed')
   expect(completed?.lifecycleReason).toBe('covered_by_rebuild')
+})
+
+const insertDuckdbProjectDirtyWork = async (
+  database: ReviewServingDirtyWorkDatabase,
+  input: {dirtyWorkId: string; projectId: string; status?: string; updatedAt?: string},
+) => {
+  const status = input.status ?? 'pending'
+  const updatedAtSql =
+    input.updatedAt === undefined ? 'current_timestamp' : `TIMESTAMPTZ ${getSqlLiteral(input.updatedAt)}`
+  const projectionIdentity = `display:${input.projectId}`
+  const projectionKey = JSON.stringify({projectionComponent: 'display', projectionIdentity})
+
+  await database.run(`
+    INSERT INTO app.review_serving_dirty_work (
+      dirty_work_id,
+      project_id,
+      scope_kind,
+      scope_id,
+      article_id,
+      projection_key,
+      projection_component,
+      projection_identity,
+      dirty_kind,
+      source_partition,
+      first_source_high_water_mark,
+      latest_source_high_water_mark,
+      latest_delta_id,
+      dirty_range_start,
+      dirty_range_end,
+      status,
+      updated_at
+    )
+    VALUES (
+      ${getSqlLiteral(input.dirtyWorkId)},
+      ${getSqlLiteral(input.projectId)},
+      'project',
+      ${getSqlLiteral(input.projectId)},
+      NULL,
+      ${getSqlLiteral(projectionKey)},
+      'display',
+      ${getSqlLiteral(projectionIdentity)},
+      'project.reviewConfig.updated',
+      'projectReviewConfig',
+      1,
+      1,
+      NULL,
+      NULL,
+      NULL,
+      ${getSqlLiteral(status)},
+      ${updatedAtSql}
+    )
+  `)
+  await database.run(`
+    INSERT INTO app.review_serving_dirty_work_claim_state (
+      dirty_work_id,
+      storage_row_id,
+      project_id,
+      projection_component,
+      projection_identity,
+      source_partition,
+      status,
+      latest_source_high_water_mark,
+      dirty_range_start,
+      dirty_range_end,
+      updated_at
+    )
+    VALUES (
+      ${getSqlLiteral(input.dirtyWorkId)},
+      NULL,
+      ${getSqlLiteral(input.projectId)},
+      'display',
+      ${getSqlLiteral(projectionIdentity)},
+      'projectReviewConfig',
+      ${getSqlLiteral(status)},
+      1,
+      NULL,
+      NULL,
+      ${updatedAtSql}
+    )
+  `)
+}
+
+const claimDuckdbDisplayDirtyWorkIds = async (database: ReviewServingDirtyWorkDatabase) => {
+  const claims = await claimReviewServingDirtyWork({limit: 4, projectionComponent: 'display'}, database)
+
+  return claims.map((claim) => {
+    return claim.dirtyWorkId
+  })
+}
+
+const getDuckdbDirtyWorkStatuses = async (database: ReviewServingDirtyWorkDatabase) => {
+  return database.queryJson<{dirtyWorkId: string; lifecycleReason: string | null; status: string}>(`
+    SELECT dirty_work_id AS dirtyWorkId, lifecycle_reason AS lifecycleReason, status
+    FROM app.review_serving_dirty_work
+    ORDER BY dirty_work_id ASC
+  `)
+}
+
+const getDuckdbClaimStateStatuses = async (database: ReviewServingDirtyWorkDatabase) => {
+  return database.queryJson<{dirtyWorkId: string; status: string}>(`
+    SELECT dirty_work_id AS dirtyWorkId, status
+    FROM app.review_serving_dirty_work_claim_state
+    ORDER BY dirty_work_id ASC
+  `)
+}
+
+test('claims skip dirty work for archived or delete-pending projects until they are active again', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    await database.run(`
+      INSERT INTO app.project (id, archived, delete_pending_at)
+      VALUES
+        ('project-archived', TRUE, NULL),
+        ('project-deleting', FALSE, TIMESTAMPTZ '2026-06-16T11:00:00.000Z')
+    `)
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'dirty-archived',
+      projectId: 'project-archived',
+      updatedAt: '2026-06-16T10:00:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'dirty-deleting',
+      projectId: 'project-deleting',
+      updatedAt: '2026-06-16T10:01:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'dirty-missing-project',
+      projectId: 'project-missing',
+      updatedAt: '2026-06-16T10:02:00.000Z',
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'dirty-active',
+      projectId: 'project-1',
+      updatedAt: '2026-06-16T10:03:00.000Z',
+    })
+
+    expect(await claimDuckdbDisplayDirtyWorkIds(database)).toEqual(['dirty-active'])
+
+    await database.run("UPDATE app.project SET archived = FALSE WHERE id = 'project-archived'")
+
+    expect(await claimDuckdbDisplayDirtyWorkIds(database)).toEqual(['dirty-archived'])
+
+    await database.run("UPDATE app.project SET delete_pending_at = NULL WHERE id = 'project-deleting'")
+
+    expect(await claimDuckdbDisplayDirtyWorkIds(database)).toEqual(['dirty-deleting'])
+    expect(await claimDuckdbDisplayDirtyWorkIds(database)).toEqual([])
+    expect(await getDuckdbDirtyWorkStatuses(database)).toEqual([
+      {dirtyWorkId: 'dirty-active', lifecycleReason: null, status: 'running'},
+      {dirtyWorkId: 'dirty-archived', lifecycleReason: null, status: 'running'},
+      {dirtyWorkId: 'dirty-deleting', lifecycleReason: null, status: 'running'},
+      {dirtyWorkId: 'dirty-missing-project', lifecycleReason: null, status: 'pending'},
+    ])
+  } finally {
+    close()
+  }
+})
+
+test('blocked-by-rebuild requeue returns parked rows to pending after the retry window when no rebuild request holds the project', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+  const now = new Date('2026-06-16T12:00:00.000Z')
+  const secondsAgo = (seconds: number) => {
+    return new Date(now.getTime() - seconds * 1000).toISOString()
+  }
+
+  try {
+    await database.run(`
+      INSERT INTO app.project (id)
+      VALUES
+        ('project-boundary'),
+        ('project-recent'),
+        ('project-admitted'),
+        ('project-request-recent'),
+        ('project-request-stale'),
+        ('project-completed')
+    `)
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'blocked-boundary',
+      projectId: 'project-boundary',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(3_600),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'blocked-recent',
+      projectId: 'project-recent',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(3_599),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'blocked-admitted-request',
+      projectId: 'project-admitted',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'blocked-request-recent',
+      projectId: 'project-request-recent',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'blocked-request-stale',
+      projectId: 'project-request-stale',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'blocked-completed-request',
+      projectId: 'project-completed',
+      status: 'blocked_by_rebuild',
+      updatedAt: secondsAgo(7_200),
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'pending-old',
+      projectId: 'project-1',
+      updatedAt: secondsAgo(7_200),
+    })
+    await database.run(`
+      INSERT INTO app.review_rebuild_request (request_id, project_id, status, admission_state, updated_at)
+      VALUES
+        ('request-admitted', 'project-admitted', 'admitted', 'admitted', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(7_200))}),
+        ('request-blocked-recent', 'project-request-recent', 'blocked_over_budget', 'blocked_over_budget', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(3_599))}),
+        ('request-blocked-stale', 'project-request-stale', 'blocked_over_budget', 'blocked_over_budget', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(3_600))}),
+        ('request-completed', 'project-completed', 'completed', 'admitted', TIMESTAMPTZ ${getSqlLiteral(secondsAgo(60))})
+    `)
+
+    expect(await requeueReviewServingDirtyWorkBlockedByRebuild({limit: 0, now}, database)).toEqual({requeuedCount: 0})
+    expect(await requeueReviewServingDirtyWorkBlockedByRebuild({limit: 1, now}, database)).toEqual({requeuedCount: 1})
+    expect(await getDuckdbClaimStateStatuses(database)).toContainEqual({
+      dirtyWorkId: 'blocked-completed-request',
+      status: 'pending',
+    })
+    expect(await requeueReviewServingDirtyWorkBlockedByRebuild({limit: 10, now}, database)).toEqual({requeuedCount: 2})
+    expect(await getDuckdbDirtyWorkStatuses(database)).toEqual([
+      {dirtyWorkId: 'blocked-admitted-request', lifecycleReason: null, status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'blocked-boundary', lifecycleReason: 'released', status: 'pending'},
+      {dirtyWorkId: 'blocked-completed-request', lifecycleReason: 'released', status: 'pending'},
+      {dirtyWorkId: 'blocked-recent', lifecycleReason: null, status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'blocked-request-recent', lifecycleReason: null, status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'blocked-request-stale', lifecycleReason: 'released', status: 'pending'},
+      {dirtyWorkId: 'pending-old', lifecycleReason: null, status: 'pending'},
+    ])
+    expect(await getDuckdbClaimStateStatuses(database)).toEqual([
+      {dirtyWorkId: 'blocked-admitted-request', status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'blocked-boundary', status: 'pending'},
+      {dirtyWorkId: 'blocked-completed-request', status: 'pending'},
+      {dirtyWorkId: 'blocked-recent', status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'blocked-request-recent', status: 'blocked_by_rebuild'},
+      {dirtyWorkId: 'blocked-request-stale', status: 'pending'},
+      {dirtyWorkId: 'pending-old', status: 'pending'},
+    ])
+    expect(await requeueReviewServingDirtyWorkBlockedByRebuild({limit: 10, now}, database)).toEqual({requeuedCount: 0})
+  } finally {
+    close()
+  }
+})
+
+test('retention cleanup requeues stale blocked-by-rebuild rows by default with a bounded per-cycle limit', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+
+  try {
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'blocked-stale-1',
+      projectId: 'project-1',
+      status: 'blocked_by_rebuild',
+      updatedAt: twoHoursAgo,
+    })
+    await insertDuckdbProjectDirtyWork(database, {
+      dirtyWorkId: 'blocked-stale-2',
+      projectId: 'project-1',
+      status: 'blocked_by_rebuild',
+      updatedAt: twoHoursAgo,
+    })
+
+    const disabled = await cleanupReviewServingDirtyWorkRetention({blockedByRebuildRequeueLimit: 0}, database)
+    const limited = await cleanupReviewServingDirtyWorkRetention({blockedByRebuildRequeueLimit: 1}, database)
+    const defaulted = await cleanupReviewServingDirtyWorkRetention({}, database)
+
+    expect(disabled.requeuedBlockedByRebuildCount).toBe(0)
+    expect(limited.requeuedBlockedByRebuildCount).toBe(1)
+    expect(defaulted.requeuedBlockedByRebuildCount).toBe(1)
+    expect(await getDuckdbClaimStateStatuses(database)).toEqual([
+      {dirtyWorkId: 'blocked-stale-1', status: 'pending'},
+      {dirtyWorkId: 'blocked-stale-2', status: 'pending'},
+    ])
+  } finally {
+    close()
+  }
 })
 
 test('claims stale running work after the running lease expires', async () => {

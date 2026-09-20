@@ -55,6 +55,7 @@ const createDiagnosticsDatabase = () => {
               {lifecycleReason: null, rowCount: '3', status: 'pending'},
               {lifecycleReason: 'projected', rowCount: '5', status: 'completed'},
             ]),
+            dirtyWorkBlockedByRebuildCount: 2,
             dirtyWorkOldestQueuedAt: '2026-06-18T09:00:00.000Z',
             dirtyWorkPendingCount: 3,
             dirtyWorkSourcePartitionLagsJson: JSON.stringify([
@@ -221,6 +222,7 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
 
   expect(diagnostics).toMatchObject({
     dirtyWork: {
+      blockedByRebuildCount: 2,
       buckets: [
         {
           highWaterRowCount: 2,
@@ -419,6 +421,23 @@ test('review serving diagnostics batch warning state into one owner read', async
   )
 
   expect(statements).toHaveLength(1)
+})
+
+test('review serving diagnostics count blocked-by-rebuild dirty work as queued instead of failed', async () => {
+  const {database, statements} = createDiagnosticsDatabase()
+
+  await getReviewServingDiagnostics(
+    {now: '2026-06-18T10:05:00.000Z', projectId: 'project-1', reviewConfigHash: 'review-config-1'},
+    database,
+  )
+  const dirtyWorkCte = statements[0]?.split('dirty_work AS (')[1]?.split('dirty_work_bucket AS (')[0] ?? ''
+
+  expect(dirtyWorkCte).toContain("OR status = 'blocked_by_rebuild'")
+  expect(dirtyWorkCte).toContain(
+    "CAST(COUNT(*) FILTER (WHERE status = 'blocked_by_rebuild') AS INTEGER) AS blockedByRebuildCount",
+  )
+  expect(dirtyWorkCte).toContain('CAST(0 AS INTEGER) AS failedCount')
+  expect(statements[0]).toContain('dirty_work.blockedByRebuildCount AS dirtyWorkBlockedByRebuildCount')
 })
 
 test('review serving diagnostics preserve project-wide snapshot status counts when review config is omitted', async () => {

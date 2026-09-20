@@ -702,6 +702,38 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     }
 
     if (statement.includes('FROM app.review_rebuild_request')) {
+      if (statement.includes("status = 'blocked_over_budget'")) {
+        const strings = getSqlStrings(statement)
+        const projectId = strings[0] ?? ''
+        const reasonFilter = statement.includes('AND reason =') ? strings[1] : undefined
+        const reviewConfigHashPathIndex = strings.indexOf('$.reviewConfigHash')
+        const reviewConfigHashFilter =
+          reviewConfigHashPathIndex === -1 ? undefined : strings[reviewConfigHashPathIndex + 1]
+        const requestedComponentFilter = getRequestedComponentFilterFromSql(statement)
+        const window = statement.match(/updated_at > TIMESTAMPTZ '([^']+)' - INTERVAL '(\d+) milliseconds'/u)
+        const blockedAfterMs =
+          window === null ? Number.NEGATIVE_INFINITY : new Date(window[1] ?? '').getTime() - Number(window[2] ?? 0)
+        const blockedRequest = Array.from(requests.values())
+          .filter((request) => {
+            return (
+              request.projectId === projectId
+              && request.status === 'blocked_over_budget'
+              && request.admissionState === 'blocked_over_budget'
+              && new Date(request.updatedAt).getTime() > blockedAfterMs
+              && (reasonFilter === undefined || request.reason === reasonFilter)
+              && (reviewConfigHashFilter === undefined
+                || getReviewConfigHashFromFakeRequest(request) === reviewConfigHashFilter)
+              && (requestedComponentFilter === undefined
+                || hasSameFakeComponentSet(getRequestedComponentsFromFakeRequest(request), requestedComponentFilter))
+            )
+          })
+          .sort((left, right) => {
+            return right.updatedAt.localeCompare(left.updatedAt) || left.requestId.localeCompare(right.requestId)
+          })[0]
+
+        return (blockedRequest === undefined ? [] : [blockedRequest]) as T[]
+      }
+
       if (statement.includes("status = 'admitted'") || statement.includes("status IN ('admitted', 'running')")) {
         const strings = getSqlStrings(statement)
         const projectId = strings[0] ?? ''
@@ -770,6 +802,16 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     requests.set(requestId, {...request, status})
   }
 
+  const setRequestUpdatedAt = (requestId: string, updatedAt: string) => {
+    const request = requests.get(requestId)
+
+    if (!request) {
+      throw new Error(`Expected fake rebuild request ${requestId} to exist`)
+    }
+
+    requests.set(requestId, {...request, updatedAt})
+  }
+
   const setStats = (nextStats: FakeStats) => {
     effectiveStats = {
       ...nextStats,
@@ -781,6 +823,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     database,
     queryWorkloadContexts,
     setRequestStatus,
+    setRequestUpdatedAt,
     setStats,
     statements,
     transactionStatements,
@@ -1624,6 +1667,72 @@ test('V4 missing snapshot rebuild requests reuse active admitted work', async ()
   expect(secondRequest.requestId).toBe(firstRequest.requestId)
   expect(rebuildRequestInsertCount).toBe(1)
   expect(statements.join('\n')).toContain("chunk.status IN ('blocked_over_budget', 'quarantined')")
+})
+
+test('V4 rebuild requests reuse a recent blocked over-budget request instead of re-estimating admission', async () => {
+  const {database, setRequestUpdatedAt, statements} = createFakeRequestDatabase({
+    ...baseStats,
+    enabledPromptCount: 4,
+    humanJudgmentCount: 2_000,
+    judgmentCount: 5_000,
+    promptCount: 4,
+    scopedArticleCount: 100_000,
+    summaryHumanJudgmentCount: 1_000,
+  })
+  const input = {
+    components: ['summary', 'payload'] as const,
+    projectId: 'project-v4',
+    reason: 'requestReviewServingLargeRebuild',
+    reuseBlockedRequestWithinMs: 3_600_000,
+  }
+  const countStatsQueries = () => {
+    return statements.filter((statement) => {
+      return statement.includes('WITH project_settings')
+    }).length
+  }
+  const countBlockedLookups = () => {
+    return statements.filter((statement) => {
+      return statement.includes("AND status = 'blocked_over_budget'")
+    }).length
+  }
+
+  const countRequestInserts = () => {
+    return statements.filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_request')
+    }).length
+  }
+
+  const first = await Effect.runPromise(requestReviewServingV4RebuildEffect(input, database))
+  const statsQueriesPerEstimate = countStatsQueries()
+
+  expect(first.status).toBe('blocked_over_budget')
+  expect(statsQueriesPerEstimate).toBeGreaterThan(0)
+  expect(countRequestInserts()).toBe(1)
+  expect(countBlockedLookups()).toBe(1)
+
+  setRequestUpdatedAt(first.requestId, new Date(Date.now() - 59 * 60_000).toISOString())
+  const reused = await Effect.runPromise(requestReviewServingV4RebuildEffect(input, database))
+
+  expect(reused.requestId).toBe(first.requestId)
+  expect(reused.status).toBe('blocked_over_budget')
+  expect(countStatsQueries()).toBe(statsQueriesPerEstimate)
+  expect(countRequestInserts()).toBe(1)
+  expect(countBlockedLookups()).toBe(2)
+
+  setRequestUpdatedAt(first.requestId, new Date(Date.now() - 61 * 60_000).toISOString())
+  const retried = await Effect.runPromise(requestReviewServingV4RebuildEffect(input, database))
+
+  expect(retried.status).toBe('blocked_over_budget')
+  expect(countStatsQueries()).toBe(statsQueriesPerEstimate * 2)
+  expect(countRequestInserts()).toBe(2)
+  expect(countBlockedLookups()).toBe(3)
+
+  setRequestUpdatedAt(first.requestId, new Date(Date.now() - 59 * 60_000).toISOString())
+  await Effect.runPromise(requestReviewServingV4RebuildEffect({...input, reuseBlockedRequestWithinMs: 0}, database))
+
+  expect(countStatsQueries()).toBe(statsQueriesPerEstimate * 3)
+  expect(countRequestInserts()).toBe(3)
+  expect(countBlockedLookups()).toBe(3)
 })
 
 test('V4 foreground missing snapshot rebuild does not reuse an active full enrichment request', async () => {

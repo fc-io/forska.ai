@@ -9,6 +9,7 @@ import {
   boostReviewServingRebuildRequestPriority,
   createReviewServingRebuildRequest,
   getActiveReviewServingRebuildRequestForProject,
+  getBlockedOverBudgetReviewServingRebuildRequestForProject,
   releaseFailedRequestlessReviewServingRebuildChunks,
   type ReviewServingRebuildRequestStatus,
   terminalizeStaleZeroChunkReviewServingRebuildRequest,
@@ -944,6 +945,53 @@ test('active project rebuild request lookup can be scoped by review config', asy
   expect(joined).toContain('FROM app.review_rebuild_chunk_manifest chunk')
   expect(joined).toContain('INNER JOIN app.review_serving_snapshot_manifest snapshot')
   expect(joined).toContain('snapshot.review_config_hash IS NOT DISTINCT FROM')
+})
+
+test('blocked over-budget rebuild request lookup matches only a recent identical request', async () => {
+  const statements: string[] = []
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      statements.push(statement)
+
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async <T>(
+      operation: (tx: ReviewServingChunkManifestRepositoryTransaction) => Promise<T>,
+    ): Promise<T> => {
+      return operation(database)
+    },
+  }
+
+  const request = await getBlockedOverBudgetReviewServingRebuildRequestForProject(
+    {
+      blockedWithinMs: 3_600_000,
+      now: '2026-06-20T10:05:00.000Z',
+      projectId: 'project-v4',
+      reason: 'selectedImportDirtyWork',
+      requestedComponents: ['selectedImport'],
+      reviewConfigHash: 'review:current',
+    },
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(request).toBeNull()
+  expect(statements).toHaveLength(1)
+  expect(joined).toContain("project_id = 'project-v4'")
+  expect(joined).toContain("AND reason = 'selectedImportDirtyWork'")
+  expect(joined).toContain('json_array_length(requested_components_json) = 1')
+  expect(joined).toContain("'selectedImport'")
+  expect(joined).toContain(
+    "json_extract_string(identity_json, '$.reviewConfigHash') IS NOT DISTINCT FROM 'review:current'",
+  )
+  expect(joined).toContain("AND status = 'blocked_over_budget'")
+  expect(joined).toContain("AND admission_state = 'blocked_over_budget'")
+  expect(joined).toContain("AND updated_at > TIMESTAMPTZ '2026-06-20T10:05:00.000Z' - INTERVAL '3600000 milliseconds'")
+  expect(joined).toContain('LIMIT 1')
+  expect(joined).not.toContain('FROM app.review_rebuild_chunk_manifest chunk')
 })
 
 test('boosting an active project rebuild request uses a lightweight foreground update', async () => {
