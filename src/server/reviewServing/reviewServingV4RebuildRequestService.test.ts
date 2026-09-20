@@ -948,6 +948,39 @@ test('V4 rebuild request service admits large search rebuilds as executable rang
   expect(searchChunkInserts[0]).not.toContain('input_row_budget_split')
 })
 
+test('V4 non-fresh dirty-work rebuild requests carry the dirty source watermarks that cover their claims', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 1, snapshotCount: 1},
+    {
+      dirtyWatermarks: [
+        {latestSourceHighWaterMark: 3, sourcePartition: 'projectReviewConfig:project-v4'},
+        {latestSourceHighWaterMark: 2, sourcePartition: 'promptConfig:project-v4:prompt-a'},
+        {latestSourceHighWaterMark: 1, sourcePartition: 'promptConfig:project-v4:prompt-b'},
+      ],
+      snapshotComponents: countReadyReviewServingComponents,
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: ['llmStatus'], priority: 10_000, projectId: 'project-v4', reason: 'llmStatusDirtyWork'},
+      database,
+    ),
+  )
+  const joined = statements.join('\n')
+
+  expect(request.status).toBe('admitted')
+  expect(request.requestedComponents).toEqual(['llmStatus'])
+  expect(request.diagnosticsJson).toMatchObject({diagnostics: {bootstrapSnapshot: false}})
+  expect(request.sourceWatermarksJson).toMatchObject({
+    dirtySourceWatermarks: {projectReviewConfig: 3, promptConfig: 2},
+    snapshots: {count: 1},
+  })
+  expect(joined).toContain('FROM app.review_serving_project_dirty_source_watermark')
+  expect(joined).toContain("AND status <> 'completed'")
+  expect(joined).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
+})
+
 test('V4 search dirty work bootstraps requested search when active snapshot lacks search state', async () => {
   const {database, statements} = createFakeRequestDatabase(
     {...baseStats, activeSnapshotCount: 1, snapshotCount: 1},

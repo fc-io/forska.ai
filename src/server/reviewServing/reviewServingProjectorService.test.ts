@@ -687,6 +687,69 @@ test('wake routes high-fanout queue dirty work through chunked rebuilds instead 
   expect(releasedClaimIds).toEqual([])
 })
 
+const getProjectScopeLlmStatusClaim = () => {
+  return {
+    ...getClaim({
+      articleId: null,
+      component: 'llmStatus',
+      dirtyWorkId: 'llm-status-project-1',
+      latestSourceHighWaterMark: 3,
+      scopeId: 'project-1',
+      scopeKind: 'project',
+    }),
+    sourcePartition: 'projectReviewConfig:project-1',
+  }
+}
+
+const getNonFreshRebuildRequest = (dirtySourceWatermarks: Record<string, number> | null) => {
+  return {
+    projectId: 'project-1',
+    sourceWatermarksJson: {
+      ...(dirtySourceWatermarks === null ? {} : {dirtySourceWatermarks}),
+      judgments: {count: 0, updatedAt: null},
+      snapshots: {count: 1, updatedAt: '2026-09-20T09:30:22.801Z'},
+    },
+    status: 'admitted',
+  } as never
+}
+
+const wakeProjectScopeLlmStatusDirtyWork = async (dirtySourceWatermarks: Record<string, number> | null) => {
+  const harness = createDependencyHarness({llmStatus: [getProjectScopeLlmStatusClaim()]})
+
+  harness.dependencies.requestRebuild = () => {
+    return Effect.succeed(getNonFreshRebuildRequest(dirtySourceWatermarks))
+  }
+  harness.dependencies.runners = {
+    llmStatus: async () => {
+      return {processedCount: 1}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['llmStatus'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    harness.dependencies,
+  )
+
+  return {...harness, result}
+}
+
+test('wake completes project-scope llm status dirty work only when the non-fresh rebuild carries its dirty source watermark', async () => {
+  const covered = await wakeProjectScopeLlmStatusDirtyWork({projectReviewConfig: 3})
+  const stale = await wakeProjectScopeLlmStatusDirtyWork({projectReviewConfig: 2})
+  const statsOnly = await wakeProjectScopeLlmStatusDirtyWork(null)
+
+  expect(covered.result.status).toBe('completed')
+  expect(covered.completedClaimIds).toEqual(['llm-status-project-1'])
+  expect(covered.releasedClaimIds).toEqual([])
+  expect(covered.failedClaimIds).toEqual([])
+  expect(stale.result.status).toBe('partial')
+  expect(stale.completedClaimIds).toEqual([])
+  expect(stale.releasedClaimIds).toEqual(['llm-status-project-1'])
+  expect(statsOnly.result.status).toBe('partial')
+  expect(statsOnly.completedClaimIds).toEqual([])
+  expect(statsOnly.releasedClaimIds).toEqual(['llm-status-project-1'])
+})
+
 test('wake routes high-fanout human status dirty work through chunked rebuilds instead of direct projection', async () => {
   const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     humanStatus: [
