@@ -372,8 +372,20 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   expect(result.releasedClaimIds).toEqual([])
   expect(searchRunner).not.toHaveBeenCalled()
   expect(rebuildRequests).toEqual([
-    {components: ['search'], priority: 50, projectId: 'project-1', reason: 'searchDirtyWork'},
-    {components: ['summary'], priority: 50, projectId: 'project-1', reason: 'summaryDirtyWork'},
+    {
+      components: ['search'],
+      priority: 50,
+      projectId: 'project-1',
+      reason: 'searchDirtyWork',
+      reuseBlockedRequestWithinMs: 3_600_000,
+    },
+    {
+      components: ['summary'],
+      priority: 50,
+      projectId: 'project-1',
+      reason: 'summaryDirtyWork',
+      reuseBlockedRequestWithinMs: 3_600_000,
+    },
   ])
   expect(
     result.runs.find((run) => {
