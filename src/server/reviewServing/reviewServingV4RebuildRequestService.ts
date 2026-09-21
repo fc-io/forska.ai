@@ -307,6 +307,11 @@ const selectedImportScopedBootstrapReuseComponents = new Set<ReviewServingProjec
   'selectedImport',
   'summary',
 ])
+const getBootstrapReusableSourceSelectorComponents = (
+  components: readonly ReviewServingProjectionComponent[],
+): readonly ReviewServingProjectionComponent[] => {
+  return components.includes('selectedImport') ? ['selectedImport'] : components
+}
 const articleScaledComponentFanOut = {
   display: listModeFanOut,
   humanStatus: 0,
@@ -1014,7 +1019,12 @@ const getReviewServingV4BootstrapReusableComponents = async (
     database,
   )
   const activeOrLastKnownGoodSnapshot = await getActiveOrLastKnownGoodReviewServingSnapshotManifest(
-    {componentStateMode: 'available', projectId: input.projectId, reviewConfigHash: input.reviewConfigHash},
+    {
+      componentStateMode: 'available',
+      projectId: input.projectId,
+      requiredComponents: getBootstrapReusableSourceSelectorComponents(input.components),
+      reviewConfigHash: input.reviewConfigHash,
+    },
     database,
   )
   const reusableSnapshots = [

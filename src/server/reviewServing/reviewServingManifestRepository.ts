@@ -146,6 +146,7 @@ type SnapshotComponentProjectionStatusRow = {
 
 type SnapshotManifestReadOptions = {
   componentStateMode?: ReviewServingSnapshotComponentStateMode
+  requiredComponents?: readonly ReviewServingProjectionComponent[]
   workloadContext?: DuckdbWorkloadContext
 }
 
@@ -502,6 +503,33 @@ const getSnapshotManifestForMode = async (
   return options.componentStateMode === 'available'
     ? getAvailableSnapshotManifest(manifest, database, options.workloadContext)
     : manifest
+}
+
+const getSnapshotAvailableComponentSet = (manifest: ReviewServingSnapshotManifest) => {
+  return new Set(
+    [...manifest.componentState.required, ...manifest.componentState.optional].map((state) => {
+      return state.component
+    }),
+  )
+}
+
+const hasRequiredSnapshotComponentState = (
+  manifest: ReviewServingSnapshotManifest | null,
+  requiredComponents: readonly ReviewServingProjectionComponent[] | undefined,
+) => {
+  if (requiredComponents === undefined || requiredComponents.length === 0) {
+    return manifest !== null
+  }
+
+  if (manifest === null) {
+    return false
+  }
+
+  const componentSet = getSnapshotAvailableComponentSet(manifest)
+
+  return requiredComponents.every((component) => {
+    return componentSet.has(component)
+  })
 }
 
 const getSnapshotManifestSelect = () => {
@@ -1119,27 +1147,47 @@ export const getActiveOrLastKnownGoodReviewServingSnapshotManifest = async (
   input: {
     componentStateMode?: ReviewServingSnapshotComponentStateMode
     projectId: string
+    requiredComponents?: readonly ReviewServingProjectionComponent[]
     reviewConfigHash?: string | null
     workloadContext?: DuckdbWorkloadContext
   },
   database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
 ) => {
+  const active = await getActiveReviewServingSnapshotManifest(input, database)
+
+  if (hasRequiredSnapshotComponentState(active, input.requiredComponents)) {
+    return active
+  }
+
+  const lastKnownGood =
+    active?.lastKnownGoodSnapshotId === null || active?.lastKnownGoodSnapshotId === undefined
+      ? null
+      : await getReviewServingSnapshotManifest({...input, snapshotId: active.lastKnownGoodSnapshotId}, database)
+
+  if (hasRequiredSnapshotComponentState(lastKnownGood, input.requiredComponents)) {
+    return lastKnownGood
+  }
+
   const rows = await database.queryJson<SnapshotManifestRow>(
     `
     ${getSnapshotManifestSelect()}
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       AND ${getReviewConfigPredicate(input.reviewConfigHash)}
-      AND snapshot_status IN ('active', 'retired')
-    ORDER BY
-      CASE WHEN snapshot_status = 'active' THEN 0 ELSE 1 END,
-      activated_at DESC NULLS LAST,
-      updated_at DESC
+      AND snapshot_status = 'retired'
+    ORDER BY activated_at DESC NULLS LAST, updated_at DESC
     LIMIT 1
   `,
     input.workloadContext,
   )
+  const latestRetired = rows[0] === undefined ? null : await getSnapshotManifestForMode(rows[0], database, input)
 
-  return rows[0] === undefined ? null : getSnapshotManifestForMode(rows[0], database, input)
+  return (
+    (hasRequiredSnapshotComponentState(latestRetired, input.requiredComponents) ? latestRetired : null)
+    ?? active
+    ?? lastKnownGood
+    ?? latestRetired
+    ?? null
+  )
 }
 
 export const getReviewServingSnapshotManifest = async (

@@ -23,8 +23,7 @@ import {
   type ReviewServingLazyPromptAnswerPostingDatabase,
 } from './reviewServingLazyPromptAnswerPostingSql.ts'
 import {
-  getActiveReviewServingSnapshotManifest,
-  getLastKnownGoodReviewServingSnapshotManifest,
+  getActiveOrLastKnownGoodReviewServingSnapshotManifest,
   type ReviewServingManifestRepositoryDatabase,
   type ReviewServingSnapshotManifest,
 } from './reviewServingManifestRepository.ts'
@@ -154,17 +153,9 @@ const getManifest = async (projectId: string, dependencies?: ReviewServingLlmRev
   const manifestDatabase =
     dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
   const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
-  const active = await getActiveReviewServingSnapshotManifest(
-    {componentStateMode: 'available', projectId, reviewConfigHash},
+  return getActiveOrLastKnownGoodReviewServingSnapshotManifest(
+    {componentStateMode: 'available', projectId, requiredComponents: llmCountRequiredComponents, reviewConfigHash},
     manifestDatabase,
-  )
-
-  return (
-    active
-    ?? getLastKnownGoodReviewServingSnapshotManifest(
-      {componentStateMode: 'available', projectId, reviewConfigHash},
-      manifestDatabase,
-    )
   )
 }
 

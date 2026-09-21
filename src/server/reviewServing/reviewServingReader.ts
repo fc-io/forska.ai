@@ -1019,6 +1019,7 @@ const rejectReaderRequest = <T>(input: {
 const getSnapshotManifest = async (
   request: ReviewServingReaderRequest,
   manifestDatabase: ReviewServingManifestReaderDatabase,
+  requiredComponents?: readonly ReviewServingProjectionComponent[],
 ) => {
   if (!hasText(request.projectId)) {
     return null
@@ -1040,6 +1041,7 @@ const getSnapshotManifest = async (
     {
       componentStateMode: 'available',
       projectId: request.projectId as string,
+      requiredComponents,
       reviewConfigHash: request.reviewConfigHash,
       workloadContext: request.routeDiagnosticWorkloadContext,
     },
@@ -1211,7 +1213,7 @@ export const readReviewServingRows = async <T>(
         diagnosticsDatabase,
       )
     : null
-  const manifest = await getSnapshotManifest(request, manifestDatabase)
+  const manifest = await getSnapshotManifest(request, manifestDatabase, contract?.requiredComponents)
   const filterSignature = contract ? getReviewServingFilterSignature(getFilterSignatureInput(request)) : null
 
   if (!contract) {

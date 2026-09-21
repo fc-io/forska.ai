@@ -104,6 +104,10 @@ const createManifestDatabase = (
         return []
       }
 
+      if (statement.includes("snapshot_status IN ('active', 'retired')")) {
+        return status === 'active' || status === 'retired' ? ([getSnapshotRow(status, inputComponents)] as T[]) : []
+      }
+
       if (statement.includes("snapshot_status = 'active'")) {
         return status === 'active' ? ([getSnapshotRow('active', inputComponents)] as T[]) : []
       }
@@ -113,6 +117,53 @@ const createManifestDatabase = (
       }
 
       return [getSnapshotRow(status, inputComponents)] as T[]
+    },
+    run: async () => {},
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  return database
+}
+
+const createOptionalOnlyActiveWithReadableLkgManifestDatabase = () => {
+  const activeRow = {
+    ...getSnapshotRow('active', []),
+    componentStateJson: {optional: [], required: []},
+    lastKnownGoodSnapshotId: 'retired-snapshot',
+    optionalComponentsJson: ['payload'],
+    requiredComponentsJson: [],
+    snapshotId: 'active-snapshot',
+  }
+  const retiredRow = {...getSnapshotRow('retired', defaultReadableComponents), snapshotId: 'retired-snapshot'}
+  const database: ReviewServingManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      if (!statement.includes('FROM app.review_serving_snapshot_manifest')) {
+        return getDiagnosticsRows(statement) as T[]
+      }
+
+      if (statement.includes("snapshot_status IN ('active', 'retired')")) {
+        return [activeRow, retiredRow] as T[]
+      }
+
+      if (statement.includes("snapshot_id = 'active-snapshot'")) {
+        return [activeRow] as T[]
+      }
+
+      if (statement.includes("snapshot_id = 'retired-snapshot'")) {
+        return [retiredRow] as T[]
+      }
+
+      if (statement.includes("snapshot_status = 'active'")) {
+        return [activeRow] as T[]
+      }
+
+      if (statement.includes("snapshot_status = 'retired'")) {
+        return [retiredRow] as T[]
+      }
+
+      return [activeRow] as T[]
     },
     run: async () => {},
     transaction: async (operation) => {
@@ -270,6 +321,31 @@ test('LLM default list remains foreground-readable while search and payload enri
   expect(sql).not.toContain('search_identity')
   expect(sql).not.toContain('lazy-detail-hydration')
   expect(sql).not.toContain('model_id AS modelId')
+})
+
+test('LLM default count and list use a row-ready last-known-good snapshot when active is optional-only', async () => {
+  const reader = createReaderDatabase(545_684, 1)
+  const dependencies = {
+    currentReviewConfigHash: 'config-1',
+    database: reader.database,
+    manifestDatabase: createOptionalOnlyActiveWithReadableLkgManifestDatabase(),
+  }
+
+  const countResult = await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 5, prompts: {}},
+    dependencies,
+  )
+  const listResult = await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 5, prompts: {}},
+    dependencies,
+  )
+  const sql = reader.statements.join('\n')
+
+  expect(countResult).toEqual({totalCount: 545_684, totalPages: 109_137})
+  expect(listResult.data).toHaveLength(1)
+  expect(listResult.totalCount).toBe(545_684)
+  expect(sql).toContain("snapshot_id = 'retired-snapshot'")
+  expect(sql).not.toContain("snapshot_id = 'active-snapshot'")
 })
 
 test('LLM list keeps rows readable with nullable totals while count indexing catches up', async () => {
