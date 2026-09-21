@@ -665,6 +665,43 @@ export const releaseInactiveRequestRebuildChunkManifests = async (
       AND ${inactiveRequestPredicate}
   `)
 
+  // A snapshot activated early (count-ready components complete) is retired as soon as a newer
+  // snapshot for the same project and review config activates. Chunks of a still-admitted request
+  // that never started keep the request's promise alive by moving to the newly active snapshot when
+  // the request was raised for that component and the active snapshot serves it. Completing them as
+  // superseded would finalize the request with the component never built while its dirty work had
+  // already been marked covered at admission (a newly imported judgment stayed invisible).
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest AS chunk
+    SET snapshot_id = active_snapshot.snapshot_id,
+        updated_at = current_timestamp
+    FROM app.review_serving_snapshot_manifest retired_snapshot,
+      app.review_serving_snapshot_manifest active_snapshot,
+      app.review_rebuild_request request
+    WHERE ${uniqueChunkIds === null ? '' : `chunk.chunk_id IN (${uniqueChunkIds.map(getSqlLiteral).join(', ')}) AND`}
+      chunk.status = 'pending'
+      AND chunk.started_at IS NULL
+      AND chunk.request_id IS NOT NULL
+      AND chunk.project_id IS NOT NULL
+      AND chunk.snapshot_id IS NOT NULL
+      AND retired_snapshot.project_id IS NOT DISTINCT FROM chunk.project_id
+      AND retired_snapshot.snapshot_id IS NOT DISTINCT FROM chunk.snapshot_id
+      AND retired_snapshot.snapshot_status = 'retired'
+      AND active_snapshot.project_id IS NOT DISTINCT FROM retired_snapshot.project_id
+      AND active_snapshot.review_config_hash IS NOT DISTINCT FROM retired_snapshot.review_config_hash
+      AND active_snapshot.snapshot_status = 'active'
+      AND active_snapshot.snapshot_id <> retired_snapshot.snapshot_id
+      AND (request.request_id || '') = chunk.request_id
+      AND request.status IN ('admitted', 'running')
+      AND request.admission_state = 'admitted'
+      AND EXISTS (
+        SELECT 1
+        FROM json_each(request.requested_components_json) requested_component
+        WHERE json_extract_string(requested_component.value, '$') = chunk.projection_component
+      )
+      AND ${getRebuildChunkSnapshotComponentRequirementPredicate('active_snapshot', 'chunk')}
+  `)
+
   await database.run(`
     UPDATE app.review_rebuild_chunk_manifest
     SET status = 'completed',

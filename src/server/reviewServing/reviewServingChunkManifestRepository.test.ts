@@ -490,6 +490,23 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       }
     })
   }
+  // Models the re-target pass: requests named `rebuild:retarget-*` stand for admitted requests whose
+  // requested component the active snapshot `snapshot-active` serves.
+  const retargetRetiredSnapshotChunks = (statement: string) => {
+    const scopedChunkIds = statement.includes('chunk_id IN') ? new Set(getSqlStrings(statement)) : null
+
+    rows.forEach((existing, chunkId) => {
+      if (
+        (scopedChunkIds === null || scopedChunkIds.has(chunkId))
+        && existing.snapshotId === 'snapshot-retired'
+        && existing.status === 'pending'
+        && existing.startedAt === null
+        && existing.requestId?.startsWith('rebuild:retarget') === true
+      ) {
+        rows.set(chunkId, {...existing, snapshotId: 'snapshot-active', updatedAt: getClock(statements)})
+      }
+    })
+  }
   const completeSupersededSnapshotChunks = (statement: string) => {
     const scopedChunkIds = statement.includes('chunk_id IN') ? new Set(getSqlStrings(statement)) : null
 
@@ -529,6 +546,13 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
       && statement.includes('NOT EXISTS')
     ) {
       releaseInactiveRequestChunks(statement)
+    }
+
+    if (
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest AS chunk')
+      && statement.includes('SET snapshot_id = active_snapshot.snapshot_id')
+    ) {
+      retargetRetiredSnapshotChunks(statement)
     }
 
     if (
@@ -1867,6 +1891,72 @@ test('claim discovery preserves finalized chunks for inactive but present rebuil
 
   expect(releaseStatement).toBeDefined()
   expect(releaseStatement).not.toContain("request.status IN ('admitted', 'running')")
+})
+
+test('inactive request release moves unstarted requested chunks of a retired snapshot to the active snapshot instead of superseding them', async () => {
+  // Boundary: both chunks target the retired snapshot and never started. The first belongs to an
+  // admitted request raised for its component (payloadDirtyWork -> payload), so it keeps the
+  // request's promise by moving to the active snapshot and staying claimable; the second is not a
+  // requested component of its request and is superseded exactly as before.
+  const retiredRequestedPayload = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-retired-requested-payload',
+        projectionComponent: 'payload',
+        projectionIdentity: 'payload:project-1',
+      },
+      [],
+    ),
+    requestId: 'rebuild:retarget-payload',
+    snapshotId: 'snapshot-retired',
+    status: 'pending' as const,
+  }
+  const retiredUnrequested = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-retired-unrequested'}, []),
+    requestId: 'rebuild:retired',
+    snapshotId: 'snapshot-retired',
+    status: 'pending' as const,
+  }
+  const {database, rows, statements} = createFakeChunkManifestDatabase([retiredRequestedPayload, retiredUnrequested])
+
+  await releaseInactiveRequestRebuildChunkManifests(database)
+
+  expect(rows.get(retiredRequestedPayload.chunkId)).toMatchObject({
+    lastError: null,
+    requestId: 'rebuild:retarget-payload',
+    snapshotId: 'snapshot-active',
+    startedAt: null,
+    status: 'pending',
+  })
+  expect(rows.get(retiredUnrequested.chunkId)).toMatchObject({
+    lastError: 'superseded by retired review-serving snapshot',
+    requestId: 'rebuild:retired',
+    status: 'completed',
+  })
+  const retargetIndex = statements.findIndex((statement) => {
+    return statement.includes('SET snapshot_id = active_snapshot.snapshot_id')
+  })
+  const supersedeIndex = statements.findIndex((statement) => {
+    return statement.includes("snapshot.snapshot_status IN ('retired', 'failed')")
+  })
+  const retargetStatement = statements[retargetIndex] ?? ''
+
+  expect(retargetIndex).toBeGreaterThanOrEqual(0)
+  expect(retargetIndex).toBeLessThan(supersedeIndex)
+  expect(retargetStatement).toContain("chunk.status = 'pending'")
+  expect(retargetStatement).toContain('chunk.started_at IS NULL')
+  expect(retargetStatement).toContain("retired_snapshot.snapshot_status = 'retired'")
+  expect(retargetStatement).toContain("active_snapshot.snapshot_status = 'active'")
+  expect(retargetStatement).toContain(
+    'active_snapshot.review_config_hash IS NOT DISTINCT FROM retired_snapshot.review_config_hash',
+  )
+  expect(retargetStatement).toContain("request.status IN ('admitted', 'running')")
+  expect(retargetStatement).toContain("request.admission_state = 'admitted'")
+  expect(retargetStatement).toContain('json_each(request.requested_components_json)')
+  expect(retargetStatement).toContain('json_each(active_snapshot.required_components_json)')
+  expect(retargetStatement).toContain('json_each(active_snapshot.optional_components_json)')
+  expect(retargetStatement).not.toContain("status = 'completed'")
 })
 
 test('inactive request release completes nonterminal chunks for retired snapshots as superseded', async () => {
