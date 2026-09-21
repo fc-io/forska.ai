@@ -666,14 +666,14 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
           })
           .toSorted((left, right) => {
             return (
-              getFakeRequestPriority(right) - getFakeRequestPriority(left)
+              getFakeClaimLane(left) - getFakeClaimLane(right)
+              || getFakeRequestPriority(right) - getFakeRequestPriority(left)
               || (getFakeRequestPriority(left) >= 10_000 && getFakeRequestPriority(right) >= 10_000
                 ? getFakeRequestUpdatedAt(right).localeCompare(getFakeRequestUpdatedAt(left))
                 : 0)
               || (getFakeRequestPriority(left) >= 10_000 && getFakeRequestPriority(right) >= 10_000
                 ? left.updatedAt.localeCompare(right.updatedAt)
                 : 0)
-              || getFakeClaimLane(left) - getFakeClaimLane(right)
               || getFakeClaimPriority(left) - getFakeClaimPriority(right)
               || getFakeLeasePriority(left) - getFakeLeasePriority(right)
               || left.updatedAt.localeCompare(right.updatedAt)
@@ -1028,7 +1028,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
   expect(statements.join('\n')).toContain('SELECT MAX(request.updated_at)')
   expect(statements.join('\n')).toContain('candidate.updated_at ASC')
   expect(statements.join('\n')).toMatch(
-    /SELECT MAX\(request\.priority\)[\s\S]*\) DESC NULLS LAST,[\s\S]*SELECT MAX\(request\.updated_at\)[\s\S]*candidate\.updated_at[\s\S]*candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*CASE candidate\.projection_component/,
+    /candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*SELECT MAX\(request\.priority\)[\s\S]*\) DESC NULLS LAST,[\s\S]*SELECT MAX\(request\.updated_at\)[\s\S]*candidate\.updated_at[\s\S]*CASE candidate\.projection_component/,
   )
   expect(statements.join('\n')).toContain('CASE candidate.projection_component')
 })
@@ -1204,7 +1204,7 @@ test('next claimable chunk discovery allows independent critical components befo
   expect(next).toMatchObject({inputDigest: 'digest-display', projectionComponent: 'display'})
 })
 
-test('next claimable chunk discovery lets posting run before unrelated queue search and payload chunks complete', async () => {
+test('next claimable chunk discovery prioritizes unrelated critical queue before background posting', async () => {
   const completedComponents = [
     'projectScope',
     'selectedImport',
@@ -1258,7 +1258,7 @@ test('next claimable chunk discovery lets posting run before unrelated queue sea
     database,
   )
 
-  expect(next).toMatchObject({inputDigest: 'digest-posting', projectionComponent: 'posting'})
+  expect(next).toMatchObject({inputDigest: 'digest-queue', projectionComponent: 'queue'})
 })
 
 test('next claimable chunk discovery treats posting summary and search as bulk after result visibility', async () => {
@@ -1384,7 +1384,103 @@ test('next claimable chunk discovery prioritizes posting before summary once pay
   expect(next).toMatchObject({inputDigest: 'digest-old-posting', projectionComponent: 'posting'})
 })
 
-test('next claimable chunk discovery applies request priority before component order', async () => {
+test('next claimable chunk discovery applies lane priority before request priority for bulk search', async () => {
+  const displayProjectScope = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-low-priority-project-scope',
+        projectId: 'project-visible',
+        projectionComponent: 'projectScope',
+      },
+      [],
+    ),
+    requestId: 'rebuild:normal-activation',
+    status: 'completed' as const,
+  }
+  const displaySelectedImport = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-low-priority-selected-import',
+        projectId: 'project-visible',
+        projectionComponent: 'selectedImport',
+      },
+      [],
+    ),
+    requestId: 'rebuild:normal-activation',
+    status: 'completed' as const,
+  }
+  const display = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-low-priority-display',
+        projectId: 'project-visible',
+        projectionComponent: 'display',
+      },
+      [],
+    ),
+    requestId: 'rebuild:normal-activation',
+    updatedAt: '2026-06-16T14:10:00.000Z',
+  }
+  const searchProjectScope = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-high-priority-search-project-scope',
+        projectId: 'project-search',
+        projectionComponent: 'projectScope',
+      },
+      [],
+    ),
+    requestId: 'rebuild:foreground-search',
+    status: 'completed' as const,
+  }
+  const searchSelectedImport = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-high-priority-search-selected-import',
+        projectId: 'project-search',
+        projectionComponent: 'selectedImport',
+      },
+      [],
+    ),
+    requestId: 'rebuild:foreground-search',
+    status: 'completed' as const,
+  }
+  const search = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-high-priority-search',
+        projectId: 'project-search',
+        projectionComponent: 'search',
+      },
+      [],
+    ),
+    requestId: 'rebuild:foreground-search',
+    updatedAt: '2026-06-16T14:00:00.000Z',
+  }
+  const {database, statements} = createFakeChunkManifestDatabase([
+    displayProjectScope,
+    displaySelectedImport,
+    display,
+    searchProjectScope,
+    searchSelectedImport,
+    search,
+  ])
+
+  const next = await getNextClaimableReviewServingRebuildChunk({now: '2026-06-16T14:05:00.000Z'}, database)
+
+  expect(next).toMatchObject({inputDigest: 'digest-low-priority-display', projectionComponent: 'display'})
+  expect(statements.join('\n')).toMatch(
+    /candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*SELECT MAX\(request\.priority\)/,
+  )
+})
+
+test('next claimable chunk discovery keeps request priority inside the critical lane', async () => {
   const normalProjectScope = {
     ...getChunkRowFromIdentity(
       {
@@ -1481,36 +1577,26 @@ test('next claimable chunk discovery keeps foreground fairness ahead of route to
   expect(next).toMatchObject({inputDigest: 'digest-old-project-scope', projectionComponent: 'projectScope'})
 })
 
-test('next claimable chunk discovery lets stalled foreground age break same-priority component ties', async () => {
-  const oldProjectScope = {
+test('next claimable chunk discovery lets stalled foreground age break same-lane component order', async () => {
+  const oldCompletedComponents = ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'] as const
+  const oldCompleted = oldCompletedComponents.map((projectionComponent) => {
+    return {
+      ...getChunkRowFromIdentity(
+        {
+          ...baseChunkIdentity,
+          inputDigest: `digest-old-${projectionComponent}`,
+          projectId: 'project-old',
+          projectionComponent,
+        },
+        [],
+      ),
+      requestId: 'rebuild:stalled-foreground-old',
+      status: 'completed' as const,
+    }
+  })
+  const oldQueue = {
     ...getChunkRowFromIdentity(
-      {
-        ...baseChunkIdentity,
-        inputDigest: 'digest-old-project-scope',
-        projectId: 'project-old',
-        projectionComponent: 'projectScope',
-      },
-      [],
-    ),
-    requestId: 'rebuild:stalled-foreground-old',
-    status: 'completed' as const,
-  }
-  const oldSelectedImport = {
-    ...getChunkRowFromIdentity(
-      {
-        ...baseChunkIdentity,
-        inputDigest: 'digest-old-selected-import',
-        projectId: 'project-old',
-        projectionComponent: 'selectedImport',
-      },
-      [],
-    ),
-    requestId: 'rebuild:stalled-foreground-old',
-    status: 'completed' as const,
-  }
-  const oldSearch = {
-    ...getChunkRowFromIdentity(
-      {...baseChunkIdentity, inputDigest: 'digest-old-search', projectId: 'project-old', projectionComponent: 'search'},
+      {...baseChunkIdentity, inputDigest: 'digest-old-queue', projectId: 'project-old', projectionComponent: 'queue'},
       [],
     ),
     requestId: 'rebuild:stalled-foreground-old',
@@ -1529,13 +1615,26 @@ test('next claimable chunk discovery lets stalled foreground age break same-prio
     requestId: 'rebuild:stalled-foreground-fresh',
     status: 'completed' as const,
   }
-  const freshJudgmentInput = {
+  const freshDisplay = {
     ...getChunkRowFromIdentity(
       {
         ...baseChunkIdentity,
-        inputDigest: 'digest-fresh-judgment-input',
+        inputDigest: 'digest-fresh-display',
         projectId: 'project-fresh',
-        projectionComponent: 'judgmentInputContent',
+        projectionComponent: 'display',
+      },
+      [],
+    ),
+    requestId: 'rebuild:stalled-foreground-fresh',
+    status: 'completed' as const,
+  }
+  const freshLlmStatus = {
+    ...getChunkRowFromIdentity(
+      {
+        ...baseChunkIdentity,
+        inputDigest: 'digest-fresh-llm-status',
+        projectId: 'project-fresh',
+        projectionComponent: 'llmStatus',
       },
       [],
     ),
@@ -1543,18 +1642,18 @@ test('next claimable chunk discovery lets stalled foreground age break same-prio
     updatedAt: '2026-06-16T14:10:00.000Z',
   }
   const {database, statements} = createFakeChunkManifestDatabase([
-    oldProjectScope,
-    oldSelectedImport,
-    oldSearch,
+    ...oldCompleted,
+    oldQueue,
     freshProjectScope,
-    freshJudgmentInput,
+    freshDisplay,
+    freshLlmStatus,
   ])
 
   const next = await getNextClaimableReviewServingRebuildChunk({now: '2026-06-16T14:15:00.000Z'}, database)
 
-  expect(next).toMatchObject({inputDigest: 'digest-old-search', projectionComponent: 'search'})
+  expect(next).toMatchObject({inputDigest: 'digest-old-queue', projectionComponent: 'queue'})
   expect(statements.join('\n')).toMatch(
-    /request\.priority[\s\S]*request\.updated_at[\s\S]*candidate\.updated_at[\s\S]*candidate\.projection_component/,
+    /candidate\.projection_component IN \('projectScope', 'selectedImport', 'display'[\s\S]*request\.priority[\s\S]*request\.updated_at[\s\S]*candidate\.updated_at[\s\S]*CASE candidate\.projection_component/,
   )
 })
 

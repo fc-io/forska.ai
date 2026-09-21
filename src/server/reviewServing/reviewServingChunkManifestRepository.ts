@@ -1251,8 +1251,8 @@ export const getReviewServingRebuildTimingDiagnostics = async (
     WHERE ${scopePredicate}
       AND (${getReviewServingRebuildChunkClaimPredicate({now: claimNow}, 'chunk')})
     ORDER BY
-      ${getRebuildChunkClaimRequestPrioritySql('chunk')} DESC NULLS LAST,
       ${getRebuildChunkClaimLaneSql('chunk')} ASC,
+      ${getRebuildChunkClaimRequestPrioritySql('chunk')} DESC NULLS LAST,
       ${getRebuildChunkClaimPrioritySql('chunk')} ASC,
       chunk.updated_at ASC,
       chunk.chunk_id ASC
@@ -1774,6 +1774,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
       FROM app.review_rebuild_chunk_manifest AS candidate
       WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
       ORDER BY
+        ${getRebuildChunkClaimLaneSql('candidate')} ASC,
         ${getRebuildChunkClaimRequestPrioritySql('candidate')} DESC NULLS LAST,
         CASE
           WHEN ${getRebuildChunkClaimRequestPrioritySql('candidate')} >= ${getSqlLiteral(stalledForegroundRebuildRequestPriority)}
@@ -1785,7 +1786,6 @@ export const getNextClaimableReviewServingRebuildChunk = async (
           THEN candidate.updated_at
           ELSE NULL
         END ASC NULLS LAST,
-        ${getRebuildChunkClaimLaneSql('candidate')} ASC,
         ${getRebuildChunkClaimPrioritySql('candidate')} ASC,
         CASE
           WHEN candidate.status = 'running'

@@ -155,6 +155,27 @@ const getJobConfigRow = (): MockJobConfigRow => {
   }
 }
 
+type MockReadOnlyQuery = <T>(statement: string, workloadContext?: unknown) => Promise<T[]>
+
+const getMockJudgeReadOnlyDatabaseService = (
+  queryJson: MockReadOnlyQuery,
+  run: (statement: string) => Promise<void> = async () => {
+    return undefined
+  },
+) => {
+  return {
+    close: async () => {
+      return undefined
+    },
+    queryJson,
+    queryJsonOwnerMain: queryJson,
+    run,
+    validate: async () => {
+      return undefined
+    },
+  }
+}
+
 const getExhaustedScanState = (
   lastProjectRefreshAckSeq: number | null,
   wrapVisibilityAckSeq: number | null,
@@ -211,8 +232,8 @@ const registerSharedMocks = (
 
     return {
       getJudgeWorkerReadOnlyAppDatabaseService: () => {
-        return {
-          queryJson: async <T>(statement: string, workloadContext?: unknown): Promise<T[]> => {
+        return getMockJudgeReadOnlyDatabaseService(
+          async <T>(statement: string, workloadContext?: unknown): Promise<T[]> => {
             queryWorkloadContexts.push(workloadContext)
 
             return statement.includes('app.project_mart_refresh_state pmrs')
@@ -239,10 +260,7 @@ const registerSharedMocks = (
                       ? [jobConfigRow as T]
                       : []
           },
-          run: async (_statement: string): Promise<void> => {
-            return undefined
-          },
-        }
+        )
       },
       getJudgmentJobSqliteService: () => {
         return sqliteService
@@ -293,10 +311,7 @@ test('sizes provider refill from effective cap with a ready reservoir above acti
       return entries
     },
     getHealthSnapshot: async () => {
-      return {
-        orphanedJudgedRowCount: 0,
-        promptCounts: {claimed: 0, judged: 0, ready: 250, running: 0, skipped: 0},
-      }
+      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 0, judged: 0, ready: 250, running: 0, skipped: 0}}
     },
     getReadyCount: async () => {
       return 250
@@ -325,13 +340,7 @@ test('sizes provider refill from effective cap with a ready reservoir above acti
       return {nextCursor: null, promptEntries: [{articleId: 'article-1', promptId: 'prompt-1'}]}
     },
     inferenceConfig: {codexMaxInflight: 1, judgmentsAddToQueueMaxBatchSize: 1000, judgmentsReadyTargetMultiplier: 2},
-    runningJobs: [
-      getRunningJob({
-        maxInflightRequests: null,
-        modelProvider: 'sglang',
-        providerLimit: 200,
-      }),
-    ],
+    runningJobs: [getRunningJob({maxInflightRequests: null, modelProvider: 'sglang', providerLimit: 200})],
   })
 
   const module = (await import(
@@ -1517,16 +1526,16 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
       getJudgeWorkerReadOnlyAppDatabaseService: () => {
-        return {
-          queryJson: async <T>(statement: string): Promise<T[]> => {
+        return getMockJudgeReadOnlyDatabaseService(
+          async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app.judgment_human jh')
               ? ([{articleId: 'article-human-late', promptId: 'prompt-human-late'}] as T[])
               : dbQuery<T>(statement)
           },
-          run: async (statement: string): Promise<void> => {
+          async (statement: string): Promise<void> => {
             return dbRun(statement)
           },
-        }
+        )
       },
       JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
       getJudgmentJobSqliteService: () => {
@@ -1626,16 +1635,16 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
       getJudgeWorkerReadOnlyAppDatabaseService: () => {
-        return {
-          queryJson: async <T>(statement: string): Promise<T[]> => {
+        return getMockJudgeReadOnlyDatabaseService(
+          async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app.judgment_human_summary')
               ? ([{articleId: summaryArticleId}] as T[])
               : dbQuery<T>(statement)
           },
-          run: async (statement: string): Promise<void> => {
+          async (statement: string): Promise<void> => {
             return dbRun(statement)
           },
-        }
+        )
       },
       JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
       getJudgmentJobSqliteService: () => {
@@ -2095,7 +2104,7 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
       getJudgeWorkerReadOnlyAppDatabaseService: () => {
-        return {queryJson: dbQuery, run: dbRun}
+        return getMockJudgeReadOnlyDatabaseService(dbQuery, dbRun)
       },
       getJudgmentJobSqliteService: () => {
         return sqliteService
@@ -2238,7 +2247,7 @@ test('queue reuse keeps cloned prompt edits queued when source judgments stay on
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
       getJudgeWorkerReadOnlyAppDatabaseService: () => {
-        return {queryJson: dbQuery, run: dbRun}
+        return getMockJudgeReadOnlyDatabaseService(dbQuery, dbRun)
       },
       getJudgmentJobSqliteService: () => {
         return sqliteService
@@ -2372,7 +2381,7 @@ test('queue reuse does not skip matching judgments outside the target project sc
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
       getJudgeWorkerReadOnlyAppDatabaseService: () => {
-        return {queryJson: dbQuery, run: dbRun}
+        return getMockJudgeReadOnlyDatabaseService(dbQuery, dbRun)
       },
       getJudgmentJobSqliteService: () => {
         return sqliteService

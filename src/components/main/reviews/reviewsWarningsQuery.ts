@@ -41,6 +41,7 @@ export type ReviewsWarningsData = {
       terminalDirtyWorkCount: number
       terminalQuarantineCount: number
       terminalRebuildChunkCount: number
+      terminalSnapshotCount?: number
     }
     oldestQueuedAt: string | null
     pendingArticleRefreshCount: number

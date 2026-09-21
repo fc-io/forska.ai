@@ -293,6 +293,7 @@ const isCurrentDbHistoricalMaintenanceFailure = (data: ReviewsWarningsData, path
     isDirtyWorkLifecycleDiagnostic
     && data.indexing.maintenance.terminalDirtyWorkCount === 0
     && data.indexing.serving.diagnostics.dirtyWork?.failedCount === 0
+  const isHistoricalSnapshotDiagnostic = path === 'data.indexing.serving.diagnostics.snapshot.failedCount'
   const isHistoricalTerminalDiagnostic =
     path === 'data.indexing.serving.diagnostics.rebuildChunks.failedCount'
     || path === 'data.indexing.serving.diagnostics.dirtyWork.failedCount'
@@ -301,6 +302,11 @@ const isCurrentDbHistoricalMaintenanceFailure = (data: ReviewsWarningsData, path
 
   if (networkSmokeDbMode === 'current' && isNonTerminalDirtyWorkLifecycleDiagnostic) {
     return true
+  }
+
+  if (networkSmokeDbMode === 'current' && isHistoricalSnapshotDiagnostic) {
+    // Failed snapshot manifests can remain as history after a newer active/candidate snapshot supersedes them.
+    return data.indexing.maintenance.hasHistoricalFailures && !data.indexing.maintenance.hasActionableFailures
   }
 
   return (
@@ -383,6 +389,131 @@ const getWarningsEndpointInspection = (body: string): WarningsEndpointInspection
     ? {data: parsed.data, kind: 'queued', projectId: parsed.projectId}
     : {details: queuedFailureDetails, kind: 'failure'}
 }
+
+const createWarningsAuditData = (input: {
+  hasActionableFailures?: boolean
+  processing?: boolean
+  readable?: boolean
+  snapshotFailedCount?: number
+  usable?: boolean
+}): ReviewsWarningsData => {
+  const readable = input.readable ?? true
+  const usable = input.usable ?? readable
+  const processing = input.processing === true
+
+  return {
+    enabledPromptCount: 1,
+    indexing: {
+      activeConsumerCount: 0,
+      activeWorkCount: processing ? 1 : 0,
+      articleRefreshesPerMinute: null,
+      blockedReason: null,
+      cleanup: {inFlightGenerationCleanupCount: 0, lastProgressedAt: null},
+      coverage: {
+        countReadyArticleCount: readable ? 1 : null,
+        detailReadyArticleCount: readable ? 1 : null,
+        filterReadyArticleCount: readable ? 1 : null,
+        reviewPageReadyArticleCount: readable ? 1 : 0,
+        rowReadyArticleCount: readable ? 1 : null,
+        searchReadyArticleCount: readable ? 1 : null,
+        totalArticleCount: 1,
+      },
+      eligibleConsumerCount: 0,
+      eligibleConsumerPresent: false,
+      inFlightArticleRefreshCount: 0,
+      inFlightProjectRefreshCount: processing ? 1 : 0,
+      inFlightRefreshCount: processing ? 1 : 0,
+      lastProcessedAt: readable ? '2026-09-21T19:41:02.134Z' : null,
+      lastProgressedAt: readable ? '2026-09-21T19:41:02.134Z' : null,
+      lastStartedAt: null,
+      maintenance: {
+        hasActionableFailures: input.hasActionableFailures ?? false,
+        hasHistoricalFailures: (input.snapshotFailedCount ?? 1) > 0,
+        status: input.hasActionableFailures === true ? 'failed' : 'idle',
+        terminalDirtyWorkCount: 0,
+        terminalQuarantineCount: 0,
+        terminalRebuildChunkCount: 0,
+        terminalSnapshotCount: input.snapshotFailedCount ?? 1,
+      },
+      oldestQueuedAt: null,
+      pendingArticleRefreshCount: 0,
+      pendingProjectRefreshCount: processing ? 1 : 0,
+      pendingRefreshCount: processing ? 1 : 0,
+      progressState:
+        input.hasActionableFailures === true
+          ? 'failed'
+          : processing
+            ? 'processing'
+            : readable
+              ? 'completed'
+              : 'stalled',
+      projectRefreshesPerMinute: null,
+      queuedArticleRefreshCount: 0,
+      queuedProjectRefreshCount: 0,
+      queuedRefreshCount: 0,
+      quarantinedArticleRefreshCount: 0,
+      quarantinedArticles: [],
+      recoveryContext: null,
+      recoveryMode: 'none',
+      requiredConsumerRole: 'maintenance-worker',
+      retryAfterAt: null,
+      search: {availability: readable ? 'ready' : 'unavailable', optionalComponent: true, snapshotId: null},
+      serving: {
+        diagnostics: {
+          dirtyWork: {failedCount: 0, pendingCount: 0, runningCount: 0},
+          rebuildChunks: {failedCount: 0, pendingCount: 0, runningCount: 0},
+          snapshot: {
+            activeCount: readable ? 1 : 0,
+            candidateCount: 0,
+            failedCount: input.snapshotFailedCount ?? 1,
+            invalidCandidateCount: 0,
+            retiredCount: 0,
+          },
+        },
+        manifest: {},
+        readable,
+        usable,
+      },
+      status:
+        input.hasActionableFailures === true
+          ? 'failed'
+          : processing
+            ? 'refreshing'
+            : readable
+              ? 'ready'
+              : 'stale',
+    },
+    projectId: 'project-historical-failed-snapshot-warning',
+    scope: {hasAnyArticlesInScope: true},
+  }
+}
+
+test('current-db warnings audit allows historical failed snapshots behind readable serving rows', () => {
+  test.skip(networkSmokeDbMode !== 'current', 'current-db-only warning classification')
+
+  expect(getWarningFailureDetails(createWarningsAuditData({snapshotFailedCount: 2}))).toBeNull()
+})
+
+test('current-db warnings audit allows historical failed snapshots while current serving work is processing', () => {
+  test.skip(networkSmokeDbMode !== 'current', 'current-db-only warning classification')
+
+  expect(
+    getWarningsEndpointInspection(
+      JSON.stringify({data: createWarningsAuditData({processing: true, readable: false})}),
+    ),
+  ).toEqual({kind: 'ok'})
+})
+
+test('current-db warnings audit still fails idle unreadable serving states', () => {
+  test.skip(networkSmokeDbMode !== 'current', 'current-db-only warning classification')
+
+  const inspection = getWarningsEndpointInspection(
+    JSON.stringify({data: createWarningsAuditData({readable: false, snapshotFailedCount: 2})}),
+  )
+
+  expect(inspection.kind).toBe('failure')
+  expect(inspection.kind === 'failure' ? inspection.details : '').toContain('stalled review indexing')
+})
 
 const fetchWarningsEndpointInspection = async (projectId: string) => {
   const response = await fetch(`${apiBaseUrl}${warningEndpointPath}`, {

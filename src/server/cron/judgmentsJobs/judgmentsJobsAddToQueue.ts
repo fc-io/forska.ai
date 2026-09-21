@@ -2,8 +2,8 @@ import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
-import {judgmentBacklogControllerConstants} from './judgmentBacklogController.ts'
 import {shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
+import {judgmentBacklogControllerConstants} from './judgmentBacklogController.ts'
 import type {JobCursor} from './judgmentJobSqliteService.ts'
 import {
   getJudgmentJobSqliteErrorMessage,

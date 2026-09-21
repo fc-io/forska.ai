@@ -45,10 +45,7 @@ type JudgmentJobServingActiveScope = JudgmentJobServingScope & {
   projectScopeIdentity: string
   selectedImportSnapshotId: string
 }
-type JudgmentJobServingScopeResolution = {
-  hasServingScopeRows: boolean
-  scope: JudgmentJobServingActiveScope | null
-}
+type JudgmentJobServingScopeResolution = {hasServingScopeRows: boolean; scope: JudgmentJobServingActiveScope | null}
 
 const getJudgmentJobQueueWorkloadContext = (
   routeOrJobKey: string,
@@ -274,19 +271,6 @@ const getDispatchReadyServingScopeFromRows = (
   return getFirstDispatchReadyServingScope(rows, routeOrJobKey, database)
 }
 
-const getDispatchReadyServingScope = async (
-  projectId: string,
-  routeOrJobKey: string,
-  reviewConfigHash: string | null,
-  database: AppReadOnlyDatabaseService,
-): Promise<JudgmentJobServingActiveScope | null> => {
-  return getDispatchReadyServingScopeFromRows(
-    await getServingScopeRows({projectId, reviewConfigHash, routeOrJobKey}, database),
-    routeOrJobKey,
-    database,
-  )
-}
-
 const getActiveServingScopeResolution = async (
   projectId: string,
   routeOrJobKey: string,
@@ -302,7 +286,10 @@ const getActiveServingScopeResolution = async (
     return {hasServingScopeRows: false, scope: null}
   }
 
-  const currentRows = await getServingScopeRows({projectId, reviewConfigHash: currentReviewConfigHash, routeOrJobKey}, database)
+  const currentRows = await getServingScopeRows(
+    {projectId, reviewConfigHash: currentReviewConfigHash, routeOrJobKey},
+    database,
+  )
   const currentScope = await getDispatchReadyServingScopeFromRows(currentRows, routeOrJobKey, database)
 
   if (currentScope !== null) {
@@ -367,11 +354,7 @@ const getDatePredicate = (column: string, from: Date | null | undefined, to: Dat
 }
 
 const getJudgmentJobUnassessedPairsFromCurrentProjectTables = async (
-  params: {
-    cursor: UnassessedPairsCursor | null
-    jobId: string
-    projectId: string
-  },
+  params: {cursor: UnassessedPairsCursor | null; jobId: string; projectId: string},
   database: AppReadOnlyDatabaseService,
   limit: number,
 ): Promise<UnassessedPairsResult> => {

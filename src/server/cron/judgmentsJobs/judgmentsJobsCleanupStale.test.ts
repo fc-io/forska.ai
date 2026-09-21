@@ -7,11 +7,11 @@ import {getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
 import {getRequestAttemptLifecycleState, parseRequestAttempts} from './judgmentRequestAttemptManifest.ts'
+import type {CleanupStaleBudget} from './judgmentsJobsCleanupStale.ts'
 import {
   getProviderAdmissionProbeLeaseIdentity,
   getProviderAdmissionRequestLeaseIdentity,
 } from './providerAdmissionLease.ts'
-import type {CleanupStaleBudget} from './judgmentsJobsCleanupStale.ts'
 
 setDefaultTimeout(120_000)
 
