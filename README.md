@@ -19,7 +19,21 @@ Install Bun if you do not already have it:
 curl -fsSL https://bun.sh/install | bash
 ```
 
-Clone the repo and install dependencies:
+Then pick **one** of the two versions below. They are alternatives, not steps: clone either the stable release or the current dev build.
+
+### Option A: Stable release (recommended)
+
+The current stable release is the Git tag `stable-2026-09-15`. Pick this if you want a version that is known to work.
+
+```bash
+git clone --branch stable-2026-09-15 https://github.com/fc-io/forska.ai.git
+cd forska.ai
+bun install
+```
+
+### Option B: Current dev build
+
+The `main` branch is the active development build. It has the newest features, and it can be broken at any commit.
 
 ```bash
 git clone https://github.com/fc-io/forska.ai.git
@@ -27,21 +41,27 @@ cd forska.ai
 bun install
 ```
 
-The current stable release is the Git tag `stable-2026-09-15`.
+### Switching between them later
 
-Clone the stable version:
-
-```bash
-git clone --branch stable-2026-09-15 https://github.com/fc-io/forska.ai.git
-```
-
-From an existing checkout:
+From an existing checkout, move to the stable release:
 
 ```bash
 git fetch origin --tags
 git switch --detach stable-2026-09-15
 bun install
 ```
+
+Or back to the dev build:
+
+```bash
+git switch main
+git pull
+bun install
+```
+
+Run `bun install` after either switch, because dependencies can differ between versions.
+
+### Start the app
 
 Start the local API/server stack and web app together:
 
