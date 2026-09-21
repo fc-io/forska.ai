@@ -1,6 +1,8 @@
+import {Buffer} from 'node:buffer'
 import {spawnSync} from 'node:child_process'
+import {existsSync, readFileSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
-import {resolve} from 'node:path'
+import {join, resolve} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -23,14 +25,99 @@ const getChildRuntimeEnv = (overrides: Record<string, string>) => {
   }
 }
 
+const runBunSpawnSync = (
+  command: Parameters<typeof globalThis.Bun.spawnSync>[0],
+  options: Parameters<typeof globalThis.Bun.spawnSync>[1],
+) => {
+  const outputPath = join(
+    tmpdir(),
+    `f1-review-serving-heartbeat-child-output-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.log`,
+  )
+  const patchedCommand = Array.from(command)
+
+  if (patchedCommand[1] === '-e' && typeof patchedCommand[2] === 'string') {
+    patchedCommand[2] = `
+      const __forskaChildOutputPath = process.env.FORSKA_TEST_CHILD_OUTPUT_PATH
+      if (__forskaChildOutputPath) {
+        const {appendFileSync} = await import('node:fs')
+        const __forskaOriginalStdoutWrite = process.stdout.write.bind(process.stdout)
+        const __forskaOriginalStderrWrite = process.stderr.write.bind(process.stderr)
+        process.stdout.write = (chunk, ...args) => {
+          appendFileSync(__forskaChildOutputPath, String(chunk))
+          return __forskaOriginalStdoutWrite(chunk, ...args)
+        }
+        process.stderr.write = (chunk, ...args) => {
+          appendFileSync(__forskaChildOutputPath, String(chunk))
+          return __forskaOriginalStderrWrite(chunk, ...args)
+        }
+        for (const __forskaConsoleMethod of ['log', 'warn', 'error']) {
+          const __forskaOriginalConsoleMethod = console[__forskaConsoleMethod].bind(console)
+          console[__forskaConsoleMethod] = (...args) => {
+            appendFileSync(__forskaChildOutputPath, args.map(String).join(' ') + '\\n')
+            __forskaOriginalConsoleMethod(...args)
+          }
+        }
+      }
+      ${patchedCommand[2]}
+    `
+  }
+
+  const result = globalThis.Bun.spawnSync(patchedCommand, {
+    ...options,
+    env: {...options?.env, FORSKA_TEST_CHILD_OUTPUT_PATH: outputPath},
+    stderr: 'pipe',
+    stdout: 'pipe',
+  })
+  const fileOutput = existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : ''
+  rmSync(outputPath, {force: true})
+
+  return {...result, stdout: Buffer.from(`${result.stdout.toString()}\n${result.stderr.toString()}\n${fileOutput}`)}
+}
+
 const runBunEval = (script: string, env: Record<string, string>) => {
-  const result = spawnSync(process.execPath, ['-e', script], {
+  const outputPath = join(
+    tmpdir(),
+    `f1-review-serving-heartbeat-node-child-output-${process.pid}-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}.log`,
+  )
+  const patchedScript = `
+    const __forskaChildOutputPath = process.env.FORSKA_TEST_CHILD_OUTPUT_PATH
+    if (__forskaChildOutputPath) {
+      const {appendFileSync} = await import('node:fs')
+      const __forskaOriginalStdoutWrite = process.stdout.write.bind(process.stdout)
+      const __forskaOriginalStderrWrite = process.stderr.write.bind(process.stderr)
+      process.stdout.write = (chunk, ...args) => {
+        appendFileSync(__forskaChildOutputPath, String(chunk))
+        return __forskaOriginalStdoutWrite(chunk, ...args)
+      }
+      process.stderr.write = (chunk, ...args) => {
+        appendFileSync(__forskaChildOutputPath, String(chunk))
+        return __forskaOriginalStderrWrite(chunk, ...args)
+      }
+      for (const __forskaConsoleMethod of ['log', 'warn', 'error']) {
+        const __forskaOriginalConsoleMethod = console[__forskaConsoleMethod].bind(console)
+        console[__forskaConsoleMethod] = (...args) => {
+          appendFileSync(__forskaChildOutputPath, args.map(String).join(' ') + '\\n')
+          __forskaOriginalConsoleMethod(...args)
+        }
+      }
+    }
+    ${script}
+  `
+  const result = spawnSync(process.execPath, ['-e', patchedScript], {
     cwd: repoRoot,
-    env: getChildRuntimeEnv(env),
+    env: getChildRuntimeEnv({...env, FORSKA_TEST_CHILD_OUTPUT_PATH: outputPath}),
     timeout: 10_000,
   })
+  const fileOutput = existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : ''
+  rmSync(outputPath, {force: true})
 
-  return {...result, exitCode: result.status ?? 1}
+  return {
+    ...result,
+    exitCode: result.status ?? 1,
+    stdout: Buffer.from(`${result.stdout.toString()}\n${result.stderr.toString()}\n${fileOutput}`),
+  }
 }
 
 const readChildProcessOutput = (runScript: {stderr: {toString: () => string}; stdout: {toString: () => string}}) => {
@@ -61,7 +148,7 @@ const getLastJsonLine = (value: string) => {
 }
 
 test('review serving projector worker heartbeat logs original loop failure and restarts', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -154,7 +241,7 @@ test('review serving projector worker heartbeat logs original loop failure and r
 })
 
 test('review serving projector worker heartbeat uses guarded maintenance batch defaults', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -243,7 +330,7 @@ test('review serving projector worker heartbeat uses guarded maintenance batch d
 })
 
 test('review serving projector worker heartbeat scales default batch size above low-memory DuckDB profile', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -330,7 +417,7 @@ test('review serving projector worker heartbeat scales default batch size above 
 })
 
 test('review serving projector worker heartbeat does not start a loop while DuckDB exclusive work is active', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -415,7 +502,7 @@ test('review serving projector worker heartbeat only recycles DuckDB after nativ
 })
 
 test('review serving projector worker heartbeat keeps soft RSS pressure below the hard recycle cap', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -495,7 +582,7 @@ test('review serving projector worker heartbeat keeps soft RSS pressure below th
 })
 
 test('review serving projector worker heartbeat restarts bounded low-memory worker bursts without closing DuckDB', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -585,7 +672,7 @@ test('review serving projector worker heartbeat restarts bounded low-memory work
 })
 
 test('review serving projector worker heartbeat carries the last cleanup timestamp across bounded restarts', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -984,7 +1071,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle while for
 })
 
 test('review serving projector worker heartbeat keeps skipping high-RSS recycle after repeated foreground DuckDB queue deferrals', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1095,7 +1182,7 @@ test('review serving projector worker heartbeat keeps skipping high-RSS recycle 
 })
 
 test('review serving projector worker heartbeat skips high-RSS recycle during project-transfer background activity', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1201,7 +1288,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle during pr
 })
 
 test('review serving projector worker heartbeat skips high-RSS recycle during active project-transfer sessions', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1303,7 +1390,7 @@ test('review serving projector worker heartbeat skips high-RSS recycle during ac
 })
 
 test('review serving projector worker heartbeat keeps bounded restart timer refed until stop clears it', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1384,7 +1471,7 @@ test('review serving projector worker heartbeat keeps bounded restart timer refe
 })
 
 test('review serving projector worker heartbeat restarts native-heavy completion in process after cooldown', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1463,7 +1550,7 @@ test('review serving projector worker heartbeat restarts native-heavy completion
 })
 
 test('review serving projector worker heartbeat exits supervised maintenance worker when recycle remains above restart RSS cap', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1576,7 +1663,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
 })
 
 test('review serving projector worker heartbeat exits supervised maintenance worker when recycle remains above hard RSS cap', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1689,7 +1776,7 @@ test('review serving projector worker heartbeat exits supervised maintenance wor
 })
 
 test('review serving projector worker heartbeat cancels pending native-heavy restart when stopped', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1762,7 +1849,7 @@ test('review serving projector worker heartbeat cancels pending native-heavy res
 })
 
 test('review serving projector worker heartbeat ignores obsolete immediate bounded process-exit requests', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1832,7 +1919,7 @@ test('review serving projector worker heartbeat ignores obsolete immediate bound
 })
 
 test('review serving projector worker heartbeat preserves explicit null burst cap', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',

@@ -1,4 +1,58 @@
+import {Buffer} from 'node:buffer'
+import {existsSync, readFileSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
 import {expect, test} from 'bun:test'
+
+const runBunSpawnSync = (
+  command: Parameters<typeof globalThis.Bun.spawnSync>[0],
+  options: Parameters<typeof globalThis.Bun.spawnSync>[1],
+) => {
+  const outputPath = join(
+    tmpdir(),
+    `f1-judging-cron-child-output-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.log`,
+  )
+  const patchedCommand = Array.from(command)
+
+  if (patchedCommand[1] === '-e' && typeof patchedCommand[2] === 'string') {
+    patchedCommand[2] = `
+      const __forskaChildOutputPath = process.env.FORSKA_TEST_CHILD_OUTPUT_PATH
+      if (__forskaChildOutputPath) {
+        const {appendFileSync} = await import('node:fs')
+        const __forskaOriginalStdoutWrite = process.stdout.write.bind(process.stdout)
+        const __forskaOriginalStderrWrite = process.stderr.write.bind(process.stderr)
+        process.stdout.write = (chunk, ...args) => {
+          appendFileSync(__forskaChildOutputPath, String(chunk))
+          return __forskaOriginalStdoutWrite(chunk, ...args)
+        }
+        process.stderr.write = (chunk, ...args) => {
+          appendFileSync(__forskaChildOutputPath, String(chunk))
+          return __forskaOriginalStderrWrite(chunk, ...args)
+        }
+        for (const __forskaConsoleMethod of ['log', 'warn', 'error']) {
+          const __forskaOriginalConsoleMethod = console[__forskaConsoleMethod].bind(console)
+          console[__forskaConsoleMethod] = (...args) => {
+            appendFileSync(__forskaChildOutputPath, args.map(String).join(' ') + '\\n')
+            __forskaOriginalConsoleMethod(...args)
+          }
+        }
+      }
+      ${patchedCommand[2]}
+    `
+  }
+
+  const result = globalThis.Bun.spawnSync(patchedCommand, {
+    ...options,
+    env: {...options?.env, FORSKA_TEST_CHILD_OUTPUT_PATH: outputPath},
+    stderr: 'pipe',
+    stdout: 'pipe',
+  })
+  const fileOutput = existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : ''
+  rmSync(outputPath, {force: true})
+
+  return {...result, stdout: Buffer.from(`${result.stdout.toString()}\n${result.stderr.toString()}\n${fileOutput}`)}
+}
 
 const getLastJsonLine = (value: string) => {
   const lines = value
@@ -21,7 +75,7 @@ const getLastJsonLine = (value: string) => {
 }
 
 test('judging cron prevents overlapping owner reads and syncs judge-worker SQLite leases', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',

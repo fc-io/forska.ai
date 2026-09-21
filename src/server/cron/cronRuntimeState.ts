@@ -1,5 +1,6 @@
 import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 import {env} from '../utils/env.ts'
+import {beginProcessActivity, finishProcessActivity, recordProcessActivityEvent} from '../utils/processActivityState.ts'
 import {lowMemoryMaintenanceDuckdbLimitMiB} from '../utils/serverCronMountDecisions.ts'
 import {shouldDisableServerMutationWork} from '../utils/serverMutationMode.ts'
 import {
@@ -78,6 +79,7 @@ type CronRuntimeClassReport = {
 
 type CronRuntimeState = {
   classReports: Partial<Record<CronRuntimeClassName, CronRuntimeClassReport>>
+  processActivityIds: Partial<Record<CronRuntimeTickName, string>>
   tickReports: Partial<Record<CronRuntimeTickName, CronRuntimeTickState>>
 }
 
@@ -92,7 +94,7 @@ declare global {
 }
 
 const getCronRuntimeState = () => {
-  globalThis.__forskaCronRuntimeState ??= {classReports: {}, tickReports: {}}
+  globalThis.__forskaCronRuntimeState ??= {classReports: {}, processActivityIds: {}, tickReports: {}}
 
   return globalThis.__forskaCronRuntimeState
 }
@@ -281,6 +283,62 @@ const getCronRuntimeTickErrorMessage = (error: unknown): string | null => {
   }
 }
 
+const getCronRuntimeTickActivityLabel = (cronName: CronRuntimeTickName) => {
+  return cronName
+    .replace(/^judgments-jobs-/, 'Judgment jobs ')
+    .replaceAll('-', ' ')
+    .replace(/\b\w/g, (match) => {
+      return match.toUpperCase()
+    })
+}
+
+const recordCronRuntimeProcessActivity = (
+  cronName: CronRuntimeTickName,
+  status: CronRuntimeTickStatus,
+  error: unknown,
+) => {
+  const existingActivityId = cronRuntimeState.processActivityIds[cronName]
+
+  if (status === 'started') {
+    if (existingActivityId !== undefined) {
+      finishProcessActivity(existingActivityId, {details: {cronName, replacedByNextRun: true}, status: 'skipped'})
+    }
+
+    cronRuntimeState.processActivityIds[cronName] = beginProcessActivity({
+      category: 'judgment-cron',
+      details: {cronName},
+      label: getCronRuntimeTickActivityLabel(cronName),
+    })
+    return
+  }
+
+  if (status === 'skipped' && existingActivityId === undefined) {
+    return
+  }
+
+  if (existingActivityId !== undefined) {
+    const finished = finishProcessActivity(existingActivityId, {
+      details: {cronName},
+      error,
+      status: status === 'success' ? 'completed' : status,
+    })
+
+    if (finished !== null) {
+      delete cronRuntimeState.processActivityIds[cronName]
+      return
+    }
+  }
+
+  if (status === 'success' || status === 'failure') {
+    recordProcessActivityEvent({
+      category: 'judgment-cron',
+      details: {cronName, ...(error === undefined ? {} : {error})},
+      label: getCronRuntimeTickActivityLabel(cronName),
+      status: status === 'success' ? 'completed' : 'failed',
+    })
+  }
+}
+
 export const recordCronRuntimeTick = (
   cronName: CronRuntimeTickName,
   status: CronRuntimeTickStatus,
@@ -307,9 +365,11 @@ export const recordCronRuntimeTick = (
   }
 
   cronRuntimeState.tickReports[cronName] = next
+  recordCronRuntimeProcessActivity(cronName, status, error)
 }
 
 export const resetCronRuntimeStateForTests = () => {
   cronRuntimeState.classReports = {}
+  cronRuntimeState.processActivityIds = {}
   cronRuntimeState.tickReports = {}
 }

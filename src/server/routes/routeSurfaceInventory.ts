@@ -269,9 +269,12 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       proxyClassification: 'duckdb-owner-diagnostics',
       releaseDecision: settingsDiagnosticsDecision,
       routeModule: 'AdminInvestigateRoutes.ts',
-      sensitivity: 'DuckDB owner active workload and queue diagnostics.',
+      sensitivity: 'DuckDB owner active workload, queue, and in-memory process activity diagnostics.',
     },
-    [['GET', '/api/admin/duckdb-runtime-workloads']],
+    [
+      ['GET', '/api/admin/duckdb-runtime-workloads'],
+      ['GET', '/api/admin/process-activity'],
+    ],
   ),
   ...ownerDependentSettingsDiagnostics(
     'AdminInvestigateRoutes.ts',

@@ -1,8 +1,11 @@
 import {expect, test} from 'bun:test'
 
+import {getProcessActivitySnapshot, resetProcessActivityStateForTests} from '../utils/processActivityState.ts'
 import {
   buildCronRuntimeDiagnostics,
+  cronRuntimeTickNames,
   recordCronRuntimeClassState,
+  recordCronRuntimeTick,
   resetCronRuntimeStateForTests,
 } from './cronRuntimeState.ts'
 import {
@@ -72,6 +75,34 @@ test('reported cron class state can add live tick metadata', () => {
     lastTickAt: '2026-09-11T05:00:00.000Z',
     source: 'reported',
   })
+})
+
+test('cron runtime ticks are reflected in process-local activity', () => {
+  resetCronRuntimeStateForTests()
+  resetProcessActivityStateForTests()
+
+  recordCronRuntimeTick(cronRuntimeTickNames.addToQueue, 'started')
+
+  expect(getProcessActivitySnapshot().active).toMatchObject([
+    {
+      category: 'judgment-cron',
+      details: {cronName: cronRuntimeTickNames.addToQueue},
+      label: 'Judgment Jobs Add To Queue',
+      status: 'running',
+    },
+  ])
+
+  recordCronRuntimeTick(cronRuntimeTickNames.addToQueue, 'success')
+
+  expect(getProcessActivitySnapshot().active).toEqual([])
+  expect(getProcessActivitySnapshot().recent).toMatchObject([
+    {
+      category: 'judgment-cron',
+      details: {cronName: cronRuntimeTickNames.addToQueue},
+      label: 'Judgment Jobs Add To Queue',
+      status: 'completed',
+    },
+  ])
 })
 
 test('cron runtime diagnostics expose cleanup-stale activity without route-time scans', () => {

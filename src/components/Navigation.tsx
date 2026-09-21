@@ -300,6 +300,13 @@ export const Navigation = () => {
                           DuckDB Append Metrics
                         </Link>
                         <Link
+                          to="/admin/process-activity"
+                          class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                          onClick={closeAdminMenu}
+                        >
+                          Process Activity
+                        </Link>
+                        <Link
                           to="/settings"
                           class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                           onClick={closeAdminMenu}

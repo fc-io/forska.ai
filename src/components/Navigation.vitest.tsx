@@ -143,6 +143,20 @@ describe('Navigation admin menu hover', () => {
     }
   })
 
+  test('includes the process activity admin page link', async () => {
+    const {container, dispose} = await renderNavigation()
+
+    try {
+      const processActivityLink = container.querySelector('a[href="/admin/process-activity"]')
+
+      expect(processActivityLink).toBeInstanceOf(HTMLAnchorElement)
+      expect(processActivityLink?.textContent).toContain('Process Activity')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('still toggles the admin menu by click', async () => {
     const {container, dispose} = await renderNavigation()
 

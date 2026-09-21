@@ -15,6 +15,7 @@ import {
   getDuckdbRuntimeWorkloadDiagnosticsSnapshot,
 } from '../utils/duckdbService.ts'
 import {getOwnerlessRouteBackendSelections} from '../utils/ownerlessReadableBackends.ts'
+import {getProcessActivitySnapshot} from '../utils/processActivityState.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {
   getRuntimeCutoverVersion,
@@ -711,6 +712,21 @@ export const adminInvestigateRoutes = new Elysia()
       pid: process.pid,
     }
   })
+  .get(
+    '/api/admin/process-activity',
+    ({query}) => {
+      const parsedLimit = Number(query.limit ?? 50)
+
+      return {
+        data: {
+          activity: getProcessActivitySnapshot({limit: Number.isFinite(parsedLimit) ? parsedLimit : 50}),
+          process: {pid: process.pid, role: getCurrentServerRole(), serverRole: process.env.SERVER_ROLE ?? null},
+        },
+        error: null,
+      }
+    },
+    {query: t.Object({limit: t.Optional(t.String())})},
+  )
   .post('/api/admin/clear-databases', async () => {
     return {data: await clearLocalDatabases()}
   })

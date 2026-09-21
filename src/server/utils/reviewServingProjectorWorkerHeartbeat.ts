@@ -5,6 +5,7 @@ import {runReviewServingProjectorWorker} from '../workers/reviewServingProjector
 import {getActiveDuckdbExclusiveWorkSnapshot, hasActiveDuckdbExclusiveWork} from './duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
+import {beginProcessActivity, finishProcessActivity, recordProcessActivityEvent} from './processActivityState.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {pauseReviewServingProjector} from './reviewServingProjectorPause.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
@@ -312,6 +313,12 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         '[reviewServingProjectorWorker] background loop paused while exclusive DuckDB work is active',
         {duckdbExclusiveWork: exclusiveWork},
       )
+      recordProcessActivityEvent({
+        category: 'review-serving',
+        details: {duckdbExclusiveWork: exclusiveWork},
+        label: 'Review-serving projector paused for exclusive DuckDB work',
+        status: 'skipped',
+      })
       scheduleRestart(options.pollIntervalMs ?? lowMemoryReviewServingProjectorWorkerRestartDelayMs, false)
       return
     }
@@ -335,6 +342,18 @@ export const startReviewServingProjectorWorkerHeartbeat = (
 
     activeLoopController = loopController
     controller.signal.addEventListener('abort', abortActiveLoop, {once: true})
+    const activityId = beginProcessActivity({
+      category: 'review-serving',
+      details: {
+        maxCompletedRebuildChunksPerRun,
+        maxRunMs,
+        rebuildChunkBatchSize:
+          options.rebuildChunkBatchSize
+          ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
+          ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
+      },
+      label: 'Review-serving projector loop',
+    })
 
     if (maxRunMs !== null && maxRunMs > 0) {
       maxRunTimer = setTimeout(() => {
@@ -365,6 +384,10 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       signal: loopController.signal,
     })
       .then(async (result) => {
+        finishProcessActivity(activityId, {
+          details: {componentRotationOffset: result?.componentRotationOffset ?? null, reason: result?.reason ?? null},
+          status: result?.reason === 'aborted' ? 'skipped' : 'completed',
+        })
         lastCleanupAtMs = result?.lastCleanupAtMs ?? null
         lastAdmittedWakeAtMs = result?.lastAdmittedWakeAtMs ?? lastAdmittedWakeAtMs
         componentRotationOffset = result?.componentRotationOffset ?? componentRotationOffset
@@ -380,6 +403,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         }
       })
       .catch((error) => {
+        finishProcessActivity(activityId, {error, status: 'failed'})
         logReviewServingProjectorWorkerError(error)
         lastAdmittedWakeAtMs = Date.now()
 
