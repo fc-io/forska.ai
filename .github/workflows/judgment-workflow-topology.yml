@@ -47,3 +47,20 @@ jobs:
         run: bun test scripts/judgmentWorkflowTopology.test.ts scripts/processLockAcquisition.test.ts src/server/utils/backgroundServerStack.test.ts src/server/utils/judgeWorkerJournalIdentity.test.ts src/server/cron/judgmentsJobs/judgmentJobPaths.test.ts
       - name: Production judgment topology
         run: bun run test:judgment-workflow:topology
+        env:
+          FORSKA_TEST_TOPOLOGY_PRESERVE_FAILURE_ARTIFACTS: 'true'
+      - name: Upload topology failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: topology-failure-${{ matrix.os }}
+          # createJudgmentWorkflowTopology roots each preserved scenario at
+          # .tmp/judgment-workflow-failure-evidence/judgment-workflow-topology-<uuid>/
+          # holding failure.jsonl, logs/*.jsonl (LOG_DIR for the api, maintenance and
+          # judge workers), data/forska.duckdb, data/judgment-jobs/*.sqlite and
+          # data/judge-worker-journals/*.sqlite. `.tmp` is a dot-directory, so hidden
+          # files must be opted in or the upload finds nothing.
+          path: .tmp/judgment-workflow-failure-evidence/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
