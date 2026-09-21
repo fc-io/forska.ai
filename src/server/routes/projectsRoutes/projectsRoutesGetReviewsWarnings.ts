@@ -597,6 +597,7 @@ const getReviewsWarningsPayload = async (input: {
   const coverageManifest = await getActiveOrLastKnownGoodReviewServingSnapshotManifest({
     componentStateMode: 'available',
     projectId,
+    requiredComponents: defaultReadableReviewServingComponents,
     reviewConfigHash,
     workloadContext: getReviewWarningsWorkloadContext(projectId, 'coverageManifest'),
   })

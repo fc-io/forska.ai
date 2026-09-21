@@ -454,7 +454,6 @@ const createFakeManifestDatabase = (
 
           return statusOrder === 0 ? rightActivatedAt.localeCompare(leftActivatedAt) : statusOrder
         })
-        .slice(0, 1)
         .map(getSnapshotQueryRow) as T[]
     }
 
@@ -479,6 +478,12 @@ const createFakeManifestDatabase = (
           return (
             snapshot.projectId === (getWhereLiteral(statement, 'project_id') ?? '') && snapshot.status === 'retired'
           )
+        })
+        .sort((left, right) => {
+          const leftActivatedAt = left.activatedAt ?? left.updatedAt
+          const rightActivatedAt = right.activatedAt ?? right.updatedAt
+
+          return rightActivatedAt.localeCompare(leftActivatedAt)
         })
         .map(getSnapshotQueryRow) as T[]
     }
@@ -782,10 +787,71 @@ test('active-or-last-known-good manifest selection uses one statement and prefer
 
   expect(manifest?.snapshotId).toBe('snapshot-active')
   expect(statements).toHaveLength(1)
-  expect(statements[0]).toContain("snapshot_status IN ('active', 'retired')")
+  expect(statements[0]).toContain("snapshot_status = 'active'")
 })
 
-test('active-or-last-known-good manifest selection returns the latest retired snapshot in one statement', async () => {
+test('active-or-last-known-good manifest selection falls back to retired state for requested components', async () => {
+  const retiredSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-retired-row-ready',
+    status: 'retired',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const activeSnapshot: FakeSnapshotRow = {
+    ...retiredSnapshot,
+    activatedAt: '2026-06-16T11:00:00.000Z',
+    componentState: {optional: [], required: []},
+    lastKnownGoodSnapshotId: 'snapshot-retired-row-ready',
+    requiredComponents: [],
+    snapshotId: 'snapshot-active-optional-only',
+    status: 'active',
+    updatedAt: '2026-06-16T11:00:00.000Z',
+  }
+  const newerOptionalOnlyRetiredSnapshot: FakeSnapshotRow = {
+    ...activeSnapshot,
+    activatedAt: '2026-06-16T10:30:00.000Z',
+    lastKnownGoodSnapshotId: null,
+    snapshotId: 'snapshot-retired-optional-only',
+    status: 'retired',
+    updatedAt: '2026-06-16T10:30:00.000Z',
+  }
+  const {database, statements} = createFakeManifestDatabase([
+    activeSnapshot,
+    newerOptionalOnlyRetiredSnapshot,
+    retiredSnapshot,
+  ])
+
+  const manifest = await getActiveOrLastKnownGoodReviewServingSnapshotManifest(
+    {
+      componentStateMode: 'available',
+      projectId: 'project-1',
+      requiredComponents: ['display'],
+      reviewConfigHash: 'review-config-1',
+    },
+    database,
+  )
+
+  expect(manifest?.snapshotId).toBe('snapshot-retired-row-ready')
+  const snapshotStatements = statements.filter((statement) => {
+    return statement.includes('FROM app.review_serving_snapshot_manifest')
+  })
+
+  expect(snapshotStatements).toHaveLength(2)
+  expect(snapshotStatements[1]).toContain("snapshot_id = 'snapshot-retired-row-ready'")
+  expect(
+    manifest?.componentState.required.map((state) => {
+      return state.component
+    }),
+  ).toEqual(['display'])
+})
+
+test('active-or-last-known-good manifest selection returns the latest retired snapshot when no active exists', async () => {
   const olderSnapshot: FakeSnapshotRow = {
     ...baseSnapshotInput,
     activatedAt: '2026-06-16T09:00:00.000Z',
@@ -812,7 +878,9 @@ test('active-or-last-known-good manifest selection returns the latest retired sn
   )
 
   expect(manifest?.snapshotId).toBe('snapshot-latest')
-  expect(statements).toHaveLength(1)
+  expect(statements).toHaveLength(2)
+  expect(statements[0]).toContain("snapshot_status = 'active'")
+  expect(statements[1]).toContain("snapshot_status = 'retired'")
 })
 
 test.each([
@@ -1162,6 +1230,77 @@ test('promotion retires previous active and preserves it as last-known-good', as
   expect(statements.join('\n')).toContain("'display:identity-1'")
   expect(statements.join('\n')).toContain("'reviewChange'")
   expect(statements.join('\n')).toContain('latest_source_high_water_mark <= coverage.completed_source_high_water_mark')
+})
+
+test('promotion refuses optional-only candidates that would replace a row-ready active snapshot', async () => {
+  const activeSnapshot: FakeSnapshotRow = {
+    ...baseSnapshotInput,
+    activatedAt: '2026-06-16T10:00:00.000Z',
+    lastError: null,
+    lastKnownGoodSnapshotId: null,
+    optionalComponents: [],
+    requiredComponents: ['display'],
+    snapshotId: 'snapshot-active',
+    status: 'active',
+    updatedAt: '2026-06-16T10:00:00.000Z',
+    validationResult: null,
+  }
+  const {database, snapshots, statements} = createFakeManifestDatabase([activeSnapshot])
+
+  await createCandidateReviewServingSnapshotManifest(
+    {
+      ...baseSnapshotInput,
+      componentRequirements: {optionalComponents: ['payload'], requiredComponents: []},
+      componentState: {
+        optional: [
+          {
+            baseGeneration: '1',
+            component: 'payload',
+            patchWatermark: '3',
+            projectionIdentity: 'payload:identity-1',
+            requirement: 'optional',
+          },
+        ],
+        required: [],
+      },
+      lastKnownGoodSnapshotId: 'snapshot-active',
+      snapshotId: 'snapshot-optional-only',
+    },
+    database,
+  )
+  await upsertReviewServingProjectionIdentityManifest(
+    {
+      baseGeneration: 1,
+      definitionVersion: 'payload-v1',
+      inputDigest: 'payload-digest-1',
+      inputWatermark: 10,
+      inputWatermarks: {reviewChange: 10},
+      patchWatermark: 3,
+      projectId: 'project-1',
+      projectionComponent: 'payload',
+      projectionIdentity: 'payload:identity-1',
+      reviewConfigHash: 'review-config-1',
+      status: 'candidate',
+    },
+    database,
+  )
+
+  const statementCountBeforePromotion = statements.length
+  const promotionResult = await promoteReviewServingProjectorSnapshot(
+    {projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-optional-only'},
+    database,
+  )
+  const promotionStatements = statements.slice(statementCountBeforePromotion)
+
+  expect(promotionResult).toEqual({
+    error:
+      'candidate snapshot snapshot-optional-only has no required components and cannot replace active snapshot snapshot-active',
+    promoted: false,
+    snapshotId: 'snapshot-optional-only',
+  })
+  expect(snapshots.get('project-1:snapshot-active')?.status).toBe('active')
+  expect(snapshots.get('project-1:snapshot-optional-only')?.status).toBe('candidate')
+  expect(promotionStatements.join('\n')).not.toContain("snapshot_status = 'retired'")
 })
 
 test('promotion refreshes stale candidate component state before activation', async () => {

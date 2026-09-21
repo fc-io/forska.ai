@@ -119,6 +119,7 @@ type FakeRequestDatabaseOptions = {
   dirtyWatermarks?: readonly FakeDirtyWatermark[]
   evenArticleRanges?: boolean
   legacyRequiredEnrichmentCandidate?: boolean
+  optionalOnlyActiveBootstrapSnapshotId?: string
   reusableBootstrapSourceSnapshotId?: string
   reusableManifestSourceWatermarks?: Record<string, number>
   snapshotComponents?: readonly ReviewServingProjectionComponent[]
@@ -460,6 +461,15 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       validationResultJson: null,
     }
   }
+  const getOptionalOnlyActiveBootstrapSnapshotRow = (snapshotId: string) => {
+    return {
+      ...getReusableBootstrapSnapshotRow(snapshotId, 'active'),
+      componentStateJson: {optional: [], required: []},
+      lastKnownGoodSnapshotId: options.reusableBootstrapSourceSnapshotId ?? null,
+      optionalComponentsJson: ['payload'],
+      requiredComponentsJson: [],
+    }
+  }
 
   reusableBootstrapComponentSet.forEach((component) => {
     const manifest = getFakeReusableProjectionManifest(
@@ -661,22 +671,55 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return [{completedChunkCount: completed, incompleteChunkCount: 0, totalChunkCount: completed}] as T[]
     }
 
+    if (
+      statement.includes('FROM app.review_serving_snapshot_manifest')
+      && statement.includes("snapshot_status = 'active'")
+    ) {
+      if (options.optionalOnlyActiveBootstrapSnapshotId !== undefined) {
+        return [getOptionalOnlyActiveBootstrapSnapshotRow(options.optionalOnlyActiveBootstrapSnapshotId)] as T[]
+      }
+
+      return reusableBootstrapComponentSet.size === 0 || options.reusableBootstrapSourceSnapshotId === undefined
+        ? ([] as T[])
+        : ([getReusableBootstrapSnapshotRow(options.reusableBootstrapSourceSnapshotId, 'active')] as T[])
+    }
+
     if (statement.includes('FROM app.review_serving_snapshot_manifest') && statement.includes('snapshot_id =')) {
       const strings = getSqlStrings(statement)
       const projectId = strings[0] ?? 'project-v4'
       const snapshotId = strings[1] ?? 'snapshot:reusable-bootstrap'
+      const optionalOnlyActiveEnabled = options.optionalOnlyActiveBootstrapSnapshotId === snapshotId
       const exactSnapshotEnabled = options.reusableBootstrapSourceSnapshotId === undefined
       const sourceSnapshotEnabled = options.reusableBootstrapSourceSnapshotId === snapshotId
 
+      if (optionalOnlyActiveEnabled) {
+        return [getOptionalOnlyActiveBootstrapSnapshotRow(snapshotId)] as T[]
+      }
+
       return reusableBootstrapComponentSet.size === 0 || (!exactSnapshotEnabled && !sourceSnapshotEnabled)
         ? ([] as T[])
-        : ([{...getReusableBootstrapSnapshotRow(snapshotId), projectId}] as T[])
+        : ([
+            {
+              ...getReusableBootstrapSnapshotRow(snapshotId, sourceSnapshotEnabled ? 'retired' : 'candidate'),
+              projectId,
+            },
+          ] as T[])
     }
 
     if (
       statement.includes('FROM app.review_serving_snapshot_manifest')
       && statement.includes("snapshot_status IN ('active', 'retired')")
     ) {
+      if (
+        options.optionalOnlyActiveBootstrapSnapshotId !== undefined
+        && options.reusableBootstrapSourceSnapshotId !== undefined
+      ) {
+        return [
+          getOptionalOnlyActiveBootstrapSnapshotRow(options.optionalOnlyActiveBootstrapSnapshotId),
+          getReusableBootstrapSnapshotRow(options.reusableBootstrapSourceSnapshotId, 'retired'),
+        ] as T[]
+      }
+
       return reusableBootstrapComponentSet.size === 0 || options.reusableBootstrapSourceSnapshotId === undefined
         ? ([] as T[])
         : ([getReusableBootstrapSnapshotRow(options.reusableBootstrapSourceSnapshotId, 'active')] as T[])
@@ -1386,6 +1429,39 @@ test('V4 bootstrap rebuild clones isolated unchanged component rows from an acti
         reusedComponents: ['projectScope', 'selectedImport', 'queue', 'summary', 'payload', 'search'],
         reuseMode: 'componentGeneration',
         sameSnapshotComponents: [],
+      },
+    },
+  })
+})
+
+test('V4 foreground bootstrap reuses selected-import state from retired LKG when active is optional-only', async () => {
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 1, snapshotCount: 2},
+    {
+      completedBootstrapComponents: ['projectScope', 'selectedImport', 'queue'],
+      optionalOnlyActiveBootstrapSnapshotId: 'snapshot:active-optional-only',
+      reusableBootstrapSourceSnapshotId: 'snapshot:retired-row-ready',
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect({projectId: 'project-v4', reason: 'missingReviewServingSnapshot'}, database),
+  )
+  const chunkInsertSql = getChunkInsertSql(statements)
+
+  expect(request.status).toBe('admitted')
+  expect(chunkInsertSql).not.toContain("'projectScope'")
+  expect(chunkInsertSql).not.toContain("'selectedImport'")
+  expect(chunkInsertSql).not.toContain("'queue'")
+  expect(chunkInsertSql).toContain("'display'")
+  expect(chunkInsertSql).toContain("'llmStatus'")
+  expect(chunkInsertSql).toContain("'humanStatus'")
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {
+        crossSnapshotComponents: ['projectScope', 'selectedImport', 'queue'],
+        rebuiltComponents: ['display', 'llmStatus', 'humanStatus'],
+        reusedComponents: ['projectScope', 'selectedImport', 'queue'],
       },
     },
   })
@@ -2111,11 +2187,15 @@ test('V4 missing snapshot rebuild requests do not reuse active work for a differ
   expect(contextlessQueries).toEqual([])
   expect(queryWorkloadContexts.length).toBeGreaterThan(0)
   for (const {workloadContext} of queryWorkloadContexts) {
-    expect(workloadContext).toMatchObject({
-      projectId: 'project-v4',
-      routeOrJobKey: 'reviewServing.v4RebuildRequest',
-      workloadClass: 'reviewProjector',
-    })
+    if (workloadContext?.routeOrJobKey === 'reviewServing.snapshotManifest.componentAvailability') {
+      expect(workloadContext).toMatchObject({workloadClass: 'reviewServingManifest'})
+    } else {
+      expect(workloadContext).toMatchObject({
+        projectId: 'project-v4',
+        routeOrJobKey: 'reviewServing.v4RebuildRequest',
+        workloadClass: 'reviewProjector',
+      })
+    }
   }
 })
 

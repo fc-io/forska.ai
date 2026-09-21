@@ -872,6 +872,23 @@ const refreshCandidateSnapshotForPromotion = async (
   )
 }
 
+const hasPromotableRequiredSnapshotState = (manifest: ReviewServingSnapshotManifest | null) => {
+  return (
+    manifest?.componentState.required.some((state) => {
+      return manifest.requiredComponents.includes(state.component)
+    }) === true
+  )
+}
+
+const getRequiredComponentlessPromotionError = (
+  candidate: ReviewServingSnapshotManifest,
+  active: ReviewServingSnapshotManifest | null,
+) => {
+  return candidate.requiredComponents.length === 0 && hasPromotableRequiredSnapshotState(active)
+    ? `candidate snapshot ${candidate.snapshotId} has no required components and cannot replace active snapshot ${active?.snapshotId}`
+    : null
+}
+
 export const activateReviewServingProjectorSnapshot = async (
   input: PromoteReviewServingProjectorSnapshotInput,
   database: ReviewServingProjectorWriterTransaction,
@@ -924,6 +941,12 @@ export const activateReviewServingProjectorSnapshot = async (
     {projectId: input.projectId, reviewConfigHash: candidateReviewConfigHash},
     database,
   )
+  const requiredComponentlessPromotionError = getRequiredComponentlessPromotionError(refreshedCandidate, active)
+
+  if (requiredComponentlessPromotionError !== null) {
+    return {error: requiredComponentlessPromotionError, promoted: false, snapshotId: input.snapshotId}
+  }
+
   const lastKnownGoodSnapshotId = active?.snapshotId ?? active?.lastKnownGoodSnapshotId ?? null
 
   await database.run(`
