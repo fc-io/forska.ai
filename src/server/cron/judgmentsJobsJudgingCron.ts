@@ -2,6 +2,7 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
+import {beginProcessActivity, finishProcessActivity} from '../utils/processActivityState.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {
   isExpectedDuckdbOwnerRoleLossError,
@@ -52,14 +53,21 @@ const sendToLLM = async (): Promise<void> => {
   if (isSendingToLLM) return
 
   isSendingToLLM = true
+  const activityId = beginProcessActivity({
+    category: 'judgment-cron',
+    details: {serverJobId},
+    label: 'Judgment jobs Send To LLM',
+  })
   try {
     const runningJobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
-    await getJudgmentJobSqliteService().syncOwnedLeases(
-      runningJobs.map((job) => {
-        return job.id
-      }),
-    )
-    if (!shouldRunJudgingCron()) return
+    const runningJobIds = runningJobs.map((job) => {
+      return job.id
+    })
+    await getJudgmentJobSqliteService().syncOwnedLeases(runningJobIds)
+    if (!shouldRunJudgingCron()) {
+      finishProcessActivity(activityId, {details: {runningJobCount: runningJobIds.length}, status: 'skipped'})
+      return
+    }
     await judgmentsJobsSendToLLM(runningJobs, serverJobId, {
       filterJobs: shouldUseLowMemoryJudgmentsCronMode()
         ? async (jobs: typeof runningJobs) => {
@@ -68,13 +76,11 @@ const sendToLLM = async (): Promise<void> => {
         : undefined,
     })
     if (shouldRunJudgmentMaintenanceCron()) {
-      await getJudgmentJobSqliteService().publishHealthProjections(
-        runningJobs.map((job) => {
-          return job.id
-        }),
-      )
+      await getJudgmentJobSqliteService().publishHealthProjections(runningJobIds)
     }
+    finishProcessActivity(activityId, {details: {runningJobCount: runningJobIds.length}, status: 'completed'})
   } catch (err) {
+    finishProcessActivity(activityId, {error: err, status: 'failed'})
     logJudgingCronError('[cron] sendToLLM error:', err)
   } finally {
     isSendingToLLM = false

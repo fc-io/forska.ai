@@ -942,6 +942,7 @@ const staticAuditTargets: NetworkSmokeTarget[] = [
   {template: '/admin/llm', label: 'admin llm', buildPath: () => '/admin/llm'},
   {template: '/admin/pdf-conversions', label: 'admin pdf conversions', buildPath: () => '/admin/pdf-conversions'},
   {template: '/admin/pdf-reset', label: 'admin pdf reset', buildPath: () => '/admin/pdf-reset'},
+  {template: '/admin/process-activity', label: 'admin process activity', buildPath: () => '/admin/process-activity'},
   {template: '/admin/prompts/deduplicate', label: 'admin prompt dedupe', buildPath: () => '/admin/prompts/deduplicate'},
   {template: '/admin/setup_stats', label: 'admin setup stats', buildPath: () => '/admin/setup_stats'},
   {

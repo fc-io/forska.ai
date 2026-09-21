@@ -62,6 +62,7 @@ const duckdbOwnerProxyHopByHopResponseHeaders = new Set([
 const duckdbOwnerProxyLogger = createRateLimitedLogger({windowMs: 30_000})
 const duckdbOwnerDiagnosticProxyTimeoutPathnames = new Set([
   '/api/admin/duckdb-runtime-workloads',
+  '/api/admin/process-activity',
   `${duckdbOwnerPrivateApiPrefix}/api/llmstatus`,
   `${duckdbOwnerPrivateApiPrefix}/api/nvidiasmi`,
   '/api/duckdb_owner_connections',

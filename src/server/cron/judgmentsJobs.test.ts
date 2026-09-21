@@ -1,6 +1,58 @@
-import {readFileSync} from 'node:fs'
+import {Buffer} from 'node:buffer'
+import {existsSync, readFileSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
+
+const runBunSpawnSync = (
+  command: Parameters<typeof globalThis.Bun.spawnSync>[0],
+  options: Parameters<typeof globalThis.Bun.spawnSync>[1],
+) => {
+  const outputPath = join(
+    tmpdir(),
+    `f1-judgments-jobs-child-output-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.log`,
+  )
+  const patchedCommand = Array.from(command)
+
+  if (patchedCommand[1] === '-e' && typeof patchedCommand[2] === 'string') {
+    patchedCommand[2] = `
+      const __forskaChildOutputPath = process.env.FORSKA_TEST_CHILD_OUTPUT_PATH
+      if (__forskaChildOutputPath) {
+        const {appendFileSync} = await import('node:fs')
+        const __forskaOriginalStdoutWrite = process.stdout.write.bind(process.stdout)
+        const __forskaOriginalStderrWrite = process.stderr.write.bind(process.stderr)
+        process.stdout.write = (chunk, ...args) => {
+          appendFileSync(__forskaChildOutputPath, String(chunk))
+          return __forskaOriginalStdoutWrite(chunk, ...args)
+        }
+        process.stderr.write = (chunk, ...args) => {
+          appendFileSync(__forskaChildOutputPath, String(chunk))
+          return __forskaOriginalStderrWrite(chunk, ...args)
+        }
+        for (const __forskaConsoleMethod of ['log', 'warn', 'error']) {
+          const __forskaOriginalConsoleMethod = console[__forskaConsoleMethod].bind(console)
+          console[__forskaConsoleMethod] = (...args) => {
+            appendFileSync(__forskaChildOutputPath, args.map(String).join(' ') + '\\n')
+            __forskaOriginalConsoleMethod(...args)
+          }
+        }
+      }
+      ${patchedCommand[2]}
+    `
+  }
+
+  const result = globalThis.Bun.spawnSync(patchedCommand, {
+    ...options,
+    env: {...options?.env, FORSKA_TEST_CHILD_OUTPUT_PATH: outputPath},
+    stderr: 'pipe',
+    stdout: 'pipe',
+  })
+  const fileOutput = existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : ''
+  rmSync(outputPath, {force: true})
+
+  return {...result, stdout: Buffer.from(`${result.stdout.toString()}\n${result.stderr.toString()}\n${fileOutput}`)}
+}
 
 const getLastJsonLine = (value: string) => {
   const lines = value
@@ -51,7 +103,7 @@ test('import-only judgment cron module does not import maintenance cron dependen
 })
 
 test('judgment maintenance crons pause while DuckDB exclusive work is active', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -175,7 +227,7 @@ test('judgment maintenance crons pause while DuckDB exclusive work is active', (
 })
 
 test('judgment operational cron gate parks judgment maintenance work', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -311,7 +363,7 @@ test('judgment operational cron gate parks judgment maintenance work', () => {
 })
 
 test('judgment operational cron gates cleanup-stale and llm-status independently', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -447,7 +499,7 @@ test('judgment operational cron gates cleanup-stale and llm-status independently
 })
 
 test('judgment import cron stays enabled at the low-memory cap', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -575,7 +627,7 @@ test('judgment import cron stays enabled at the low-memory cap', () => {
 })
 
 test('cleanup-stale partial budget result records cron success', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -713,7 +765,7 @@ test('cleanup-stale partial budget result records cron success', () => {
 })
 
 test('stale cleanup-stale activity skips duplicate cleanup but does not block add-to-queue', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -879,7 +931,7 @@ test('stale cleanup-stale activity skips duplicate cleanup but does not block ad
 })
 
 test('judgment import cron skips while project transfer background work is active', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -975,7 +1027,7 @@ test('judgment import cron skips while project transfer background work is activ
 })
 
 test('add-to-queue overlap warning waits for sustained running time', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1134,7 +1186,7 @@ test('add-to-queue overlap warning waits for sustained running time', () => {
 })
 
 test('add-to-queue cron starts a fresh run when a prior run is stale', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1306,7 +1358,7 @@ test('add-to-queue cron starts a fresh run when a prior run is stale', () => {
 })
 
 test('llm status cron is owned by maintenance worker instead of judge worker', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1458,7 +1510,7 @@ test('llm status cron is owned by maintenance worker instead of judge worker', (
 })
 
 test('llm status cron prevents overlapping runs and recovers after completion', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1606,7 +1658,7 @@ test('llm status cron prevents overlapping runs and recovers after completion', 
 })
 
 test('provider telemetry sampler cron is owned by maintenance worker and role gated', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1763,7 +1815,7 @@ test('provider telemetry sampler cron is owned by maintenance worker and role ga
 })
 
 test('provider telemetry sampler cron prevents overlapping runs', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -1911,7 +1963,7 @@ test('provider telemetry sampler cron prevents overlapping runs', () => {
 })
 
 test('provider telemetry sampler discovers running jobs without runtime match and stores samples', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -2107,7 +2159,7 @@ test('provider telemetry sampler discovers running jobs without runtime match an
 })
 
 test('add-to-queue cron ignores a stale judgment import latch', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',
@@ -2256,7 +2308,7 @@ test('add-to-queue cron ignores a stale judgment import latch', () => {
 })
 
 test('judging cron ignores a stale judgment import latch', () => {
-  const runScript = globalThis.Bun.spawnSync(
+  const runScript = runBunSpawnSync(
     [
       'bun',
       '-e',

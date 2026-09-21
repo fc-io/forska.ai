@@ -139,6 +139,7 @@ import {
   waitForDuckdbForegroundQueue,
 } from '../utils/duckdbService.ts'
 import {getClampedReviewServingSearchRebuildChunkBatchSize} from '../utils/env.ts'
+import {recordProcessActivityEvent} from '../utils/processActivityState.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']> & {
@@ -6677,6 +6678,46 @@ const runReviewServingProjectorWorkerCyclePhase = async <T>(phase: string, opera
   return result
 }
 
+const recordReviewServingProjectorWorkerCycleActivity = (result: ReviewServingProjectorWorkerCycleResult) => {
+  if (
+    result.status === 'idle'
+    && result.chunk.status === 'idle'
+    && result.cleanup.status === 'skipped'
+    && result.deltaIntake.status === 'idle'
+    && result.projector.status === 'idle'
+  ) {
+    return
+  }
+
+  recordProcessActivityEvent({
+    category: 'review-serving',
+    details: {
+      admission: result.admission,
+      chunkBatchCount: result.chunkBatchCount,
+      cleanupStatus: result.cleanup.status,
+      deltaIntake: result.deltaIntake,
+      projectorStatus: result.projector.status,
+      workerId: result.workerId,
+      ...(result.chunk.status === 'completed'
+        ? {
+            chunkId: result.chunk.chunkId,
+            projectionComponent: result.chunk.projectionComponent,
+            requestId: result.chunk.requestId,
+          }
+        : result.chunk.status === 'failed' || result.chunk.status === 'skipped'
+          ? {chunkId: result.chunk.chunkId, requestId: result.chunk.requestId}
+          : {}),
+    },
+    label:
+      result.chunk.status === 'completed'
+        ? `Review-serving completed ${result.chunk.projectionComponent} chunk`
+        : result.status === 'idle'
+          ? 'Review-serving projector idle'
+          : 'Review-serving projector cycle',
+    status: result.status === 'failed' ? 'failed' : result.status === 'idle' ? 'idle' : 'completed',
+  })
+}
+
 const getBlockedReviewServingProjectorWakeResult = (
   blockedReason: ReviewServingProjectorWakeBlockedReason | null,
 ): WakeReviewServingProjectorServiceResult => {
@@ -10078,6 +10119,7 @@ export const runReviewServingProjectorWorker = async (
   }
   const cycleResult = await runReviewServingProjectorWorkerOnce(seededOptions, dependencies)
   logReviewServingProjectorWorkerCycle(cycleResult)
+  recordReviewServingProjectorWorkerCycleActivity(cycleResult)
   const nowMs = getWorkerNowMs(dependencies, options)
   const completedRebuildChunksInRun =
     (options.completedRebuildChunksInRun ?? 0) + getReviewServingProjectorWorkerCompletedChunkRunCharge(cycleResult)

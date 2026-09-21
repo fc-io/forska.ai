@@ -10,27 +10,15 @@ const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
 }
 
-const getLastJsonLine = (stdout: string) => {
-  return (
-    stdout
-      .split('\n')
-      .map((line) => {
-        return line.trim()
-      })
-      .filter((line) => {
-        return line !== ''
-      })
-      .at(-1) ?? ''
-  )
-}
-
 test('admin append metrics route returns append lane metrics', () => {
   const duckdbPath = join(tmpdir(), `f1-admin-append-metrics-route-${Date.now()}.duckdb`)
+  const outputPath = join(tmpdir(), `f1-admin-append-metrics-route-${Date.now()}.json`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
+        const {writeFileSync} = await import('node:fs')
         const {Elysia} = await import('elysia')
         const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
@@ -88,7 +76,7 @@ test('admin append metrics route returns append lane metrics', () => {
 
         const app = new Elysia().use(adminInvestigateRoutes)
         const response = await app.handle(new Request('http://localhost/api/admin/duckdb-append-metrics'))
-        console.log(await response.text())
+        writeFileSync(process.env.ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH, await response.text())
         await database.close()
       `,
     ],
@@ -97,10 +85,13 @@ test('admin append metrics route returns append lane metrics', () => {
       env: {
         ...process.env,
         API_SERVER_PORT: '3001',
+        ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH: outputPath,
         DUCKDB_PATH: duckdbPath,
         SERVER_ROLE: 'dev-single',
         VITE_PORT: '3000',
       },
+      stderr: 'pipe',
+      stdout: 'pipe',
     },
   )
 
@@ -111,7 +102,7 @@ test('admin append metrics route returns append lane metrics', () => {
       )
     }
 
-    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+    const responseBody = JSON.parse(readFileSync(outputPath, 'utf8')) as {
       laneCount: number
       lastInsertedRows: number | null
       queueDepth: number
@@ -127,6 +118,7 @@ test('admin append metrics route returns append lane metrics', () => {
     expect(responseBody.rowsInserted).toBe(1)
     expect(responseBody.rowsSkipped).toBe(0)
   } finally {
+    removeFileIfExists(outputPath)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
@@ -134,12 +126,14 @@ test('admin append metrics route returns append lane metrics', () => {
 })
 
 test('admin duckdb runtime workloads route returns non-querying active work diagnostics', () => {
+  const outputPath = join(tmpdir(), `f1-admin-runtime-workloads-route-${Date.now()}.json`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
         const {mock} = await import('bun:test')
+        const {writeFileSync} = await import('node:fs')
         const {Elysia} = await import('elysia')
 
         const duckdbServiceModulePath = new URL('./src/server/utils/duckdbService.ts', 'file://' + process.cwd() + '/').href
@@ -173,39 +167,52 @@ test('admin duckdb runtime workloads route returns non-querying active work diag
         const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
         const app = new Elysia().use(adminInvestigateRoutes)
         const response = await app.handle(new Request('http://localhost/api/admin/duckdb-runtime-workloads'))
-        console.log(await response.text())
+        writeFileSync(process.env.ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH, await response.text())
       `,
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, API_SERVER_PORT: '3001', SERVER_ROLE: 'maintenance-worker', VITE_PORT: '3000'},
+      env: {
+        ...process.env,
+        ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH: outputPath,
+        API_SERVER_PORT: '3001',
+        SERVER_ROLE: 'maintenance-worker',
+        VITE_PORT: '3000',
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
     },
   )
 
-  if (runRoute.exitCode !== 0) {
-    throw new Error(
-      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin DuckDB runtime workloads route test failed',
-    )
-  }
+  try {
+    if (runRoute.exitCode !== 0) {
+      throw new Error(
+        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin DuckDB runtime workloads route test failed',
+      )
+    }
 
-  const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-    activeMainWork: {routeOrJobKey: string; statementHash: string; workloadClass: string}
-    queues: {main: {queueDepth: number}}
-    workloads: unknown[]
-  }
+    const responseBody = JSON.parse(readFileSync(outputPath, 'utf8')) as {
+      activeMainWork: {routeOrJobKey: string; statementHash: string; workloadClass: string}
+      queues: {main: {queueDepth: number}}
+      workloads: unknown[]
+    }
 
-  expect(responseBody.activeMainWork).toMatchObject({
-    routeOrJobKey: 'llmStatus.route',
-    statementHash: 'abcdef123456',
-    workloadClass: 'foreground-diagnostic',
-  })
-  expect(responseBody.queues.main.queueDepth).toBe(1)
-  expect(responseBody.workloads).toEqual([])
+    expect(responseBody.activeMainWork).toMatchObject({
+      routeOrJobKey: 'llmStatus.route',
+      statementHash: 'abcdef123456',
+      workloadClass: 'foreground-diagnostic',
+    })
+    expect(responseBody.queues.main.queueDepth).toBe(1)
+    expect(responseBody.workloads).toEqual([])
+  } finally {
+    removeFileIfExists(outputPath)
+  }
 })
 
 test('admin clear databases route rebuilds DuckDB and removes judgment job SQLite files', () => {
   const runtimeRoot = join(tmpdir(), `f1-admin-clear-databases-route-${Date.now()}`)
   const duckdbPath = join(runtimeRoot, 'forska.duckdb')
+  const outputPath = join(tmpdir(), `f1-admin-clear-databases-route-${Date.now()}.json`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -234,7 +241,7 @@ test('admin clear databases route rebuilds DuckDB and removes judgment job SQLit
         const [promptCountRow] = await database.queryJson(\`SELECT COUNT(*)::INTEGER AS count FROM app.prompt\`)
         const [migrationCountRow] = await database.queryJson(\`SELECT COUNT(*)::INTEGER AS count FROM app_schema_migration\`)
 
-        console.log(JSON.stringify({
+        writeFileSync(process.env.ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH, JSON.stringify({
           leaseExists: existsSync(process.env.DUCKDB_PATH + '.duckdb-owner.lock'),
           migrationCount: migrationCountRow?.count ?? 0,
           promptCount: promptCountRow?.count ?? 0,
@@ -253,10 +260,13 @@ test('admin clear databases route rebuilds DuckDB and removes judgment job SQLit
       env: {
         ...process.env,
         API_SERVER_PORT: '3001',
+        ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH: outputPath,
         DUCKDB_PATH: duckdbPath,
         SERVER_ROLE: 'dev-single',
         VITE_PORT: '3000',
       },
+      stderr: 'pipe',
+      stdout: 'pipe',
     },
   )
 
@@ -267,7 +277,7 @@ test('admin clear databases route rebuilds DuckDB and removes judgment job SQLit
       )
     }
 
-    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+    const responseBody = JSON.parse(readFileSync(outputPath, 'utf8')) as {
       leaseExists: boolean
       migrationCount: number
       promptCount: number
@@ -289,25 +299,28 @@ test('admin clear databases route rebuilds DuckDB and removes judgment job SQLit
     })
     expect(responseBody.migrationCount).toBeGreaterThan(0)
   } finally {
+    removeFileIfExists(outputPath)
     removeFileIfExists(runtimeRoot)
   }
 })
 
 test('admin maintenance runtime diagnostics route reports effective duckdb settings and process memory', () => {
   const duckdbPath = join(tmpdir(), `f1-admin-maintenance-runtime-diagnostics-${Date.now()}.duckdb`)
+  const outputPath = join(tmpdir(), `f1-admin-maintenance-runtime-diagnostics-${Date.now()}.json`)
   const tempDirectory = join(tmpdir(), `f1-admin-maintenance-runtime-diagnostics-temp-${Date.now()}`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
+        const {writeFileSync} = await import('node:fs')
         const {Elysia} = await import('elysia')
         const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
         const {closeDuckdbService} = await import('./src/server/utils/duckdbService.ts')
 
         const app = new Elysia().use(adminInvestigateRoutes)
         const response = await app.handle(new Request('http://localhost/api/admin/maintenance-runtime-diagnostics'))
-        console.log(await response.text())
+        writeFileSync(process.env.ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH, await response.text())
         await closeDuckdbService()
       `,
     ],
@@ -315,6 +328,7 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
       cwd: process.cwd(),
       env: {
         ...process.env,
+        ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH: outputPath,
         API_SERVER_PORT: '3001',
         DUCKDB_MEMORY_LIMIT: '256MiB',
         DUCKDB_PATH: duckdbPath,
@@ -322,6 +336,8 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
         SERVER_ROLE: 'maintenance-worker',
         VITE_PORT: '3000',
       },
+      stderr: 'pipe',
+      stdout: 'pipe',
     },
   )
 
@@ -334,7 +350,7 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
       )
     }
 
-    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+    const responseBody = JSON.parse(readFileSync(outputPath, 'utf8')) as {
       duckdb: {
         configured: {
           appendLaneCount: number
@@ -413,6 +429,7 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
     expect('projectMartLargeRebuildHeartbeat' in responseBody).toBe(false)
     expect('projectMartLargeRebuildRuntimeMetrics' in responseBody).toBe(false)
   } finally {
+    removeFileIfExists(outputPath)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(tempDirectory)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
@@ -420,13 +437,86 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
   }
 })
 
+test('admin process activity route reports current and recent in-memory work', async () => {
+  const {Elysia} = await import('elysia')
+  const {adminInvestigateRoutes} = await import('./AdminInvestigateRoutes.ts')
+  const {beginProcessActivity, finishProcessActivity, recordProcessActivityEvent, resetProcessActivityStateForTests} =
+    await import('../utils/processActivityState.ts')
+  resetProcessActivityStateForTests()
+
+  const activityId = beginProcessActivity({
+    category: 'review-serving',
+    details: {projectId: 'project-activity'},
+    label: 'Review-serving projector loop',
+    now: new Date('2026-09-21T12:00:00.000Z'),
+  })
+  recordProcessActivityEvent({
+    category: 'judgment-cron',
+    details: {cronName: 'judgments-jobs-add-to-queue'},
+    label: 'Judgment jobs Add To Queue',
+    now: new Date('2026-09-21T12:00:01.000Z'),
+    status: 'completed',
+  })
+
+  const app = new Elysia().use(adminInvestigateRoutes)
+  const activeResponse = await app.handle(new Request('http://localhost/api/admin/process-activity?limit=10'))
+  const activeBody = (await activeResponse.json()) as {
+    data: {
+      activity: {
+        active: Array<{details: Record<string, unknown>; id: string; label: string; status: string}>
+        recent: Array<{label: string; status: string}>
+      }
+      process: {pid: number; role: string}
+    }
+    error: string | null
+  }
+
+  expect(activeResponse.status).toBe(200)
+  expect(activeBody.error).toBeNull()
+  expect(activeBody.data.process.pid).toBe(process.pid)
+  expect(activeBody.data.activity.active).toMatchObject([
+    {
+      details: {projectId: 'project-activity'},
+      id: activityId,
+      label: 'Review-serving projector loop',
+      status: 'running',
+    },
+  ])
+  expect(activeBody.data.activity.recent).toMatchObject([{label: 'Judgment jobs Add To Queue', status: 'completed'}])
+
+  finishProcessActivity(activityId, {
+    details: {reason: 'completedChunkLimit'},
+    now: new Date('2026-09-21T12:00:02.000Z'),
+    status: 'completed',
+  })
+  const finishedResponse = await app.handle(new Request('http://localhost/api/admin/process-activity?limit=10'))
+  const finishedBody = (await finishedResponse.json()) as {
+    data: {
+      activity: {active: unknown[]; recent: Array<{details: Record<string, unknown>; label: string; status: string}>}
+    }
+  }
+
+  expect(finishedBody.data.activity.active).toEqual([])
+  expect(finishedBody.data.activity.recent).toMatchObject([
+    {
+      details: {projectId: 'project-activity', reason: 'completedChunkLimit'},
+      label: 'Review-serving projector loop',
+      status: 'completed',
+    },
+    {label: 'Judgment jobs Add To Queue', status: 'completed'},
+  ])
+  resetProcessActivityStateForTests()
+})
+
 test('admin worker runtime diagnostics route reports local capabilities, registry state, and shared ack visibility', () => {
   const duckdbPath = join(tmpdir(), `f1-admin-worker-runtime-diagnostics-${Date.now()}.duckdb`)
+  const outputPath = join(tmpdir(), `f1-admin-worker-runtime-diagnostics-${Date.now()}.json`)
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
+        const {writeFileSync} = await import('node:fs')
         const {Elysia} = await import('elysia')
         const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
@@ -535,7 +625,7 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
 
         const app = new Elysia().use(adminInvestigateRoutes)
         const response = await app.handle(new Request('http://localhost/api/admin/worker-runtime-diagnostics'))
-        console.log(await response.text())
+        writeFileSync(process.env.ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH, await response.text())
         await database.close()
       `,
     ],
@@ -543,6 +633,7 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
       cwd: process.cwd(),
       env: {
         ...process.env,
+        ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH: outputPath,
         API_SERVER_PORT: '3001',
         DUCKDB_MEMORY_LIMIT: '20GB',
         DUCKDB_PATH: duckdbPath,
@@ -550,6 +641,8 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
         SERVER_ROLE: 'dev-single',
         VITE_PORT: '3000',
       },
+      stderr: 'pipe',
+      stdout: 'pipe',
     },
   )
 
@@ -562,7 +655,7 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
       )
     }
 
-    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+    const responseBody = JSON.parse(readFileSync(outputPath, 'utf8')) as {
       capabilities: string[]
       cutoverRefusal: {
         refusedRegisteredProcessCount: number
@@ -637,6 +730,7 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
       pendingCompletionAckCount: 2,
     })
   } finally {
+    removeFileIfExists(outputPath)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
