@@ -753,6 +753,8 @@ const getReviewsWarningsPayload = async (input: {
     + servingDiagnostics.rebuildChunks.quarantinedCount
   const terminalDirtyWorkCount = servingDiagnostics.dirtyWork.failedCount
   const terminalQuarantineCount = servingDiagnostics.quarantine.quarantinedOutboxCount
+  const terminalSnapshotCount = servingDiagnostics.snapshot.failedCount
+  const terminalWorkFailureCount = terminalRebuildChunkCount + terminalDirtyWorkCount + terminalQuarantineCount
   const pendingDirtyWorkCount =
     servingDiagnostics.dirtyWork.pendingCount
     + servingDiagnostics.dirtyWork.runningCount
@@ -771,10 +773,9 @@ const getReviewsWarningsPayload = async (input: {
   const hasBlockedCandidateSnapshot =
     servingDiagnostics.snapshot.invalidCandidateCount > 0 && pendingRebuildChunkCount === 0
   const hasLiveRefreshWork = pendingRefreshCount > 0 || inFlightRefreshCount > 0 || claimableRefreshCount > 0
-  const hasHistoricalMaintenanceFailures =
-    terminalRebuildChunkCount + terminalDirtyWorkCount + terminalQuarantineCount > 0
+  const hasHistoricalMaintenanceFailures = terminalWorkFailureCount + terminalSnapshotCount > 0
   const hasActionableMaintenanceFailures =
-    hasHistoricalMaintenanceFailures && (!hasReviewServingRows || (terminalQuarantineCount > 0 && hasLiveRefreshWork))
+    terminalWorkFailureCount > 0 && (!hasReviewServingRows || (terminalQuarantineCount > 0 && hasLiveRefreshWork))
   const hasBlockedLiveMaintenanceWork =
     hasLiveRefreshWork
     && (reviewServingProjectorPaused
@@ -850,6 +851,7 @@ const getReviewsWarningsPayload = async (input: {
           terminalDirtyWorkCount,
           terminalQuarantineCount,
           terminalRebuildChunkCount,
+          terminalSnapshotCount,
         },
         oldestQueuedAt: getOldestTimestamp(
           servingDiagnostics.dirtyWork.oldestQueuedAt,

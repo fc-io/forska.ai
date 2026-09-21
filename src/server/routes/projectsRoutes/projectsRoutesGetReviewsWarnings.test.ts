@@ -56,6 +56,7 @@ type ReviewsWarningsResponse = {
         terminalDirtyWorkCount: number
         terminalQuarantineCount: number
         terminalRebuildChunkCount: number
+        terminalSnapshotCount: number
       }
       oldestQueuedAt: string | null
       pendingArticleRefreshCount: number
@@ -882,6 +883,42 @@ test('reviews warnings preserve failed latest terminal rebuild request as histor
   expect(body.data.indexing.status).toBe('ready')
 })
 
+test('reviews warnings preserve failed candidate snapshots as historical maintenance behind serving rows', async () => {
+  const projectId = 'project-failed-candidate-snapshot-with-serving-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-active-failed-candidate-with-serving-warning',
+  })
+  await insertActiveReviewServingManifest({
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId: 'snapshot-failed-candidate-with-serving-warning',
+    status: 'failed',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.maintenance).toMatchObject({
+    hasActionableFailures: false,
+    hasHistoricalFailures: true,
+    status: 'idle',
+    terminalSnapshotCount: 1,
+  })
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.serving.diagnostics.snapshot).toMatchObject({activeCount: 1, failedCount: 1})
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(body.data.indexing.status).toBe('ready')
+})
+
 test('reviews warnings ignore failed requestless bootstrap bookkeeping behind serving rows', async () => {
   const projectId = 'project-requestless-bootstrap-terminal-with-serving-warning'
 
@@ -1063,6 +1100,12 @@ test('reviews warnings do not treat failed serving snapshots as progressable rep
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.maintenance).toMatchObject({
+    hasActionableFailures: false,
+    hasHistoricalFailures: true,
+    status: 'idle',
+    terminalSnapshotCount: 1,
+  })
   expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.serving).toMatchObject({readable: false, usable: false})
   expect(body.data.indexing.status).toBe('stale')

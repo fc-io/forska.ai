@@ -16,13 +16,55 @@ const countRef = {
 
 const logCalls: Array<{key: string; level?: string; message: string}> = []
 
+const getProjectAccessForLeakedMock = async (projectId: string) => {
+  const [{getAppDatabaseService}, {escapeSqlString}] = await Promise.all([
+    import('../../services/appDatabaseService.ts'),
+    import('../../services/appQueryHelpers.ts'),
+  ])
+  const [project] = await getAppDatabaseService().queryJson<{
+    archived: boolean
+    humanJudgmentMode: 'prompt' | 'summary' | null
+    id: string
+    name: string
+    updatedAt?: string | null
+  }>(
+    `
+    SELECT id, name, archived, human_judgment_mode AS humanJudgmentMode, updated_at AS updatedAt
+    FROM app.project
+    WHERE id = '${escapeSqlString(projectId)}'
+      AND delete_pending_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.archived_project_delete_tombstone tombstone
+        WHERE tombstone.project_id = app.project.id
+          AND tombstone.completed_at IS NULL
+      )
+    LIMIT 1
+  `,
+  )
+
+  if (!project) {
+    throw new Error('Project not found')
+  }
+
+  if (project.archived) {
+    throw new Error('Archived projects must be unarchived before use')
+  }
+
+  return project
+}
+
 const registerModuleMocks = () => {
   logCalls.length = 0
 
   void mock.module(projectAccessGuardModulePath, () => {
     return {
-      assertProjectIsActive: async () => {
-        return {archived: false, id: 'project-1', name: 'Project 1'}
+      assertProjectIsActive: async (projectId: string) => {
+        if (projectId === 'project-1') {
+          return {archived: false, humanJudgmentMode: null, id: 'project-1', name: 'Project 1', updatedAt: null}
+        }
+
+        return getProjectAccessForLeakedMock(projectId)
       },
     }
   })
