@@ -47,7 +47,7 @@ declare global {
   var __forskaProcessActivityState: ProcessActivityState | undefined
 }
 
-const defaultRecentActivityLimit = 200
+const defaultRecentActivityLimit = 80
 
 const getProcessActivityState = (): ProcessActivityState => {
   globalThis.__forskaProcessActivityState ??= {

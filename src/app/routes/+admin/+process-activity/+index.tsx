@@ -22,8 +22,10 @@ type ProcessActivityRecord = {
 }
 
 type ProcessActivityResponse = {activity: {active: ProcessActivityRecord[]; recent: ProcessActivityRecord[]}}
+type ProcessActivityProblem = {label: string; level: 'critical' | 'warning'}
 
 const processActivityQueryKey = ['admin', 'process-activity'] as const
+const longRunningActivityWarningMs = 5 * 60 * 1_000
 
 const fetchProcessActivity = async (): Promise<ProcessActivityResponse> => {
   const response = await apiClient.api.admin['process-activity'].get({query: {limit: '80'}})
@@ -87,6 +89,50 @@ const formatDetails = (details: ProcessActivityDetails) => {
   return JSON.stringify(Object.fromEntries(entries), null, 2)
 }
 
+const getActivityAgeMs = (row: ProcessActivityRecord, now: Date) => {
+  const startedAt = parseTimestamp(row.startedAt)
+  return startedAt === null ? 0 : Math.max(0, now.getTime() - startedAt.getTime())
+}
+
+const isExpectedLongRunningActivity = (row: ProcessActivityRecord) => {
+  return row.status === 'running' && row.category === 'review-serving' && row.label === 'Review-serving projector loop'
+}
+
+const hasDetail = (details: ProcessActivityDetails, key: string) => {
+  return Object.hasOwn(details, key)
+}
+
+const getActivityProblem = (row: ProcessActivityRecord, now: Date): ProcessActivityProblem | null => {
+  if (row.status === 'failed') {
+    return {label: 'failed', level: 'critical'}
+  }
+
+  const ageMs = getActivityAgeMs(row, now)
+  if (row.status === 'running' && !isExpectedLongRunningActivity(row) && ageMs >= longRunningActivityWarningMs) {
+    return {label: `running ${formatDuration(ageMs)}`, level: 'warning'}
+  }
+
+  if (row.status === 'skipped' && (hasDetail(row.details, 'error') || hasDetail(row.details, 'replacedByNextRun'))) {
+    return {label: 'skipped with issue', level: 'warning'}
+  }
+
+  return null
+}
+
+const getActivityProblemClass = (problem: ProcessActivityProblem | null) => {
+  return problem?.level === 'critical'
+    ? 'bg-red-50 hover:bg-red-100'
+    : problem?.level === 'warning'
+      ? 'bg-amber-50 hover:bg-amber-100'
+      : 'hover:bg-stone-50'
+}
+
+const getActivityProblemBadgeClass = (problem: ProcessActivityProblem) => {
+  return problem.level === 'critical'
+    ? 'bg-red-100 text-red-700 ring-red-200'
+    : 'bg-amber-100 text-amber-700 ring-amber-200'
+}
+
 const getStatusClass = (status: ProcessActivityStatus) => {
   return status === 'running'
     ? 'bg-blue-100 text-blue-700 ring-blue-200'
@@ -103,6 +149,16 @@ const StatusBadge = (props: {status: ProcessActivityStatus}) => {
   return (
     <span class={`rounded-full px-2 py-1 text-xs font-semibold ring-1 ring-inset ${getStatusClass(props.status)}`}>
       {props.status}
+    </span>
+  )
+}
+
+const ProblemBadge = (props: {problem: ProcessActivityProblem}) => {
+  return (
+    <span
+      class={`mt-2 inline-flex rounded-full px-2 py-1 text-xs font-semibold ring-1 ring-inset ${getActivityProblemBadgeClass(props.problem)}`}
+    >
+      Attention: {props.problem.label}
     </span>
   )
 }
@@ -140,13 +196,20 @@ const ActivityTable = (props: {emptyLabel: string; rows: ProcessActivityRecord[]
             <tbody class="divide-y divide-stone-100 bg-white">
               <For each={props.rows}>
                 {(row) => {
+                  const problem = getActivityProblem(row, new Date())
+
                   return (
-                    <tr class="align-top hover:bg-stone-50">
+                    <tr class={`align-top ${getActivityProblemClass(problem)}`}>
                       <td class="px-4 py-3">
                         <StatusBadge status={row.status} />
                       </td>
                       <td class="px-4 py-3">
                         <div class="text-sm font-medium text-stone-900">{row.label}</div>
+                        <Show when={problem}>
+                          {(activityProblem) => {
+                            return <ProblemBadge problem={activityProblem()} />
+                          }}
+                        </Show>
                         <div class="mt-1 font-mono text-xs text-stone-500">{row.id}</div>
                       </td>
                       <td class="px-4 py-3 text-sm text-stone-700">{row.category}</td>

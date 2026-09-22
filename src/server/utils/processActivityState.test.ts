@@ -51,4 +51,21 @@ test('process activity state tracks active work and keeps a bounded recent histo
     {status: 'skipped'},
     {details: {projectId: 'project-1', reason: 'completedChunkLimit'}, durationMs: 1250, status: 'completed'},
   ])
+
+  const overflowStartedAtMs = new Date('2026-09-21T12:01:00.000Z').getTime()
+  Array.from({length: 82}, (_, index) => {
+    return recordProcessActivityEvent({
+      category: 'judgment-cron',
+      label: `Overflow event ${index}`,
+      now: new Date(overflowStartedAtMs + index * 1_000),
+      status: 'completed',
+    })
+  })
+
+  const cappedSnapshot = getProcessActivitySnapshot({limit: 200})
+
+  expect(cappedSnapshot.maxRecent).toBe(80)
+  expect(cappedSnapshot.recent).toHaveLength(80)
+  expect(cappedSnapshot.recent[0]?.label).toBe('Overflow event 81')
+  expect(cappedSnapshot.recent.at(-1)?.label).toBe('Overflow event 2')
 })
