@@ -17,6 +17,7 @@ import {
 } from '../../reviewServing/reviewServingManifestRepository.ts'
 import {promoteReviewServingProjectorSnapshot} from '../../reviewServing/reviewServingProjectorWriter.ts'
 import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
+import {capActiveReviewServingRebuildRequestPriorityForProject} from '../../reviewServing/reviewServingRebuildRequestRepository.ts'
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getApiReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
@@ -216,6 +217,23 @@ const getHasLegacyRequiredBootstrapEnrichmentCandidate = async (input: {
         .join(', ')})
     `,
     getReviewWarningsWorkloadContext(input.projectId, 'legacyCandidateEnrichmentState'),
+  )
+
+  return Number(row?.count ?? 0) > 0
+}
+
+const getHasOverprioritizedMissingSnapshotRepair = async (projectId: string) => {
+  const [row] = await getApiReadOnlyAppDatabaseService().queryJson<{count: number}>(
+    `
+    SELECT CAST(COUNT(*) AS INTEGER) AS count
+    FROM app.review_rebuild_request request
+    WHERE request.project_id = '${escapeSqlString(projectId)}'
+      AND request.reason = 'missingReviewServingSnapshot'
+      AND request.status IN ('admitted', 'running')
+      AND request.admission_state = 'admitted'
+      AND request.priority > ${foregroundReviewServingRepairPriority}
+    `,
+    getReviewWarningsWorkloadContext(projectId, 'overprioritizedMissingSnapshotRepair'),
   )
 
   return Number(row?.count ?? 0) > 0
@@ -707,6 +725,21 @@ const getReviewsWarningsPayload = async (input: {
     await requestReviewServingV4Rebuild({
       pageFirstOnly: true,
       priority,
+      projectId,
+      reason: 'missingReviewServingSnapshot',
+    }).catch(() => {
+      return undefined
+    })
+  }
+
+  const hasOverprioritizedMissingSnapshotRepair =
+    !isServerMutationWorkDisabled && !reviewServingProjectorPaused && hasReadableReviewServingRows
+      ? await getHasOverprioritizedMissingSnapshotRepair(projectId)
+      : false
+
+  if (hasOverprioritizedMissingSnapshotRepair) {
+    await capActiveReviewServingRebuildRequestPriorityForProject({
+      priority: foregroundReviewServingRepairPriority,
       projectId,
       reason: 'missingReviewServingSnapshot',
     }).catch(() => {

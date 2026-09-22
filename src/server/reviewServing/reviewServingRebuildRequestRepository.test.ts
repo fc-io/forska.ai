@@ -10,6 +10,7 @@ import {
 import {
   boostActiveReviewServingRebuildRequestForProject,
   boostReviewServingRebuildRequestPriority,
+  capActiveReviewServingRebuildRequestPriorityForProject,
   createReviewServingRebuildRequest,
   defaultRebuildMaxAdmissionSplitCount,
   getActiveReviewServingRebuildRequestForProject,
@@ -1084,6 +1085,71 @@ test('blocked over-budget rebuild request lookup in DuckDB reuses a request bloc
     expect(
       await getBlockedOverBudgetReviewServingRebuildRequestForProject({...lookupInput, now: oneSecondLater}, database),
     ).toBeNull()
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('capping project rebuild priority in DuckDB lowers only live requests of that project and reason above the cap', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingChunkManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      return (await connection.runAndReadAll(statement)).getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE TABLE app.review_rebuild_request (
+        request_id VARCHAR PRIMARY KEY,
+        project_id VARCHAR NOT NULL,
+        reason VARCHAR NOT NULL,
+        priority INTEGER NOT NULL,
+        status VARCHAR NOT NULL,
+        admission_state VARCHAR NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+      );
+      INSERT INTO app.review_rebuild_request VALUES
+        ('admitted-10000', 'project-v4', 'missingReviewServingSnapshot', 10000, 'admitted', 'admitted', TIMESTAMPTZ '2026-09-21T17:40:51Z'),
+        ('running-20000', 'project-v4', 'missingReviewServingSnapshot', 20000, 'running', 'admitted', TIMESTAMPTZ '2026-09-21T17:40:51Z'),
+        ('admitted-1001', 'project-v4', 'missingReviewServingSnapshot', 1001, 'admitted', 'admitted', TIMESTAMPTZ '2026-09-21T17:40:51Z'),
+        ('admitted-1000', 'project-v4', 'missingReviewServingSnapshot', 1000, 'admitted', 'admitted', TIMESTAMPTZ '2026-09-21T17:40:51Z'),
+        ('completed-10000', 'project-v4', 'missingReviewServingSnapshot', 10000, 'completed', 'admitted', TIMESTAMPTZ '2026-09-21T17:40:51Z'),
+        ('blocked-10000', 'project-v4', 'missingReviewServingSnapshot', 10000, 'blocked_over_budget', 'blocked_over_budget', TIMESTAMPTZ '2026-09-21T17:40:51Z'),
+        ('other-reason-10000', 'project-v4', 'selectedImportDirtyWork', 10000, 'admitted', 'admitted', TIMESTAMPTZ '2026-09-21T17:40:51Z'),
+        ('other-project-10000', 'project-other', 'missingReviewServingSnapshot', 10000, 'admitted', 'admitted', TIMESTAMPTZ '2026-09-21T17:40:51Z');
+    `)
+
+    await capActiveReviewServingRebuildRequestPriorityForProject(
+      {priority: 1000, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    )
+
+    const rows = await database.queryJson<{priority: number; requestId: string; updatedAt: string}>(`
+      SELECT request_id AS requestId, priority, strftime(updated_at AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%S') AS updatedAt
+      FROM app.review_rebuild_request
+      ORDER BY request_id
+    `)
+
+    expect(rows).toEqual([
+      {priority: 1000, requestId: 'admitted-1000', updatedAt: '2026-09-21T17:40:51'},
+      {priority: 1000, requestId: 'admitted-10000', updatedAt: '2026-09-21T17:40:51'},
+      {priority: 1000, requestId: 'admitted-1001', updatedAt: '2026-09-21T17:40:51'},
+      {priority: 10000, requestId: 'blocked-10000', updatedAt: '2026-09-21T17:40:51'},
+      {priority: 10000, requestId: 'completed-10000', updatedAt: '2026-09-21T17:40:51'},
+      {priority: 10000, requestId: 'other-project-10000', updatedAt: '2026-09-21T17:40:51'},
+      {priority: 10000, requestId: 'other-reason-10000', updatedAt: '2026-09-21T17:40:51'},
+      {priority: 1000, requestId: 'running-20000', updatedAt: '2026-09-21T17:40:51'},
+    ])
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()

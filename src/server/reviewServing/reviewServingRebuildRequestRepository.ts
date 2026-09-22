@@ -1645,6 +1645,23 @@ export const boostReviewServingRebuildRequestPriority = async (
   return getReviewServingRebuildRequest({requestId: input.requestId}, database)
 }
 
+export const capActiveReviewServingRebuildRequestPriorityForProject = async (
+  input: {priority: number; projectId: string; reason: string},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
+) => {
+  const priority = getNormalizedPriority(input.priority)
+
+  await database.run(`
+    UPDATE app.review_rebuild_request
+    SET priority = ${getSqlLiteral(priority)}
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND reason = ${getSqlLiteral(input.reason)}
+      AND status IN ('admitted', 'running')
+      AND admission_state = 'admitted'
+      AND priority > ${getSqlLiteral(priority)}
+  `)
+}
+
 export const boostActiveReviewServingRebuildRequestForProject = async (
   input: {priority: number; projectId: string; reason?: string},
   database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
