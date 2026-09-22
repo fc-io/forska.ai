@@ -11,6 +11,7 @@ import {countReadyReviewServingComponents} from '../reviewServing/reviewServingC
 import type {ReviewServingDirtyWorkClaim} from '../reviewServing/reviewServingDirtyWorkService.ts'
 import {wakeReviewServingProjectorService} from '../reviewServing/reviewServingProjectorService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {getProcessActivitySnapshot, resetProcessActivityStateForTests} from '../utils/processActivityState.ts'
 import {
   defaultReviewServingProjectorWorkerActiveYieldMs,
   defaultReviewServingProjectorWorkerErrorBackoffMs,
@@ -347,6 +348,34 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
     fallbackIntent: 'reject',
     workloadClass: 'reviewProjector',
   })
+})
+
+test('worker records project id in completed rebuild chunk process activity', async () => {
+  resetProcessActivityStateForTests()
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+
+  await runReviewServingProjectorWorker(
+    {
+      leaseMs: 2_000,
+      maxCompletedRebuildChunksPerRun: 1,
+      now: new Date('2026-06-16T10:00:00.000Z'),
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  const snapshot = getProcessActivitySnapshot({limit: 5})
+  const activity = snapshot.recent.find((record) => {
+    return record.label === 'Review-serving completed display chunk'
+  })
+
+  expect(activity?.category).toBe('review-serving')
+  expect(activity?.details.chunkId).toBe('chunk-1')
+  expect(activity?.details.projectId).toBe('project-1')
+  expect(activity?.details.projectionComponent).toBe('display')
+  expect(activity?.details.requestId).toBeNull()
+  expect(activity?.status).toBe('completed')
+  resetProcessActivityStateForTests()
 })
 
 test('worker routes rebuild chunk executor transactions through background priority when available', async () => {
@@ -6056,7 +6085,12 @@ test('worker marks rebuild requests failed after terminal chunk failure', async 
   const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
   const joined = harness.runStatements.join('\n')
 
-  expect(result.chunk).toEqual({chunkId: 'chunk-1', requestId: 'rebuild-terminal', status: 'failed'})
+  expect(result.chunk).toEqual({
+    chunkId: 'chunk-1',
+    projectId: 'project-1',
+    requestId: 'rebuild-terminal',
+    status: 'failed',
+  })
   expect(joined).toContain('UPDATE app.review_rebuild_request')
   expect(joined).toContain("status = 'failed'")
   expect(joined).toContain("last_error = 'chunk executor failed'")
@@ -6099,7 +6133,12 @@ test('worker finalizes active rebuild requests that already have terminal chunks
   )
   const joined = harness.runStatements.join('\n')
 
-  expect(result.chunk).toEqual({chunkId: terminalChunk.chunkId, requestId: terminalChunk.requestId, status: 'failed'})
+  expect(result.chunk).toEqual({
+    chunkId: terminalChunk.chunkId,
+    projectId: 'project-1',
+    requestId: terminalChunk.requestId,
+    status: 'failed',
+  })
   expect(harness.claimInputs).toEqual([])
   expect(harness.wakeInputs).toEqual([])
   expect(joined).toContain('UPDATE app.review_rebuild_request')
@@ -6144,7 +6183,12 @@ test('worker marks rebuild requests failed when completion finalization throws',
   const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
   const joined = harness.runStatements.join('\n')
 
-  expect(result.chunk).toEqual({chunkId: 'chunk-1', requestId: 'rebuild-finalizer', status: 'failed'})
+  expect(result.chunk).toEqual({
+    chunkId: 'chunk-1',
+    projectId: 'project-1',
+    requestId: 'rebuild-finalizer',
+    status: 'failed',
+  })
   expect(harness.failedChunks).toEqual([])
   expect(joined).toContain('UPDATE app.review_rebuild_request')
   expect(joined).toContain("status = 'failed'")

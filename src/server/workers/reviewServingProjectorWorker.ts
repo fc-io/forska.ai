@@ -353,12 +353,42 @@ type ReviewServingProjectorWorkerChunkResult =
   | {chunkId: null; status: 'idle'}
   | {
       chunkId: string
+      projectId: string | null
       projectionComponent: ReviewServingProjectionComponent
       requestId: string | null
       status: 'completed'
     }
-  | {chunkId: string; requestId: string | null; status: 'failed'}
-  | {chunkId: string; requestId: string | null; status: 'skipped'}
+  | {chunkId: string; projectId: string | null; requestId: string | null; status: 'failed'}
+  | {chunkId: string; projectId: string | null; requestId: string | null; status: 'skipped'}
+
+const getCompletedWorkerChunkResult = (
+  chunk: Pick<ReviewServingRebuildChunkManifest, 'chunkId' | 'projectId' | 'projectionComponent' | 'requestId'>,
+): Extract<ReviewServingProjectorWorkerChunkResult, {status: 'completed'}> => {
+  return {
+    chunkId: chunk.chunkId,
+    projectId: chunk.projectId ?? null,
+    projectionComponent: chunk.projectionComponent,
+    requestId: chunk.requestId,
+    status: 'completed',
+  }
+}
+
+const getFailedWorkerChunkResult = (
+  chunk: Pick<ReviewServingRebuildChunkManifest, 'chunkId' | 'projectId' | 'requestId'>,
+): Extract<ReviewServingProjectorWorkerChunkResult, {status: 'failed'}> => {
+  return {chunkId: chunk.chunkId, projectId: chunk.projectId ?? null, requestId: chunk.requestId, status: 'failed'}
+}
+
+const getSkippedWorkerChunkResult = (
+  chunk: Pick<ReviewServingProjectorWorkerChunkInput, 'projectId' | 'requestId'> & {chunkId: string},
+): Extract<ReviewServingProjectorWorkerChunkResult, {status: 'skipped'}> => {
+  return {
+    chunkId: chunk.chunkId,
+    projectId: chunk.projectId ?? null,
+    requestId: chunk.requestId ?? null,
+    status: 'skipped',
+  }
+}
 
 type ReviewServingProjectorWorkerStaleCandidateCleanupResult =
   | (CleanupStaleCandidateReviewServingSnapshotManifestsResult & {status: 'completed'})
@@ -6366,7 +6396,7 @@ const finalizeTerminalFailedRebuildRequests = async (input: {
     }
 
     if (firstFinalizedResult === null) {
-      firstFinalizedResult = {chunkId: chunk.chunkId, requestId: chunk.requestId, status: 'failed'}
+      firstFinalizedResult = getFailedWorkerChunkResult(chunk)
     }
     await finalizeFailedReviewServingRebuildRequest(chunk, input.database)
   }, Promise.resolve())
@@ -6510,10 +6540,7 @@ const finalizeCompletedReviewServingRebuildRequestOnceForBatch = async (input: {
       await finalizeErroredCompletedReviewServingRebuildRequest({chunk: input.chunk, error}, input.database)
     })
 
-    return {
-      chunk: {chunkId: input.chunk.chunkId, requestId: input.chunk.requestId, status: 'failed'},
-      completedCount: input.completedCount + 1,
-    }
+    return {chunk: getFailedWorkerChunkResult(input.chunk), completedCount: input.completedCount + 1}
   }
 }
 
@@ -6533,19 +6560,11 @@ const finalizeNextCompletedUnfinalizedRebuildRequest = async (input: {
   try {
     await finalizeCompletedReviewServingRebuildRequest(chunk, input.database, {deleteSummaryFilterOptions: false})
 
-    return {
-      chunk: {
-        chunkId: chunk.chunkId,
-        projectionComponent: chunk.projectionComponent,
-        requestId: chunk.requestId,
-        status: 'completed',
-      },
-      completedCount: 1,
-    }
+    return {chunk: getCompletedWorkerChunkResult(chunk), completedCount: 1}
   } catch (error) {
     await finalizeErroredCompletedReviewServingRebuildRequest({chunk, error}, input.database)
 
-    return {chunk: {chunkId: chunk.chunkId, requestId: chunk.requestId, status: 'failed'}, completedCount: 1}
+    return {chunk: getFailedWorkerChunkResult(chunk), completedCount: 1}
   }
 }
 
@@ -6701,11 +6720,12 @@ const recordReviewServingProjectorWorkerCycleActivity = (result: ReviewServingPr
       ...(result.chunk.status === 'completed'
         ? {
             chunkId: result.chunk.chunkId,
+            projectId: result.chunk.projectId,
             projectionComponent: result.chunk.projectionComponent,
             requestId: result.chunk.requestId,
           }
         : result.chunk.status === 'failed' || result.chunk.status === 'skipped'
-          ? {chunkId: result.chunk.chunkId, requestId: result.chunk.requestId}
+          ? {chunkId: result.chunk.chunkId, projectId: result.chunk.projectId, requestId: result.chunk.requestId}
           : {}),
     },
     label:
@@ -7842,10 +7862,7 @@ const claimReviewServingProjectorWorkerRebuildChunkInput = async ({
       })
 
   if (completed) {
-    return {
-      chunk: {chunkId: 'completed-manifest', requestId: chunkInput.requestId ?? null, status: 'skipped'},
-      status: 'not-claimed',
-    }
+    return {chunk: getSkippedWorkerChunkResult({...chunkInput, chunkId: 'completed-manifest'}), status: 'not-claimed'}
   }
 
   if (claimedChunk === null) {
@@ -7969,7 +7986,7 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
       workerId,
     })
 
-    return {chunkId: effectiveClaimedChunk.chunkId, requestId: effectiveClaimedChunk.requestId, status: 'failed'}
+    return getFailedWorkerChunkResult(effectiveClaimedChunk)
   }
 
   try {
@@ -8011,16 +8028,11 @@ const runClaimedReviewServingProjectorWorkerRebuildChunk = async ({
       workerId,
     })
 
-    return {
-      chunkId: effectiveClaimedChunk.chunkId,
-      projectionComponent: effectiveClaimedChunk.projectionComponent,
-      requestId: effectiveClaimedChunk.requestId,
-      status: 'completed',
-    }
+    return getCompletedWorkerChunkResult(effectiveClaimedChunk)
   } catch (error) {
     await finalizeErroredCompletedReviewServingRebuildRequest({chunk: effectiveClaimedChunk, error}, database)
 
-    return {chunkId: effectiveClaimedChunk.chunkId, requestId: effectiveClaimedChunk.requestId, status: 'failed'}
+    return getFailedWorkerChunkResult(effectiveClaimedChunk)
   }
 }
 
@@ -8349,10 +8361,7 @@ const failClaimedReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
         workerId: input.workerId,
       })
 
-      return [
-        ...results,
-        {chunkId: claimed.chunk.chunkId, requestId: claimed.chunk.requestId, status: 'failed' as const},
-      ]
+      return [...results, getFailedWorkerChunkResult(claimed.chunk)]
     },
     Promise.resolve([]),
   )
@@ -8404,12 +8413,7 @@ const recoverDuckDbOutOfMemoryReviewServingRebuildChunkBatch = async (input: {
       return null
     }
 
-    results.push({
-      chunkId: claimed.chunk.chunkId,
-      projectionComponent: claimed.chunk.projectionComponent,
-      requestId: claimed.chunk.requestId,
-      status: 'completed',
-    })
+    results.push(getCompletedWorkerChunkResult(claimed.chunk))
   }
 
   return results
@@ -8544,7 +8548,7 @@ const runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch = async (inpu
       workerId: input.workerId,
     })
     completedCount += 1
-    lastCompletedChunk = result
+    lastCompletedChunk = {...result, projectId: claimed.chunk.projectId ?? null}
   }
 
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
@@ -8618,7 +8622,7 @@ const runSelectedImportReviewServingProjectorWorkerRebuildChunkBatch = async (in
       workerId: input.workerId,
     })
     completedCount += 1
-    lastCompletedChunk = result
+    lastCompletedChunk = {...result, projectId: claimed.chunk.projectId ?? null}
   }
 
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
@@ -8692,7 +8696,7 @@ const runDisplayReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       workerId: input.workerId,
     })
     completedCount += 1
-    lastCompletedChunk = result
+    lastCompletedChunk = {...result, projectId: claimed.chunk.projectId ?? null}
   }
 
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
@@ -8766,7 +8770,7 @@ const runPayloadReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       workerId: input.workerId,
     })
     completedCount += 1
-    lastCompletedChunk = result
+    lastCompletedChunk = {...result, projectId: claimed.chunk.projectId ?? null}
   }
 
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
@@ -8840,7 +8844,7 @@ const runSearchReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       workerId: input.workerId,
     })
     completedCount += 1
-    lastCompletedChunk = result
+    lastCompletedChunk = {...result, projectId: claimed.chunk.projectId ?? null}
   }
 
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
@@ -8914,7 +8918,7 @@ const runQueueReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
       workerId: input.workerId,
     })
     completedCount += 1
-    lastCompletedChunk = result
+    lastCompletedChunk = {...result, projectId: claimed.chunk.projectId ?? null}
   }
 
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
@@ -8991,7 +8995,7 @@ const runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch = asy
       workerId: input.workerId,
     })
     completedCount += 1
-    lastCompletedChunk = result
+    lastCompletedChunk = {...result, projectId: claimed.chunk.projectId ?? null}
   }
 
   return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
@@ -9082,7 +9086,7 @@ const runReviewServingProjectorWorkerRebuildChunkBatchWith = async (
       workerId: input.workerId,
     })
     completedCount += 1
-    lastCompletedChunk = result
+    lastCompletedChunk = {...result, projectId: claimed.chunk.projectId ?? null}
   }
 
   const recycledChunk = input.claimedChunks.at(-1)
