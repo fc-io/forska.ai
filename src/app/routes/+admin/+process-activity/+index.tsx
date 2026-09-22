@@ -302,7 +302,7 @@ const AdminProcessActivity = () => {
           return (
             <div class="space-y-6">
               <ActivityTable
-                emptyLabel="No active in-memory work is recorded."
+                emptyLabel="No job or chunk is running right now."
                 rows={activeRows()}
                 title="Current Work"
               />
