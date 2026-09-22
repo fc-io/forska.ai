@@ -483,6 +483,92 @@ test('review serving projector worker heartbeat does not start a loop while Duck
   expect(result.events).toEqual([])
 })
 
+test('review serving projector worker heartbeat keeps the long-lived loop out of active process activity', () => {
+  const runScript = runBunSpawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const processActivityModulePath = getModulePath('./src/server/utils/processActivityState.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        let resolveRunStarted
+        const runStarted = new Promise((resolve) => {
+          resolveRunStarted = resolve
+        })
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async (options) => {
+              resolveRunStarted()
+              await new Promise((resolve) => {
+                options.signal.addEventListener('abort', resolve, {once: true})
+              })
+              return {
+                componentRotationOffset: 0,
+                lastAdmittedWakeAtMs: null,
+                lastCleanupAtMs: null,
+                reason: 'aborted',
+              }
+            },
+          }
+        })
+
+        const {getProcessActivitySnapshot, resetProcessActivityStateForTests} = await import(processActivityModulePath)
+        resetProcessActivityStateForTests()
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?process-activity=' + Date.now())
+        const stop = startReviewServingProjectorWorkerHeartbeat({pollIntervalMs: 5})
+
+        await runStarted
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5)
+        })
+        const activeWhileRunning = getProcessActivitySnapshot().active
+        stop()
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5)
+        })
+        const snapshotAfterStop = getProcessActivitySnapshot({limit: 10})
+
+        console.log(JSON.stringify({activeAfterStop: snapshotAfterStop.active, activeWhileRunning, recentAfterStop: snapshotAfterStop.recent}))
+      `,
+    ],
+    {cwd: process.cwd(), env: getChildRuntimeEnv({DUCKDB_MEMORY_LIMIT: ''})},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Review serving projector worker heartbeat process-activity test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    activeAfterStop: unknown[]
+    activeWhileRunning: unknown[]
+    recentAfterStop: unknown[]
+  }
+
+  expect(result.activeWhileRunning).toEqual([])
+  expect(result.activeAfterStop).toEqual([])
+  expect(result.recentAfterStop).toEqual([])
+})
+
 test('review serving projector worker hard RSS restart cap adds bounded restart grace', () => {
   const gibibyte = 1024 ** 3
 

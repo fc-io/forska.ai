@@ -5,7 +5,7 @@ import {runReviewServingProjectorWorker} from '../workers/reviewServingProjector
 import {getActiveDuckdbExclusiveWorkSnapshot, hasActiveDuckdbExclusiveWork} from './duckdbExclusiveWork.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
-import {beginProcessActivity, finishProcessActivity, recordProcessActivityEvent} from './processActivityState.ts'
+import {recordProcessActivityEvent} from './processActivityState.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {pauseReviewServingProjector} from './reviewServingProjectorPause.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
@@ -327,6 +327,11 @@ export const startReviewServingProjectorWorkerHeartbeat = (
     const maxCompletedRebuildChunksPerRun = getReviewServingProjectorWorkerMaxCompletedChunksPerRun(options)
     const maxRunMs = getReviewServingProjectorWorkerMaxRunMs(options)
     const restartDelayMs = options.restartDelayMs ?? lowMemoryReviewServingProjectorWorkerRestartDelayMs
+    const rebuildChunkBatchSize =
+      options.rebuildChunkBatchSize
+      ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
+      ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize
+    const loopActivityDetails = {maxCompletedRebuildChunksPerRun, maxRunMs, rebuildChunkBatchSize}
     let endedByMaxRun = false
     let maxRunTimer: ReturnType<typeof setTimeout> | null = null
     const abortActiveLoop = () => {
@@ -342,18 +347,6 @@ export const startReviewServingProjectorWorkerHeartbeat = (
 
     activeLoopController = loopController
     controller.signal.addEventListener('abort', abortActiveLoop, {once: true})
-    const activityId = beginProcessActivity({
-      category: 'review-serving',
-      details: {
-        maxCompletedRebuildChunksPerRun,
-        maxRunMs,
-        rebuildChunkBatchSize:
-          options.rebuildChunkBatchSize
-          ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
-          ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
-      },
-      label: 'Review-serving projector loop',
-    })
 
     if (maxRunMs !== null && maxRunMs > 0) {
       maxRunTimer = setTimeout(() => {
@@ -370,10 +363,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       pollIntervalMs: options.pollIntervalMs,
       rebuildChunkBatchMaxRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options),
       rebuildChunkBatchSoftRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes(options),
-      rebuildChunkBatchSize:
-        options.rebuildChunkBatchSize
-        ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE
-        ?? defaultReviewServingProjectorWorkerHeartbeatBatchSize,
+      rebuildChunkBatchSize,
       searchRebuildChunkBatchSize:
         options.searchRebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE ?? undefined,
       wakeStarvationMs: options.wakeStarvationMs ?? env.FORSKA_REVIEW_SERVING_WAKE_STARVATION_MS ?? undefined,
@@ -384,10 +374,6 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       signal: loopController.signal,
     })
       .then(async (result) => {
-        finishProcessActivity(activityId, {
-          details: {componentRotationOffset: result?.componentRotationOffset ?? null, reason: result?.reason ?? null},
-          status: result?.reason === 'aborted' ? 'skipped' : 'completed',
-        })
         lastCleanupAtMs = result?.lastCleanupAtMs ?? null
         lastAdmittedWakeAtMs = result?.lastAdmittedWakeAtMs ?? lastAdmittedWakeAtMs
         componentRotationOffset = result?.componentRotationOffset ?? componentRotationOffset
@@ -403,7 +389,12 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         }
       })
       .catch((error) => {
-        finishProcessActivity(activityId, {error, status: 'failed'})
+        recordProcessActivityEvent({
+          category: 'review-serving',
+          details: {...loopActivityDetails, error},
+          label: 'Review-serving projector loop failed',
+          status: 'failed',
+        })
         logReviewServingProjectorWorkerError(error)
         lastAdmittedWakeAtMs = Date.now()
 
