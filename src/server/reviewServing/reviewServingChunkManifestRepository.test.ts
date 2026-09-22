@@ -1,9 +1,12 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import {
   claimReviewServingRebuildChunk,
   claimReviewServingRebuildChunks,
   getNextClaimableReviewServingRebuildChunk,
+  getReviewServingRebuildChunkBuiltPredicateSql,
   getReviewServingRebuildChunkId,
   getReviewServingRebuildChunkWorkloadClass,
   getReviewServingRebuildTimingDiagnostics,
@@ -522,7 +525,10 @@ const createFakeChunkManifestDatabase = (initialRows: readonly FakeChunkRow[] = 
           ...existing,
           admissionState: 'admitted',
           completedAt: existing.completedAt ?? getClock(statements),
-          lastError: existing.lastError ?? 'superseded by retired review-serving snapshot',
+          lastError:
+            existing.lastError === null
+              ? 'superseded by retired review-serving snapshot'
+              : `superseded by retired review-serving snapshot: ${existing.lastError}`,
           leaseExpiresAt: null,
           leaseOwner: null,
           retryAfter: null,
@@ -2127,6 +2133,67 @@ test('inactive request release completes nonterminal chunks for retired snapshot
   expect(supersededStatement).toBeDefined()
   expect(supersededStatement).toContain("status IN ('pending', 'running')")
   expect(supersededStatement).toContain('app.review_serving_snapshot_manifest snapshot')
+  expect(supersededStatement).toContain(
+    "last_error = 'superseded by retired review-serving snapshot' || COALESCE(': ' || last_error, '')",
+  )
+})
+
+test('inactive request release marks a superseded running chunk even when it already carries an error', async () => {
+  const retiredRunningWithError = {
+    ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-retired-running-error'}, []),
+    lastError: 'DuckDB OOM on previous attempt',
+    leaseExpiresAt: '2026-06-16T14:10:00.000Z',
+    leaseOwner: 'worker-1',
+    requestId: 'rebuild:retired-running',
+    snapshotId: 'snapshot-retired',
+    startedAt: '2026-06-16T14:00:00.000Z',
+    status: 'running' as const,
+  }
+  const {database, rows} = createFakeChunkManifestDatabase([retiredRunningWithError])
+
+  await releaseInactiveRequestRebuildChunkManifests(database)
+
+  expect(rows.get(retiredRunningWithError.chunkId)).toMatchObject({
+    lastError: 'superseded by retired review-serving snapshot: DuckDB OOM on previous attempt',
+    status: 'completed',
+  })
+})
+
+test('rebuild chunk built predicate in DuckDB counts only chunks that completed without being superseded', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await duckdbInstance.connect()
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE TABLE app.review_rebuild_chunk_manifest (
+        chunk_id VARCHAR NOT NULL,
+        status VARCHAR NOT NULL,
+        last_error VARCHAR
+      );
+      INSERT INTO app.review_rebuild_chunk_manifest VALUES
+        ('built', 'completed', NULL),
+        ('split-parent', 'completed', 'output rows: estimated 300000 > max 250000'),
+        ('superseded-unstarted', 'completed', 'superseded by retired review-serving snapshot'),
+        ('superseded-with-error', 'completed', 'superseded by retired review-serving snapshot: DuckDB OOM'),
+        ('pending', 'pending', NULL),
+        ('failed', 'failed', 'DuckDB OOM');
+    `)
+
+    const rows = (
+      await connection.runAndReadAll(`
+        SELECT chunk.chunk_id AS chunkId
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE ${getReviewServingRebuildChunkBuiltPredicateSql('chunk')}
+        ORDER BY chunk.chunk_id
+      `)
+    ).getRowObjectsJson()
+
+    expect(rows).toEqual([{chunkId: 'built'}, {chunkId: 'split-parent'}])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
 })
 
 test('over-budget chunks are parked before claim and cannot hot-loop', async () => {

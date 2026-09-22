@@ -124,6 +124,7 @@ type FakeRequestDatabaseOptions = {
   reusableManifestSourceWatermarks?: Record<string, number>
   snapshotComponents?: readonly ReviewServingProjectionComponent[]
   staleBootstrapComponents?: readonly ReviewServingProjectionComponent[]
+  supersededBootstrapComponents?: readonly ReviewServingProjectionComponent[]
 }
 
 const getSqlStrings = (statement: string) => {
@@ -424,6 +425,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
   const reusableBootstrapSourceWatermarks =
     options.reusableManifestSourceWatermarks ?? getFakeBootstrapSourceWatermarks(options)
   const completedBootstrapComponentSet = new Set(options.completedBootstrapComponents ?? [])
+  const supersededBootstrapComponentSet = new Set(options.supersededBootstrapComponents ?? [])
   const activeNoChunkBootstrapComponentSet = new Set(options.activeBootstrapComponentsWithoutChunks ?? [])
   const reusableBootstrapComponentSet = new Set([
     ...completedBootstrapComponentSet,
@@ -667,8 +669,18 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
     if (statement.includes('app.review_rebuild_chunk_manifest') && statement.includes('totalChunkCount')) {
       const component = getSqlStrings(statement).at(-2) as ReviewServingProjectionComponent | undefined
       const completed = component !== undefined && completedBootstrapComponentSet.has(component) ? 2 : 0
+      const superseded =
+        component !== undefined
+        && supersededBootstrapComponentSet.has(component)
+        && statement.includes(
+          "NOT starts_with(COALESCE(last_error, ''), 'superseded by retired review-serving snapshot')",
+        )
+          ? completed
+          : 0
 
-      return [{completedChunkCount: completed, incompleteChunkCount: 0, totalChunkCount: completed}] as T[]
+      return [
+        {completedChunkCount: completed - superseded, incompleteChunkCount: superseded, totalChunkCount: completed},
+      ] as T[]
     }
 
     if (
@@ -1695,6 +1707,47 @@ test('V4 bootstrap rebuild promotes all-reused candidates and completes covered 
       sameSnapshotComponents: [...fakeRebuildComponents],
     },
     promotion: {dirtyWorkCompletion: {completedCount: 1}, promoted: true},
+  })
+})
+
+test('V4 bootstrap rebuild rebuilds same-snapshot components whose chunks were superseded instead of promoting them', async () => {
+  const supersededComponents = ['display', 'llmStatus', 'humanStatus', 'queue'] as const
+  const {database, statements} = createFakeRequestDatabase(
+    {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
+    {
+      completedBootstrapComponents: fakeRebuildComponents,
+      dirtyWatermarks: [
+        {latestSourceHighWaterMark: 10, sourcePartition: 'reviewChange:project-v4'},
+        {latestSourceHighWaterMark: 4, sourcePartition: 'importRunArticle:project-v4'},
+        {latestSourceHighWaterMark: 7, sourcePartition: 'projectScope:project-v4'},
+      ],
+      supersededBootstrapComponents: supersededComponents,
+    },
+  )
+
+  const request = await Effect.runPromise(
+    requestReviewServingV4RebuildEffect(
+      {components: fakeRebuildComponents, projectId: 'project-v4', reason: 'missingReviewServingSnapshot'},
+      database,
+    ),
+  )
+  const chunkInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+  })
+  const rebuiltComponents = supersededComponents.filter((component) => {
+    return chunkInserts.some((statement) => {
+      return statement.includes(`'${component}'`)
+    })
+  })
+
+  expect(request.status).toBe('admitted')
+  expect(chunkInserts).toHaveLength(supersededComponents.length)
+  expect(rebuiltComponents).toEqual([...supersededComponents])
+  expect(statements.join('\n')).not.toContain("snapshot_status = 'active',")
+  expect(request.diagnosticsJson).toMatchObject({
+    diagnostics: {
+      componentReuse: {rebuiltChunkCount: supersededComponents.length, rebuiltComponents: [...supersededComponents]},
+    },
   })
 })
 
