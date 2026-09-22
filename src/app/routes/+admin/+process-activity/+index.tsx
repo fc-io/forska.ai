@@ -21,15 +21,7 @@ type ProcessActivityRecord = {
   updatedAt: ProcessActivityTimestamp
 }
 
-type ProcessActivityResponse = {
-  activity: {
-    active: ProcessActivityRecord[]
-    maxRecent: number
-    recent: ProcessActivityRecord[]
-    startedAt: ProcessActivityTimestamp
-  }
-  process: {pid: number; role: string; serverRole: string | null}
-}
+type ProcessActivityResponse = {activity: {active: ProcessActivityRecord[]; recent: ProcessActivityRecord[]}}
 
 const processActivityQueryKey = ['admin', 'process-activity'] as const
 
@@ -112,15 +104,6 @@ const StatusBadge = (props: {status: ProcessActivityStatus}) => {
     <span class={`rounded-full px-2 py-1 text-xs font-semibold ring-1 ring-inset ${getStatusClass(props.status)}`}>
       {props.status}
     </span>
-  )
-}
-
-const SummaryCell = (props: {label: string; value: string}) => {
-  return (
-    <div class="rounded-lg border border-stone-200 bg-white px-4 py-3 shadow-sm">
-      <div class="text-xs font-semibold uppercase tracking-wide text-stone-500">{props.label}</div>
-      <div class="mt-2 break-all text-sm font-medium text-stone-900">{props.value}</div>
-    </div>
   )
 }
 
@@ -255,18 +238,6 @@ const AdminProcessActivity = () => {
 
           return (
             <div class="space-y-6">
-              <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <SummaryCell label="Role" value={activityData().process.role} />
-                <SummaryCell label="PID" value={String(activityData().process.pid)} />
-                <SummaryCell label="Active Work" value={String(activeRows().length)} />
-                <SummaryCell
-                  label="Recent Events"
-                  value={`${recentRows().length} / ${activityData().activity.maxRecent}`}
-                />
-                <SummaryCell label="Started" value={formatTimestamp(activityData().activity.startedAt)} />
-                <SummaryCell label="Last Refresh" value={formatTimestamp(new Date().toISOString())} />
-              </div>
-
               <ActivityTable
                 emptyLabel="No active in-memory work is recorded."
                 rows={activeRows()}
