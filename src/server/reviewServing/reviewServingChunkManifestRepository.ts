@@ -453,6 +453,17 @@ const getWriteOutputValidationResult = (value: unknown) => {
 const releasableInactiveRequestRebuildChunkStatusSql =
   "('pending', 'completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
 const supersededSnapshotRebuildChunkStatusSql = "('pending', 'running')"
+const supersededRetiredSnapshotRebuildChunkLastError = 'superseded by retired review-serving snapshot'
+
+export const getReviewServingRebuildChunkBuiltPredicateSql = (tableAlias?: string) => {
+  const source = tableAlias ? `${tableAlias}.` : ''
+
+  return `(
+    ${source}status = 'completed'
+    AND NOT starts_with(COALESCE(${source}last_error, ''), ${getSqlLiteral(supersededRetiredSnapshotRebuildChunkLastError)})
+  )`
+}
+
 const preservedRebuildChunkStatusSql = "('completed', 'running', 'failed')"
 const activeRebuildChunkPreservePredicate = `
   app.review_rebuild_chunk_manifest.status IN ${preservedRebuildChunkStatusSql}
@@ -710,7 +721,7 @@ export const releaseInactiveRequestRebuildChunkManifests = async (
         retry_count = 0,
         lease_owner = NULL,
         lease_expires_at = NULL,
-        last_error = COALESCE(last_error, 'superseded by retired review-serving snapshot'),
+        last_error = ${getSqlLiteral(supersededRetiredSnapshotRebuildChunkLastError)} || COALESCE(': ' || last_error, ''),
         completed_at = COALESCE(completed_at, current_timestamp),
         updated_at = current_timestamp
     WHERE ${uniqueChunkIds === null ? '' : `chunk_id IN (${uniqueChunkIds.map(getSqlLiteral).join(', ')}) AND`}

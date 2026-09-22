@@ -11,10 +11,11 @@ import {
   getStableReviewServingJson,
   type ReviewServingIdentityValue,
 } from './reviewProjectionIdentity.ts'
-import type {
-  ReviewServingChunkManifestRepositoryDatabase,
-  ReviewServingChunkManifestRepositoryTransaction,
-  ReviewServingRebuildChunkManifestInput,
+import {
+  getReviewServingRebuildChunkBuiltPredicateSql,
+  type ReviewServingChunkManifestRepositoryDatabase,
+  type ReviewServingChunkManifestRepositoryTransaction,
+  type ReviewServingRebuildChunkManifestInput,
 } from './reviewServingChunkManifestRepository.ts'
 import {
   countReadyReviewServingComponents,
@@ -901,8 +902,8 @@ const getReviewServingV4BootstrapComponentChunkStats = async (
   }>(`
     SELECT
       CAST(COUNT(*) AS INTEGER) AS totalChunkCount,
-      CAST(COUNT(*) FILTER (WHERE status = 'completed') AS INTEGER) AS completedChunkCount,
-      CAST(COUNT(*) FILTER (WHERE status <> 'completed') AS INTEGER) AS incompleteChunkCount
+      CAST(COUNT(*) FILTER (WHERE ${getReviewServingRebuildChunkBuiltPredicateSql()}) AS INTEGER) AS completedChunkCount,
+      CAST(COUNT(*) FILTER (WHERE NOT ${getReviewServingRebuildChunkBuiltPredicateSql()}) AS INTEGER) AS incompleteChunkCount
     FROM app.review_rebuild_chunk_manifest
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
