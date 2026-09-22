@@ -514,6 +514,23 @@ const getReviewRebuildRequestCount = async (projectId: string, reason = 'missing
   return Number(row?.count ?? 0)
 }
 
+const getReviewRebuildRequestPriorities = async (projectId: string, reason: string) => {
+  const {getAppDatabaseService} = await import('../../services/appDatabaseService.ts')
+  const rows = await getAppDatabaseService().queryJson<{priority: number}>(`
+    SELECT priority
+    FROM app.review_rebuild_request
+    WHERE project_id = '${projectId}'
+      AND reason = '${reason}'
+      AND status = 'admitted'
+      AND admission_state = 'admitted'
+    ORDER BY request_id
+  `)
+
+  return rows.map((row) => {
+    return Number(row.priority)
+  })
+}
+
 const getReviewRebuildRequestComponents = async (projectId: string, reason: string) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -2286,6 +2303,78 @@ test('reviews warnings seed missing-snapshot repair instead of filter enrichment
     'humanStatus',
     'queue',
   ])
+  expect(await getReviewRebuildRequestPriorities(projectId, 'missingReviewServingSnapshot')).toEqual([10_000])
+})
+
+test('reviews warnings demote top-priority missing-snapshot repairs once serving rows are readable', async () => {
+  const projectId = 'project-readable-demotes-missing-snapshot-repair-warning'
+  const otherProjectId = 'project-unviewed-missing-snapshot-repair-warning'
+  const snapshotId = 'snapshot-readable-demotes-missing-snapshot-repair-warning'
+  const requestedAt = '2026-09-21T17:40:51.000Z'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    components: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue'],
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId,
+  })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
+    snapshotId,
+  })
+  await insertReviewRebuildRequest({
+    createdAt: requestedAt,
+    priority: 10_000,
+    projectId,
+    reason: 'missingReviewServingSnapshot',
+    requestId: 'request-readable-missing-snapshot-10000-warning',
+    status: 'admitted',
+    updatedAt: requestedAt,
+  })
+  await insertReviewRebuildRequest({
+    createdAt: requestedAt,
+    priority: 20_000,
+    projectId,
+    reason: 'missingReviewServingSnapshot',
+    requestId: 'request-readable-missing-snapshot-20000-warning',
+    status: 'admitted',
+    updatedAt: requestedAt,
+  })
+  await insertReviewRebuildRequest({
+    createdAt: requestedAt,
+    priority: 10_000,
+    projectId,
+    reason: 'selectedImportDirtyWork',
+    requestId: 'request-readable-selected-import-10000-warning',
+    status: 'admitted',
+    updatedAt: requestedAt,
+  })
+  await insertReviewRebuildRequest({
+    createdAt: requestedAt,
+    priority: 10_000,
+    projectId: otherProjectId,
+    reason: 'missingReviewServingSnapshot',
+    requestId: 'request-unviewed-missing-snapshot-10000-warning',
+    status: 'admitted',
+    updatedAt: requestedAt,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.serving).toMatchObject({readable: true, usable: true})
+  expect(await getReviewRebuildRequestPriorities(projectId, 'missingReviewServingSnapshot')).toEqual([1_000, 1_000])
+  expect(await getReviewRebuildRequestPriorities(projectId, 'selectedImportDirtyWork')).toEqual([10_000])
+  expect(await getReviewRebuildRequestPriorities(otherProjectId, 'missingReviewServingSnapshot')).toEqual([10_000])
+  expect(
+    new Date((await getReviewRebuildRequestMetadata('request-readable-missing-snapshot-10000-warning')).updatedAt),
+  ).toEqual(new Date(requestedAt))
 })
 
 test('reviews warnings request detail enrichment when filter-ready serving lacks payload detail', async () => {
