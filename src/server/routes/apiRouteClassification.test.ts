@@ -36,6 +36,16 @@ const judgmentJobUnassessedCountRoute = {
   samplePath: '/api/judgmentsjobs-unassessed-count',
 } as const
 const runtimeAssetRoute = {endpoint: 'runtime-asset', method: 'GET', samplePath: '/api/runtime-asset'} as const
+const duckdbRuntimeWorkloadsRoute = {
+  endpoint: 'duckdb-runtime-workloads',
+  method: 'GET',
+  samplePath: '/api/admin/duckdb-runtime-workloads',
+} as const
+const processActivityRoute = {
+  endpoint: 'process-activity',
+  method: 'GET',
+  samplePath: '/api/admin/process-activity',
+} as const
 const removedProjectMartAdminMutationRoutes = [
   '/api/admin/project-mart-large-rebuild-run',
   '/api/admin/project-mart-large-rebuild-pause',
@@ -52,6 +62,8 @@ const ownerRoutedRoutes = [
   judgmentJobUnassessedCountRoute,
   runningJudgmentJobsRoute,
   runtimeAssetRoute,
+  duckdbRuntimeWorkloadsRoute,
+  processActivityRoute,
 ]
 
 test('owner-backed routes proxy to the DuckDB owner and fail closed without one', () => {

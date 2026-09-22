@@ -263,14 +263,9 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
   ...ownerDependentSensitive('AdminInvestigateRoutes.ts', 'Destructive local database reset for the settings page.', [
     ['POST', '/api/admin/clear-databases'],
   ]),
-  ...routeGroup(
-    {
-      category: 'sensitive-local-api',
-      proxyClassification: 'duckdb-owner-diagnostics',
-      releaseDecision: settingsDiagnosticsDecision,
-      routeModule: 'AdminInvestigateRoutes.ts',
-      sensitivity: 'DuckDB owner active workload, queue, and in-memory process activity diagnostics.',
-    },
+  ...ownerDependentSettingsDiagnostics(
+    'AdminInvestigateRoutes.ts',
+    'DuckDB owner active workload, queue, and in-memory process activity diagnostics.',
     [
       ['GET', '/api/admin/duckdb-runtime-workloads'],
       ['GET', '/api/admin/process-activity'],
