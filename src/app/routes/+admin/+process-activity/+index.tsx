@@ -285,4 +285,4 @@ const AdminProcessActivity = () => {
   )
 }
 
-export const Route = createFileRoute('/admin/process-activity/' as never)({component: AdminProcessActivity})
+export const Route = createFileRoute('/admin/process-activity/')({component: AdminProcessActivity})
