@@ -40,6 +40,8 @@ export type ReviewServingSnapshotValidationResult =
 type SelectedImportSnapshotStatusRow = {status: string}
 type ReviewServingSnapshotMaterializationValidationRow = {
   enabledPromptCount?: number | null
+  hasDisplayRows?: boolean | null
+  hasScopedArticles?: boolean | null
   missingQueueArticleCount?: number | null
   nullLlmStatusRowCount?: number | null
 }
@@ -406,11 +408,44 @@ const getQueueMaterializationValidationError = async (
     : null
 }
 
+const getDisplayMaterializationValidationError = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  if (!hasRequiredComponent(candidate, 'display')) {
+    return null
+  }
+
+  const [row] = await database.queryJson<ReviewServingSnapshotMaterializationValidationRow>(`
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM mart.project_scope_article scope
+        INNER JOIN app."article" article
+          ON article.id = scope.article_id
+        WHERE scope.project_id = ${getSqlLiteral(candidate.projectId)}
+          AND (scope.in_curated_scope OR scope.in_route_scope)
+      ) AS hasScopedArticles,
+      EXISTS (
+        SELECT 1
+        FROM mart.review_article_serving_base_v4 base
+        WHERE base.project_id = ${getSqlLiteral(candidate.projectId)}
+          AND base.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(candidate.reviewConfigHash)}
+          AND base.snapshot_id = ${getSqlLiteral(candidate.snapshotId)}
+      ) AS hasDisplayRows
+  `)
+
+  return row?.hasScopedArticles === true && row.hasDisplayRows === false
+    ? 'required component display has no serving rows for in-scope articles'
+    : null
+}
+
 const getMaterializationValidationErrors = async (
   candidate: ReviewServingSnapshotManifest,
   database: ReviewServingSnapshotPromotionDatabase,
 ) => {
   const errors = await Promise.all([
+    getDisplayMaterializationValidationError(candidate, database),
     getLlmStatusMaterializationValidationError(candidate, database),
     getQueueMaterializationValidationError(candidate, database),
   ])

@@ -833,6 +833,12 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
     projectId,
     snapshotId: 'snapshot-ready-warning',
   })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
+    snapshotId: 'snapshot-ready-warning',
+  })
 
   const {body, response} = await postWarningsRequest(projectId)
 
@@ -855,6 +861,12 @@ test('reviews warnings preserve failed latest terminal rebuild request as histor
     includeSearchState: false,
     optionalComponents: [],
     projectId,
+    snapshotId: 'snapshot-latest-terminal-rebuild-failed-with-serving-warning',
+  })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
     snapshotId: 'snapshot-latest-terminal-rebuild-failed-with-serving-warning',
   })
   await insertReviewRebuildRequest({
@@ -895,6 +907,12 @@ test('reviews warnings preserve failed candidate snapshots as historical mainten
     projectId,
     snapshotId: 'snapshot-active-failed-candidate-with-serving-warning',
   })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
+    snapshotId: 'snapshot-active-failed-candidate-with-serving-warning',
+  })
   await insertActiveReviewServingManifest({
     includeSearchState: false,
     optionalComponents: [],
@@ -929,6 +947,12 @@ test('reviews warnings ignore failed requestless bootstrap bookkeeping behind se
     includeSearchState: false,
     optionalComponents: [],
     projectId,
+    snapshotId: 'snapshot-requestless-bootstrap-terminal-with-serving-warning',
+  })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
     snapshotId: 'snapshot-requestless-bootstrap-terminal-with-serving-warning',
   })
   await insertReviewRebuildRequest({
@@ -1072,6 +1096,12 @@ test('reviews warnings report completed health for last-known-good serving with 
     snapshotId: 'snapshot-retired-completed-warning',
     status: 'retired',
   })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
+    snapshotId: 'snapshot-retired-completed-warning',
+  })
 
   const {body, response} = await postWarningsRequest(projectId)
 
@@ -1146,6 +1176,12 @@ test('reviews warnings report active search snapshot as indexing while search re
     includeSearchState: true,
     optionalComponents: ['search'],
     projectId,
+    snapshotId: 'snapshot-search-pending-rebuild-warning',
+  })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
     snapshotId: 'snapshot-search-pending-rebuild-warning',
   })
   await insertReviewRebuildChunk({
@@ -1953,6 +1989,12 @@ test('reviews warnings keep readable serving failed when a quarantine barrier bl
     projectId,
     snapshotId: 'snapshot-v4-readable-outbox-barrier-live-work-warning',
   })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
+    snapshotId: 'snapshot-v4-readable-outbox-barrier-live-work-warning',
+  })
   await insertReviewSourceChangeOutbox(projectId, 'quarantined')
   await runDatabase(`
     INSERT INTO app.review_serving_dirty_work (
@@ -2212,6 +2254,38 @@ test('reviews warnings distinguishes row-ready coverage from count filter detail
 
   expect(secondResponse.status).toBe(200)
   expect(await getReviewRebuildRequestCount(projectId, 'filterReadinessEnrichment')).toBe(1)
+})
+
+test('reviews warnings seed missing-snapshot repair instead of filter enrichment when the active snapshot serves zero rows', async () => {
+  const projectId = 'project-active-snapshot-zero-rows-warning'
+  const snapshotId = 'snapshot-active-zero-rows-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({
+    components: ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus', 'queue'],
+    includeSearchState: false,
+    optionalComponents: ['search'],
+    projectId,
+    snapshotId,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.coverage).toMatchObject({rowReadyArticleCount: 0, totalArticleCount: 1})
+  expect(body.data.indexing.serving).toMatchObject({readable: false, usable: true})
+  expect(await getReviewRebuildRequestCount(projectId, 'filterReadinessEnrichment')).toBe(0)
+  expect(await getReviewRebuildRequestCount(projectId)).toBe(1)
+  expect(await getReviewRebuildRequestComponents(projectId, 'missingReviewServingSnapshot')).toEqual([
+    'projectScope',
+    'selectedImport',
+    'display',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+  ])
 })
 
 test('reviews warnings request detail enrichment when filter-ready serving lacks payload detail', async () => {
@@ -2975,6 +3049,12 @@ test('reviews warnings do not mutate stale queued V4 repairs even when serving r
     projectId,
     snapshotId: 'snapshot-readable-serving-stale-queued-foreground-warning',
   })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
+    snapshotId: 'snapshot-readable-serving-stale-queued-foreground-warning',
+  })
   await insertReviewRebuildRequest({
     createdAt: oldTimestamp,
     priority: 1_000,
@@ -3072,6 +3152,12 @@ test('reviews warnings keep readable serving ready when terminal quarantined V4 
     includeSearchState: false,
     optionalComponents: [],
     projectId,
+    snapshotId: 'snapshot-readable-serving-active-quarantined-v4-warning',
+  })
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
     snapshotId: 'snapshot-readable-serving-active-quarantined-v4-warning',
   })
   await insertReviewRebuildRequest({

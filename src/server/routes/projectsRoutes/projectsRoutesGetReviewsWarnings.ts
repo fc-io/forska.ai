@@ -618,7 +618,8 @@ const getReviewsWarningsPayload = async (input: {
   const hasReviewServingRows =
     warningSnapshot.status === 'accepted'
     && isUsableReviewServingWarningSnapshot(warningSnapshot.diagnostics.manifest.status)
-  const hasReadableReviewServingRows = hasReviewServingRows
+  const hasEmptyReviewServingRows = hasReviewServingRows && totalArticleCount > 0 && coverage.rowReadyArticleCount === 0
+  const hasReadableReviewServingRows = hasReviewServingRows && !hasEmptyReviewServingRows
   const pendingCandidateSnapshotActivationCount = hasReadableReviewServingRows
     ? 0
     : getNonNegativeDifference(
@@ -628,9 +629,10 @@ const getReviewsWarningsPayload = async (input: {
   const shouldPrioritizeMissingSnapshotRepair =
     !hasReadableReviewServingRows && enabledPromptCount > 0 && hasAnyArticlesInScope
   const hasUnreadableActiveWarningSnapshot =
-    warningSnapshot.status === 'rejected'
-    && warningSnapshot.reason === 'missingRequiredComponentState'
-    && warningSnapshot.diagnostics.manifest.status === 'active'
+    hasEmptyReviewServingRows
+    || (warningSnapshot.status === 'rejected'
+      && warningSnapshot.reason === 'missingRequiredComponentState'
+      && warningSnapshot.diagnostics.manifest.status === 'active')
   const expiredRebuildChunkLeaseCount = Math.min(
     servingDiagnostics.rebuildChunks.runningCount,
     servingDiagnostics.rebuildChunks.expiredLeaseCount,

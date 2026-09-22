@@ -1,5 +1,7 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import {type ReviewServingProjectionIdentityManifest} from './reviewServingManifestRepository.ts'
 import {getReviewServingProjectionComponentIdentityKey} from './reviewServingProjectorDomain.ts'
 import {
@@ -817,6 +819,108 @@ test('snapshot validation blocks required queue candidates with unanswered artic
   expect(result.ok ? null : result.error).toBe(
     'required component queue is missing 18784 unassessed article-rank rows for unanswered list-mode articles',
   )
+})
+
+const displayMaterializationSchemaSql = `
+  CREATE SCHEMA app;
+  CREATE SCHEMA mart;
+  CREATE TABLE app."article" (id VARCHAR PRIMARY KEY);
+  CREATE TABLE mart.project_scope_article (
+    project_id VARCHAR NOT NULL,
+    article_id VARCHAR NOT NULL,
+    in_curated_scope BOOLEAN NOT NULL,
+    in_route_scope BOOLEAN NOT NULL
+  );
+  CREATE TABLE mart.review_article_serving_base_v4 (
+    project_id VARCHAR NOT NULL,
+    review_config_hash VARCHAR,
+    snapshot_id VARCHAR NOT NULL,
+    article_id VARCHAR NOT NULL
+  );
+`
+
+const validateDisplayCandidateAgainstDuckdb = async (seedSql: string) => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await duckdbInstance.connect()
+  const {database} = createPromotionDatabase()
+  const originalQueryJson = database.queryJson
+
+  database.queryJson = async <T>(statement: string) => {
+    return statement.includes('hasDisplayRows')
+      ? ((await connection.runAndReadAll(statement)).getRowObjectsJson() as T[])
+      : originalQueryJson<T>(statement)
+  }
+
+  try {
+    await connection.run(`${displayMaterializationSchemaSql}${seedSql}`)
+
+    return await validateReviewServingCandidateSnapshotManifest(
+      {
+        componentState: {
+          optional: [],
+          required: [
+            {
+              baseGeneration: '1',
+              component: 'display',
+              patchWatermark: '4',
+              projectionIdentity: 'display:identity-1',
+              requirement: 'required',
+            },
+          ],
+        },
+        composedIdentity: {route: 'review.rows', version: 1},
+        lastError: null,
+        lastKnownGoodSnapshotId: null,
+        optionalComponents: [],
+        projectId: 'project-1',
+        requiredComponents: ['display'],
+        reviewConfigHash: 'review-config-1',
+        selectedImportSnapshotId: 'selected-import-1',
+        snapshotId: 'snapshot-1',
+        sourceWatermarks: {reviewChange: 10},
+        status: 'candidate',
+        validationResult: null,
+      },
+      database,
+    )
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+}
+
+const scopedArticleSeedSql = `
+  INSERT INTO app."article" VALUES ('article-1');
+  INSERT INTO mart.project_scope_article VALUES ('project-1', 'article-1', TRUE, FALSE);
+`
+
+test('snapshot validation in DuckDB blocks required display candidates with no serving rows for in-scope articles', async () => {
+  const withoutRows = await validateDisplayCandidateAgainstDuckdb(scopedArticleSeedSql)
+  const withOtherSnapshotRow = await validateDisplayCandidateAgainstDuckdb(`
+    ${scopedArticleSeedSql}
+    INSERT INTO mart.review_article_serving_base_v4 VALUES ('project-1', 'review-config-1', 'snapshot-0', 'article-1');
+  `)
+
+  expect(withoutRows.ok ? null : withoutRows.error).toBe(
+    'required component display has no serving rows for in-scope articles',
+  )
+  expect(withOtherSnapshotRow.ok ? null : withOtherSnapshotRow.error).toBe(
+    'required component display has no serving rows for in-scope articles',
+  )
+})
+
+test('snapshot validation in DuckDB accepts display candidates with one serving row or no in-scope articles', async () => {
+  const withOneRow = await validateDisplayCandidateAgainstDuckdb(`
+    ${scopedArticleSeedSql}
+    INSERT INTO mart.review_article_serving_base_v4 VALUES ('project-1', 'review-config-1', 'snapshot-1', 'article-1');
+  `)
+  const withOutOfScopeArticle = await validateDisplayCandidateAgainstDuckdb(`
+    INSERT INTO app."article" VALUES ('article-1');
+    INSERT INTO mart.project_scope_article VALUES ('project-1', 'article-1', FALSE, FALSE);
+  `)
+
+  expect(withOneRow.ok).toBe(true)
+  expect(withOutOfScopeArticle.ok).toBe(true)
 })
 
 test('optional component availability distinguishes route states', () => {
