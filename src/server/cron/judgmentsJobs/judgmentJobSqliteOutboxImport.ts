@@ -20,11 +20,12 @@ import {
 import {recordJudgmentJobStorageTransfer} from './judgmentJobStorageTransferRuntime.ts'
 import {commitJudgmentSqliteOutboxImportDirtyWork} from './judgmentsJobsMarkDirtyWork.ts'
 
-const judgmentOutboxBatchMaxRows = 100
-const judgmentOutboxBatchMaxBytes = 4 * 1024 * 1024
+const judgmentOutboxBatchMaxRows = 500
+const judgmentOutboxBatchMaxBytes = 8 * 1024 * 1024
 const judgmentOutboxImportLeaseMs = 30_000
 const judgmentOutboxImportLogger = createRateLimitedLogger({windowMs: 30_000})
 const maxImportCandidateJobsPerScan = 100
+const judgmentOutboxImportLookupChunkSize = 500
 const judgmentOutboxImportLookupWorkloadContext: DuckdbWorkloadContext = {
   fallbackIntent: 'reject',
   routeOrJobKey: 'judgmentJob.sqliteOutboxImport.lookup',
@@ -110,6 +111,33 @@ const getUniqueValues = (values: string[]) => {
   return Array.from(new Set(values))
 }
 
+const getIdChunks = (ids: string[]): string[][] => {
+  return ids.length <= judgmentOutboxImportLookupChunkSize
+    ? [ids]
+    : [
+        ids.slice(0, judgmentOutboxImportLookupChunkSize),
+        ...getIdChunks(ids.slice(judgmentOutboxImportLookupChunkSize)),
+      ]
+}
+
+const getExistingIdsInChunk = async (
+  tableName: 'app.article' | 'app.model' | 'app.project' | 'app.prompt',
+  ids: string[],
+): Promise<string[]> => {
+  const rows = await queryOutboxImportBackground<{id: string}>(
+    `
+    SELECT id
+    FROM ${tableName}
+    WHERE id IN (${ids.map(getSqlLiteral).join(', ')})
+  `,
+    {...judgmentOutboxImportLookupWorkloadContext, maxResultRows: ids.length},
+  )
+
+  return rows.map((row) => {
+    return row.id
+  })
+}
+
 const getExistingIds = async (
   tableName: 'app.article' | 'app.model' | 'app.project' | 'app.prompt',
   ids: string[],
@@ -120,27 +148,11 @@ const getExistingIds = async (
     return new Set()
   }
 
-  const rows = await Promise.all(
-    uniqueIds.map(async (id) => {
-      const [row] = await queryOutboxImportBackground<{id: string}>(
-        `
-        SELECT id
-        FROM ${tableName}
-        WHERE id = ${getSqlLiteral(id)}
-        LIMIT 1
-      `,
-        {...judgmentOutboxImportLookupWorkloadContext, maxResultRows: 1},
-      )
+  const existingIds = await getIdChunks(uniqueIds).reduce<Promise<string[]>>(async (previous, chunk) => {
+    return [...(await previous), ...(await getExistingIdsInChunk(tableName, chunk))]
+  }, Promise.resolve([]))
 
-      return row?.id ?? null
-    }),
-  )
-
-  return new Set(
-    rows.filter((id): id is string => {
-      return id !== null
-    }),
-  )
+  return new Set(existingIds)
 }
 
 const getExistingForeignKeys = async (entries: JudgmentJobSqliteOutboxEntry[]): Promise<JudgmentOutboxForeignKeys> => {
