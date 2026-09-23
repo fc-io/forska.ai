@@ -14,6 +14,10 @@ import {
   type ReviewServingProjectionComponentIdentity,
   type ReviewServingSourcePartitionWatermarks,
 } from './reviewServingProjectorDomain.ts'
+import {
+  getReviewServingRebuildChunkBuiltPredicateSql,
+  getReviewServingRebuildChunkUnstartedSupersededPredicateSql,
+} from './reviewServingSupersededRebuildChunk.ts'
 
 export type ReviewServingManifestRepositoryDatabase = {
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
@@ -351,7 +355,10 @@ const getAvailableSnapshotManifest = async (
         request.updated_at AS requestUpdatedAt,
         MAX(chunk.updated_at) AS maxChunkUpdatedAt,
         CAST(COUNT(*) AS INTEGER) AS totalChunkCount,
-        CAST(COUNT(*) FILTER (WHERE chunk.status = 'completed') AS INTEGER) AS completedChunkCount
+        CAST(COUNT(*) FILTER (WHERE ${getReviewServingRebuildChunkBuiltPredicateSql('chunk')}) AS INTEGER) AS completedChunkCount,
+        CAST(
+          COUNT(*) FILTER (WHERE NOT ${getReviewServingRebuildChunkUnstartedSupersededPredicateSql('chunk')}) AS INTEGER
+        ) AS effectiveChunkCount
       FROM requested_component requested
       INNER JOIN app.review_rebuild_chunk_manifest chunk
         ON chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(manifest.projectId)}
@@ -383,6 +390,7 @@ const getAvailableSnapshotManifest = async (
         ROW_NUMBER() OVER (
           PARTITION BY component, projectionIdentity, outputBaseGeneration
           ORDER BY
+            CASE WHEN effectiveChunkCount > 0 THEN 0 ELSE 1 END ASC,
             requestCreatedAt DESC NULLS LAST,
             requestUpdatedAt DESC NULLS LAST,
             maxChunkUpdatedAt DESC NULLS LAST,

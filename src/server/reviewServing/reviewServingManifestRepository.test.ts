@@ -1116,6 +1116,137 @@ test('available manifest state hides candidate rebuilt components without comple
   ).toEqual(['display'])
 })
 
+test('available manifest state in DuckDB ignores never-started superseded chunk groups and counts superseded chunks as unbuilt', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await duckdbInstance.connect()
+  const database: ReviewServingManifestRepositoryDatabase = {
+    queryJson: async <T>(statement: string) => {
+      return (await connection.runAndReadAll(statement)).getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+  const getComponentState = (component: string, requirement: 'optional' | 'required') => {
+    return {
+      baseGeneration: '0',
+      component,
+      patchWatermark: '0',
+      projectionIdentity: `${component}:identity`,
+      requirement,
+    }
+  }
+  const requiredComponents = ['display', 'llmStatus', 'humanStatus', 'queue']
+  const componentState = {
+    optional: [getComponentState('payload', 'optional')],
+    required: requiredComponents.map((component) => {
+      return getComponentState(component, 'required')
+    }),
+  }
+  const superseded = "'superseded by retired review-serving snapshot'"
+
+  try {
+    await connection.run(`
+      CREATE SCHEMA app;
+      CREATE TABLE app.review_serving_snapshot_manifest (
+        project_id VARCHAR NOT NULL,
+        snapshot_id VARCHAR NOT NULL,
+        snapshot_status VARCHAR NOT NULL,
+        review_config_hash VARCHAR,
+        composed_identity_json JSON,
+        component_state_json JSON,
+        required_components_json JSON,
+        optional_components_json JSON,
+        source_watermarks_json JSON,
+        validation_result_json JSON,
+        selected_import_snapshot_id VARCHAR,
+        last_known_good_snapshot_id VARCHAR,
+        last_error VARCHAR
+      );
+      CREATE TABLE app.review_projection_identity_manifest (
+        project_id VARCHAR,
+        projection_component VARCHAR NOT NULL,
+        projection_identity VARCHAR NOT NULL,
+        base_generation BIGINT NOT NULL,
+        status VARCHAR NOT NULL
+      );
+      CREATE TABLE app.review_rebuild_chunk_manifest (
+        chunk_id VARCHAR NOT NULL,
+        project_id VARCHAR,
+        snapshot_id VARCHAR,
+        projection_component VARCHAR NOT NULL,
+        projection_identity VARCHAR NOT NULL,
+        output_base_generation BIGINT NOT NULL,
+        request_id VARCHAR,
+        status VARCHAR NOT NULL,
+        last_error VARCHAR,
+        started_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL
+      );
+      CREATE TABLE app.review_rebuild_request (
+        request_id VARCHAR NOT NULL,
+        status VARCHAR NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+      );
+      INSERT INTO app.review_serving_snapshot_manifest VALUES (
+        'project-1',
+        'snapshot-active',
+        'active',
+        'review-config-1',
+        '{}',
+        '${JSON.stringify(componentState)}',
+        '${JSON.stringify(requiredComponents)}',
+        '["payload"]',
+        '{}',
+        NULL,
+        'selected-import-1',
+        NULL,
+        NULL
+      );
+      INSERT INTO app.review_projection_identity_manifest
+      SELECT 'project-1', component, component || ':identity', 0, 'active'
+      FROM (VALUES ('display'), ('llmStatus'), ('humanStatus'), ('queue'), ('payload')) AS component_row(component);
+      INSERT INTO app.review_rebuild_request VALUES
+        ('request-built', 'completed', TIMESTAMPTZ '2026-09-20T10:00:00Z', TIMESTAMPTZ '2026-09-20T10:30:00Z'),
+        ('request-superseded', 'admitted', TIMESTAMPTZ '2026-09-20T11:00:00Z', TIMESTAMPTZ '2026-09-20T11:00:00Z'),
+        ('request-partly-run', 'admitted', TIMESTAMPTZ '2026-09-20T12:00:00Z', TIMESTAMPTZ '2026-09-20T12:00:00Z'),
+        ('request-in-progress', 'running', TIMESTAMPTZ '2026-09-20T13:00:00Z', TIMESTAMPTZ '2026-09-20T13:00:00Z');
+      INSERT INTO app.review_rebuild_chunk_manifest VALUES
+        ('display-built-1', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z'),
+        ('display-built-2', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:02:00Z', TIMESTAMPTZ '2026-09-20T10:06:00Z'),
+        ('display-superseded-1', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z'),
+        ('display-superseded-2', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z'),
+        ('llm-superseded-1', 'project-1', 'snapshot-active', 'llmStatus', 'llmStatus:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z'),
+        ('llm-superseded-2', 'project-1', 'snapshot-active', 'llmStatus', 'llmStatus:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z'),
+        ('human-built-1', 'project-1', 'snapshot-active', 'humanStatus', 'humanStatus:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z'),
+        ('human-partly-run-built', 'project-1', 'snapshot-active', 'humanStatus', 'humanStatus:identity', 0, 'request-partly-run', 'completed', NULL, TIMESTAMPTZ '2026-09-20T12:01:00Z', TIMESTAMPTZ '2026-09-20T12:05:00Z'),
+        ('human-partly-run-superseded', 'project-1', 'snapshot-active', 'humanStatus', 'humanStatus:identity', 0, 'request-partly-run', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T12:05:00Z'),
+        ('queue-built-1', 'project-1', 'snapshot-active', 'queue', 'queue:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z'),
+        ('payload-built-1', 'project-1', 'snapshot-active', 'payload', 'payload:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z'),
+        ('payload-in-progress-1', 'project-1', 'snapshot-active', 'payload', 'payload:identity', 0, 'request-in-progress', 'pending', NULL, NULL, TIMESTAMPTZ '2026-09-20T13:00:00Z');
+    `)
+
+    const available = await getReviewServingSnapshotManifest(
+      {componentStateMode: 'available', projectId: 'project-1', snapshotId: 'snapshot-active'},
+      database,
+    )
+
+    expect(
+      available?.componentState.required.map((state) => {
+        return state.component
+      }),
+    ).toEqual(['display', 'queue'])
+    expect(available?.componentState.optional).toEqual([])
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
 test('promotion reports invalid candidates without mutating snapshot manifests', async () => {
   const activeSnapshot: FakeSnapshotRow = {
     ...baseSnapshotInput,

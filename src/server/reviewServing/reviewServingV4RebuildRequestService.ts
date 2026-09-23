@@ -11,11 +11,10 @@ import {
   getStableReviewServingJson,
   type ReviewServingIdentityValue,
 } from './reviewProjectionIdentity.ts'
-import {
-  getReviewServingRebuildChunkBuiltPredicateSql,
-  type ReviewServingChunkManifestRepositoryDatabase,
-  type ReviewServingChunkManifestRepositoryTransaction,
-  type ReviewServingRebuildChunkManifestInput,
+import type {
+  ReviewServingChunkManifestRepositoryDatabase,
+  ReviewServingChunkManifestRepositoryTransaction,
+  ReviewServingRebuildChunkManifestInput,
 } from './reviewServingChunkManifestRepository.ts'
 import {
   countReadyReviewServingComponents,
@@ -52,6 +51,7 @@ import {
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 import {getReviewServingSelectedImportSnapshotId} from './reviewServingSelectedImportProjector.ts'
 import {composeReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
+import {getReviewServingRebuildChunkBuiltPredicateSql} from './reviewServingSupersededRebuildChunk.ts'
 
 export const defaultReviewServingV4RebuildComponents = [
   ...countReadyReviewServingComponents,

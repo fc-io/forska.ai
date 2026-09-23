@@ -11,6 +11,7 @@ import {
   type ReviewServingProjectionComponent,
 } from './reviewServingContracts.ts'
 import {promoteReviewServingProjectorSnapshot} from './reviewServingProjectorWriter.ts'
+import {supersededRetiredSnapshotRebuildChunkLastError} from './reviewServingSupersededRebuildChunk.ts'
 
 export type ReviewServingChunkManifestRepositoryTransaction = {
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
@@ -453,17 +454,6 @@ const getWriteOutputValidationResult = (value: unknown) => {
 const releasableInactiveRequestRebuildChunkStatusSql =
   "('pending', 'completed', 'running', 'failed', 'blocked_over_budget', 'quarantined')"
 const supersededSnapshotRebuildChunkStatusSql = "('pending', 'running')"
-const supersededRetiredSnapshotRebuildChunkLastError = 'superseded by retired review-serving snapshot'
-
-export const getReviewServingRebuildChunkBuiltPredicateSql = (tableAlias?: string) => {
-  const source = tableAlias ? `${tableAlias}.` : ''
-
-  return `(
-    ${source}status = 'completed'
-    AND NOT starts_with(COALESCE(${source}last_error, ''), ${getSqlLiteral(supersededRetiredSnapshotRebuildChunkLastError)})
-  )`
-}
-
 const preservedRebuildChunkStatusSql = "('completed', 'running', 'failed')"
 const activeRebuildChunkPreservePredicate = `
   app.review_rebuild_chunk_manifest.status IN ${preservedRebuildChunkStatusSql}

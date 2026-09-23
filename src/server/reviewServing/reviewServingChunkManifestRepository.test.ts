@@ -6,7 +6,6 @@ import {
   claimReviewServingRebuildChunk,
   claimReviewServingRebuildChunks,
   getNextClaimableReviewServingRebuildChunk,
-  getReviewServingRebuildChunkBuiltPredicateSql,
   getReviewServingRebuildChunkId,
   getReviewServingRebuildChunkWorkloadClass,
   getReviewServingRebuildTimingDiagnostics,
@@ -22,6 +21,7 @@ import {
   writeReviewServingRebuildChunkOutput,
 } from './reviewServingChunkManifestRepository.ts'
 import {defaultReadableReviewServingComponents} from './reviewServingContracts.ts'
+import {getReviewServingRebuildChunkBuiltPredicateSql} from './reviewServingSupersededRebuildChunk.ts'
 
 type FakeChunkRow = ReviewServingRebuildChunkManifest
 
