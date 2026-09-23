@@ -60,6 +60,7 @@ const getJudgmentJobQueueWorkloadContext = (
     projectId,
     routeOrJobKey,
     timeoutMs,
+    timeoutScope: 'execution',
     workloadClass: 'judgmentJobServingQueue',
   }
 }

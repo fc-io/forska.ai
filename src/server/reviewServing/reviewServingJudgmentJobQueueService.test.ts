@@ -244,6 +244,37 @@ test('judgment job count scope without import routes uses curated project articl
   expect(countStatement ?? '').not.toContain('FROM app.article_import_route article_route_scope')
 })
 
+test('judgment job count budgets only query execution so queue waits do not fail the scope lookup', async () => {
+  resetDatabases()
+
+  await service.getJudgmentJobUnassessedCountFromServing({
+    importRouteIds: [],
+    projectDateFrom: null,
+    projectDateTo: null,
+    projectId: 'project-1',
+  })
+  const scopeWorkloadContext =
+    apiDatabase.workloadContexts[
+      apiDatabase.statements.findIndex((statement) => {
+        return statement.includes('FROM app.review_serving_snapshot_manifest')
+      })
+    ]
+
+  expect(scopeWorkloadContext).toMatchObject({
+    routeOrJobKey: 'judgmentJobs.unassessedCount',
+    timeoutMs: 5000,
+    timeoutScope: 'execution',
+  })
+  expect(apiDatabase.workloadContexts.length).toBeGreaterThan(1)
+  expect(
+    new Set(
+      apiDatabase.workloadContexts.map((context) => {
+        return context?.timeoutScope
+      }),
+    ),
+  ).toEqual(new Set(['execution']))
+})
+
 test('judgment job refill uses dispatch-ready candidate snapshot before full snapshot promotion', async () => {
   resetDatabases()
   judgeWorkerDatabase.snapshotRows = [getScopeRow({snapshotId: 'candidate-snapshot-1', snapshotStatus: 'candidate'})]
@@ -351,7 +382,7 @@ test('judgment job refill falls back to current project tables when no serving s
   expect(refillStatement ?? '').toContain('FROM app.judgment judgment')
   expect(refillStatement ?? '').not.toContain('queue_union AS')
   expect(refillStatement ?? '').not.toContain('FROM mart.project_scope_article')
-  expect(fallbackWorkloadContext).toMatchObject({maxResultRows: 11, timeoutMs: 15000})
+  expect(fallbackWorkloadContext).toMatchObject({maxResultRows: 11, timeoutMs: 15000, timeoutScope: 'execution'})
 })
 
 test('judgment job refill scope rechecks current project dates routes and curated articles', async () => {
