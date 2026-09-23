@@ -681,6 +681,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     jobEvidence: Array<{
       artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
       claims: Array<{claimId: string; queueRecordId: string; serverId: string; status: string}>
+      completedClaims: Array<{claimId: string; queueRecordId: string}>
       health: {
         claimedOutboxCount: number
         hasOutboxRows: boolean
@@ -723,6 +724,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
         jobEvidence: Array<{
           artifacts: {lease: boolean; shm: boolean; sqlite: boolean; wal: boolean}
           claims: Array<{claimId: string; queueRecordId: string; serverId: string; status: string}>
+          completedClaims: Array<{claimId: string; queueRecordId: string}>
           health: {
             hasOutboxRows: boolean
             hasPendingCompletionAck: boolean
@@ -772,6 +774,11 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
         const claimIds = observedClaims.get(claim.queueRecordId) ?? new Set<string>()
         claimIds.add(claim.claimId)
         observedClaims.set(claim.queueRecordId, claimIds)
+      }
+      for (const completedClaim of job.completedClaims) {
+        const claimIds = observedClaims.get(completedClaim.queueRecordId) ?? new Set<string>()
+        claimIds.add(completedClaim.claimId)
+        observedClaims.set(completedClaim.queueRecordId, claimIds)
       }
     }
     const providerEvidence = provider.getEvidence()

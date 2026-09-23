@@ -480,6 +480,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
           const scanState = await getJudgmentJobSqliteService().getScanState(jobId)
           const health = await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
           const claims = await getJudgmentJobSqliteService().getTopologyClaimRows(jobId)
+          const completedClaims = await getJudgmentJobSqliteService().getTopologyCompletedClaimRows(jobId)
 
           return {
             artifacts: {
@@ -489,6 +490,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
               wal: existsSync(`${sqlitePath}-wal`),
             },
             claims,
+            completedClaims,
             health,
             jobId,
             scanState,
