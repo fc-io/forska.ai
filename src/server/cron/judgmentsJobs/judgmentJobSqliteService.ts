@@ -1327,6 +1327,8 @@ const ensureCompletionAckSchema = (database: Database) => {
       WHERE request_attempts_json IS NULL
          OR TRIM(request_attempts_json) IN ('', '[]', 'null')
          OR TRIM(request_attempts_json) NOT LIKE '[%';
+    CREATE INDEX IF NOT EXISTS idx_completion_ack_queue_prompt_id
+      ON completion_ack(queue_prompt_id);
   `)
 }
 
