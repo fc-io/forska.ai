@@ -179,7 +179,10 @@ const getFakeEffectiveWorkloadClass = (row: FakeChunkRow) => {
 }
 
 const getFakeClaimLane = (row: FakeChunkRow) => {
-  return getFakeEffectiveWorkloadClass(row) === 'critical' ? 0 : 1
+  return getFakeEffectiveWorkloadClass(row) === 'critical'
+    && (row.requestId === null || getFakeRequestPriority(row) >= 500)
+    ? 0
+    : 1
 }
 
 const getFakeClaimPriority = (row: FakeChunkRow) => {
@@ -211,7 +214,7 @@ const isFakeChunkClaimableStatus = (row: FakeChunkRow) => {
 }
 
 const hasFakeForegroundClaimPressure = (row: FakeChunkRow, rows: Iterable<FakeChunkRow>) => {
-  if (getFakeClaimLane(row) === 0) {
+  if (getFakeEffectiveWorkloadClass(row) === 'critical') {
     return false
   }
 
@@ -219,7 +222,7 @@ const hasFakeForegroundClaimPressure = (row: FakeChunkRow, rows: Iterable<FakeCh
     return (
       candidate.projectId === row.projectId
       && candidate.admissionState === 'admitted'
-      && getFakeClaimLane(candidate) === 0
+      && getFakeEffectiveWorkloadClass(candidate) === 'critical'
       && getFakeRequestPriority(candidate) >= getFakeRequestPriority(row)
       && (candidate.status === 'pending' || candidate.status === 'failed' || candidate.status === 'running')
     )
@@ -1231,18 +1234,18 @@ test('next claimable chunk discovery prioritizes unrelated critical queue before
   })
   const pendingQueue = {
     ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-queue', projectionComponent: 'queue'}, []),
-    requestId: 'rebuild:other',
+    requestId: 'rebuild:foreground-other',
   }
   const pendingSearch = {
     ...getChunkRowFromIdentity({...baseChunkIdentity, inputDigest: 'digest-search', projectionComponent: 'search'}, []),
-    requestId: 'rebuild:other',
+    requestId: 'rebuild:foreground-other',
   }
   const pendingPayload = {
     ...getChunkRowFromIdentity(
       {...baseChunkIdentity, inputDigest: 'digest-payload', projectionComponent: 'payload'},
       [],
     ),
-    requestId: 'rebuild:other',
+    requestId: 'rebuild:foreground-other',
   }
   const posting = {
     ...getChunkRowFromIdentity(
@@ -1401,7 +1404,7 @@ test('next claimable chunk discovery applies lane priority before request priori
       },
       [],
     ),
-    requestId: 'rebuild:normal-activation',
+    requestId: 'rebuild:foreground-activation',
     status: 'completed' as const,
   }
   const displaySelectedImport = {
@@ -1414,7 +1417,7 @@ test('next claimable chunk discovery applies lane priority before request priori
       },
       [],
     ),
-    requestId: 'rebuild:normal-activation',
+    requestId: 'rebuild:foreground-activation',
     status: 'completed' as const,
   }
   const display = {
@@ -1427,7 +1430,7 @@ test('next claimable chunk discovery applies lane priority before request priori
       },
       [],
     ),
-    requestId: 'rebuild:normal-activation',
+    requestId: 'rebuild:foreground-activation',
     updatedAt: '2026-06-16T14:10:00.000Z',
   }
   const searchProjectScope = {
@@ -1440,7 +1443,7 @@ test('next claimable chunk discovery applies lane priority before request priori
       },
       [],
     ),
-    requestId: 'rebuild:foreground-search',
+    requestId: 'rebuild:stalled-foreground-search',
     status: 'completed' as const,
   }
   const searchSelectedImport = {
@@ -1453,7 +1456,7 @@ test('next claimable chunk discovery applies lane priority before request priori
       },
       [],
     ),
-    requestId: 'rebuild:foreground-search',
+    requestId: 'rebuild:stalled-foreground-search',
     status: 'completed' as const,
   }
   const search = {
@@ -1466,7 +1469,7 @@ test('next claimable chunk discovery applies lane priority before request priori
       },
       [],
     ),
-    requestId: 'rebuild:foreground-search',
+    requestId: 'rebuild:stalled-foreground-search',
     updatedAt: '2026-06-16T14:00:00.000Z',
   }
   const {database, statements} = createFakeChunkManifestDatabase([

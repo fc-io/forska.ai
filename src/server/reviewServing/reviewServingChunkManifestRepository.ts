@@ -504,6 +504,7 @@ const rebuildChunkClaimPriorityOrder = [
   'search',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 const stalledForegroundRebuildRequestPriority = 10_000
+const minimumCriticalLaneRebuildRequestPriority = 500
 
 export const getReviewServingRebuildChunkWorkloadClass = (
   component: ReviewServingProjectionComponent,
@@ -537,6 +538,10 @@ const getRebuildChunkEffectiveWorkloadClassSql = (tableAlias: string) => {
 const getRebuildChunkClaimLaneSql = (tableAlias: string) => {
   return `CASE
     WHEN ${getRebuildChunkEffectiveWorkloadClassSql(tableAlias)} = ${getSqlLiteral(rebuildChunkWorkloadClasses.critical)}
+      AND COALESCE(
+        ${getRebuildChunkClaimRequestPrioritySql(tableAlias)},
+        ${getSqlLiteral(minimumCriticalLaneRebuildRequestPriority)}
+      ) >= ${getSqlLiteral(minimumCriticalLaneRebuildRequestPriority)}
     THEN 0
     ELSE 1
   END`
