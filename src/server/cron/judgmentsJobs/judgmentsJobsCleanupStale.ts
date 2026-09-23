@@ -555,7 +555,11 @@ const getProjectedCloseoutRowCount = async (budget?: CleanupStaleBudget): Promis
   const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{count: number | string | bigint}>(
     `
     SELECT COUNT(*) AS count
-    FROM app.request_attempt_closeout
+    FROM (
+      SELECT 1
+      FROM app.request_attempt_closeout
+      LIMIT ${cleanupStaleProjectedCloseoutProbeLargeTableRows + 1}
+    ) bounded_closeout
   `,
     getCleanupStaleDuckdbWorkloadContext('projectedCloseoutRowCount', 1, budget),
   )
