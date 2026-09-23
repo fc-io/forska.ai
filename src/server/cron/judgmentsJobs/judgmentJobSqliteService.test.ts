@@ -144,6 +144,43 @@ afterAll(async () => {
   tempRuntimeRoot.cleanup()
 })
 
+test('queue prompt lifecycle rows look up completion acks by queue prompt through an index', async () => {
+  const {jobId, service} = await createSqliteJobFixture('lifecycle-ack-index')
+
+  await service.getQueuePromptLifecycleRows(jobId)
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId), {readonly: true})
+
+  try {
+    const indexes = sqliteDatabase.query("PRAGMA index_list('completion_ack')").all() as Array<{name: string}>
+    const plan = sqliteDatabase
+      .query(
+        `
+          EXPLAIN QUERY PLAN
+          SELECT ca.request_attempts_json
+          FROM completion_ack ca
+          WHERE ca.queue_prompt_id = ?
+            AND ca.request_attempts_json IS NOT NULL
+          LIMIT 1
+        `,
+      )
+      .all('queue-record-1') as Array<{detail: string}>
+
+    expect(
+      indexes.map((index) => {
+        return index.name
+      }),
+    ).toContain('idx_completion_ack_queue_prompt_id')
+    expect(
+      plan.map((step) => {
+        return step.detail
+      }),
+    ).toContain('SEARCH ca USING INDEX idx_completion_ack_queue_prompt_id (queue_prompt_id=?)')
+  } finally {
+    sqliteDatabase.close(false)
+  }
+})
+
 test('classifies only native busy file deletion as retryable', () => {
   if (!isRetryableJudgmentJobFileDeleteError) {
     throw new Error('SQLite file deletion classifier not initialized')
