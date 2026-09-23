@@ -13,7 +13,7 @@ import {readJudgeWorkerJournalLock} from '../src/server/utils/judgeWorkerJournal
 import {isLockOwnedByCurrentMachine} from '../src/server/utils/localMachineIdentity.ts'
 import {installRuntimeJsonlSink, writeRuntimeLogEvent} from '../src/server/utils/runtimeLogger.ts'
 import {resolveRuntimeProcessIdentity, type RuntimeProcessIdentity} from '../src/server/utils/runtimeProcessIdentity.ts'
-import {runtimeReadyPath} from '../src/server/utils/runtimeReadyContract.ts'
+import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 import {withAbortSignalTimeout} from '../src/utils/withAbortSignalTimeout.ts'
 import {
   getNextJudgeWatchdogState,
@@ -730,13 +730,17 @@ const ensureApiReady = () => {
 }
 
 const getJudgeRuntimeReadyUrl = () => {
-  return `http://127.0.0.1:${config.judgePort}/api/runtime/ready`
+  return `http://127.0.0.1:${config.judgePort}${runtimeReadyPath}`
 }
 
-const probeJudgeRuntimeReady = async (): Promise<{body: JudgeRuntimeReadyBody | null; responseOk: boolean}> => {
+const getJudgeRuntimeStateUrl = () => {
+  return `http://127.0.0.1:${config.judgePort}${runtimeStatePath}`
+}
+
+const probeJudgeRuntime = async (url: string): Promise<{body: JudgeRuntimeReadyBody | null; responseOk: boolean}> => {
   try {
     return await withAbortSignalTimeout(1_000, async (signal) => {
-      const response = await fetch(getJudgeRuntimeReadyUrl(), {signal})
+      const response = await fetch(url, {signal})
       const body = response.ok
         ? ((await response.json().catch(() => {
             return null
@@ -751,13 +755,13 @@ const probeJudgeRuntimeReady = async (): Promise<{body: JudgeRuntimeReadyBody | 
 }
 
 const isJudgeReady = async () => {
-  const probe = await probeJudgeRuntimeReady()
+  const probe = await probeJudgeRuntime(getJudgeRuntimeReadyUrl())
 
   return isJudgeWatchdogResponseHealthy(probe) && probe.body?.data?.ready === true
 }
 
 const isJudgeLocallyHealthy = async () => {
-  return isJudgeWatchdogResponseHealthy(await probeJudgeRuntimeReady())
+  return isJudgeWatchdogResponseHealthy(await probeJudgeRuntime(getJudgeRuntimeStateUrl()))
 }
 
 const waitForJudgeReady = async (deadlineMs = Date.now() + judgeStartupTimeoutMs): Promise<void> => {
