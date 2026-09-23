@@ -68,7 +68,7 @@ test('background import continues past an idle job to the next job with outbox w
             getHealthSnapshot: async (jobId) => ({
               claimedOutboxCount: 0,
               hasOutboxRows: jobId === 'job-b-ready',
-              oldestUnexportedAgeMs: jobId === 'job-b-ready' ? 1_000 : null,
+              oldestUnexportedAgeMs: jobId === 'job-b-ready' ? 5_000 : null,
             }),
             hasOwnedLease: () => false,
             reconcileProjectRefreshAcks: async () => {
@@ -103,6 +103,95 @@ test('background import continues past an idle job to the next job with outbox w
   expect(result.cycles).toEqual(['job-b-ready'])
   expect(result.reconcileCalls).toBe(1)
   expect(result.summary).toMatchObject({attemptedCount: 2, skippedCount: 1, succeededCount: 1})
+})
+
+test('background import waits until the oldest unexported outbox row is 5 s old before importing an active job', () => {
+  const run = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+        const moduleUrl = (path) => new URL(path, 'file://' + process.cwd() + '/').href
+        const appDatabaseServicePath = moduleUrl('./src/server/services/appDatabaseService.ts')
+        const jobPathsPath = moduleUrl('./src/server/cron/judgmentsJobs/judgmentJobPaths.ts')
+        const outboxImportPath = moduleUrl('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+        const sqliteServicePath = moduleUrl('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const cycles = []
+        let reconcileCalls = 0
+
+        void mock.module(appDatabaseServicePath, () => ({
+          getAppDatabaseService: () => ({
+            queryJson: async (statement) => {
+              if (statement.includes('FROM app.judgment_job')) {
+                return [
+                  {id: 'job-a-idle', storageState: 'active'},
+                  {id: 'job-b-ready', storageState: 'active'},
+                ]
+              }
+              return []
+            },
+            queryJsonBackground: async (statement) => {
+              if (statement.includes('FROM app.judgment_job')) {
+                return [
+                  {id: 'job-a-idle', storageState: 'active'},
+                  {id: 'job-b-ready', storageState: 'active'},
+                ]
+              }
+              return []
+            },
+            run: async () => {},
+            runBackground: async () => {},
+          }),
+        }))
+        void mock.module(jobPathsPath, () => ({
+          getJudgmentJobSqliteJobIds: () => ['job-a-idle', 'job-b-ready'],
+        }))
+        void mock.module(outboxImportPath, () => ({
+          runJudgmentJobSqliteOutboxImportCycle: async ({jobId}) => {
+            cycles.push(jobId)
+            return {status: 'imported'}
+          },
+        }))
+        void mock.module(sqliteServicePath, () => ({
+          getJudgmentJobSqliteService: () => ({
+            getHealthSnapshot: async (jobId) => ({
+              claimedOutboxCount: 0,
+              hasOutboxRows: jobId === 'job-b-ready',
+              oldestUnexportedAgeMs: jobId === 'job-b-ready' ? 4_999 : null,
+            }),
+            hasOwnedLease: () => false,
+            reconcileProjectRefreshAcks: async () => {
+              reconcileCalls += 1
+              return 0
+            },
+            releaseOwnedLease: async () => {},
+            syncOwnedLeases: async () => {},
+          }),
+        }))
+
+        const {runJudgmentJobSqliteBackgroundImport} = await import(
+          moduleUrl('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts') + '?batching=' + Date.now()
+        )
+        const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'maintenance-owner'})
+        console.log(JSON.stringify({cycles, reconcileCalls, summary}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (run.exitCode !== 0) {
+    throw new Error(run.stderr.toString() || run.stdout.toString())
+  }
+
+  const result = JSON.parse(getLastJsonLine(run.stdout.toString()) ?? '{}') as {
+    cycles: string[]
+    reconcileCalls: number
+    summary: {attemptedCount: number; skippedCount: number; succeededCount: number}
+  }
+
+  expect(result.cycles).toEqual([])
+  expect(result.summary).toMatchObject({attemptedCount: 2, skippedCount: 2, succeededCount: 0})
 })
 
 test('background import treats exported ack-only outbox rows as idle import work', () => {
@@ -158,7 +247,7 @@ test('background import treats exported ack-only outbox rows as idle import work
             getHealthSnapshot: async (jobId) => ({
               claimedOutboxCount: 0,
               hasOutboxRows: true,
-              oldestUnexportedAgeMs: jobId === 'job-b-unexported' ? 1_000 : null,
+              oldestUnexportedAgeMs: jobId === 'job-b-unexported' ? 5_000 : null,
             }),
             hasOwnedLease: () => false,
             reconcileProjectRefreshAcks: async () => {

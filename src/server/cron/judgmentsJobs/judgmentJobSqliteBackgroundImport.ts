@@ -16,6 +16,7 @@ const drainingRetentionPruneChunkSize = 1_000
 const maxDrainingRetentionPruneBatchesPerImportTick = 1
 const maxImportableJudgmentJobsPerScan = 100
 const maxTrackedJudgmentJobIdsPerLookup = 100
+const activeJobImportMinOldestUnexportedAgeMs = 5_000
 let trackedImportableJudgmentJobScanOffset = 0
 const judgmentJobSqliteBackgroundImportWorkloadContext = {
   fallbackIntent: 'reject' as const,
@@ -251,7 +252,8 @@ const hasActiveJobImportWork = async (jobId: string) => {
   return (
     healthSnapshot === null
     || healthSnapshot.claimedOutboxCount > 0
-    || typeof healthSnapshot.oldestUnexportedAgeMs === 'number'
+    || (typeof healthSnapshot.oldestUnexportedAgeMs === 'number'
+      && healthSnapshot.oldestUnexportedAgeMs >= activeJobImportMinOldestUnexportedAgeMs)
   )
 }
 
