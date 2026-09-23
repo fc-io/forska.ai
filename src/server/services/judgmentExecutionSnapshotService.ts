@@ -806,32 +806,62 @@ export const createTransientJudgmentExecutionSnapshotsForClaims = async (
   })
 }
 
-export const createJudgmentExecutionSnapshotsForClaims = async (
+const getSnapshotClaimFlagKey = (request: JudgmentExecutionSnapshotClaimInput) => {
+  return `${shouldIncludeFulltext([request])}:${shouldStripFulltextImages([request])}`
+}
+
+const getSnapshotClaimGroups = (
   requests: JudgmentExecutionSnapshotClaimInput[],
-): Promise<JudgmentExecutionSnapshotClaim[]> => {
-  const [request, ...remainingRequests] = requests
+): JudgmentExecutionSnapshotClaimInput[][] => {
+  return requests.reduce<JudgmentExecutionSnapshotClaimInput[][]>((groups, request) => {
+    const lastGroup = groups.at(-1)
+    const [lastGroupRequest] = lastGroup ?? []
 
-  if (!request) {
-    return []
-  }
+    return lastGroup
+      && lastGroupRequest
+      && getSnapshotClaimFlagKey(lastGroupRequest) === getSnapshotClaimFlagKey(request)
+      ? [...groups.slice(0, -1), [...lastGroup, request]]
+      : [...groups, [request]]
+  }, [])
+}
 
-  const [row] = await getSnapshotRows([request], {
-    includeFulltext: shouldIncludeFulltext([request]),
-    stripImages: shouldStripFulltextImages([request]),
-  })
+const getSnapshotInputForClaim = (
+  request: JudgmentExecutionSnapshotClaimInput,
+  rowsByClaimId: Map<string, JudgmentExecutionSnapshotRow>,
+) => {
+  const row = rowsByClaimId.get(request.claimId)
 
   if (!row) {
     throw new Error(`Failed to build judgment execution snapshot for claim ${request.claimId}`)
   }
 
   const payload = getSnapshotPayload(row)
-  const snapshotInput = {
+
+  return {
+    claimedBy: request.claimedBy,
     executionSnapshotHash: getJudgmentExecutionSnapshotHash(payload),
     executionSnapshotId: randomUUID(),
     payload,
     row,
   }
-  const [insertedRow] = await getAppDatabaseService().queryJson<StoredSnapshotIdentityRow>(`
+}
+
+const createJudgmentExecutionSnapshotsForClaimGroup = async (
+  requests: JudgmentExecutionSnapshotClaimInput[],
+): Promise<JudgmentExecutionSnapshotClaim[]> => {
+  const rows = await getSnapshotRows(requests, {
+    includeFulltext: shouldIncludeFulltext(requests),
+    stripImages: shouldStripFulltextImages(requests),
+  })
+  const rowsByClaimId = new Map(
+    rows.map((row) => {
+      return [row.claimId, row] as const
+    }),
+  )
+  const snapshotInputs = requests.map((request) => {
+    return getSnapshotInputForClaim(request, rowsByClaimId)
+  })
+  const insertedRows = await getAppDatabaseService().queryJson<StoredSnapshotIdentityRow>(`
     INSERT INTO app.judgment_execution_snapshot (
       id,
       job_id,
@@ -848,7 +878,7 @@ export const createJudgmentExecutionSnapshotsForClaims = async (
       payload_hash,
       payload_json,
       created_by
-    ) VALUES ${getSnapshotInsertValueSql(snapshotInput)}
+    ) VALUES ${snapshotInputs.map(getSnapshotInsertValueSql).join(',\n')}
     ON CONFLICT(job_id, queue_record_id, claim_id) DO NOTHING
     RETURNING
       id AS executionSnapshotId,
@@ -867,13 +897,30 @@ export const createJudgmentExecutionSnapshotsForClaims = async (
       created_by AS createdBy,
       created_at AS createdAt
   `)
-  const snapshot = insertedRow ? toSnapshotIdentity(insertedRow) : await getSnapshotIdentityByRequest(request)
+  const insertedByClaimId = new Map(
+    insertedRows.map((insertedRow) => {
+      return [insertedRow.claimId, toSnapshotIdentity(insertedRow)] as const
+    }),
+  )
 
-  if (!snapshot) {
-    throw new Error(`Failed to persist judgment execution snapshot for claim ${request.claimId}`)
-  }
+  return requests.reduce<Promise<JudgmentExecutionSnapshotClaim[]>>(async (previous, request) => {
+    const snapshots = await previous
+    const snapshot = insertedByClaimId.get(request.claimId) ?? (await getSnapshotIdentityByRequest(request))
 
-  return [snapshot, ...(await createJudgmentExecutionSnapshotsForClaims(remainingRequests))]
+    if (!snapshot) {
+      throw new Error(`Failed to persist judgment execution snapshot for claim ${request.claimId}`)
+    }
+
+    return [...snapshots, snapshot]
+  }, Promise.resolve([]))
+}
+
+export const createJudgmentExecutionSnapshotsForClaims = async (
+  requests: JudgmentExecutionSnapshotClaimInput[],
+): Promise<JudgmentExecutionSnapshotClaim[]> => {
+  return getSnapshotClaimGroups(requests).reduce<Promise<JudgmentExecutionSnapshotClaim[]>>(async (previous, group) => {
+    return [...(await previous), ...(await createJudgmentExecutionSnapshotsForClaimGroup(group))]
+  }, Promise.resolve([]))
 }
 
 export const createJudgmentExecutionSnapshotForClaim = async ({
