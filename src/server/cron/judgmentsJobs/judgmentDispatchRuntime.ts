@@ -138,12 +138,41 @@ const getProviderActivePromptLimit = ({providerMaxInflightRequests}: ProviderQue
   return getJudgmentPromptQueueTargetFromProviderLimit({providerMaxInflightRequests}).activePromptLimit
 }
 
-const getProviderQueueCapacityLimit = ({
-  providerMaxInflightRequests,
-  providerPromptBacklogTarget,
-}: ProviderQueueInput): number => {
-  return getJudgmentPromptQueueTargetFromProviderLimit({providerMaxInflightRequests, providerPromptBacklogTarget})
-    .queuedPromptLimit
+const dispatchCompletionRateWindowMs = 60_000
+const providerPromptBacklogTargets = new Map<string, number>()
+const providerCompletionTimes = new Map<string, number[]>()
+
+// The send loop sizes each provider's claim buffer from its recent completion rate; prompts that
+// do not carry their own backlog target use this one so the queue limit stays consistent.
+export const setJudgmentDispatchProviderPromptBacklogTarget = (input: ProviderQueueInput, target: number): void => {
+  providerPromptBacklogTargets.set(getProviderDispatchKey(input), Math.max(1, Math.trunc(target)))
+}
+
+const getRecentCompletionTimes = (providerKey: string, nowMs: number): number[] => {
+  return (providerCompletionTimes.get(providerKey) ?? []).filter((completedAtMs) => {
+    return nowMs - completedAtMs < dispatchCompletionRateWindowMs
+  })
+}
+
+const recordProviderCompletion = (providerKey: string, nowMs: number): void => {
+  providerCompletionTimes.set(providerKey, [...getRecentCompletionTimes(providerKey, nowMs), nowMs])
+}
+
+export const getJudgmentDispatchCompletionRatePerSecond = (input: ProviderQueueInput, nowMs = Date.now()): number => {
+  const providerKey = getProviderDispatchKey(input)
+  const recentCompletionTimes = getRecentCompletionTimes(providerKey, nowMs)
+
+  providerCompletionTimes.set(providerKey, recentCompletionTimes)
+
+  return recentCompletionTimes.length / (dispatchCompletionRateWindowMs / 1000)
+}
+
+const getProviderQueueCapacityLimit = (input: ProviderQueueInput): number => {
+  return getJudgmentPromptQueueTargetFromProviderLimit({
+    providerMaxInflightRequests: input.providerMaxInflightRequests,
+    providerPromptBacklogTarget:
+      input.providerPromptBacklogTarget ?? providerPromptBacklogTargets.get(getProviderDispatchKey(input)) ?? null,
+  }).queuedPromptLimit
 }
 
 const getPromptProviderQueueInput = (prompt: PromptToProcess): ProviderQueueInput => {
@@ -249,6 +278,7 @@ const createJudgmentDispatchRuntimeLayer = (
               Effect.ensuring(
                 Effect.sync(() => {
                   removeActivePrompt(state, nextPrompt.prompt.recordId)
+                  recordProviderCompletion(state.key, Date.now())
 
                   if (promptFiber) {
                     state.batchFibers.delete(promptFiber)
@@ -602,6 +632,8 @@ export const shutdownJudgmentDispatchRuntime = async (reason = 'shutdown') => {
 }
 
 export const resetJudgmentDispatchRuntimeForTests = async () => {
+  providerPromptBacklogTargets.clear()
+  providerCompletionTimes.clear()
   await judgmentDispatchRuntime.shutdown('test-reset')
   judgmentDispatchRuntime = createJudgmentDispatchRuntime()
 }

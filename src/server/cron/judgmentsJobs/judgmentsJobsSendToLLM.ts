@@ -18,8 +18,11 @@ import {
 import {isJudgeWorkerLeaseLossTestBarrierActive} from './judgeWorkerLeaseLossTestBarrier.ts'
 import {
   enqueueClaimedJudgmentPrompts,
+  getJudgmentDispatchCompletionRatePerSecond,
   getJudgmentDispatchJobPromptIds,
   getJudgmentDispatchQueueCapacity,
+  type ProviderQueueInput,
+  setJudgmentDispatchProviderPromptBacklogTarget,
 } from './judgmentDispatchRuntime.ts'
 import {getJudgmentEndpointAvailability} from './judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
@@ -302,7 +305,7 @@ const getRuntimeInFlightCountsByJob = (jobIds: string[]): Map<string, number> =>
   )
 }
 
-const getDispatchQueueCapacityByConnection = async (jobs: RunningJudgmentJob[]): Promise<Map<string, number>> => {
+const getProviderQueueInputsByConnection = (jobs: RunningJudgmentJob[]): Array<[string, ProviderQueueInput]> => {
   const connectionJobs = Array.from(
     jobs.reduce((state, job) => {
       const providerKey = getJobProviderKey(job)
@@ -310,25 +313,67 @@ const getDispatchQueueCapacityByConnection = async (jobs: RunningJudgmentJob[]):
     }, new Map<string, RunningJudgmentJob>()),
   )
 
-  const capacities = await Promise.all(
-    connectionJobs.map(async ([providerKey, job]) => {
-      const dispatchProviderCap = getEffectiveDispatchProviderCap({job})
+  return connectionJobs.map(([providerKey, job]) => {
+    const dispatchProviderCap = getEffectiveDispatchProviderCap({job})
 
-      return [
-        providerKey,
-        await getJudgmentDispatchQueueCapacity({
-          modelId: job.modelId,
-          modelProvider: job.modelProvider,
-          providerKey: job.providerKey,
-          providerConnectionId: job.providerConnectionId,
-          providerMaxInflightRequests: dispatchProviderCap.maxInflight,
-          providerUsesFamilyDefault: dispatchProviderCap.usesFamilyDefault,
-        }),
-      ] as const
+    return [
+      providerKey,
+      {
+        modelId: job.modelId,
+        modelProvider: job.modelProvider,
+        providerKey: job.providerKey,
+        providerConnectionId: job.providerConnectionId,
+        providerMaxInflightRequests: dispatchProviderCap.maxInflight,
+        providerUsesFamilyDefault: dispatchProviderCap.usesFamilyDefault,
+      },
+    ]
+  })
+}
+
+const getDispatchQueueCapacityByConnection = async (jobs: RunningJudgmentJob[]): Promise<Map<string, number>> => {
+  const capacities = await Promise.all(
+    getProviderQueueInputsByConnection(jobs).map(async ([providerKey, input]) => {
+      return [providerKey, await getJudgmentDispatchQueueCapacity(input)] as const
     }),
   )
 
   return new Map(capacities)
+}
+
+const judgeClaimBufferSeconds = 45
+const judgeClaimBufferMaximumMaxInflightMultiplier = 6
+
+// Claims wait on the owner, which can stall for tens of seconds behind review-serving work. Buffer
+// ~45 s of the provider's measured completion rate beyond max in-flight (never less than the
+// configured burst), so SGLang keeps running through those stalls. 45 s stays under the backlog
+// controller's 60 s dispatch-queued stage-age threshold.
+export const getJudgeClaimBufferPrompts = ({
+  capacity,
+  completionRatePerSecond,
+}: {
+  capacity: Capacity
+  completionRatePerSecond: number
+}): number => {
+  const rateBuffer = Math.ceil(Math.max(0, completionRatePerSecond) * judgeClaimBufferSeconds)
+
+  return Math.min(
+    Math.max(capacity.maxBurst, capacity.maxInflight * judgeClaimBufferMaximumMaxInflightMultiplier),
+    Math.max(capacity.maxBurst, rateBuffer),
+  )
+}
+
+const getTargetReservedPrompts = (jobs: RunningJudgmentJob[], capacity: Capacity): number => {
+  const providerInputs = getProviderQueueInputsByConnection(jobs)
+  const completionRatePerSecond = providerInputs.reduce((sum, [, input]) => {
+    return sum + getJudgmentDispatchCompletionRatePerSecond(input)
+  }, 0)
+  const targetReservedPrompts = capacity.maxInflight + getJudgeClaimBufferPrompts({capacity, completionRatePerSecond})
+
+  providerInputs.forEach(([, input]) => {
+    setJudgmentDispatchProviderPromptBacklogTarget(input, targetReservedPrompts)
+  })
+
+  return targetReservedPrompts
 }
 
 const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
@@ -1331,11 +1376,11 @@ const sendToLLMForJobs = async (
     return job.id
   })
   const runtimeInFlightCounts = getRuntimeInFlightCountsByJob(jobIds)
+  const targetReservedPrompts = getTargetReservedPrompts(jobs, capacity)
   const providerQueueCapacities = await getDispatchQueueCapacityByConnection(jobs)
   const promptsInFlight = Array.from(runtimeInFlightCounts.values()).reduce((sum, count) => {
     return sum + count
   }, 0)
-  const targetReservedPrompts = capacity.maxInflight + capacity.maxBurst
   const deficit = Math.max(0, targetReservedPrompts - promptsInFlight)
   const totalQueueCapacity = Array.from(providerQueueCapacities.values()).reduce((sum, count) => {
     return sum + count

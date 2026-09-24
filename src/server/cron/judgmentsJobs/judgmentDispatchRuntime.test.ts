@@ -1,6 +1,12 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
-import {createJudgmentDispatchRuntime, shutdownJudgmentDispatchRuntime} from './judgmentDispatchRuntime.ts'
+import {
+  createJudgmentDispatchRuntime,
+  getJudgmentDispatchCompletionRatePerSecond,
+  resetJudgmentDispatchRuntimeForTests,
+  setJudgmentDispatchProviderPromptBacklogTarget,
+  shutdownJudgmentDispatchRuntime,
+} from './judgmentDispatchRuntime.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 
 const flush = async (): Promise<void> => {
@@ -398,4 +404,56 @@ test('shutdown recovers active and queued prompts for a provider', async () => {
   release.resolve()
 
   expect(recovered).toHaveBeenCalledTimes(1)
+})
+
+test('uses the provider backlog target set by the send loop when prompts carry none', async () => {
+  const release = createSignal()
+  const processPromptBatch = mock(async () => {
+    await release.promise
+  })
+  const runtime = createJudgmentDispatchRuntime({processPromptBatch})
+  const providerInput = {
+    providerConnectionId: 'connection-buffer',
+    providerMaxInflightRequests: 2,
+    providerUsesFamilyDefault: false,
+  }
+
+  setJudgmentDispatchProviderPromptBacklogTarget(providerInput, 6)
+  await runtime.enqueueClaimedPrompts({
+    label: 'send-loop-target',
+    prompts: [
+      createPrompt({providerConnectionId: 'connection-buffer', providerMaxInflightRequests: 2, recordId: 'record-a'}),
+    ],
+  })
+  await flush()
+
+  expect(await runtime.getProviderQueueCapacity(providerInput)).toBe(5)
+
+  release.resolve()
+  await runtime.shutdown('test-complete')
+  await resetJudgmentDispatchRuntimeForTests()
+})
+
+test('reports provider completion rate over the last minute', async () => {
+  const runtime = createJudgmentDispatchRuntime({processPromptBatch: async () => {}})
+  const providerInput = {
+    providerConnectionId: 'connection-rate',
+    providerMaxInflightRequests: 4,
+    providerUsesFamilyDefault: false,
+  }
+
+  await runtime.enqueueClaimedPrompts({
+    label: 'completion-rate',
+    prompts: ['record-a', 'record-b', 'record-c'].map((recordId) => {
+      return createPrompt({providerConnectionId: 'connection-rate', providerMaxInflightRequests: 4, recordId})
+    }),
+  })
+  await flush()
+  await flush()
+
+  expect(getJudgmentDispatchCompletionRatePerSecond(providerInput)).toBeCloseTo(3 / 60)
+  expect(getJudgmentDispatchCompletionRatePerSecond(providerInput, Date.now() + 61_000)).toBe(0)
+
+  await runtime.shutdown('test-complete')
+  await resetJudgmentDispatchRuntimeForTests()
 })

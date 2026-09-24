@@ -11,6 +11,7 @@ import {
   getDispatchAvailability,
   getEffectiveDispatchProviderCap,
   getEffectiveProviderCap,
+  getJudgeClaimBufferPrompts,
   getJudgmentsJobsSendToLLMRunState,
   getPromptClaimChunkLimits,
   getPromptClaimDispatchChunkLimits,
@@ -967,4 +968,13 @@ test('requeues remaining claimed prompts when endpoint availability flips before
 
   expect(processed).toEqual(['record-a'])
   expect(requeuePrompts).toHaveBeenCalledWith([secondPrompt])
+})
+
+test('judge claim buffer covers ~45 s of measured completions within burst and max in-flight bounds', () => {
+  const capacity = {maxBurst: 200, maxInflight: 200, workerCount: 200}
+
+  expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 0})).toBe(200)
+  expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 2})).toBe(200)
+  expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 12})).toBe(540)
+  expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 100})).toBe(1200)
 })
