@@ -3,7 +3,6 @@ import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJu
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
-import {judgmentBacklogControllerConstants} from './judgmentBacklogController.ts'
 import type {JobCursor} from './judgmentJobSqliteService.ts'
 import {
   getJudgmentJobSqliteErrorMessage,
@@ -101,10 +100,12 @@ const getConfiguredJobMaxInflight = (job: Job): number | null => {
   return getPositiveJobLimit(job.providerLimit) ?? getPositiveJobLimit(job.maxInflightRequests)
 }
 
+// Ready rows are cheap SQLite rows. Keeping ~10x max in-flight ready lets the LLM ride out owner
+// DuckDB stalls of a few minutes (review-serving projector phases) that delay serving-queue reads.
+const sqliteReadyReservoirMinimumMultiplier = 10
+
 const getAddToQueueBucketMinimumReadyTargetMultiplier = (job: Job): number => {
-  return getConfiguredJobMaxInflight(job) !== null && !isCodexJob(job)
-    ? judgmentBacklogControllerConstants.promptBacklogMaximumEffectiveCapacityMultiplier
-    : 1
+  return getConfiguredJobMaxInflight(job) !== null && !isCodexJob(job) ? sqliteReadyReservoirMinimumMultiplier : 1
 }
 
 const getAddToQueueBucketMaxInflight = (jobs: Job[]): number => {

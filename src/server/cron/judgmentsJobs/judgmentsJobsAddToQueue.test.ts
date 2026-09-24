@@ -351,7 +351,7 @@ test('sizes provider refill from effective cap with a ready reservoir above acti
 
   expect(getPromptsCalls.count).toBe(1)
   expect(requestedPromptCounts).toEqual([512])
-  expect(readyDeficits).toEqual([550])
+  expect(readyDeficits).toEqual([1750])
 })
 
 test('skips timed-out serving queue reads without marking the scan exhausted', async () => {
@@ -796,10 +796,10 @@ test('skips OLAP refill while ready prompts stay at the low watermark', async ()
       return entries
     },
     getHealthSnapshot: async () => {
-      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 0, judged: 0, ready: 300, running: 0, skipped: 0}}
+      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 0, judged: 0, ready: 750, running: 0, skipped: 0}}
     },
     getReadyCount: async () => {
-      return 300
+      return 750
     },
     getScanState: async () => {
       return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
@@ -858,10 +858,10 @@ test('refills OLAP below the low watermark without counting claimed prompts as r
       return entries
     },
     getHealthSnapshot: async () => {
-      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 390, judged: 0, ready: 299, running: 0, skipped: 0}}
+      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 390, judged: 0, ready: 749, running: 0, skipped: 0}}
     },
     getReadyCount: async () => {
-      return 299
+      return 749
     },
     getScanState: async () => {
       return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
@@ -903,7 +903,7 @@ test('refills OLAP below the low watermark without counting claimed prompts as r
   await module.judgmentsJobsAddToQueue('server-1')
 
   expect(getPromptsCalls.count).toBe(1)
-  expect(readyDeficits).toEqual([101])
+  expect(readyDeficits).toEqual([251])
 })
 
 test('caps each OLAP refill window while allowing one tick to fill provider-sized reservoirs', async () => {
