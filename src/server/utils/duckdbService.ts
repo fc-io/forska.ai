@@ -6166,12 +6166,30 @@ const ensureStartedDuckdbProcess = async () => {
   return duckdbServiceState.startupPromise
 }
 
-const getNextDuckdbQueuedMainWorkIndex = () => {
-  const foregroundWorkIndex = duckdbServiceState.duckdbMainQueuedWork.findIndex((queuedWork) => {
-    return queuedWork.priority === 'foreground'
+// Foreground work goes first, but queued work that has waited this long runs next regardless of
+// priority, so a steady stream of foreground work cannot starve background work such as the
+// review-serving projector.
+const duckdbQueuedMainWorkMaxWaitMs = 5_000
+
+export const selectNextDuckdbQueuedMainWorkIndex = (
+  queuedWork: ReadonlyArray<{priority: DuckdbMainWorkPriority; queuedAtMs: number}>,
+  nowMs: number,
+): number => {
+  const [oldestQueuedWork] = queuedWork
+
+  if (oldestQueuedWork && nowMs - oldestQueuedWork.queuedAtMs >= duckdbQueuedMainWorkMaxWaitMs) {
+    return 0
+  }
+
+  const foregroundWorkIndex = queuedWork.findIndex((work) => {
+    return work.priority === 'foreground'
   })
 
   return foregroundWorkIndex === -1 ? 0 : foregroundWorkIndex
+}
+
+const getNextDuckdbQueuedMainWorkIndex = () => {
+  return selectNextDuckdbQueuedMainWorkIndex(duckdbServiceState.duckdbMainQueuedWork, Date.now())
 }
 
 const runDuckdbQueuedMainWork = async <T>(queuedWork: DuckdbQueuedMainWork<T>): Promise<T> => {

@@ -210,3 +210,15 @@ test('runtime reset cancels pending observers instead of leaving callbacks attac
   expect(await held.outcome).toContain('DuckDB connection not started')
   expect(await service.runDuckdbJsonQuery('SELECT 4 AS value', workloadContext)).toEqual([{value: 4}])
 })
+
+test('main queue picks foreground work first until queued background work has waited 5 s', async () => {
+  const {selectNextDuckdbQueuedMainWorkIndex} = await import('./duckdbService.ts')
+  const queuedWork = [
+    {priority: 'background' as const, queuedAtMs: 0},
+    {priority: 'foreground' as const, queuedAtMs: 1_000},
+  ]
+
+  expect(selectNextDuckdbQueuedMainWorkIndex(queuedWork, 4_999)).toBe(1)
+  expect(selectNextDuckdbQueuedMainWorkIndex(queuedWork, 5_000)).toBe(0)
+  expect(selectNextDuckdbQueuedMainWorkIndex([{priority: 'background', queuedAtMs: 0}], 10)).toBe(0)
+})

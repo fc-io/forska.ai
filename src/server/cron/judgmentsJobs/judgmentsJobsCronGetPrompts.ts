@@ -2,6 +2,7 @@ import {getJudgmentJobUnassessedPairsFromServing} from '../../reviewServing/revi
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {canCurrentServerOwnDuckdb} from '../../utils/serverRuntimeRole.ts'
 import type {JobCursor} from './judgmentJobSqliteService.ts'
 
 export type PromptQueueEntry = {articleId: string; promptId: string}
@@ -35,6 +36,16 @@ const getUnassessedPairsCursor = (cursor: JobCursor | null) => {
  * Uses the V4 serving queue to find unassessed pairs without raw DuckDB fallback windows.
  * Uses cursor-based pagination to avoid re-fetching already-queued pairs.
  */
+// Refill metadata reads run on the DuckDB owner at foreground priority, ahead of background
+// review-serving projector work.
+const getJudgeRefillReadDatabaseService = () => {
+  const database = getJudgeWorkerReadOnlyAppDatabaseService()
+
+  return canCurrentServerOwnDuckdb() && typeof database.queryJsonOwnerMain === 'function'
+    ? {...database, queryJson: database.queryJsonOwnerMain}
+    : database
+}
+
 export const judgmentsJobsCronGetPrompts = async (
   projectId: string,
   jobId: string,
@@ -42,7 +53,7 @@ export const judgmentsJobsCronGetPrompts = async (
   cursor: JobCursor | null = null,
 ): Promise<QueuePromptsResult> => {
   const [projectResult, enabledPromptCount] = await Promise.all([
-    getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string; archived: boolean}>(
+    getJudgeRefillReadDatabaseService().queryJson<{id: string; archived: boolean}>(
       `
       SELECT id, archived
       FROM app.project
@@ -51,7 +62,7 @@ export const judgmentsJobsCronGetPrompts = async (
     `,
       getJudgmentJobMetadataWorkloadContext({jobId, projectId, routeSuffix: 'project'}),
     ),
-    getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{count: number}>(
+    getJudgeRefillReadDatabaseService().queryJson<{count: number}>(
       `
       SELECT COUNT(*) AS count
       FROM app.project_prompt
