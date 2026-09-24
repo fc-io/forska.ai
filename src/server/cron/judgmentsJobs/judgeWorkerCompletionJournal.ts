@@ -2532,6 +2532,38 @@ export const getJudgeWorkerHeldQueueRecordIds = (jobId: string): string[] => {
   })
 }
 
+const ackedCompletionRetentionMs = 24 * 60 * 60 * 1000
+const ackedCompletionPruneBatchSize = 500
+
+// Acked completions were never deleted, so the journal grew by every judgment ever made (4.9 GB,
+// 560k rows) and slowed every synchronous journal query. Keep a day of acked rows for late token
+// use and replays, skip rows whose accepted claim still exists, and delete in small batches so a
+// prune never blocks the judge loop for long.
+export const pruneAckedJudgeWorkerCompletions = ({now = Date.now()}: {now?: number} = {}): number => {
+  const result = openJournalDatabase()
+    .query(
+      `
+        DELETE FROM completion_outbox
+        WHERE claim_id IN (
+          SELECT co.claim_id
+          FROM completion_outbox co INDEXED BY idx_completion_outbox_unacked
+          WHERE co.acked_at IS NOT NULL
+            AND co.acked_at < ?
+            AND NOT EXISTS (
+              SELECT 1
+              FROM accepted_claim ac
+              WHERE ac.claim_id = co.claim_id
+            )
+          ORDER BY co.acked_at ASC, co.created_at ASC
+          LIMIT ?
+        )
+      `,
+    )
+    .run(new Date(now - ackedCompletionRetentionMs).toISOString(), ackedCompletionPruneBatchSize) as {changes?: number}
+
+  return Number(result.changes ?? 0)
+}
+
 export const hasUnackedJudgeWorkerCompletion = async (claimId: string): Promise<boolean> => {
   return getUnackedCompletionRows(openJournalDatabase(), claimId).length > 0
 }
