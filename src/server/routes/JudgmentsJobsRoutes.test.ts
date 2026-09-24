@@ -1091,14 +1091,15 @@ test('owner-backed completion rejects snapshot mismatch before accepting the cla
   await sqliteService.closeAll()
 })
 
-test('owner-backed completion imports accepted judgment outbox into DuckDB', async () => {
+test('owner-backed completion leaves the accepted judgment outbox for the background import', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
   }
 
-  const [{getJudgmentJobSqliteService}, {getAppDatabaseService}] = await Promise.all([
+  const [{getJudgmentJobSqliteService}, {getAppDatabaseService}, {flushJudgmentJobSqliteOutbox}] = await Promise.all([
     import('../cron/judgmentsJobs/judgmentJobSqliteService.ts'),
     import('../services/appDatabaseService.ts'),
+    import('../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'),
   ])
   const sqliteService = getJudgmentJobSqliteService()
   const suffix = Date.now()
@@ -1225,17 +1226,26 @@ test('owner-backed completion imports accepted judgment outbox into DuckDB', asy
       method: 'POST',
     }),
   )
-  const [judgmentRow] = await getAppDatabaseService().queryJson<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM app.judgment
-    WHERE project_id = '${projectId}'
-      AND article_id = '${articleId}'
-      AND prompt_id = '${promptId}'
-      AND model_id = '${modelId}'
-  `)
+  const getJudgmentCount = async () => {
+    const [judgmentRow] = await getAppDatabaseService().queryJson<{count: number}>(`
+      SELECT COUNT(*) AS count
+      FROM app.judgment
+      WHERE project_id = '${projectId}'
+        AND article_id = '${articleId}'
+        AND prompt_id = '${promptId}'
+        AND model_id = '${modelId}'
+    `)
+
+    return Number(judgmentRow?.count ?? 0)
+  }
 
   expect(completionResponse.status).toBe(200)
-  expect(Number(judgmentRow?.count ?? 0)).toBe(1)
+  expect(await getJudgmentCount()).toBe(0)
+  expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(1)
+
+  await flushJudgmentJobSqliteOutbox({jobId})
+
+  expect(await getJudgmentCount()).toBe(1)
   expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(0)
 
   await sqliteService.closeAll()
@@ -1356,9 +1366,10 @@ test('owner-backed completion replay accepts existing ack when token use conflic
     throw new Error('Test app not initialized')
   }
 
-  const [{getJudgmentJobSqliteService}, {getAppDatabaseService}] = await Promise.all([
+  const [{getJudgmentJobSqliteService}, {getAppDatabaseService}, {drainCompletionTokenUseOutbox}] = await Promise.all([
     import('../cron/judgmentsJobs/judgmentJobSqliteService.ts'),
     import('../services/appDatabaseService.ts'),
+    import('../cron/judgmentsJobs/judgmentCompletionTokenUseOutbox.ts'),
   ])
   const sqliteService = getJudgmentJobSqliteService()
   const projectId = `token-conflict-project-${Date.now()}`
@@ -1449,6 +1460,7 @@ test('owner-backed completion replay accepts existing ack when token use conflic
       method: 'POST',
     }),
   )
+  await drainCompletionTokenUseOutbox(jobId)
   const replayResponse = await app.handle(
     new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
       body: JSON.stringify({
@@ -1466,6 +1478,7 @@ test('owner-backed completion replay accepts existing ack when token use conflic
     }),
   )
   const replayBody = (await replayResponse.json()) as {data: {status: string}}
+  const drainedAfterReplay = await drainCompletionTokenUseOutbox(jobId)
   const [tokenUseRow] = await getAppDatabaseService().queryJson<{totalCompletionTokens: number; totalTokens: number}>(`
     SELECT total_completion_tokens AS totalCompletionTokens,
            total_tokens AS totalTokens
@@ -1479,6 +1492,7 @@ test('owner-backed completion replay accepts existing ack when token use conflic
   expect(replayBody.data.status).toBe('judged')
   expect(Number(tokenUseRow?.totalCompletionTokens ?? 0)).toBe(3)
   expect(Number(tokenUseRow?.totalTokens ?? 0)).toBe(10)
+  expect(drainedAfterReplay).toBe(1)
 
   await sqliteService.closeAll()
 })

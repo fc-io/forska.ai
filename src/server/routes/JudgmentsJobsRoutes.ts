@@ -12,6 +12,11 @@ import {
   pauseJudgeWorkerAfterArmedTestClaim,
 } from '../cron/judgmentsJobs/judgeWorkerLeaseLossTestBarrier.ts'
 import {
+  enqueueCompletionTokenUse,
+  getCompletionTokenUseIdOrNull,
+  type JudgmentCompletionTokenUseSummary,
+} from '../cron/judgmentsJobs/judgmentCompletionTokenUseOutbox.ts'
+import {
   getJudgmentEndpointAvailability,
   getJudgmentEndpointAvailabilityDiagnostics,
 } from '../cron/judgmentsJobs/judgmentEndpointAvailability.ts'
@@ -25,10 +30,7 @@ import {
   isJudgmentJobSqliteIsolatedImportLeaseConflict,
   runJudgmentJobSqliteIsolatedFlush,
 } from '../cron/judgmentsJobs/judgmentJobSqliteIsolatedImport.ts'
-import {
-  flushJudgmentJobSqliteOutbox,
-  importJudgmentJobSqliteOutboxBatch,
-} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
+import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {assertJudgmentJobCanRunSqlitePreflight} from '../cron/judgmentsJobs/judgmentJobSqlitePreflight.ts'
 import {
   getJudgmentJobSqliteService,
@@ -95,14 +97,12 @@ import {
   type JudgmentProviderTelemetryBucketedHistory,
   queryJudgmentProviderTelemetryBucketedHistory,
 } from '../services/judgmentProviderTelemetryHistoryService.ts'
-import {getTokenUseQueryService, TokenUseIdempotencyConflictError} from '../services/tokenUseQueryService.ts'
 import {hasActiveDuckdbExclusiveWork, isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
 import {
   getDuckdbOwnerConnectionProxyHeaders,
   getDuckdbOwnerConnectionsOverview,
 } from '../utils/duckdbOwnerConnections.ts'
 import {HttpError} from '../utils/httpError.ts'
-import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
 import {
@@ -115,25 +115,6 @@ import {
 import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
 const judgmentJobServerId = getDefaultJudgmentServerJobId()
-const judgmentsJobsLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
-
-const importAcceptedCompletionSqliteOutboxBatch = async (jobId: string): Promise<void> => {
-  try {
-    await importJudgmentJobSqliteOutboxBatch({claimedBy: judgmentJobServerId, jobId})
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    const level =
-      isDuckdbExclusiveWorkAdmissionError(error) || isTransientJudgmentJobSqliteLockMessage(errorMessage)
-        ? 'log'
-        : 'warn'
-
-    judgmentsJobsLogger[level](
-      `judgmentsJobs:completion-outbox-flush:${jobId}`,
-      '[judgmentsJobs] deferred accepted completion SQLite outbox flush',
-      {errorMessage, jobId},
-    )
-  }
-}
 
 type JudgmentJobMutationState = {
   error: unknown
@@ -368,34 +349,6 @@ type JudgmentCompletionBody = JudgmentCompletionIdentity & {
   skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
   tokenUse?: JudgmentCompletionTokenUseSummary | null
-}
-type JudgmentCompletionTokenUseSummary = {
-  dpSize?: number | null
-  duration?: number | null
-  failedRequests: number
-  failedRequestsDetails: unknown[]
-  finishedAt?: string | null
-  gpuGpusPerNode?: number | null
-  gpuNnodes?: number | null
-  gpuShape?: string | null
-  gpuTotalGpus?: number | null
-  hasFailedRequests: boolean
-  modelName: string | null
-  sglangMaxRunningRequests?: number | null
-  startedAt?: string | null
-  successfulRequests: number
-  tpSize?: number | null
-  totalCompletionTokens: number
-  totalFailedCompletionTokens: number
-  totalFailedPromptTokens: number
-  totalFailedTokens: number
-  totalPromptTokens: number
-  totalRequests: number
-  totalSuccessCompletionTokens: number
-  totalSuccessPromptTokens: number
-  totalSuccessTokens: number
-  totalTokens: number
-  requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
 }
 type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number; protectedRecordIds?: string[]}
 type JudgmentWorkerHeartbeatBody = {claimedBy?: string; jobIds?: string[]}
@@ -923,7 +876,7 @@ const assertCompletionClaimIdentity = async (
   options: {allowUnclaimedReadyPrompt?: boolean} = {},
 ) => {
   try {
-    await getJudgmentJobSqliteService().assertPromptClaimIdentity(identity, options)
+    return await getJudgmentJobSqliteService().assertPromptClaimIdentityMatch(identity, options)
   } catch (error) {
     if (error instanceof JudgmentPromptClaimIdentityError) {
       throw new HttpError(409, error.message)
@@ -931,10 +884,6 @@ const assertCompletionClaimIdentity = async (
 
     throw error
   }
-}
-
-const getCompletionTokenUseId = (body: JudgmentCompletionBody) => {
-  return `judgment-completion-token-use:${body.claimId}`
 }
 
 const getCompletionRequestAttempts = (body: JudgmentCompletionBody): JudgmentRequestAttemptJsonEntry[] => {
@@ -957,85 +906,6 @@ const getCompletionRequestAttemptsJson = (
   )
 }
 
-const getCompletionTokenUseIdOrNull = (body: JudgmentCompletionBody): string | null => {
-  return body.tokenUse && body.tokenUse.totalRequests > 0 ? getCompletionTokenUseId(body) : null
-}
-
-const applyCompletionTokenUseOnce = async (body: JudgmentCompletionBody): Promise<string | null> => {
-  const tokenUse = body.tokenUse
-
-  if (!tokenUse || tokenUse.totalRequests <= 0) {
-    return null
-  }
-
-  const tokenUseId = getCompletionTokenUseId(body)
-  const startedAt = tokenUse.startedAt ? new Date(tokenUse.startedAt) : null
-  const finishedAt = tokenUse.finishedAt ? new Date(tokenUse.finishedAt) : null
-
-  await getTokenUseQueryService().insertTokenUseOnce({
-    id: tokenUseId,
-    judgment_job_id: body.jobId,
-    gpu_nnodes: tokenUse.gpuNnodes ?? null,
-    gpu_gpus_per_node: tokenUse.gpuGpusPerNode ?? null,
-    gpu_total_gpus: tokenUse.gpuTotalGpus ?? null,
-    tp_size: tokenUse.tpSize ?? null,
-    dp_size: tokenUse.dpSize ?? null,
-    gpu_shape: tokenUse.gpuShape ?? null,
-    sglang_max_running_requests: tokenUse.sglangMaxRunningRequests ?? null,
-    sglang_model: tokenUse.modelName,
-    requests: tokenUse.totalRequests,
-    total_prompt_tokens: tokenUse.totalPromptTokens,
-    total_completion_tokens: tokenUse.totalCompletionTokens,
-    total_tokens: tokenUse.totalTokens,
-    successful_requests: tokenUse.successfulRequests,
-    failed_requests: tokenUse.failedRequests,
-    has_failed_requests: tokenUse.hasFailedRequests,
-    failed_requests_details: tokenUse.failedRequestsDetails.length > 0 ? tokenUse.failedRequestsDetails : null,
-    total_success_prompt_tokens: tokenUse.totalSuccessPromptTokens,
-    total_success_completion_tokens: tokenUse.totalSuccessCompletionTokens,
-    total_success_tokens: tokenUse.totalSuccessTokens,
-    total_failed_prompt_tokens: tokenUse.totalFailedPromptTokens,
-    total_failed_completion_tokens: tokenUse.totalFailedCompletionTokens,
-    total_failed_tokens: tokenUse.totalFailedTokens,
-    request_attempts_json: getCompletionRequestAttemptsJson(body, 'token_use', tokenUseId),
-    started_at: startedAt,
-    finished_at: finishedAt,
-    duration: tokenUse.duration == null ? null : Math.round(tokenUse.duration),
-  })
-
-  return tokenUseId
-}
-
-const logAcceptedCompletionTokenUseConflict = (
-  body: JudgmentCompletionBody,
-  error: TokenUseIdempotencyConflictError,
-): void => {
-  judgmentsJobsLogger.warn(
-    `judgmentsJobs:completion-token-use-conflict:${body.claimId}`,
-    '[judgmentsJobs] completion token use replay conflict ignored after accepted completion',
-    {
-      claimId: body.claimId,
-      jobId: body.jobId,
-      mismatch: error.mismatch,
-      queueRecordId: body.queueRecordId,
-      tokenUseId: error.id,
-    },
-  )
-}
-
-const applyAcceptedCompletionTokenUseOnce = async (body: JudgmentCompletionBody): Promise<string | null> => {
-  try {
-    return await applyCompletionTokenUseOnce(body)
-  } catch (error) {
-    if (error instanceof TokenUseIdempotencyConflictError) {
-      logAcceptedCompletionTokenUseConflict(body, error)
-      return getCompletionTokenUseIdOrNull(body)
-    }
-
-    throw error
-  }
-}
-
 const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCompletionBody) => {
   const existingAck = await getJudgmentJobSqliteService().getPromptCompletionAck(jobId, body.claimId)
 
@@ -1049,8 +919,7 @@ const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCom
     throw new HttpError(409, 'snapshot identity mismatch for replayed judgment completion')
   }
 
-  await applyAcceptedCompletionTokenUseOnce(body)
-  await importAcceptedCompletionSqliteOutboxBatch(jobId)
+  await enqueueCompletionTokenUse(body)
 
   return {
     data: {claimId: body.claimId, queueRecordId: existingAck.queuePromptId, status: existingAck.status},
@@ -1072,8 +941,13 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
   const identity = {...body, jobId}
   const allowUnclaimedReadyPrompt = !['failed', 'retry', 'skipped'].includes(body.status ?? '')
 
-  await assertCompletionSnapshotIdentity(identity)
-  await assertCompletionClaimIdentity(identity, {allowUnclaimedReadyPrompt})
+  const claimIdentitySource = await assertCompletionClaimIdentity(identity, {allowUnclaimedReadyPrompt})
+
+  // A live claim row already stores the snapshot id and hash written from the DuckDB snapshot at
+  // claim time. Only a requeued ready row has lost them, so only then check DuckDB.
+  if (claimIdentitySource === 'readyPrompt') {
+    await assertCompletionSnapshotIdentity(identity)
+  }
   const tokenUseId = getCompletionTokenUseIdOrNull(body)
   const completionAckRequestAttemptsJson = getCompletionRequestAttemptsJson(body, 'completion_ack', tokenUseId)
 
@@ -1085,7 +959,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
       requestAttemptsJson: completionAckRequestAttemptsJson,
       tokenUseId,
     })
-    await applyAcceptedCompletionTokenUseOnce(body)
+    await enqueueCompletionTokenUse(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}, error: null}
   }
 
@@ -1102,7 +976,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
         tokenUseId,
       },
     )
-    await applyAcceptedCompletionTokenUseOnce(body)
+    await enqueueCompletionTokenUse(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'skipped'}, error: null}
   }
 
@@ -1114,7 +988,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
       requestAttemptsJson: completionAckRequestAttemptsJson,
       tokenUseId,
     })
-    await applyAcceptedCompletionTokenUseOnce(body)
+    await enqueueCompletionTokenUse(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'failed'}, error: null}
   }
 
@@ -1164,8 +1038,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
 
     throw error
   }
-  await applyAcceptedCompletionTokenUseOnce(body)
-  await importAcceptedCompletionSqliteOutboxBatch(jobId)
+  await enqueueCompletionTokenUse(body)
 
   return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}, error: null}
 }

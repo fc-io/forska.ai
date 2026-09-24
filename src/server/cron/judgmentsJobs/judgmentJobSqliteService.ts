@@ -912,6 +912,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
   ensureQueuePromptSchema(database)
   ensureOutboxClaimSchema(database)
   ensureCompletionAckSchema(database)
+  ensureCompletionTokenUseOutboxSchema(database)
 
   openDatabases.set(jobId, database)
   return database
@@ -1300,6 +1301,26 @@ const ensureQueuePromptSchema = (database: Database) => {
     CREATE INDEX IF NOT EXISTS idx_queue_prompt_status_ready_insert_seq
       ON queue_prompt(status, ready_insert_seq, id)
   `)
+}
+
+// Token use from accepted completions waits here until the background import writes it to DuckDB,
+// so completion acks never wait on the DuckDB queue.
+const ensureCompletionTokenUseOutboxSchema = (database: Database) => {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS completion_token_use_outbox (
+      token_use_id TEXT PRIMARY KEY,
+      completion_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `)
+}
+
+const getPendingCompletionTokenUseCount = (database: Database) => {
+  const row = database.query(`SELECT COUNT(*) AS count FROM completion_token_use_outbox`).get() as {
+    count: number
+  } | null
+
+  return Number(row?.count ?? 0)
 }
 
 const ensureCompletionAckSchema = (database: Database) => {
@@ -2156,6 +2177,7 @@ const isDrainedSqliteJob = (database: Database, _jobId: string) => {
     && getRetainedOutboxCount(database) === 0
     && getOrphanedJudgedQueueRowCount(database) === 0
     && getUnresolvedLegacyCompletionEvidenceCount(database) === 0
+    && getPendingCompletionTokenUseCount(database) === 0
   )
 }
 
@@ -3817,11 +3839,13 @@ const getPromptClaimIdentityMismatch = (
   return mismatchedKey ? `snapshot claim identity mismatch for ${mismatchedKey}` : null
 }
 
-const assertPromptClaimIdentityFromDatabase = (
+type PromptClaimIdentityMatch = {identity: PromptClaimIdentity; source: 'claimed' | 'readyPrompt'}
+
+const assertPromptClaimIdentityMatchFromDatabase = (
   database: Database,
   expected: PromptClaimIdentity,
   options: PromptClaimIdentityOptions = {},
-): PromptClaimIdentity => {
+): PromptClaimIdentityMatch => {
   const row = database
     .query(
       `
@@ -3873,7 +3897,15 @@ const assertPromptClaimIdentityFromDatabase = (
     throw new JudgmentPromptClaimIdentityError(mismatch)
   }
 
-  return actual ?? expected
+  return actual ? {identity: actual, source: 'claimed'} : {identity: expected, source: 'readyPrompt'}
+}
+
+const assertPromptClaimIdentityFromDatabase = (
+  database: Database,
+  expected: PromptClaimIdentity,
+  options: PromptClaimIdentityOptions = {},
+): PromptClaimIdentity => {
+  return assertPromptClaimIdentityMatchFromDatabase(database, expected, options).identity
 }
 
 const getPromptClaimIdentityFromOutboxInsert = (
@@ -5111,6 +5143,58 @@ const sqliteService = {
       }) ?? null
     )
   },
+  enqueueCompletionTokenUse: async ({
+    completionJson,
+    jobId,
+    tokenUseId,
+  }: {
+    completionJson: string
+    jobId: string
+    tokenUseId: string
+  }): Promise<void> => {
+    await withOwnedJobDatabase(jobId, false, (database) => {
+      database
+        .query(
+          `
+            INSERT OR IGNORE INTO completion_token_use_outbox (token_use_id, completion_json, created_at)
+            VALUES (?, ?, ?)
+          `,
+        )
+        .run(tokenUseId, completionJson, new Date().toISOString())
+    })
+  },
+  getPendingCompletionTokenUse: async (
+    jobId: string,
+    limit: number,
+  ): Promise<Array<{completionJson: string; tokenUseId: string}>> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return database
+          .query(
+            `
+              SELECT token_use_id AS tokenUseId, completion_json AS completionJson
+              FROM completion_token_use_outbox
+              ORDER BY created_at ASC, token_use_id ASC
+              LIMIT ?
+            `,
+          )
+          .all(limit) as Array<{completionJson: string; tokenUseId: string}>
+      }) ?? []
+    )
+  },
+  deleteCompletionTokenUse: async (jobId: string, tokenUseIds: string[]): Promise<void> => {
+    if (tokenUseIds.length === 0) {
+      return
+    }
+
+    await withOwnedJobDatabase(jobId, false, (database) => {
+      database
+        .query(
+          `DELETE FROM completion_token_use_outbox WHERE token_use_id IN (${getSqlPlaceholders(tokenUseIds.length).join(', ')})`,
+        )
+        .run(...tokenUseIds)
+    })
+  },
   getPromptCompletionAck: async (jobId: string, claimId: string): Promise<PromptCompletionAckRow | null> => {
     return (
       withJobDatabase(jobId, false, (database) => {
@@ -5135,6 +5219,16 @@ const sqliteService = {
         return assertPromptClaimIdentityFromDatabase(database, identity, options)
       })) ?? Promise.reject(new JudgmentPromptClaimIdentityError('missing SQLite job database'))
     )
+  },
+  assertPromptClaimIdentityMatch: async (
+    identity: PromptClaimIdentity,
+    options: PromptClaimIdentityOptions = {},
+  ): Promise<PromptClaimIdentityMatch['source']> => {
+    const match = await withOwnedJobDatabase(identity.jobId, false, (database) => {
+      return assertPromptClaimIdentityMatchFromDatabase(database, identity, options)
+    })
+
+    return match ? match.source : Promise.reject(new JudgmentPromptClaimIdentityError('missing SQLite job database'))
   },
   initializeJob: async (jobId: string) => {
     const [jobInfo, importedOutboxSeqFloor] = await Promise.all([

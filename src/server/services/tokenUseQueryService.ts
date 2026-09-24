@@ -88,6 +88,9 @@ const tokenUseInsertOnceWorkloadContext = getTokenUseWorkloadContext({
   maxResultRows: 1,
   routeOrJobKey: 'tokens.usage.insertOnce',
 })
+const tokenUseInsertOnceBatchWorkloadContext = getTokenUseWorkloadContext({
+  routeOrJobKey: 'tokens.usage.insertOnceBatch',
+})
 const tokenUseTopRequestsWorkloadContext = getTokenUseWorkloadContext({
   maxResultRows: 5,
   routeOrJobKey: 'tokens.usage.largestSingleRequest',
@@ -499,30 +502,67 @@ const insertTokenUse = async (values: Record<string, unknown>) => {
   }, tokenUseInsertWorkloadContext)
 }
 
+const insertTokenUseOnceWithRunner = async (
+  runner: TokenUseMutationRunner,
+  insertValues: Record<string, unknown>,
+): Promise<TokenUseRecord | null> => {
+  const [insertedRow] = await runner.queryJson<TokenUseRow>(getInsertTokenUseOnceSql(insertValues))
+
+  if (insertedRow) {
+    const insertedValue = getTokenUseValue(insertedRow)
+    await projectRequestAttemptCloseoutsForTokenUseValue(runner, insertedValue)
+    return insertedValue
+  }
+
+  const id = typeof insertValues.id === 'string' ? insertValues.id : ''
+  const existingValue = await getTokenUseById(runner, id)
+
+  if (!existingValue) {
+    return null
+  }
+
+  assertTokenUseIdempotentConflictMatches(existingValue, insertValues)
+  await projectRequestAttemptCloseoutsForTokenUseValue(runner, existingValue)
+
+  return existingValue
+}
+
 const insertTokenUseOnce = async (values: Record<string, unknown>) => {
   const insertValues = getInsertTokenUseValues(values)
 
   return getAppDatabaseService().transaction(async (tx) => {
-    const [insertedRow] = await tx.queryJson<TokenUseRow>(getInsertTokenUseOnceSql(insertValues))
-
-    if (insertedRow) {
-      const insertedValue = getTokenUseValue(insertedRow)
-      await projectRequestAttemptCloseoutsForTokenUseValue(tx, insertedValue)
-      return insertedValue
-    }
-
-    const id = typeof insertValues.id === 'string' ? insertValues.id : ''
-    const existingValue = await getTokenUseById(tx, id)
-
-    if (!existingValue) {
-      return null
-    }
-
-    assertTokenUseIdempotentConflictMatches(existingValue, insertValues)
-    await projectRequestAttemptCloseoutsForTokenUseValue(tx, existingValue)
-
-    return existingValue
+    return insertTokenUseOnceWithRunner(tx, insertValues)
   }, tokenUseInsertOnceWorkloadContext)
+}
+
+// Idempotent batch variant: one transaction for many rows. A row whose id already exists with
+// different values is reported as a conflict and skipped instead of failing the whole batch.
+const insertTokenUsesOnce = async (
+  valuesList: Array<Record<string, unknown>>,
+): Promise<{conflicts: TokenUseIdempotencyConflictError[]}> => {
+  if (valuesList.length === 0) {
+    return {conflicts: []}
+  }
+
+  return getAppDatabaseService().transaction(async (tx) => {
+    return valuesList.reduce<Promise<{conflicts: TokenUseIdempotencyConflictError[]}>>(
+      async (previous, values) => {
+        const state = await previous
+
+        try {
+          await insertTokenUseOnceWithRunner(tx, getInsertTokenUseValues(values))
+          return state
+        } catch (error) {
+          if (error instanceof TokenUseIdempotencyConflictError) {
+            return {conflicts: [...state.conflicts, error]}
+          }
+
+          throw error
+        }
+      },
+      Promise.resolve({conflicts: []}),
+    )
+  }, tokenUseInsertOnceBatchWorkloadContext) as Promise<{conflicts: TokenUseIdempotencyConflictError[]}>
 }
 
 const getLargestSingleRequestRows = async (orderColumn: 'total_prompt_tokens' | 'total_completion_tokens') => {
@@ -816,6 +856,7 @@ export const tokenUseQueryService = {
   getTotals,
   insertTokenUse,
   insertTokenUseOnce,
+  insertTokenUsesOnce,
 }
 
 export const getTokenUseQueryService = () => {
