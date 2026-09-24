@@ -40,8 +40,8 @@ const sqliteScanMaxWindowSize = 512
 const sqliteScanExhaustedCooldownMs = 60_000
 const defaultServingQueueReadTimeoutMs = 15_000
 const servingQueueReadTimeoutCooldownMs = 30_000
-const sqliteActiveBacklogRefillLowWatermarkRatio = 1
-const sqliteActiveBacklogRefillLowWatermarkMinimumTarget = 32
+const sqliteReadyRefillLowWatermarkRatio = 0.75
+const sqliteReadyRefillLowWatermarkMinimumTarget = 32
 let configuredServingQueueReadTimeoutMs = defaultServingQueueReadTimeoutMs
 const servingQueueReadTimeoutCooldownUntilByJobId = new Map<string, number>()
 
@@ -231,45 +231,25 @@ const readServingQueuePromptsWithTimeout = async ({
   return {promptData: null, timedOut: true}
 }
 
-const getActiveQueueBacklogCount = async ({
-  jobId,
-  readyCount,
-  sqliteService,
-}: {
-  jobId: string
-  readyCount: number
-  sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
-}): Promise<number> => {
-  const health = await (
-    sqliteService as {
-      getHealthSnapshot?: (
-        jobId: string,
-      ) => Promise<{promptCounts?: {claimed?: number; ready?: number; running?: number}}>
-    }
-  ).getHealthSnapshot?.(jobId)
-  const counts = health?.promptCounts
-
-  return counts
-    ? Math.max(0, Number(counts.ready ?? 0) + Number(counts.claimed ?? 0) + Number(counts.running ?? 0))
-    : readyCount
-}
-
-const getActiveBacklogRefillLowWatermark = (readyTargetPerJob: number): number => {
+// Only unclaimed ready rows count toward the reservoir. Claimed and running rows are work the
+// judge already holds (including claims left behind by judge restarts until they expire), so
+// counting them starved the reservoir while the LLM had free slots.
+const getReadyRefillLowWatermark = (readyTargetPerJob: number): number => {
   const target = Math.max(1, readyTargetPerJob)
 
-  return target < sqliteActiveBacklogRefillLowWatermarkMinimumTarget
+  return target < sqliteReadyRefillLowWatermarkMinimumTarget
     ? target
-    : Math.max(1, Math.floor(target * sqliteActiveBacklogRefillLowWatermarkRatio))
+    : Math.max(1, Math.floor(target * sqliteReadyRefillLowWatermarkRatio))
 }
 
-const shouldRefillActiveQueueBacklog = ({
-  activeQueueBacklogCount,
+const shouldRefillReadyReservoir = ({
+  readyCount,
   readyTargetPerJob,
 }: {
-  activeQueueBacklogCount: number
+  readyCount: number
   readyTargetPerJob: number
 }): boolean => {
-  return activeQueueBacklogCount < getActiveBacklogRefillLowWatermark(readyTargetPerJob)
+  return readyCount < getReadyRefillLowWatermark(readyTargetPerJob)
 }
 
 type PromptQueueEntry = {articleId: string; promptId: string}
@@ -660,17 +640,12 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   }
 
   const countOfReadyPrompts = await sqliteService.getReadyCount(job.id)
-  const activeQueueBacklogCount = await getActiveQueueBacklogCount({
-    jobId: job.id,
-    readyCount: countOfReadyPrompts,
-    sqliteService,
-  })
 
-  if (!shouldRefillActiveQueueBacklog({activeQueueBacklogCount, readyTargetPerJob})) {
+  if (!shouldRefillReadyReservoir({readyCount: countOfReadyPrompts, readyTargetPerJob})) {
     return
   }
 
-  const promptsToFetchCount = getPromptsToFetchCount(activeQueueBacklogCount, readyTargetPerJob, addToQueueMaxBatchSize)
+  const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
 
   if (promptsToFetchCount === 0) {
     return
@@ -758,11 +733,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       sqliteService,
     })
 
-    const nextReadyCount = await getActiveQueueBacklogCount({
-      jobId: job.id,
-      readyCount: await sqliteService.getReadyCount(job.id),
-      sqliteService,
-    })
+    const nextReadyCount = await sqliteService.getReadyCount(job.id)
     const wrapVisibilityAckSeq = promptData.nextCursor ? null : scanState.lastProjectRefreshAckSeq
     const nextScanState = promptData.nextCursor
       ? {cursor: promptData.nextCursor, exhaustedAt: null, wrapVisibilityAckSeq: null}
@@ -777,7 +748,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 
   const getNewStartMs = Date.now()
 
-  await scanWindow({cursor: baseCursor, readyCount: activeQueueBacklogCount, windowsLeft: sqliteScanMaxWindowsPerTick})
+  await scanWindow({cursor: baseCursor, readyCount: countOfReadyPrompts, windowsLeft: sqliteScanMaxWindowsPerTick})
 
   const getNewMs = Date.now() - getNewStartMs
   const finalReadyCount = await sqliteService.getReadyCount(job.id)
@@ -785,7 +756,6 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   addToQueueLogger.log(`judgmentQueue.addToQueue.topUp.${job.id}`, '[addToQueue] sqlite top-up check', {
     component: addToQueueComponent,
     event: 'topUp',
-    activeBacklog: activeQueueBacklogCount,
     fetchedNeeded: promptsToFetchCount,
     jobId: job.id,
     ms: getNewMs,

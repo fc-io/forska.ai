@@ -780,7 +780,7 @@ test('uses saved codex provider caps for per-connection ready targets', async ()
   expect(readyDeficits).toEqual([20])
 })
 
-test('skips OLAP refill when active SQLite backlog is at target', async () => {
+test('skips OLAP refill while ready prompts stay at the low watermark', async () => {
   const getPromptsCalls = {count: 0}
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async () => {
@@ -796,10 +796,10 @@ test('skips OLAP refill when active SQLite backlog is at target', async () => {
       return entries
     },
     getHealthSnapshot: async () => {
-      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 400, judged: 0, ready: 0, running: 0, skipped: 0}}
+      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 0, judged: 0, ready: 300, running: 0, skipped: 0}}
     },
     getReadyCount: async () => {
-      return 0
+      return 300
     },
     getScanState: async () => {
       return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
@@ -840,7 +840,7 @@ test('skips OLAP refill when active SQLite backlog is at target', async () => {
   expect(getPromptsCalls.count).toBe(0)
 })
 
-test('refills OLAP when active SQLite backlog is below target', async () => {
+test('refills OLAP below the low watermark without counting claimed prompts as ready', async () => {
   const getPromptsCalls = {count: 0}
   const readyDeficits: number[] = []
   const sqliteService: MockSqliteService = {
@@ -858,10 +858,10 @@ test('refills OLAP when active SQLite backlog is below target', async () => {
       return entries
     },
     getHealthSnapshot: async () => {
-      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 390, judged: 0, ready: 0, running: 0, skipped: 0}}
+      return {orphanedJudgedRowCount: 0, promptCounts: {claimed: 390, judged: 0, ready: 299, running: 0, skipped: 0}}
     },
     getReadyCount: async () => {
-      return 0
+      return 299
     },
     getScanState: async () => {
       return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
@@ -903,7 +903,7 @@ test('refills OLAP when active SQLite backlog is below target', async () => {
   await module.judgmentsJobsAddToQueue('server-1')
 
   expect(getPromptsCalls.count).toBe(1)
-  expect(readyDeficits).toEqual([10])
+  expect(readyDeficits).toEqual([101])
 })
 
 test('caps each OLAP refill window while allowing one tick to fill provider-sized reservoirs', async () => {
