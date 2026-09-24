@@ -695,6 +695,81 @@ test('owner-backed claim route returns immutable execution snapshot identity and
   await sqliteService.closeAll()
 })
 
+test('owner-backed claims of prepared prompts serve the snapshot payload from the job SQLite store', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const suffix = Date.now()
+  const projectId = `prepared-snapshot-project-${suffix}`
+  const modelId = `prepared-snapshot-model-${suffix}`
+  const connectionId = `prepared-snapshot-connection-${suffix}`
+  const jobId = `prepared-snapshot-job-${suffix}`
+  const articleId = `prepared-snapshot-article-${suffix}`
+  const promptId = `prepared-snapshot-prompt-${suffix}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_summary)
+    VALUES ('${articleId}', 'external-${articleId}', 'Prepared snapshot article', 'Prepared snapshot summary')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prepared snapshot prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order)
+    VALUES ('project-prompt-${promptId}', '${projectId}', '${promptId}', 0)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('project-article-${articleId}', '${projectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  expect(await sqliteService.prepareReadyPrompts(jobId, 'server-owner', 10)).toBe(1)
+
+  const claimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const claimBody = (await claimResponse.json()) as {
+    data: {claims: Array<{claimId: string; executionSnapshotHash: string; executionSnapshotId: string}>}
+  }
+  const [claim] = claimBody.data.claims
+
+  if (!claim) {
+    throw new Error('Expected a prepared claim')
+  }
+
+  await runDatabase(`DELETE FROM app.judgment_execution_snapshot WHERE id = '${claim.executionSnapshotId}'`)
+
+  const snapshotPath = `http://localhost/api/judgmentsjobs/execution-snapshots/${claim.executionSnapshotId}?executionSnapshotHash=${claim.executionSnapshotHash}`
+  const preparedResponse = await app.handle(new Request(`${snapshotPath}&jobId=${jobId}`))
+  const preparedBody = (await preparedResponse.json()) as {
+    data: {claimId: string; payload: {article: {articleSummary: string | null}}}
+  }
+  const duckdbOnlyResponse = await app.handle(new Request(snapshotPath))
+
+  expect(claimResponse.status).toBe(200)
+  expect(preparedResponse.status).toBe(200)
+  expect(preparedBody.data.claimId).toBe(claim.claimId)
+  expect(preparedBody.data.payload.article.articleSummary).toBe('Prepared snapshot summary')
+  expect(duckdbOnlyResponse.status).toBe(404)
+
+  await sqliteService.closeAll()
+})
+
 test('owner-backed claim snapshots resolve legacy scoped article ids through import compatibility', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

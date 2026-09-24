@@ -13,7 +13,10 @@ import {
 } from '../../services/articleIdCompatibilityAdapter.ts'
 import {
   createJudgmentExecutionSnapshotsForClaims,
+  createJudgmentExecutionSnapshotsWithRecordsForClaims,
   createTransientJudgmentExecutionSnapshotsForClaims,
+  type JudgmentExecutionSnapshotClaim,
+  type JudgmentExecutionSnapshotRecord,
 } from '../../services/judgmentExecutionSnapshotService.ts'
 import {getJudgmentJobSqliteHealthProjectionService} from '../../services/judgmentJobSqliteHealthProjectionService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
@@ -913,6 +916,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
   ensureOutboxClaimSchema(database)
   ensureCompletionAckSchema(database)
   ensureCompletionTokenUseOutboxSchema(database)
+  ensurePreparedExecutionSnapshotSchema(database)
 
   openDatabases.set(jobId, database)
   return database
@@ -1052,6 +1056,9 @@ const queuePromptColumns = [
   {name: 'retry_after_at', sql: 'TEXT'},
   {name: 'execution_snapshot_id', sql: 'TEXT'},
   {name: 'execution_snapshot_hash', sql: 'TEXT'},
+  {name: 'prepared_claim_id', sql: 'TEXT'},
+  {name: 'prepared_execution_snapshot_id', sql: 'TEXT'},
+  {name: 'prepared_execution_snapshot_hash', sql: 'TEXT'},
   {name: 'request_attempt_manifest_json', sql: `TEXT NOT NULL DEFAULT '[]'`},
   {name: 'request_attempt_manifest_version', sql: 'INTEGER NOT NULL DEFAULT 0'},
   {name: 'request_attempt_manifest_repair_json', sql: 'TEXT'},
@@ -1310,6 +1317,19 @@ const ensureCompletionTokenUseOutboxSchema = (database: Database) => {
     CREATE TABLE IF NOT EXISTS completion_token_use_outbox (
       token_use_id TEXT PRIMARY KEY,
       completion_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `)
+}
+
+// Execution snapshots built ahead of the claim by the refill. The owner serves their payload to
+// the judge from here, so neither the claim nor the judge's snapshot fetch waits on DuckDB.
+const ensurePreparedExecutionSnapshotSchema = (database: Database) => {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS prepared_execution_snapshot (
+      execution_snapshot_id TEXT PRIMARY KEY,
+      payload_hash TEXT NOT NULL,
+      record_json TEXT NOT NULL,
       created_at TEXT NOT NULL
     )
   `)
@@ -3616,7 +3636,10 @@ const markReadyQueuePromptClaimed = ({
             server_id = ?,
             claim_id = ?,
             execution_snapshot_id = ?,
-            execution_snapshot_hash = ?
+            execution_snapshot_hash = ?,
+            prepared_claim_id = NULL,
+            prepared_execution_snapshot_id = NULL,
+            prepared_execution_snapshot_hash = NULL
         WHERE id = ?
           AND status = 'ready'
       `,
@@ -3700,6 +3723,280 @@ const claimReadyQueuePromptRows = async ({
 
       return claimed ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id, ...claim}] : []
     })
+  })()
+}
+
+type PreparedQueuePromptRow = QueuePromptRow & {
+  preparedClaimId: string
+  preparedExecutionSnapshotHash: string
+  preparedExecutionSnapshotId: string
+}
+
+const preparedExecutionSnapshotMaxAgeMs = 15 * 60 * 1000
+
+const getPreparedReadyQueuePromptRows = (database: Database, limit: number): PreparedQueuePromptRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          id,
+          article_id AS articleId,
+          prompt_id AS promptId,
+          ready_insert_seq AS readyInsertSeq,
+          prepared_claim_id AS preparedClaimId,
+          prepared_execution_snapshot_id AS preparedExecutionSnapshotId,
+          prepared_execution_snapshot_hash AS preparedExecutionSnapshotHash
+        FROM queue_prompt
+        WHERE status = 'ready'
+          AND prepared_claim_id IS NOT NULL
+          AND (retry_after_at IS NULL OR retry_after_at <= ?)
+        ORDER BY ready_insert_seq ASC, id ASC
+        LIMIT ?
+      `,
+    )
+    .all(new Date().toISOString(), limit) as PreparedQueuePromptRow[]
+}
+
+const getUnpreparedReadyQueuePromptRows = (database: Database, limit: number): QueuePromptRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          id,
+          article_id AS articleId,
+          prompt_id AS promptId,
+          ready_insert_seq AS readyInsertSeq
+        FROM queue_prompt
+        WHERE status = 'ready'
+          AND prepared_claim_id IS NULL
+        ORDER BY ready_insert_seq ASC, id ASC
+        LIMIT ?
+      `,
+    )
+    .all(limit) as QueuePromptRow[]
+}
+
+// A claim of prepared rows is a single SQLite transaction: the claim id and execution snapshot
+// were created by the refill, and the identity comes from job_info, which is what completion
+// checks compare against.
+const claimPreparedQueuePromptRows = ({
+  database,
+  jobId,
+  rows,
+  serverJobId,
+}: {
+  database: Database
+  jobId: string
+  rows: PreparedQueuePromptRow[]
+  serverJobId: string
+}): QueuePromptClaim[] => {
+  const jobInfo = getOrphanedJudgedQueueRepairJobInfo(database, jobId)
+
+  if (!jobInfo || rows.length === 0) {
+    return []
+  }
+
+  const now = new Date().toISOString()
+  const claimPreparedRow = database.query(`
+    UPDATE queue_prompt
+    SET status = 'claimed',
+        sent_at = ?,
+        updated_at = ?,
+        server_id = ?,
+        claim_id = prepared_claim_id,
+        execution_snapshot_id = prepared_execution_snapshot_id,
+        execution_snapshot_hash = prepared_execution_snapshot_hash,
+        prepared_claim_id = NULL,
+        prepared_execution_snapshot_id = NULL,
+        prepared_execution_snapshot_hash = NULL
+    WHERE id = ?
+      AND status = 'ready'
+      AND prepared_claim_id = ?
+  `)
+
+  return database.transaction(() => {
+    recordJudgeWorkerHeartbeatFromDatabase(database, serverJobId)
+
+    return rows.flatMap((row) => {
+      const result = claimPreparedRow.run(now, now, serverJobId, row.id, row.preparedClaimId) as {changes?: number}
+
+      return Number(result.changes ?? 0) === 1
+        ? [
+            {
+              articleId: row.articleId,
+              claimId: row.preparedClaimId,
+              executionSnapshotHash: row.preparedExecutionSnapshotHash,
+              executionSnapshotId: row.preparedExecutionSnapshotId,
+              jobId,
+              modelId: jobInfo.modelId,
+              projectId: jobInfo.projectId,
+              promptId: row.promptId,
+              recordId: row.id,
+              useAbstract: jobInfo.useAbstract,
+              useFulltext: jobInfo.useFulltext,
+              useFulltextNoImages: jobInfo.useFulltextNoImages,
+              useTitle: jobInfo.useTitle,
+            },
+          ]
+        : []
+    })
+  })()
+}
+
+const isSnapshotIdentityForJobInfo = (
+  identity: JudgmentExecutionSnapshotClaim,
+  jobInfo: OrphanedJudgedQueueRepairJobInfo,
+): boolean => {
+  return (
+    identity.modelId === jobInfo.modelId
+    && identity.projectId === jobInfo.projectId
+    && identity.useAbstract === jobInfo.useAbstract
+    && identity.useFulltext === jobInfo.useFulltext
+    && identity.useFulltextNoImages === jobInfo.useFulltextNoImages
+    && identity.useTitle === jobInfo.useTitle
+  )
+}
+
+const resetExpiredPreparedQueuePrompts = (database: Database): void => {
+  database
+    .query(
+      `
+        UPDATE queue_prompt
+        SET prepared_claim_id = NULL,
+            prepared_execution_snapshot_id = NULL,
+            prepared_execution_snapshot_hash = NULL
+        WHERE status = 'ready'
+          AND prepared_claim_id IS NOT NULL
+          AND updated_at < ?
+      `,
+    )
+    .run(new Date(Date.now() - preparedExecutionSnapshotMaxAgeMs).toISOString())
+}
+
+const pruneUnreferencedPreparedExecutionSnapshots = (database: Database): void => {
+  database
+    .query(
+      `
+        DELETE FROM prepared_execution_snapshot
+        WHERE execution_snapshot_id NOT IN (
+          SELECT prepared_execution_snapshot_id
+          FROM queue_prompt
+          WHERE prepared_execution_snapshot_id IS NOT NULL
+          UNION
+          SELECT execution_snapshot_id
+          FROM queue_prompt
+          WHERE execution_snapshot_id IS NOT NULL
+            AND status <> 'judged'
+        )
+      `,
+    )
+    .run()
+}
+
+// Builds claim ids and execution snapshots for ready rows ahead of the claim, with the same
+// canonical-article handling the claim path uses, and keeps each payload in SQLite.
+const prepareReadyQueuePromptRows = async ({
+  database,
+  jobId,
+  limit,
+  serverJobId,
+}: {
+  database: Database
+  jobId: string
+  limit: number
+  serverJobId: string
+}): Promise<number> => {
+  resetExpiredPreparedQueuePrompts(database)
+  pruneUnreferencedPreparedExecutionSnapshots(database)
+
+  const rows = getUnpreparedReadyQueuePromptRows(database, limit)
+
+  if (rows.length === 0) {
+    return 0
+  }
+
+  const canonicalRows = await getCanonicalQueuePromptRows(jobId, rows)
+  const claimableRows = getClaimableCanonicalQueuePromptRows({database, jobId, rows: canonicalRows})
+
+  if (claimableRows.length === 0) {
+    return 0
+  }
+
+  const snapshotSettings = getQueuePromptSnapshotSettings(database, jobId)
+  const rowClaims = claimableRows.map((row) => {
+    return {claimId: randomUUID(), row}
+  })
+  const snapshots = await createJudgmentExecutionSnapshotsWithRecordsForClaims(
+    rowClaims.map(({claimId, row}) => {
+      return {
+        articleId: row.articleId,
+        claimId,
+        claimedBy: serverJobId,
+        jobId,
+        promptId: row.promptId,
+        queueRecordId: row.id,
+        ...(snapshotSettings ?? {}),
+      }
+    }),
+  )
+
+  await ensureOwnedJobLease(jobId, serverJobId)
+
+  const jobInfo = getOrphanedJudgedQueueRepairJobInfo(database, jobId)
+
+  if (!jobInfo) {
+    return 0
+  }
+
+  const now = new Date().toISOString()
+  const markPrepared = database.query(`
+    UPDATE queue_prompt
+    SET article_id = ?,
+        prepared_claim_id = ?,
+        prepared_execution_snapshot_id = ?,
+        prepared_execution_snapshot_hash = ?,
+        updated_at = ?
+    WHERE id = ?
+      AND status = 'ready'
+      AND prepared_claim_id IS NULL
+  `)
+  const insertPreparedSnapshot = database.query(`
+    INSERT OR REPLACE INTO prepared_execution_snapshot (execution_snapshot_id, payload_hash, record_json, created_at)
+    VALUES (?, ?, ?, ?)
+  `)
+
+  return database.transaction(() => {
+    return rowClaims.reduce((preparedCount, {claimId, row}, index) => {
+      const snapshot = snapshots[index]
+
+      if (!snapshot || !isSnapshotIdentityForJobInfo(snapshot.identity, jobInfo)) {
+        return preparedCount
+      }
+
+      const result = markPrepared.run(
+        row.articleId,
+        claimId,
+        snapshot.identity.executionSnapshotId,
+        snapshot.identity.executionSnapshotHash,
+        now,
+        row.id,
+      ) as {changes?: number}
+
+      if (Number(result.changes ?? 0) !== 1) {
+        return preparedCount
+      }
+
+      if (snapshot.record) {
+        insertPreparedSnapshot.run(
+          snapshot.identity.executionSnapshotId,
+          snapshot.identity.executionSnapshotHash,
+          JSON.stringify(snapshot.record),
+          now,
+        )
+      }
+
+      return preparedCount + 1
+    }, 0)
   })()
 }
 
@@ -4470,6 +4767,12 @@ const sqliteService = {
         return []
       }
 
+      const preparedRows = getPreparedReadyQueuePromptRows(database, limit)
+
+      if (preparedRows.length > 0) {
+        return claimPreparedQueuePromptRows({database, jobId, rows: preparedRows, serverJobId})
+      }
+
       return await claimReadyQueuePromptRows({
         database,
         jobId,
@@ -4479,6 +4782,43 @@ const sqliteService = {
     } finally {
       finishJudgmentJobDatabaseOperation(jobId)
     }
+  },
+  prepareReadyPrompts: async (jobId: string, serverJobId: string, limit: number): Promise<number> => {
+    startJudgmentJobDatabaseOperation(jobId)
+
+    try {
+      await ensureOwnedJobLease(jobId, serverJobId)
+      const database = getOpenDatabase(jobId, false)
+
+      return database ? await prepareReadyQueuePromptRows({database, jobId, limit, serverJobId}) : 0
+    } finally {
+      finishJudgmentJobDatabaseOperation(jobId)
+    }
+  },
+  getPreparedExecutionSnapshotRecord: async ({
+    executionSnapshotHash,
+    executionSnapshotId,
+    jobId,
+  }: {
+    executionSnapshotHash: string
+    executionSnapshotId: string
+    jobId: string
+  }): Promise<JudgmentExecutionSnapshotRecord | null> => {
+    const row = withJobDatabase(jobId, false, (database) => {
+      return database
+        .query(
+          `
+            SELECT record_json AS recordJson
+            FROM prepared_execution_snapshot
+            WHERE execution_snapshot_id = ?
+              AND payload_hash = ?
+            LIMIT 1
+          `,
+        )
+        .get(executionSnapshotId, executionSnapshotHash) as {recordJson: string} | null
+    })
+
+    return row ? (JSON.parse(row.recordJson) as JudgmentExecutionSnapshotRecord) : null
   },
   claimReadyPromptsWithoutLease: async (
     jobId: string,

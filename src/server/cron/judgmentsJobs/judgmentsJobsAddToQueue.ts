@@ -617,6 +617,44 @@ const hasSqliteExhaustedCooldown = (scanState: {exhaustedAt: Date | null; wrapVi
     : false
 }
 
+const readyPromptPrepareBatchSize = 512
+
+// Build claim ids and execution snapshots for ready rows ahead of the judge's claim, so claims
+// only touch SQLite. A failed pass leaves rows unprepared; the claim path still handles those.
+const prepareReadyPromptsForJob = async ({
+  job,
+  serverJobId,
+  sqliteService,
+}: {
+  job: Job
+  serverJobId: string
+  sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
+}): Promise<void> => {
+  const {prepareReadyPrompts} = sqliteService as {
+    prepareReadyPrompts?: (jobId: string, serverJobId: string, limit: number) => Promise<number>
+  }
+
+  if (!prepareReadyPrompts) {
+    return
+  }
+
+  try {
+    await prepareReadyPrompts(job.id, serverJobId, readyPromptPrepareBatchSize)
+  } catch (error) {
+    addToQueueWarningLogger.warn(
+      `judgmentQueue.addToQueue.prepareReadyPromptsFailed.${job.id}`,
+      '[addToQueue] ready prompt preparation deferred',
+      {
+        component: addToQueueComponent,
+        errorMessage: getJudgmentJobSqliteErrorMessage(error),
+        event: 'prepareReadyPromptsFailed',
+        jobId: job.id,
+        projectId: job.projectId,
+      },
+    )
+  }
+}
+
 const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
   const sqliteService = getJudgmentJobSqliteService()
@@ -639,6 +677,8 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 
     throw error
   }
+
+  await prepareReadyPromptsForJob({job, serverJobId, sqliteService})
 
   const countOfReadyPrompts = await sqliteService.getReadyCount(job.id)
 
@@ -750,6 +790,8 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   const getNewStartMs = Date.now()
 
   await scanWindow({cursor: baseCursor, readyCount: countOfReadyPrompts, windowsLeft: sqliteScanMaxWindowsPerTick})
+  // Prepare the rows this refill just inserted so they are claimable without DuckDB this tick.
+  await prepareReadyPromptsForJob({job, serverJobId, sqliteService})
 
   const getNewMs = Date.now() - getNewStartMs
   const finalReadyCount = await sqliteService.getReadyCount(job.id)

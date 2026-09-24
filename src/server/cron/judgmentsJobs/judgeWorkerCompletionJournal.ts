@@ -701,13 +701,17 @@ export const heartbeatOwnerBackedJudgmentWorker = async ({
 export const getOwnerBackedJudgmentExecutionSnapshot = async ({
   executionSnapshotHash,
   executionSnapshotId,
+  jobId,
 }: {
   executionSnapshotHash: string
   executionSnapshotId: string
+  jobId?: string
 }): Promise<JudgmentExecutionSnapshotRecord> => {
+  const jobQuery = jobId ? `&jobId=${encodeURIComponent(jobId)}` : ''
+
   return requestOwnerJson<JudgmentExecutionSnapshotRecord>({
     method: 'GET',
-    path: `/api/judgmentsjobs/execution-snapshots/${encodeURIComponent(executionSnapshotId)}?executionSnapshotHash=${encodeURIComponent(executionSnapshotHash)}`,
+    path: `/api/judgmentsjobs/execution-snapshots/${encodeURIComponent(executionSnapshotId)}?executionSnapshotHash=${encodeURIComponent(executionSnapshotHash)}${jobQuery}`,
   })
 }
 
