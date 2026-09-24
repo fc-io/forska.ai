@@ -11,6 +11,7 @@ import {
   getJudgeWorkerReadOnlyAppDatabaseService,
 } from '../services/appReadOnlyDatabaseService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
+import {canCurrentServerOwnDuckdb} from '../utils/serverRuntimeRole.ts'
 import {getReviewServingQueueRebuildSourceCtes} from './reviewServingQueueProjector.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 
@@ -718,6 +719,16 @@ const getNextCursor = (rows: readonly JudgmentJobServingCursorRow[], hasMore: bo
     : null
 }
 
+// The judge refill runs on the DuckDB owner. Its serving-queue reads use foreground priority there
+// so they are not queued behind background review-serving projector work.
+const getJudgeRefillReadDatabaseService = () => {
+  const database = getJudgeWorkerReadOnlyAppDatabaseService()
+
+  return canCurrentServerOwnDuckdb() && typeof database.queryJsonOwnerMain === 'function'
+    ? {...database, queryJson: database.queryJsonOwnerMain}
+    : database
+}
+
 export const getJudgmentJobUnassessedPairsFromServing = async (params: {
   cursor: UnassessedPairsCursor | null
   jobId: string
@@ -725,7 +736,7 @@ export const getJudgmentJobUnassessedPairsFromServing = async (params: {
   projectId: string
 }): Promise<UnassessedPairsResult> => {
   const limit = Math.max(0, Math.min(5_000, Math.trunc(params.numberOfPromptsToGet)))
-  const database = getJudgeWorkerReadOnlyAppDatabaseService()
+  const database = getJudgeRefillReadDatabaseService()
   const scopeResolution = await getActiveServingScopeResolution(
     params.projectId,
     `judgmentQueue.${params.jobId}.unassessedPairs`,

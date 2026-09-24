@@ -6576,19 +6576,30 @@ const getReviewServingProjectorWorkerDatabase = (
   & ReviewServingRetentionServiceDatabase => {
   const database = dependencies.getDatabase?.() ?? getAppDatabaseService()
 
+  // Projector work runs at background priority on the owner's serialized DuckDB queue, so judge
+  // claims, refills and imports (foreground) are not stuck behind it. Queue aging keeps it from
+  // starving.
+  const backgroundDatabase = database as {
+    queryJsonBackground?: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
+    runBackground?: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
+    transactionBackground?: typeof database.transaction
+  }
+  const {queryJsonBackground, runBackground, transactionBackground} = backgroundDatabase
+
   return {
     ...database,
     queryJson: <T>(statement: string) => {
-      return database.queryJson<T>(statement, workloadContext)
+      return queryJsonBackground
+        ? queryJsonBackground<T>(statement, workloadContext)
+        : database.queryJson<T>(statement, workloadContext)
     },
-    queryJsonBackground:
-      database.queryJsonBackground === undefined
-        ? undefined
-        : <T>(statement: string) => {
-            return database.queryJsonBackground<T>(statement, workloadContext)
-          },
+    queryJsonBackground: queryJsonBackground
+      ? <T>(statement: string) => {
+          return queryJsonBackground<T>(statement, workloadContext)
+        }
+      : undefined,
     run: (statement: string) => {
-      return database.run(statement, workloadContext)
+      return runBackground ? runBackground(statement, workloadContext) : database.run(statement, workloadContext)
     },
     transaction: <T>(
       operation: (tx: {
@@ -6597,7 +6608,9 @@ const getReviewServingProjectorWorkerDatabase = (
       }) => Promise<T>,
       transactionWorkloadContext?: DuckdbWorkloadContext,
     ) => {
-      return database.transaction(operation, transactionWorkloadContext ?? workloadContext)
+      return transactionBackground
+        ? transactionBackground(operation, transactionWorkloadContext ?? workloadContext)
+        : database.transaction(operation, transactionWorkloadContext ?? workloadContext)
     },
   } as ReviewServingProjectorWorkerDatabase
     & ReviewServingChunkManifestRepositoryDatabase
