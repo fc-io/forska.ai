@@ -1,10 +1,11 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {drainCompletionTokenUseOutbox} from './judgmentCompletionTokenUseOutbox.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {runJudgmentJobSqliteOutboxImportCycle} from './judgmentJobSqliteOutboxImport.ts'
-import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {
   getJudgmentJobSqliteErrorMessage,
   isTransientJudgmentJobSqliteLockMessage,
@@ -16,7 +17,7 @@ const drainingRetentionPruneChunkSize = 1_000
 const maxDrainingRetentionPruneBatchesPerImportTick = 1
 const maxImportableJudgmentJobsPerScan = 100
 const maxTrackedJudgmentJobIdsPerLookup = 100
-const activeJobImportMinOldestUnexportedAgeMs = 5_000
+const activeJobImportMinOldestUnexportedAgeMs = 30_000
 let trackedImportableJudgmentJobScanOffset = 0
 const judgmentJobSqliteBackgroundImportWorkloadContext = {
   fallbackIntent: 'reject' as const,
@@ -408,12 +409,33 @@ const runNextJudgmentJobSqliteBackgroundImport = async ({
     : nextSummary
 }
 
+const drainCompletionTokenUseForJobs = async (jobIds: string[]): Promise<void> => {
+  await jobIds.reduce(async (previous, jobId) => {
+    await previous
+
+    try {
+      await drainCompletionTokenUseOutbox(jobId)
+    } catch (error) {
+      if (!(error instanceof JudgmentJobLeaseError)) {
+        throw error
+      }
+    }
+  }, Promise.resolve())
+}
+
 export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimedBy: string}) => {
   const sqliteService = getJudgmentJobSqliteService()
 
   await sqliteService.syncOwnedLeases([])
 
-  const summary = await runNextJudgmentJobSqliteBackgroundImport({claimedBy, jobs: await getImportableJudgmentJobs()})
+  const jobs = await getImportableJudgmentJobs()
+  const summary = await runNextJudgmentJobSqliteBackgroundImport({claimedBy, jobs})
+
+  await drainCompletionTokenUseForJobs(
+    jobs.map((job) => {
+      return job.id
+    }),
+  )
 
   await (sqliteService as {reconcileProjectRefreshAcks?: () => Promise<number>}).reconcileProjectRefreshAcks?.()
 

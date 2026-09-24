@@ -193,6 +193,7 @@ test('background import scans every idle active or draining job in a single impo
                   }
                 },
                 hasOwnedLease: () => false,
+                getPendingCompletionTokenUse: async () => [],
                 syncOwnedLeases: async (jobIds) => {
                   syncedLeaseJobIds = jobIds
                 },
@@ -325,6 +326,7 @@ test('background import filters tracked sqlite jobs before applying the importab
                   return null
                 },
                 hasOwnedLease: () => false,
+                getPendingCompletionTokenUse: async () => [],
                 syncOwnedLeases: async () => {},
               }
             },
@@ -448,6 +450,7 @@ test('background import scans past tracked draining lock skips within the import
                   return null
                 },
                 hasOwnedLease: () => false,
+                getPendingCompletionTokenUse: async () => [],
                 syncOwnedLeases: async () => {},
               }
             },
@@ -581,6 +584,7 @@ test('background import caps tracked importable jobs after database filtering', 
                   return null
                 },
                 hasOwnedLease: () => false,
+                getPendingCompletionTokenUse: async () => [],
                 syncOwnedLeases: async () => {},
               }
             },
@@ -716,6 +720,7 @@ test('background import fast flushes draining jobs before active jobs', () => {
                     ? {outboxRowsDeleted: 700, queuePromptRowsDeleted: 700}
                     : {outboxRowsDeleted: 0, queuePromptRowsDeleted: 0}
                 },
+                getPendingCompletionTokenUse: async () => [],
                 syncOwnedLeases: async () => {},
               }
             },
@@ -861,6 +866,7 @@ test('background import skips locked draining jobs and imports the next candidat
                   return null
                 },
                 hasOwnedLease: () => false,
+                getPendingCompletionTokenUse: async () => [],
                 syncOwnedLeases: async () => {},
               }
             },
@@ -1014,6 +1020,7 @@ test('background import records metadata and quarantines repeated failures for t
                   return null
                 },
                 hasOwnedLease: () => false,
+                getPendingCompletionTokenUse: async () => [],
                 syncOwnedLeases: async () => {},
               }
             },
@@ -1138,6 +1145,7 @@ test('background import skips transient SQLite locks and lease conflicts without
                   return null
                 },
                 hasOwnedLease: () => false,
+                getPendingCompletionTokenUse: async () => [],
                 syncOwnedLeases: async () => {},
               }
             },
@@ -1267,6 +1275,7 @@ test('background import releases an owned sqlite lease and continues scanning id
                 releaseOwnedLease: async (jobId) => {
                   releasedOwnedLeaseJobIds.push(jobId)
                 },
+                getPendingCompletionTokenUse: async () => [],
                 syncOwnedLeases: async () => {},
               }
             },

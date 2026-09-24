@@ -64,11 +64,12 @@ test('background import continues past an idle job to the next job with outbox w
           },
         }))
         void mock.module(sqliteServicePath, () => ({
+          JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
           getJudgmentJobSqliteService: () => ({
             getHealthSnapshot: async (jobId) => ({
               claimedOutboxCount: 0,
               hasOutboxRows: jobId === 'job-b-ready',
-              oldestUnexportedAgeMs: jobId === 'job-b-ready' ? 5_000 : null,
+              oldestUnexportedAgeMs: jobId === 'job-b-ready' ? 30_000 : null,
             }),
             hasOwnedLease: () => false,
             reconcileProjectRefreshAcks: async () => {
@@ -77,6 +78,7 @@ test('background import continues past an idle job to the next job with outbox w
             },
             releaseOwnedLease: async () => {},
             syncOwnedLeases: async () => {},
+            getPendingCompletionTokenUse: async () => [],
           }),
         }))
 
@@ -105,7 +107,7 @@ test('background import continues past an idle job to the next job with outbox w
   expect(result.summary).toMatchObject({attemptedCount: 2, skippedCount: 1, succeededCount: 1})
 })
 
-test('background import waits until the oldest unexported outbox row is 5 s old before importing an active job', () => {
+test('background import waits until the oldest unexported outbox row is 30 s old before importing an active job', () => {
   const run = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -154,11 +156,12 @@ test('background import waits until the oldest unexported outbox row is 5 s old 
           },
         }))
         void mock.module(sqliteServicePath, () => ({
+          JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
           getJudgmentJobSqliteService: () => ({
             getHealthSnapshot: async (jobId) => ({
               claimedOutboxCount: 0,
               hasOutboxRows: jobId === 'job-b-ready',
-              oldestUnexportedAgeMs: jobId === 'job-b-ready' ? 4_999 : null,
+              oldestUnexportedAgeMs: jobId === 'job-b-ready' ? 29_999 : null,
             }),
             hasOwnedLease: () => false,
             reconcileProjectRefreshAcks: async () => {
@@ -167,6 +170,7 @@ test('background import waits until the oldest unexported outbox row is 5 s old 
             },
             releaseOwnedLease: async () => {},
             syncOwnedLeases: async () => {},
+            getPendingCompletionTokenUse: async () => [],
           }),
         }))
 
@@ -243,11 +247,12 @@ test('background import treats exported ack-only outbox rows as idle import work
           },
         }))
         void mock.module(sqliteServicePath, () => ({
+          JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
           getJudgmentJobSqliteService: () => ({
             getHealthSnapshot: async (jobId) => ({
               claimedOutboxCount: 0,
               hasOutboxRows: true,
-              oldestUnexportedAgeMs: jobId === 'job-b-unexported' ? 5_000 : null,
+              oldestUnexportedAgeMs: jobId === 'job-b-unexported' ? 30_000 : null,
             }),
             hasOwnedLease: () => false,
             reconcileProjectRefreshAcks: async () => {
@@ -256,6 +261,7 @@ test('background import treats exported ack-only outbox rows as idle import work
             },
             releaseOwnedLease: async () => {},
             syncOwnedLeases: async () => {},
+            getPendingCompletionTokenUse: async () => [],
           }),
         }))
 
@@ -343,6 +349,7 @@ test('draining background import runs a bounded retention cleanup pass', () => {
           },
         }))
         void mock.module(sqliteServicePath, () => ({
+          JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
           getJudgmentJobSqliteService: () => ({
             checkpointWal: async ({jobId}) => {
               if (jobId !== 'draining-job') throw new Error('unexpected checkpoint job ' + jobId)
@@ -370,6 +377,7 @@ test('draining background import runs a bounded retention cleanup pass', () => {
             },
             releaseOwnedLease: async () => {},
             syncOwnedLeases: async () => {},
+            getPendingCompletionTokenUse: async () => [],
           }),
         }))
 
