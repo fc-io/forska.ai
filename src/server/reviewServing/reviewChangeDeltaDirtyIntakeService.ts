@@ -4,7 +4,10 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getIntegerValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
-import {type ReviewServingDirtyWorkTransaction, upsertReviewServingDirtyWork} from './reviewServingDirtyWorkService.ts'
+import {
+  type ReviewServingDirtyWorkTransaction,
+  upsertReviewServingDirtyWorkBatch,
+} from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingInvalidationRuleOrNull,
   type ReviewServingInvalidationRule,
@@ -346,20 +349,17 @@ const commitValidatedReviewChangeDeltasToDirtyWork = async (
       return {...delta, ...projection}
     })
   })
-  const upserts = await projectionDeltas.reduce<Promise<{skipped: boolean}[]>>(async (previousRun, delta) => {
-    const results = await previousRun
-    const result = await upsertReviewServingDirtyWork(
-      {
+  const upserts = await upsertReviewServingDirtyWorkBatch(
+    projectionDeltas.map((delta) => {
+      return {
         latestDeltaId: delta.deltaId,
         projectionComponent: delta.projectionComponent,
         projectionIdentity: delta.projectionIdentity,
         scope: delta.scope,
-      },
-      tx,
-    )
-
-    return [...results, result]
-  }, Promise.resolve([]))
+      }
+    }),
+    tx,
+  )
 
   await markReviewChangeDeltasReconciled(tx, deltas)
 
