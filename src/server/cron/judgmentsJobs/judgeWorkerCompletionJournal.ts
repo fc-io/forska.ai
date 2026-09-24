@@ -1782,11 +1782,34 @@ const getCompletionRowsByTokenUseIdentity = (
       return '?'
     })
     .join(', ')
-  const queueRecordCondition = queueRecordIds.length > 0 ? `queue_record_id IN (${queueRecordPlaceholders})` : 'FALSE'
-  const promptIdCondition =
-    promptIds.length > 0 ? `(article_id = ? AND prompt_id IN (${promptIdPlaceholders}))` : 'FALSE'
+  const ackedCondition = `acked_at IS ${ackedState === 'acked' ? 'NOT NULL' : 'NULL'}`
+  // One pinned index per branch: with the OR inside one WHERE, SQLite only used the job_id prefix
+  // and walked every completion of the job (~0.8 s on a 250k-row job), blocking the judge loop.
+  const candidateClaimSelects = [
+    queueRecordIds.length > 0
+      ? `
+          SELECT claim_id
+          FROM completion_outbox INDEXED BY idx_completion_outbox_job_queue_acked_created
+          WHERE job_id = ?
+            AND queue_record_id IN (${queueRecordPlaceholders})
+            AND ${ackedCondition}
+        `
+      : null,
+    promptIds.length > 0
+      ? `
+          SELECT claim_id
+          FROM completion_outbox INDEXED BY idx_completion_outbox_job_article_prompt_acked_created
+          WHERE job_id = ?
+            AND article_id = ?
+            AND prompt_id IN (${promptIdPlaceholders})
+            AND ${ackedCondition}
+        `
+      : null,
+  ].filter((select): select is string => {
+    return select !== null
+  })
 
-  if (queueRecordIds.length === 0 && promptIds.length === 0) {
+  if (candidateClaimSelects.length === 0) {
     return []
   }
 
@@ -1806,17 +1829,14 @@ const getCompletionRowsByTokenUseIdentity = (
           token_use_json AS tokenUseJson,
           updated_at AS updatedAt
         FROM completion_outbox
-        WHERE job_id = ?
-          AND (${queueRecordCondition} OR ${promptIdCondition})
-          AND acked_at IS ${ackedState === 'acked' ? 'NOT NULL' : 'NULL'}
+        WHERE claim_id IN (${candidateClaimSelects.join('\n        UNION ALL\n')})
         ORDER BY created_at DESC, claim_id DESC
         LIMIT ${tokenUseCompletionLookupLimit}
       `,
     )
     .all(
-      input.jobId,
-      ...queueRecordIds,
-      ...(promptIds.length > 0 ? [input.articleId, ...promptIds] : []),
+      ...(queueRecordIds.length > 0 ? [input.jobId, ...queueRecordIds] : []),
+      ...(promptIds.length > 0 ? [input.jobId, input.articleId, ...promptIds] : []),
     ) as CompletionOutboxRow[]
 
   return rows.filter((row) => {
