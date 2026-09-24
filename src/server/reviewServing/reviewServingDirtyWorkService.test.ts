@@ -19,6 +19,7 @@ import {
   type ReviewServingDirtyWorkDatabase,
   type ReviewServingDirtyWorkRecord,
   upsertReviewServingDirtyWork,
+  upsertReviewServingDirtyWorkBatch,
 } from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingDirtyWorkScopeForChange,
@@ -1395,6 +1396,112 @@ test('repeated changes collapse to one pending row with latest high-water and di
     latestSourceHighWaterMark: 8,
     status: 'pending',
   })
+})
+
+const getArticleDisplayScope = (
+  articleId: string,
+  sourceHighWaterMark: number,
+  dirtyRangeStart: string | null,
+  dirtyRangeEnd: string | null,
+) => {
+  const scope = getReviewServingDirtyWorkScopeForChange({
+    changeKind: 'article.display.updated',
+    dirtyRangeEnd,
+    dirtyRangeStart,
+    sourceHighWaterMark,
+    sourcePartition: 'article:display',
+    values: {articleId, changedDisplayFieldNames: ['title'], projectId: 'project-1', sourceHighWaterMark},
+  })
+
+  if (scope === null) {
+    throw new Error('expected valid dirty work scope')
+  }
+
+  return scope
+}
+
+const readDirtyWorkState = async (database: ReviewServingDirtyWorkDatabase) => {
+  const dirtyWorkRows = await database.queryJson(`
+    SELECT dirty_work_id, project_id, scope_kind, scope_id, article_id, projection_key, projection_component,
+      projection_identity, dirty_kind, source_partition, first_source_high_water_mark,
+      latest_source_high_water_mark, latest_delta_id, dirty_range_start, dirty_range_end, status, lifecycle_reason
+    FROM app.review_serving_dirty_work
+    ORDER BY dirty_work_id
+  `)
+  const claimStateRows = await database.queryJson(`
+    SELECT dirty_work_id, storage_row_id, project_id, projection_component, projection_identity, source_partition,
+      status, lifecycle_reason, latest_source_high_water_mark, dirty_range_start, dirty_range_end
+    FROM app.review_serving_dirty_work_claim_state
+    ORDER BY dirty_work_id
+  `)
+  const lookupRows = await database.queryJson(`
+    SELECT dirty_work_id FROM app.review_serving_dirty_work_id_lookup ORDER BY dirty_work_id
+  `)
+
+  return {claimStateRows, dirtyWorkRows, lookupRows}
+}
+
+test('batched dirty-work upserts match sequential upserts in DuckDB', async () => {
+  const existingInput = {
+    latestDeltaId: 'delta-existing',
+    projectionComponent: 'display' as const,
+    projectionIdentity: 'display:identity-1',
+    scope: getArticleDisplayScope('article-3', 4, '4', '4'),
+  }
+  const inputs = [
+    {
+      latestDeltaId: 'delta-1',
+      projectionComponent: 'display' as const,
+      projectionIdentity: 'display:identity-1',
+      scope: getArticleDisplayScope('article-1', 5, '2', '2'),
+    },
+    {
+      latestDeltaId: 'delta-2',
+      projectionComponent: 'payload' as const,
+      projectionIdentity: 'payload:identity-1',
+      scope: getArticleDisplayScope('article-2', 3, null, null),
+    },
+    {
+      latestDeltaId: 'delta-3',
+      projectionComponent: 'display' as const,
+      projectionIdentity: 'display:identity-1',
+      scope: getArticleDisplayScope('article-1', 8, '1', '9'),
+    },
+    {
+      latestDeltaId: 'delta-4',
+      projectionComponent: 'display' as const,
+      projectionIdentity: 'display:identity-1',
+      scope: getArticleDisplayScope('article-3', 10, null, '7'),
+    },
+    {
+      latestDeltaId: null,
+      projectionComponent: 'payload' as const,
+      projectionIdentity: 'payload:identity-1',
+      scope: getArticleDisplayScope('article-2', 2, '5', null),
+    },
+  ]
+  const sequential = await createDuckdbDirtyWorkDatabase()
+  const batched = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    await upsertReviewServingDirtyWork(existingInput, sequential.database)
+    await upsertReviewServingDirtyWork(existingInput, batched.database)
+    await inputs.reduce(async (previous, input) => {
+      await previous
+      await upsertReviewServingDirtyWork(input, sequential.database)
+    }, Promise.resolve())
+
+    const batchResults = await upsertReviewServingDirtyWorkBatch(inputs, batched.database)
+    const sequentialState = await readDirtyWorkState(sequential.database)
+    const batchedState = await readDirtyWorkState(batched.database)
+
+    expect(batchResults).toHaveLength(inputs.length)
+    expect(sequentialState.dirtyWorkRows).toHaveLength(3)
+    expect(batchedState).toEqual(sequentialState)
+  } finally {
+    sequential.close()
+    batched.close()
+  }
 })
 
 test('claims pending work by component without exceeding wake budget', async () => {
