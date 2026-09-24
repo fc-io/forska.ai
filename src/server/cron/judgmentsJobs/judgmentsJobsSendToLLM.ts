@@ -10,6 +10,7 @@ import {
   getAcceptedJudgeWorkerClaimPrompts,
   getJudgeWorkerHeldQueueRecordIds,
   heartbeatOwnerBackedJudgmentWorker,
+  pruneAckedJudgeWorkerCompletions,
   recoverAbandonedJudgeWorkerAcceptedClaims,
   replayJudgeWorkerCompletionOutbox,
   shouldUseJudgeWorkerOwnerHandoff,
@@ -97,6 +98,7 @@ let configuredSendToLLMRunTimeoutMs = sendToLLMRunTimeoutMs
 
 export type SendToLLMRunStage =
   | 'acceptedClaimRecovery'
+  | 'ackedCompletionPrune'
   | 'capacityDispatch'
   | 'completionReplay'
   | 'filterRunningJobs'
@@ -1176,6 +1178,37 @@ const logOwnerBackedBackgroundFailure = (event: string, message: string, error: 
   })
 }
 
+const ackedCompletionPruneIntervalMs = 10_000
+let ackedCompletionPrunedAt = 0
+
+const pruneAckedJudgeWorkerCompletionsIfDue = (): void => {
+  const now = Date.now()
+
+  if (now - ackedCompletionPrunedAt < ackedCompletionPruneIntervalMs) {
+    return
+  }
+
+  ackedCompletionPrunedAt = now
+
+  try {
+    const prunedCount = pruneAckedJudgeWorkerCompletions({now})
+
+    if (prunedCount > 0) {
+      schedulerLogger.log('scheduler:acked-completion-prune', '[capacity] pruned acked journal completions', {
+        component: sendToLLMComponent,
+        event: 'ackedCompletionPrune',
+        prunedCount,
+      })
+    }
+  } catch (error) {
+    schedulerLogger.log('scheduler:acked-completion-prune-failed', '[capacity] acked journal completion prune failed', {
+      component: sendToLLMComponent,
+      error: error instanceof Error ? error.message : String(error),
+      event: 'ackedCompletionPruneFailed',
+    })
+  }
+}
+
 const startOwnerBackedCompletionReplay = (): void => {
   const now = Date.now()
 
@@ -1394,6 +1427,9 @@ const runJudgmentsJobsSendToLLM = async (
         event: 'ownerBackedLocalCompletionApply',
       })
     }
+
+    setActiveSendToLLMRunStage(runId, 'ackedCompletionPrune')
+    pruneAckedJudgeWorkerCompletionsIfDue()
   }
 
   setActiveSendToLLMRunStage(runId, 'filterRunningJobs')

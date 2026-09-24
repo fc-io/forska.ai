@@ -14,6 +14,7 @@ import {
   getJudgeWorkerHeldQueueRecordIds,
   hasUnackedJudgeWorkerCompletion,
   type JudgeWorkerCompletionPayload,
+  pruneAckedJudgeWorkerCompletions,
   recordAcceptedJudgeWorkerClaims,
   replayJudgeWorkerCompletionOutbox,
   resetJudgeWorkerCompletionJournalForTests,
@@ -705,6 +706,53 @@ test('held queue record ids cover accepted claims and unacked completions until 
   expect(await hasUnackedJudgeWorkerCompletion(pendingPayload.claimId)).toBe(false)
   expect(getJudgeWorkerHeldQueueRecordIds('job-a')).toEqual(['queue-held-accepted'])
   expect(getJudgeWorkerHeldQueueRecordIds('job-b')).toEqual([])
+})
+
+test('acked completion prune keeps recent, unacked and still-claimed rows', async () => {
+  const {journalPath} = setupJournalTest(async () => {
+    return Response.json({data: {status: 'judged'}})
+  })
+  const now = Date.parse('2026-09-24T12:00:00.000Z')
+  const oldAckedAt = '2026-09-22T12:00:00.000Z'
+  const payloads = {
+    oldAcked: createCompletionPayload({claimId: 'claim-prune-old', queueRecordId: 'queue-prune-old', status: 'retry'}),
+    oldAckedClaimed: createCompletionPayload({
+      claimId: 'claim-prune-claimed',
+      queueRecordId: 'queue-prune-claimed',
+      status: 'retry',
+    }),
+    recentAcked: createCompletionPayload({
+      claimId: 'claim-prune-recent',
+      queueRecordId: 'queue-prune-recent',
+      status: 'retry',
+    }),
+    unacked: createCompletionPayload({
+      claimId: 'claim-prune-unacked',
+      queueRecordId: 'queue-prune-unacked',
+      status: 'retry',
+    }),
+  }
+
+  await recordAcceptedJudgeWorkerClaims([createAcceptedClaimPrompt(payloads.oldAckedClaimed)])
+  await Promise.all(
+    Object.values(payloads).map((payload) => {
+      return enqueueJudgeWorkerCompletion(payload)
+    }),
+  )
+
+  const database = new Database(journalPath)
+  const setAckedAt = database.query(`UPDATE completion_outbox SET acked_at = ? WHERE claim_id = ?`)
+  setAckedAt.run(oldAckedAt, payloads.oldAcked.claimId)
+  setAckedAt.run(oldAckedAt, payloads.oldAckedClaimed.claimId)
+  setAckedAt.run('2026-09-24T11:00:00.000Z', payloads.recentAcked.claimId)
+  database.close(false)
+
+  expect(pruneAckedJudgeWorkerCompletions({now})).toBe(1)
+  expect(getCompletionOutboxRow(journalPath, payloads.oldAcked.claimId)).toBeNull()
+  expect(getCompletionOutboxRow(journalPath, payloads.oldAckedClaimed.claimId)?.ackedAt).toBe(oldAckedAt)
+  expect(getCompletionOutboxRow(journalPath, payloads.recentAcked.claimId)).not.toBeNull()
+  expect(getCompletionOutboxRow(journalPath, payloads.unacked.claimId)?.ackedAt).toBeNull()
+  expect(pruneAckedJudgeWorkerCompletions({now})).toBe(0)
 })
 
 test('judged completion replay waits for token use', async () => {
