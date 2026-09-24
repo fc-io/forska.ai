@@ -17,7 +17,7 @@ const drainingRetentionPruneChunkSize = 1_000
 const maxDrainingRetentionPruneBatchesPerImportTick = 1
 const maxImportableJudgmentJobsPerScan = 100
 const maxTrackedJudgmentJobIdsPerLookup = 100
-const activeJobImportMinOldestUnexportedAgeMs = 30_000
+const activeJobImportMinOldestUnexportedAgeMs = 5_000
 let trackedImportableJudgmentJobScanOffset = 0
 const judgmentJobSqliteBackgroundImportWorkloadContext = {
   fallbackIntent: 'reject' as const,
@@ -409,6 +409,7 @@ const runNextJudgmentJobSqliteBackgroundImport = async ({
     : nextSummary
 }
 
+// Best effort each tick; cleanup-stale also drains before finalizing a draining job.
 const drainCompletionTokenUseForJobs = async (jobIds: string[]): Promise<void> => {
   await jobIds.reduce(async (previous, jobId) => {
     await previous
@@ -417,7 +418,11 @@ const drainCompletionTokenUseForJobs = async (jobIds: string[]): Promise<void> =
       await drainCompletionTokenUseOutbox(jobId)
     } catch (error) {
       if (!(error instanceof JudgmentJobLeaseError)) {
-        throw error
+        judgmentJobSqliteBackgroundImportLogger.warn(
+          `judgmentJobs:completion-token-use-drain:${jobId}`,
+          '[judgmentJobs] completion token use drain deferred',
+          {errorMessage: getJudgmentJobSqliteErrorMessage(error), jobId},
+        )
       }
     }
   }, Promise.resolve())
@@ -429,13 +434,14 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
   await sqliteService.syncOwnedLeases([])
 
   const jobs = await getImportableJudgmentJobs()
-  const summary = await runNextJudgmentJobSqliteBackgroundImport({claimedBy, jobs})
 
   await drainCompletionTokenUseForJobs(
     jobs.map((job) => {
       return job.id
     }),
   )
+
+  const summary = await runNextJudgmentJobSqliteBackgroundImport({claimedBy, jobs})
 
   await (sqliteService as {reconcileProjectRefreshAcks?: () => Promise<number>}).reconcileProjectRefreshAcks?.()
 

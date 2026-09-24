@@ -4106,6 +4106,71 @@ test('orphan judged queue rows keep draining SQLite jobs out of drained state', 
   ).toEqual([{storageState: 'draining'}])
 })
 
+test('pending completion token use keeps draining SQLite jobs out of drained state', async () => {
+  if (!queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const suffix = Date.now()
+  const connectionId = `connection-token-use-drain-${suffix}`
+  const modelId = `model-token-use-drain-${suffix}`
+  const projectId = `project-token-use-drain-${suffix}`
+  const jobId = `job-token-use-drain-${suffix}`
+  const getStorageState = () => {
+    return queryDatabase?.<{storageState: string}>(`
+      SELECT storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `)
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Token Use Drain Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'completed', 'draining')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.enqueueCompletionTokenUse({
+    completionJson: JSON.stringify({claimId: 'claim-token-use-drain', jobId, queueRecordId: 'queue-token-use-drain'}),
+    jobId,
+    tokenUseId: 'judgment-completion-token-use:claim-token-use-drain',
+  })
+
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([])
+  expect(await getStorageState()).toEqual([{storageState: 'draining'}])
+
+  const pending = await service.getPendingCompletionTokenUse(jobId, 10)
+
+  expect(
+    pending.map((row) => {
+      return row.tokenUseId
+    }),
+  ).toEqual(['judgment-completion-token-use:claim-token-use-drain'])
+
+  await service.deleteCompletionTokenUse(
+    jobId,
+    pending.map((row) => {
+      return row.tokenUseId
+    }),
+  )
+
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([jobId])
+  expect(await getStorageState()).toEqual([{storageState: 'drained'}])
+})
+
 test('retained outbox rows keep draining SQLite jobs out of drained state', async () => {
   if (!queryDatabase || !runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

@@ -17,6 +17,7 @@ import {
   markJudgmentsCleanupStaleCronPartial,
   updateJudgmentsCleanupStaleCronStep,
 } from '../judgmentsJobsCronState.ts'
+import {drainCompletionTokenUseOutbox} from './judgmentCompletionTokenUseOutbox.ts'
 import {isJudgmentJobLeaseProcessAlive, isJudgmentJobLeaseStale} from './judgmentJobLease.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {runJudgmentJobRepairAction} from './judgmentJobRepair.ts'
@@ -1603,6 +1604,16 @@ const reapStaleOutboxClaimsForJobs = async ({
   return {jobsHandled, rowsChanged}
 }
 
+const drainCompletionTokenUseOutboxForCleanup = async (jobId: string): Promise<void> => {
+  try {
+    await drainCompletionTokenUseOutbox(jobId)
+  } catch (error) {
+    if (!(error instanceof JudgmentJobLeaseError)) {
+      throw error
+    }
+  }
+}
+
 const finalizeDrainingSqliteJobs = async ({
   budget,
   jobIds,
@@ -1644,6 +1655,9 @@ const finalizeDrainingSqliteJobs = async ({
       }
     }
 
+    // Pending completion token use keeps a job from counting as drained; flush it first so a
+    // paused job can finish draining in this pass.
+    await drainCompletionTokenUseOutboxForCleanup(currentJobId)
     const currentDrainedJobIds = await sqliteService.finalizeDrainingJobs({
       jobId: currentJobId,
       serverJobId: budget.serverJobId,
