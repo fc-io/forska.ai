@@ -287,6 +287,7 @@ const getOwnerBackedPromptInput = async (
     const snapshot = await getOwnerBackedJudgmentExecutionSnapshot({
       executionSnapshotHash: promptToProcess.executionSnapshotHash,
       executionSnapshotId: promptToProcess.executionSnapshotId,
+      jobId: promptToProcess.jobId,
     })
 
     return buildPromptInput(snapshot.payload)

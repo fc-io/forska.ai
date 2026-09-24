@@ -55,6 +55,11 @@ void mock.module(judgmentExecutionSnapshotServiceModulePath, () => {
 
   return {
     createJudgmentExecutionSnapshotsForClaims,
+    createJudgmentExecutionSnapshotsWithRecordsForClaims: async (inputs: Array<{claimId: string}>) => {
+      return (await createJudgmentExecutionSnapshotsForClaims(inputs)).map((identity) => {
+        return {identity, record: null}
+      })
+    },
     createTransientJudgmentExecutionSnapshotsForClaims: createJudgmentExecutionSnapshotsForClaims,
   }
 })

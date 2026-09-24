@@ -846,9 +846,14 @@ const getSnapshotInputForClaim = (
   }
 }
 
+type JudgmentExecutionSnapshotClaimWithRecord = {
+  identity: JudgmentExecutionSnapshotClaim
+  record: JudgmentExecutionSnapshotRecord | null
+}
+
 const createJudgmentExecutionSnapshotsForClaimGroup = async (
   requests: JudgmentExecutionSnapshotClaimInput[],
-): Promise<JudgmentExecutionSnapshotClaim[]> => {
+): Promise<JudgmentExecutionSnapshotClaimWithRecord[]> => {
   const rows = await getSnapshotRows(requests, {
     includeFulltext: shouldIncludeFulltext(requests),
     stripImages: shouldStripFulltextImages(requests),
@@ -899,28 +904,69 @@ const createJudgmentExecutionSnapshotsForClaimGroup = async (
   `)
   const insertedByClaimId = new Map(
     insertedRows.map((insertedRow) => {
-      return [insertedRow.claimId, toSnapshotIdentity(insertedRow)] as const
+      return [insertedRow.claimId, insertedRow] as const
+    }),
+  )
+  const payloadsByClaimId = new Map(
+    snapshotInputs.map((snapshotInput) => {
+      return [snapshotInput.row.claimId, snapshotInput.payload] as const
     }),
   )
 
-  return requests.reduce<Promise<JudgmentExecutionSnapshotClaim[]>>(async (previous, request) => {
+  return requests.reduce<Promise<JudgmentExecutionSnapshotClaimWithRecord[]>>(async (previous, request) => {
     const snapshots = await previous
-    const snapshot = insertedByClaimId.get(request.claimId) ?? (await getSnapshotIdentityByRequest(request))
+    const insertedRow = insertedByClaimId.get(request.claimId)
+
+    if (insertedRow) {
+      const identity = toSnapshotIdentity(insertedRow)
+
+      return [
+        ...snapshots,
+        {
+          identity,
+          record: {
+            ...toSnapshotRecord({...insertedRow, payloadJson: null}),
+            payload: payloadsByClaimId.get(request.claimId) ?? null,
+          },
+        },
+      ]
+    }
+
+    const snapshot = await getSnapshotIdentityByRequest(request)
 
     if (!snapshot) {
       throw new Error(`Failed to persist judgment execution snapshot for claim ${request.claimId}`)
     }
 
-    return [...snapshots, snapshot]
+    return [...snapshots, {identity: snapshot, record: null}]
   }, Promise.resolve([]))
+}
+
+const createJudgmentExecutionSnapshotsWithRecordsForClaimGroups = async (
+  requests: JudgmentExecutionSnapshotClaimInput[],
+): Promise<JudgmentExecutionSnapshotClaimWithRecord[]> => {
+  return getSnapshotClaimGroups(requests).reduce<Promise<JudgmentExecutionSnapshotClaimWithRecord[]>>(
+    async (previous, group) => {
+      return [...(await previous), ...(await createJudgmentExecutionSnapshotsForClaimGroup(group))]
+    },
+    Promise.resolve([]),
+  )
 }
 
 export const createJudgmentExecutionSnapshotsForClaims = async (
   requests: JudgmentExecutionSnapshotClaimInput[],
 ): Promise<JudgmentExecutionSnapshotClaim[]> => {
-  return getSnapshotClaimGroups(requests).reduce<Promise<JudgmentExecutionSnapshotClaim[]>>(async (previous, group) => {
-    return [...(await previous), ...(await createJudgmentExecutionSnapshotsForClaimGroup(group))]
-  }, Promise.resolve([]))
+  return (await createJudgmentExecutionSnapshotsWithRecordsForClaimGroups(requests)).map((snapshot) => {
+    return snapshot.identity
+  })
+}
+
+// Same snapshots as createJudgmentExecutionSnapshotsForClaims, plus the full record for newly
+// inserted ones so the job SQLite store can serve the payload without a DuckDB read.
+export const createJudgmentExecutionSnapshotsWithRecordsForClaims = async (
+  requests: JudgmentExecutionSnapshotClaimInput[],
+): Promise<JudgmentExecutionSnapshotClaimWithRecord[]> => {
+  return createJudgmentExecutionSnapshotsWithRecordsForClaimGroups(requests)
 }
 
 export const createJudgmentExecutionSnapshotForClaim = async ({

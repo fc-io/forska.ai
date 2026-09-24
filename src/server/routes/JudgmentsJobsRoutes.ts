@@ -352,7 +352,7 @@ type JudgmentCompletionBody = JudgmentCompletionIdentity & {
 }
 type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number; protectedRecordIds?: string[]}
 type JudgmentWorkerHeartbeatBody = {claimedBy?: string; jobIds?: string[]}
-type JudgmentSnapshotQuery = {executionSnapshotHash?: string; hash?: string}
+type JudgmentSnapshotQuery = {executionSnapshotHash?: string; hash?: string; jobId?: string}
 const unassessedCountTTLms = 10_000
 const abandonedClaimGraceMs = 30_000
 const ownerBackedClaimRecoveryIntervalMs = 15_000
@@ -449,6 +449,7 @@ const judgmentCompletionBodySchema = t.Object({
 const judgmentSnapshotQuerySchema = t.Object({
   executionSnapshotHash: t.Optional(t.String()),
   hash: t.Optional(t.String()),
+  jobId: t.Optional(t.String()),
 })
 const judgmentProviderTelemetryHistoryQuerySchema = t.Object({
   jobId: t.String(),
@@ -1050,7 +1051,16 @@ const fetchJudgmentExecutionSnapshot = async (executionSnapshotId: string, query
     throw new HttpError(400, 'executionSnapshotHash is required')
   }
 
-  const snapshot = await getJudgmentExecutionSnapshot({executionSnapshotHash, executionSnapshotId})
+  // Snapshots prepared by the refill are served from the job SQLite store without a DuckDB read.
+  const preparedSnapshot = query.jobId
+    ? await getJudgmentJobSqliteService().getPreparedExecutionSnapshotRecord({
+        executionSnapshotHash,
+        executionSnapshotId,
+        jobId: query.jobId,
+      })
+    : null
+  const snapshot =
+    preparedSnapshot ?? (await getJudgmentExecutionSnapshot({executionSnapshotHash, executionSnapshotId}))
 
   if (!snapshot) {
     throw new HttpError(404, 'judgment execution snapshot not found')

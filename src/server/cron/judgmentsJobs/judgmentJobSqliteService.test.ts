@@ -277,6 +277,128 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
   expect(await service.getInFlightCount(jobId)).toBe(0)
 })
 
+test('claims prepared ready prompts from SQLite and serves their prepared snapshot payload', async () => {
+  if (!queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const suffix = Date.now()
+  const connectionId = `connection-prepared-${suffix}`
+  const modelId = `model-prepared-${suffix}`
+  const projectId = `project-prepared-${suffix}`
+  const jobId = `job-prepared-${suffix}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Prepared Claim Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-prepared-1', promptId: 'prompt-prepared-1'},
+      {articleId: 'article-prepared-2', promptId: 'prompt-prepared-2'},
+    ],
+    'server-owner',
+  )
+
+  expect(await service.prepareReadyPrompts(jobId, 'server-owner', 10)).toBe(2)
+  expect(await service.prepareReadyPrompts(jobId, 'server-owner', 10)).toBe(0)
+
+  const readPreparedRows = () => {
+    const database = new Database(getJudgmentJobSqlitePath(jobId), {readonly: true})
+
+    try {
+      return database
+        .query(
+          `
+            SELECT id, status, claim_id AS claimId, prepared_claim_id AS preparedClaimId,
+              prepared_execution_snapshot_id AS preparedExecutionSnapshotId
+            FROM queue_prompt
+            ORDER BY ready_insert_seq
+          `,
+        )
+        .all() as Array<{
+        claimId: string | null
+        id: string
+        preparedClaimId: string | null
+        preparedExecutionSnapshotId: string | null
+        status: string
+      }>
+    } finally {
+      database.close(false)
+    }
+  }
+  const preparedRows = readPreparedRows()
+
+  expect(
+    preparedRows.every((row) => {
+      return row.status === 'ready' && row.preparedClaimId !== null && row.preparedExecutionSnapshotId !== null
+    }),
+  ).toBe(true)
+
+  const claimed = await service.claimReadyPrompts(jobId, 'judge-a', 5)
+
+  expect(
+    claimed.map((claim) => {
+      return claim.claimId
+    }),
+  ).toEqual(
+    preparedRows.map((row) => {
+      return row.preparedClaimId ?? ''
+    }),
+  )
+  expect(claimed[0]).toMatchObject({jobId, modelId, projectId, useAbstract: true, useFulltext: false, useTitle: true})
+  expect(claimed[0]).not.toHaveProperty('executionSnapshotPayload')
+  expect(
+    readPreparedRows().map((row) => {
+      return [row.status, row.claimId !== null, row.preparedClaimId]
+    }),
+  ).toEqual([
+    ['claimed', true, null],
+    ['claimed', true, null],
+  ])
+
+  const [firstClaim] = claimed
+
+  if (!firstClaim) {
+    throw new Error('Expected a prepared claim')
+  }
+
+  const record = await service.getPreparedExecutionSnapshotRecord({
+    executionSnapshotHash: firstClaim.executionSnapshotHash,
+    executionSnapshotId: firstClaim.executionSnapshotId,
+    jobId,
+  })
+  const [snapshotRow] = await queryDatabase<{claimId: string; payloadHash: string}>(`
+    SELECT claim_id AS claimId, payload_hash AS payloadHash
+    FROM app.judgment_execution_snapshot
+    WHERE id = '${firstClaim.executionSnapshotId}'
+  `)
+
+  expect(record).toMatchObject({
+    claimId: firstClaim.claimId,
+    executionSnapshotHash: firstClaim.executionSnapshotHash,
+    queueRecordId: firstClaim.recordId,
+  })
+  expect(record?.payload).toMatchObject({prompt: {id: 'prompt-prepared-1'}})
+  expect(snapshotRow).toEqual({claimId: firstClaim.claimId, payloadHash: firstClaim.executionSnapshotHash})
+})
+
 test('initializes local outbox sequence above imported central markers', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
