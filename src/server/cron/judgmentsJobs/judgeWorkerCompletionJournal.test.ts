@@ -11,6 +11,7 @@ import {
   claimOwnerJudgmentJobPrompts,
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
+  getJudgeWorkerHeldQueueRecordIds,
   hasUnackedJudgeWorkerCompletion,
   type JudgeWorkerCompletionPayload,
   recordAcceptedJudgeWorkerClaims,
@@ -668,6 +669,42 @@ test('completion replay deletes accepted claim rows after owner ack', async () =
 
   expect(await replayJudgeWorkerCompletionOutbox()).toEqual({ackedCount: 1, discardedCount: 0, failedCount: 0})
   expect(getAcceptedClaimCount(journalPath, payload.claimId)).toBe(0)
+})
+
+test('held queue record ids cover accepted claims and unacked completions until the owner acks', async () => {
+  setupJournalTest(async (request) => {
+    const body = (await request.json()) as {claimId: string; queueRecordId: string; status: string}
+
+    return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: body.status}})
+  })
+  const acceptedPayload = createCompletionPayload({
+    claimId: 'claim-held-accepted',
+    queueRecordId: 'queue-held-accepted',
+  })
+  const pendingPayload = createCompletionPayload({
+    claimId: 'claim-held-pending',
+    queueRecordId: 'queue-held-pending',
+    status: 'retry',
+  })
+  const otherJobPayload = createCompletionPayload({
+    claimId: 'claim-held-other-job',
+    jobId: 'job-b',
+    queueRecordId: 'queue-held-other-job',
+    status: 'retry',
+  })
+
+  await recordAcceptedJudgeWorkerClaims([createAcceptedClaimPrompt(acceptedPayload)])
+  await enqueueJudgeWorkerCompletion(pendingPayload)
+  await enqueueJudgeWorkerCompletion(otherJobPayload)
+
+  expect(getJudgeWorkerHeldQueueRecordIds('job-a').sort()).toEqual(['queue-held-accepted', 'queue-held-pending'])
+  expect(getJudgeWorkerHeldQueueRecordIds('job-b')).toEqual(['queue-held-other-job'])
+
+  await replayJudgeWorkerCompletionOutbox()
+
+  expect(await hasUnackedJudgeWorkerCompletion(pendingPayload.claimId)).toBe(false)
+  expect(getJudgeWorkerHeldQueueRecordIds('job-a')).toEqual(['queue-held-accepted'])
+  expect(getJudgeWorkerHeldQueueRecordIds('job-b')).toEqual([])
 })
 
 test('judged completion replay waits for token use', async () => {

@@ -8,6 +8,7 @@ import {
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
   getAcceptedJudgeWorkerClaimPrompts,
+  getJudgeWorkerHeldQueueRecordIds,
   heartbeatOwnerBackedJudgmentWorker,
   recoverAbandonedJudgeWorkerAcceptedClaims,
   replayJudgeWorkerCompletionOutbox,
@@ -481,10 +482,13 @@ const claimAndEnqueuePromptChunk = async ({
   serverJobId: string
 }): Promise<{fetched: number; rejected: number}> => {
   const providerCap = getEffectiveDispatchProviderCap({job})
-  const protectedRecordIds = shouldUseJudgeWorkerOwnerHandoff() ? await getJudgmentDispatchJobPromptIds(job.id) : []
+  const dispatchPromptIds = shouldUseJudgeWorkerOwnerHandoff() ? await getJudgmentDispatchJobPromptIds(job.id) : []
+  const protectedRecordIds = shouldUseJudgeWorkerOwnerHandoff()
+    ? Array.from(new Set([...dispatchPromptIds, ...getJudgeWorkerHeldQueueRecordIds(job.id)]))
+    : []
   const acceptedPrompts = shouldUseJudgeWorkerOwnerHandoff()
     ? await getAcceptedJudgeWorkerClaimPrompts({
-        excludedQueueRecordIds: new Set(protectedRecordIds),
+        excludedQueueRecordIds: new Set(dispatchPromptIds),
         jobId: job.id,
         limit,
       })
