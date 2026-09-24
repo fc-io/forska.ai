@@ -2487,6 +2487,31 @@ export const flushJudgeWorkerCompletionOutboxForClaim = async (claimId: string):
   return replay
 }
 
+// Queue records this worker still owns outside the dispatch runtime: accepted claims waiting for
+// dispatch and completions the owner has not acked yet. Owner claim recovery must not requeue
+// them, or the pending completion is discarded as stale and the LLM work is lost.
+export const getJudgeWorkerHeldQueueRecordIds = (jobId: string): string[] => {
+  const database = openJournalDatabase()
+  const rows = database
+    .query(
+      `
+        SELECT queue_record_id AS queueRecordId
+        FROM completion_outbox INDEXED BY idx_completion_outbox_unacked
+        WHERE acked_at IS NULL
+          AND job_id = ?
+        UNION
+        SELECT queue_record_id AS queueRecordId
+        FROM accepted_claim
+        WHERE job_id = ?
+      `,
+    )
+    .all(jobId, jobId) as Array<{queueRecordId: string}>
+
+  return rows.map((row) => {
+    return row.queueRecordId
+  })
+}
+
 export const hasUnackedJudgeWorkerCompletion = async (claimId: string): Promise<boolean> => {
   return getUnackedCompletionRows(openJournalDatabase(), claimId).length > 0
 }
