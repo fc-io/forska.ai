@@ -1198,6 +1198,40 @@ export const getActiveOrLastKnownGoodReviewServingSnapshotManifest = async (
   )
 }
 
+const getLiveSnapshotComponentStatesSql = (input: {projectId: string; reviewConfigHash: string}, group: string) => {
+  return `
+      SELECT component_state.value AS state
+      FROM app.review_serving_snapshot_manifest snapshot
+      CROSS JOIN json_each(json_extract(snapshot.component_state_json, '$.${group}')) component_state
+      WHERE snapshot.project_id = ${getSqlLiteral(input.projectId)}
+        AND snapshot.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND snapshot.snapshot_status IN ('candidate', 'active')
+  `
+}
+
+export const hasReviewServingSnapshotComponentAtBaseGeneration = async (
+  input: ReviewServingProjectionComponentIdentity & {projectId: string; reviewConfigHash: string},
+  database: ReviewServingManifestReaderDatabase,
+) => {
+  const rows = await database.queryJson<{baseGeneration: number | string}>(`
+    WITH snapshot_component AS (
+      ${getLiveSnapshotComponentStatesSql(input, 'required')}
+      UNION ALL
+      ${getLiveSnapshotComponentStatesSql(input, 'optional')}
+    )
+    SELECT projection.base_generation AS baseGeneration
+    FROM snapshot_component
+    INNER JOIN app.review_projection_identity_manifest projection
+      ON projection.manifest_id = ${getSqlLiteral(getProjectionManifestId(input))}
+      AND projection.base_generation = TRY_CAST(json_extract_string(snapshot_component.state, '$.baseGeneration') AS BIGINT)
+    WHERE json_extract_string(snapshot_component.state, '$.component') = ${getSqlLiteral(input.projectionComponent)}
+      AND json_extract_string(snapshot_component.state, '$.projectionIdentity') = ${getSqlLiteral(input.projectionIdentity)}
+    LIMIT 1
+  `)
+
+  return rows.length > 0
+}
+
 export const getReviewServingSnapshotManifest = async (
   input: {
     componentStateMode?: ReviewServingSnapshotComponentStateMode

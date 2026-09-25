@@ -18,7 +18,10 @@ import {
   type ReviewServingSnapshotManifest,
   type ReviewServingSnapshotManifestInput,
 } from './reviewServingManifestRepository.ts'
-import {type ReviewServingProjectionComponentIdentity} from './reviewServingProjectorDomain.ts'
+import {
+  getReviewServingSourceWatermarkKeys,
+  type ReviewServingProjectionComponentIdentity,
+} from './reviewServingProjectorDomain.ts'
 
 export type ReviewServingSnapshotPromotionDatabase = ReviewServingManifestRepositoryTransaction
 
@@ -528,6 +531,33 @@ export const validateReviewServingCandidateSnapshotManifest = async (
     : {candidate, error: report.error, ok: false, validationResult}
 }
 
+const getSeedSourceWatermark = (sourceWatermarks: ReviewServingIdentityValue, sourcePartition: string) => {
+  const sourceKeyValues = getReviewServingSourceWatermarkKeys(sourcePartition).flatMap((sourceKey) => {
+    const value = getNumericObjectValue(sourceWatermarks, sourceKey)
+
+    return value === null ? [] : [value]
+  })
+
+  return (
+    getNumericObjectValue(sourceWatermarks, sourcePartition)
+    ?? (sourceKeyValues.length === 0 ? null : Math.min(...sourceKeyValues))
+  )
+}
+
+// The shared identity manifest also advances when patches reach other snapshots or later claims, so activation only
+// vouches for dirty work up to the candidate's own seed; later claims were acknowledged by their patches or stay queued.
+const getSeedCappedSourceWatermark = (
+  sourceWatermarks: ReviewServingIdentityValue,
+  sourcePartition: string,
+  manifestSourceWatermark: number,
+) => {
+  const seedSourceWatermark = getSeedSourceWatermark(sourceWatermarks, sourcePartition)
+
+  return seedSourceWatermark === null || !Number.isFinite(manifestSourceWatermark)
+    ? null
+    : Math.min(seedSourceWatermark, manifestSourceWatermark)
+}
+
 export const getPromotedReviewServingSnapshotDirtyWorkCoverages = async (
   candidate: ReviewServingSnapshotManifest,
   database: ReviewServingSnapshotPromotionDatabase,
@@ -550,9 +580,16 @@ export const getPromotedReviewServingSnapshotDirtyWorkCoverages = async (
     }
 
     const manifestCoverages = Object.entries(manifest.inputWatermarks).flatMap(
-      ([sourcePartition, completedSourceHighWaterMark]) => {
-        return Number.isFinite(completedSourceHighWaterMark)
-          ? [
+      ([sourcePartition, manifestSourceWatermark]) => {
+        const completedSourceHighWaterMark = getSeedCappedSourceWatermark(
+          candidate.sourceWatermarks,
+          sourcePartition,
+          manifestSourceWatermark,
+        )
+
+        return completedSourceHighWaterMark === null
+          ? []
+          : [
               {
                 completedSourceHighWaterMark,
                 projectId: candidate.projectId,
@@ -561,7 +598,6 @@ export const getPromotedReviewServingSnapshotDirtyWorkCoverages = async (
                 sourcePartition,
               },
             ]
-          : []
       },
     )
 

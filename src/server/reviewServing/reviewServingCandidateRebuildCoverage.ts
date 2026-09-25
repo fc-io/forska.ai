@@ -27,6 +27,43 @@ const getCandidateComponentValuesSql = (candidates: readonly ReviewServingCandid
     .join(', ')
 }
 
+// Rebuild chunk writers insert their range without a key, so a patch of the same article committed while the chunk is
+// running could duplicate its rows; such articles wait until the chunk has finished.
+export const getReviewServingArticlesInRunningRebuildChunks = async (
+  input: {
+    articleIds: readonly string[]
+    component: ReviewServingProjectionComponent
+    projectId: string
+    projectionIdentity: string
+  },
+  database: ReviewServingCandidateRebuildCoverageDatabase,
+) => {
+  if (input.articleIds.length === 0) {
+    return new Set<string>()
+  }
+
+  const rows = await database.queryJson<{articleId: string}>(`
+    WITH claimed_article(article_id) AS (
+      VALUES ${getClaimedArticleValuesSql(input.articleIds)}
+    )
+    SELECT DISTINCT claimed_article.article_id AS articleId
+    FROM app.review_rebuild_chunk_manifest chunk
+    INNER JOIN claimed_article
+      ON claimed_article.article_id >= chunk.chunk_start_key
+      AND claimed_article.article_id <= chunk.chunk_end_key
+    WHERE chunk.project_id = ${getSqlLiteral(input.projectId)}
+      AND chunk.projection_component = ${getSqlLiteral(input.component)}
+      AND chunk.projection_identity = ${getSqlLiteral(input.projectionIdentity)}
+      AND chunk.status = 'running'
+  `)
+
+  return new Set(
+    rows.map((row) => {
+      return row.articleId
+    }),
+  )
+}
+
 // A pending chunk of an admitted request rebuilds its whole article range from source when it runs, so the candidate
 // rows it covers do not need incremental patches before then. The filters mirror the chunk claim predicate: chunks
 // the claim path would not pick up may never run, and their candidates keep receiving patches.

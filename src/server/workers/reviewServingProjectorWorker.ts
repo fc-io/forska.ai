@@ -64,6 +64,7 @@ import {
   projectReviewServingHumanStatusRanges,
 } from '../reviewServing/reviewServingHumanStatusProjector.ts'
 import {
+  deferReviewServingPayloadClaimsInRunningRebuildChunks,
   projectReviewServingJudgmentPayloadArticleRanges,
   projectReviewServingJudgmentPayloadRows,
 } from '../reviewServing/reviewServingJudgmentPayloadProjector.ts'
@@ -4996,9 +4997,17 @@ export const getDefaultReviewServingProjectorRunners = (
       const payloadSnapshots = snapshots.filter((snapshot) => {
         return getSnapshotReviewSettings(snapshot, currentSettings) !== null
       })
+      const claims = await deferReviewServingPayloadClaimsInRunningRebuildChunks(
+        {claims: context.claims, projectId, projectionIdentity: manifest.projectionIdentity},
+        database,
+      )
+
+      if (claims.length === 0) {
+        return {processedCount: 0}
+      }
 
       if (payloadSnapshots.length === 0) {
-        await completeReviewServingDirtyWorkClaims(context.claims, database)
+        await completeReviewServingDirtyWorkClaims(claims, database)
 
         return {processedCount: 0}
       }
@@ -5014,7 +5023,7 @@ export const getDefaultReviewServingProjectorRunners = (
           {
             acknowledgeClaims,
             baseGeneration: manifest.baseGeneration,
-            claims: context.claims,
+            claims,
             definitionVersion: manifest.definitionVersion,
             listModeKeys: reviewServingListModes,
             modelId: project.modelId,
