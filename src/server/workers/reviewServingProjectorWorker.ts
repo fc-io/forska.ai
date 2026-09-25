@@ -98,6 +98,8 @@ import {
 } from '../reviewServing/reviewServingProjectorWriter.ts'
 import {projectReviewServingProjectScopePatches} from '../reviewServing/reviewServingProjectScopeProjector.ts'
 import {
+  deferReviewServingQueueCandidatePatchesToPendingRebuild,
+  getReviewServingQueueClaimsOutsideArticles,
   projectReviewServingQueuePatches,
   projectReviewServingQueueRebuildRanges,
   projectReviewServingQueueRebuildRows,
@@ -4833,6 +4835,20 @@ const runSnapshotProjectors = async <T>(
     : [...resultsWithoutAcknowledgement, await runSnapshot(finalSnapshot, true)]
 }
 
+const getNonAcknowledgingSnapshotComponentStates = (
+  snapshots: readonly ReviewServingSnapshotContext[],
+  component: ReviewServingProjectionComponent,
+) => {
+  return snapshots.slice(0, -1).flatMap((snapshot) => {
+    const state = getSnapshotComponentState(snapshot, component)
+    const baseGeneration = Number(state?.baseGeneration ?? Number.NaN)
+
+    return state === null || !Number.isFinite(baseGeneration)
+      ? []
+      : [{baseGeneration, projectionIdentity: state.projectionIdentity, snapshotId: snapshot.snapshotId}]
+  })
+}
+
 export const getDefaultReviewServingProjectorRunners = (
   database: ReviewServingProjectorWorkerDatabase,
 ): ReviewServingProjectorServiceDependencies['runners'] => {
@@ -5069,21 +5085,32 @@ export const getDefaultReviewServingProjectorRunners = (
     },
     queue: async (context) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
-      const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
-        return projectReviewServingQueuePatches(
-          {
-            acknowledgeClaims,
-            baseGeneration: manifest.baseGeneration,
-            claims: context.claims,
-            definitionVersion: manifest.definitionVersion,
-            projectId,
-            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-            projectionIdentity: manifest.projectionIdentity,
-            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-            snapshotId: snapshot.snapshotId,
-          },
-          database,
+      const articlesAwaitingRebuild = await deferReviewServingQueueCandidatePatchesToPendingRebuild(
+        {candidates: getNonAcknowledgingSnapshotComponentStates(snapshots, 'queue'), claims: context.claims, projectId},
+        database,
+      )
+      const results = await runSnapshotProjectors(snapshots, async (snapshot, acknowledgeClaims) => {
+        const claims = getReviewServingQueueClaimsOutsideArticles(
+          context.claims,
+          articlesAwaitingRebuild.get(snapshot.snapshotId),
         )
+
+        return claims.length === 0
+          ? {servingRowCount: 0}
+          : projectReviewServingQueuePatches(
+              {
+                acknowledgeClaims,
+                baseGeneration: manifest.baseGeneration,
+                claims,
+                definitionVersion: manifest.definitionVersion,
+                projectId,
+                projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+                projectionIdentity: manifest.projectionIdentity,
+                selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+                snapshotId: snapshot.snapshotId,
+              },
+              database,
+            )
       })
 
       return {
