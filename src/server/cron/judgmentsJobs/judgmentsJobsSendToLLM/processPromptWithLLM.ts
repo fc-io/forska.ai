@@ -16,6 +16,7 @@ import {
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
   getOwnerBackedJudgmentExecutionSnapshot,
+  hasJudgeWorkerCompletionIntent,
   hasUnackedJudgeWorkerCompletion,
   shouldUseJudgeWorkerOwnerHandoff,
 } from '../judgeWorkerCompletionJournal.ts'
@@ -820,6 +821,21 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
 
           if (prepared.kind !== 'run') {
             terminalState = prepared.kind === 'ready' ? {kind: 'ready', retryAfterMs: null} : prepared
+            return undefined
+          }
+
+          if (shouldUseJudgeWorkerOwnerHandoff() && hasJudgeWorkerCompletionIntent(promptToProcess.claimId)) {
+            processPromptLogger.warn(
+              `llm:closed-claim-skipped:${promptToProcess.jobId}`,
+              '[llm] Skipping LLM call for a claim that already has a closeout',
+              {
+                claimId: promptToProcess.claimId,
+                component: processPromptComponent,
+                event: 'closedClaimSkipped',
+                jobId: promptToProcess.jobId,
+                recordId: promptToProcess.recordId,
+              },
+            )
             return undefined
           }
 

@@ -85,6 +85,7 @@ const ownerBackedPreDispatchLocalCompletionApplyLimit = 64
 const ownerBackedCompletionReplayIntervalMs = 5_000
 const ownerBackedAcceptedClaimRecoveryReplayLimit = 64
 const ownerBackedAcceptedClaimRecoveryIntervalMs = 10_000
+const ownerBackedAcceptedClaimRecoveryMinAgeMs = 60_000
 const sendToLLMRunTimeoutMs = 120_000
 const sendToLLMAlreadyRunningWarnAfterMs = 30_000
 const probePromptClaimLimit = initialPromptClaimDispatchChunkSize
@@ -1137,8 +1138,11 @@ const recoverAbandonedAcceptedClaimsForJobs = async (jobs: RunningJudgmentJob[])
   }
 
   const recovery = await recoverAbandonedJudgeWorkerAcceptedClaims({
+    acceptedBefore: new Date(Date.now() - ownerBackedAcceptedClaimRecoveryMinAgeMs),
+    getProtectedPrompts: () => {
+      return getProtectedJudgeWorkerAcceptedClaimPrompts(jobs)
+    },
     limit: ownerBackedAcceptedClaimRecoveryReplayLimit,
-    protectedPrompts: await getProtectedJudgeWorkerAcceptedClaimPrompts(jobs),
   })
   const recoveredCount = recovery.acceptedClaimsDeleted + recovery.closeoutIntentsInserted
 

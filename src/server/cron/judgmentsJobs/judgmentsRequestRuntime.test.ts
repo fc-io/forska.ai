@@ -210,6 +210,9 @@ const getOwnerBackedJudgmentExecutionSnapshot = mock(async (_input: unknown) => 
 const hasUnackedJudgeWorkerCompletion = mock(async (_claimId: string) => {
   return false
 })
+const hasJudgeWorkerCompletionIntent = mock((_claimId: string) => {
+  return false
+})
 const sqliteStateTransitions: string[] = []
 let usePromptRuntimeMocks = false
 let useJudgeWorkerOwnerHandoffMocks = false
@@ -308,6 +311,7 @@ const registerPromptModuleMocks = () => {
       enqueueJudgeWorkerCompletion,
       flushJudgeWorkerCompletionOutboxForClaim,
       getOwnerBackedJudgmentExecutionSnapshot,
+      hasJudgeWorkerCompletionIntent,
       hasUnackedJudgeWorkerCompletion,
       shouldUseJudgeWorkerOwnerHandoff: () => {
         return useJudgeWorkerOwnerHandoffMocks
@@ -396,6 +400,7 @@ afterEach(async () => {
   enqueueJudgeWorkerCompletion.mockClear()
   flushJudgeWorkerCompletionOutboxForClaim.mockClear()
   getOwnerBackedJudgmentExecutionSnapshot.mockClear()
+  hasJudgeWorkerCompletionIntent.mockClear()
   hasUnackedJudgeWorkerCompletion.mockClear()
   sqliteServiceMock.hasJob.mockClear()
   sqliteServiceMock.hasLocalJudgment.mockClear()
@@ -452,6 +457,9 @@ afterEach(async () => {
   })
   getOwnerBackedJudgmentExecutionSnapshot.mockImplementation(async (_input: unknown) => {
     return createOwnerBackedSnapshot()
+  })
+  hasJudgeWorkerCompletionIntent.mockImplementation((_claimId: string) => {
+    return false
   })
   hasUnackedJudgeWorkerCompletion.mockImplementation(async (_claimId: string) => {
     return false
@@ -1887,6 +1895,22 @@ test('judge-worker prompt execution requeues when snapshot fulltext is not yet f
     expect.objectContaining({claimId: 'claim-a', status: 'retry'}),
   )
   expect(flushJudgeWorkerCompletionOutboxForClaim).toHaveBeenCalledWith('claim-a')
+})
+
+test('judge-worker prompt execution skips the LLM call for a claim that already has a closeout', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  hasJudgeWorkerCompletionIntent.mockImplementation((claimId: string) => {
+    return claimId === 'claim-a'
+  })
+
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(judgeSinglePrompt).not.toHaveBeenCalled()
+  expect(enqueueJudgeWorkerCompletion).toHaveBeenCalledWith(
+    expect.objectContaining({claimId: 'claim-a', status: 'retry'}),
+  )
 })
 
 test('prompt release marks running then ready on connection failure', async () => {
