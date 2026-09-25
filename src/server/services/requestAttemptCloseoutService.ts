@@ -1036,6 +1036,21 @@ export const projectRequestAttemptCloseoutsForTokenUse = async ({
   return upsertRequestAttemptCloseoutRows({rows: getRequestAttemptCloseoutWriteRows(tokenUse), runner})
 }
 
+export const projectRequestAttemptCloseoutsForTokenUses = async ({
+  runner,
+  tokenUses,
+}: {
+  runner: RequestAttemptCloseoutRunner
+  tokenUses: RequestAttemptCloseoutTokenUseInput[]
+}): Promise<RequestAttemptCloseoutProjectionResult> => {
+  return upsertRequestAttemptCloseoutRows({
+    rows: tokenUses.flatMap((tokenUse) => {
+      return getRequestAttemptCloseoutWriteRows(tokenUse)
+    }),
+    runner,
+  })
+}
+
 export const rebuildRequestAttemptCloseouts = async (
   input: RequestAttemptCloseoutRebuildInput,
 ): Promise<RequestAttemptCloseoutRebuildResult> => {
