@@ -6,7 +6,10 @@ import {join} from 'node:path'
 import {expect, mock, setDefaultTimeout, test} from 'bun:test'
 
 import {buildReviewConfigHash} from '../reviewServing/reviewProjectionIdentity.ts'
-import type {ReviewServingRebuildChunkManifest} from '../reviewServing/reviewServingChunkManifestRepository.ts'
+import {
+  reviewServingRebuildChunkLongestWaitingClaimInterval,
+  type ReviewServingRebuildChunkManifest,
+} from '../reviewServing/reviewServingChunkManifestRepository.ts'
 import {countReadyReviewServingComponents} from '../reviewServing/reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim} from '../reviewServing/reviewServingDirtyWorkService.ts'
 import {wakeReviewServingProjectorService} from '../reviewServing/reviewServingProjectorService.ts'
@@ -6271,6 +6274,87 @@ test('worker readmits failed rebuild requests that still have retryable chunks',
   expect(readmissionStatement).toContain('last_error = NULL')
 })
 
+test('worker resets expired running rebuild chunks before selecting the next chunk', async () => {
+  const harness = createWorkerHarness({chunkComplete: true})
+  const statementCountsAtSelect: number[] = []
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    getNextChunk: async (getNextInput) => {
+      statementCountsAtSelect.push(harness.runStatements.length)
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInput
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  await runReviewServingProjectorWorkerOnce(
+    {now: new Date('2026-09-23T11:00:00.000Z'), rebuildProjectId: 'project-1', workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  const resetStatementIndex = harness.runStatements.findIndex((statement) => {
+    return (
+      statement.includes('UPDATE app.review_rebuild_chunk_manifest') && statement.includes("SET status = 'pending'")
+    )
+  })
+  const resetStatement = harness.runStatements[resetStatementIndex]
+
+  expect(resetStatement).toContain("WHERE status = 'running'")
+  expect(resetStatement).toContain('lease_expires_at <= ')
+  expect(resetStatement).toContain('2026-09-23T11:00:00.000Z')
+  expect(resetStatement).toContain("AND project_id IS NOT DISTINCT FROM 'project-1'")
+  expect(resetStatementIndex).toBeGreaterThanOrEqual(0)
+  expect(resetStatementIndex).toBeLessThan(statementCountsAtSelect[0] ?? -1)
+})
+
+test('worker gives the first rebuild chunk selection of every Nth cycle to the longest-waiting request', async () => {
+  const getClaimOrdersForRotationOffset = async (input: {
+    componentRotationOffset: number
+    rebuildChunkBatchSize?: number
+  }) => {
+    const harness = createWorkerHarness({chunkComplete: input.rebuildChunkBatchSize === undefined})
+
+    await runReviewServingProjectorWorkerOnce(
+      {
+        componentRotationOffset: input.componentRotationOffset,
+        rebuildChunkBatchSize: input.rebuildChunkBatchSize,
+        rebuildProjectId: 'project-1',
+        workerId: 'worker-1',
+      },
+      harness.dependencies,
+    )
+
+    return harness.getNextChunkInputs.map((getNextInput) => {
+      return (getNextInput as {claimOrder?: string}).claimOrder
+    })
+  }
+  const claimOrdersByCycle = await Promise.all(
+    Array.from(
+      {length: reviewServingRebuildChunkLongestWaitingClaimInterval * 2},
+      (_offset, componentRotationOffset) => {
+        return getClaimOrdersForRotationOffset({componentRotationOffset})
+      },
+    ),
+  )
+  const priorityCycles = Array.from({length: reviewServingRebuildChunkLongestWaitingClaimInterval - 1}, () => {
+    return ['priority']
+  })
+
+  expect(claimOrdersByCycle).toEqual([
+    ...priorityCycles,
+    ['longestWaitingRequest'],
+    ...priorityCycles,
+    ['longestWaitingRequest'],
+  ])
+  expect(
+    await getClaimOrdersForRotationOffset({
+      componentRotationOffset: reviewServingRebuildChunkLongestWaitingClaimInterval - 1,
+      rebuildChunkBatchSize: 2,
+    }),
+  ).toEqual(['longestWaitingRequest', 'priority'])
+})
+
 test('worker fails inconsistent and superseded foreground rebuild requests before readmission', async () => {
   const harness = createWorkerHarness({chunkComplete: true})
 
@@ -8930,7 +9014,7 @@ test('requestless bootstrap adoption skips duplicate insert for existing request
       estimatedPromptCount: null,
       estimatedTempBytes: null,
       lastError: null,
-      leaseExpiresAt: '2026-06-16T10:01:00.000Z',
+      leaseExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       leaseOwner: 'worker-1',
       maxInputRows: null,
       maxOutputBytes: null,
@@ -9182,7 +9266,7 @@ test('requestless summary adoption persists request linkage in DuckDB', () => {
       estimatedPromptCount: null,
       estimatedTempBytes: null,
       lastError: null,
-      leaseExpiresAt: '2026-06-16T10:01:00.000Z',
+      leaseExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       leaseOwner: 'worker-1',
       maxInputRows: null,
       maxOutputBytes: null,
