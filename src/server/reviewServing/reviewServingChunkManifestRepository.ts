@@ -37,6 +37,7 @@ export type ReviewServingRebuildChunkStatus =
 
 export type ReviewServingRebuildChunkAdmissionState = 'admitted' | 'blocked_over_budget' | 'pending'
 export type ReviewServingRebuildChunkWorkloadClass = 'bulk' | 'critical'
+export type ReviewServingRebuildChunkClaimOrder = 'longestWaitingRequest' | 'priority'
 
 export type ReviewServingRebuildChunkBudgetFields = {
   actualInputRows?: number | null
@@ -506,6 +507,17 @@ const rebuildChunkClaimPriorityOrder = [
 const stalledForegroundRebuildRequestPriority = 10_000
 const minimumCriticalLaneRebuildRequestPriority = 500
 
+export const reviewServingRebuildChunkLongestWaitingClaimInterval = 4
+
+export const getReviewServingRebuildChunkClaimOrder = (
+  claimRotationOffset: number,
+): ReviewServingRebuildChunkClaimOrder => {
+  return claimRotationOffset % reviewServingRebuildChunkLongestWaitingClaimInterval
+    === reviewServingRebuildChunkLongestWaitingClaimInterval - 1
+    ? 'longestWaitingRequest'
+    : 'priority'
+}
+
 export const getReviewServingRebuildChunkWorkloadClass = (
   component: ReviewServingProjectionComponent,
 ): ReviewServingRebuildChunkWorkloadClass => {
@@ -572,6 +584,29 @@ const getRebuildChunkClaimRequestUpdatedAtSql = (tableAlias: string) => {
     FROM app.review_rebuild_request request
     WHERE (request.request_id || '') = ${tableAlias}.request_id
   )`
+}
+
+const getRebuildChunkClaimRequestWaitingSinceSql = (tableAlias: string) => {
+  return `COALESCE(
+    (
+      SELECT MAX(started.started_at)
+      FROM app.review_rebuild_chunk_manifest started
+      WHERE (started.request_id || '') = ${tableAlias}.request_id
+    ),
+    (
+      SELECT MIN(COALESCE(request.admitted_at, request.created_at))
+      FROM app.review_rebuild_request request
+      WHERE (request.request_id || '') = ${tableAlias}.request_id
+    ),
+    ${tableAlias}.created_at
+  )`
+}
+
+const getRebuildChunkClaimOrderPrefixSql = (claimOrder: ReviewServingRebuildChunkClaimOrder, tableAlias: string) => {
+  return claimOrder === 'longestWaitingRequest'
+    ? `${getRebuildChunkClaimRequestWaitingSinceSql(tableAlias)} ASC,
+        ${tableAlias}.request_id ASC NULLS LAST,`
+    : ''
 }
 
 const getComponentSqlList = (components: readonly ReviewServingProjectionComponent[]) => {
@@ -1589,7 +1624,10 @@ const getReviewServingRebuildChunkForegroundBackpressurePredicate = (
           AND ${pressureAlias}.admission_state = 'admitted'
           AND (
             ${pressureAlias}.status = 'pending'
-            OR ${pressureAlias}.status = 'running'
+            OR (
+              ${pressureAlias}.status = 'running'
+              AND ${pressureAlias}.lease_expires_at > ${getReviewServingChunkTimestampLiteral(input.now)}
+            )
             OR (
               ${pressureAlias}.status = 'failed'
               AND COALESCE(${pressureAlias}.retry_count, 0) < CASE
@@ -1733,6 +1771,7 @@ export const getReviewServingRebuildChunkManifestForIdentity = async (
 
 export const getNextClaimableReviewServingRebuildChunk = async (
   input: {
+    claimOrder?: ReviewServingRebuildChunkClaimOrder
     now: Date | string
     projectId?: string | null
     releaseInactiveRequests?: boolean
@@ -1780,6 +1819,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
       FROM app.review_rebuild_chunk_manifest AS candidate
       WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
       ORDER BY
+        ${getRebuildChunkClaimOrderPrefixSql(input.claimOrder ?? 'priority', 'candidate')}
         ${getRebuildChunkClaimLaneSql('candidate')} ASC,
         ${getRebuildChunkClaimRequestPrioritySql('candidate')} DESC NULLS LAST,
         CASE
@@ -1829,6 +1869,25 @@ export const getNextClaimableReviewServingRebuildChunk = async (
           snapshotId: row.snapshotId ?? null,
         }
   })
+}
+
+export const resetExpiredRunningReviewServingRebuildChunks = async (
+  input: {now: Date | string; projectId?: string | null},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
+) => {
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET status = 'pending',
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = current_timestamp
+    WHERE status = 'running'
+      AND (
+        lease_expires_at IS NULL
+        OR lease_expires_at <= ${getReviewServingChunkTimestampLiteral(input.now)}
+      )
+      ${getReviewServingRebuildChunkProjectPredicate(input)}
+  `)
 }
 
 export const upsertReviewServingRebuildChunkManifests = async (
