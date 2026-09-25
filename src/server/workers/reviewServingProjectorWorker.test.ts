@@ -483,10 +483,10 @@ test('worker runs fresh job-driven llmStatus dirty work before rebuild backlog c
   expect(pendingLlmStatusStatements[0]).toContain('project.delete_pending_at IS NULL')
 })
 
-type JobDrivenTestComponent = 'llmStatus' | 'payload' | 'queue'
+type JobDrivenTestComponent = 'llmStatus' | 'payload' | 'posting' | 'queue'
 
 const isJobDrivenTestComponent = (component: string): component is JobDrivenTestComponent => {
-  return component === 'llmStatus' || component === 'payload' || component === 'queue'
+  return component === 'llmStatus' || component === 'payload' || component === 'posting' || component === 'queue'
 }
 
 const getJobDrivenDirtyWorkClaim = (
@@ -561,6 +561,7 @@ const runJobDrivenDirtyWorkCycle = async (input: {
   maxRowsPerWake?: number
   maxWakeMs?: number
   payloadBatchMs?: number
+  payloadDefersClaims?: boolean
   pendingComponents?: readonly JobDrivenTestComponent[]
 }) => {
   const harness = createWorkerHarness()
@@ -617,9 +618,22 @@ const runJobDrivenDirtyWorkCycle = async (input: {
 
         return {processedCount: 1}
       },
-      payload: async () => {
+      payload: async ({claims}) => {
         projectedComponents.push('payload')
         nowMs += input.payloadBatchMs ?? 300
+
+        return input.payloadDefersClaims === true
+          ? {
+              processedCount: 0,
+              releasedClaimIds: claims.map((claim) => {
+                return claim.dirtyWorkId
+              }),
+            }
+          : {processedCount: 1}
+      },
+      posting: async () => {
+        projectedComponents.push('posting')
+        nowMs += 300
 
         return {processedCount: 1}
       },
@@ -702,30 +716,68 @@ test('job-driven payload dirty work takes its turn in the pre-chunk wake with ll
   expect(payloadAfterSlowLlmStatus.claimedComponents).toEqual(['llmStatus'])
 })
 
+test('job-driven posting dirty work takes its turn in the pre-chunk wake after payload', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    componentRotationOffset: 3,
+    llmStatusBatchMs: 1_000,
+    pendingComponents: ['posting', 'queue', 'payload', 'llmStatus'],
+  })
+
+  expect(cycle.harness.wakeInputs[0]).toMatchObject({
+    componentOrder: ['posting', 'llmStatus', 'queue', 'payload'],
+    maxWakeMs: 5_000,
+  })
+  expect(cycle.claimedComponents).toEqual(['posting', 'llmStatus', 'queue', 'payload'])
+  expect(cycle.result.projector.runs).toMatchObject([
+    {claimCount: 1, component: 'posting'},
+    {claimCount: 1, component: 'llmStatus'},
+    {claimCount: 1, component: 'queue'},
+    {claimCount: 1, component: 'payload'},
+  ])
+  expect(cycle.harness.runChunkInputs).toHaveLength(1)
+})
+
 const jobDrivenBacklog = {llmStatus: 1_000, payload: 1_000, queue: 1_000}
 
-test('a job-driven component with a full-batch backlog keeps its turn for up to four batches after the others had theirs, then the rebuild chunk runs', async () => {
+test('a full posting batch keeps to its first-round batch and the extra batches go to the components it waits for', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: {...jobDrivenBacklog, posting: 1_000},
+    componentRotationOffset: 3,
+    llmStatusBatchMs: 1_000,
+    maxWakeMs: 8_000,
+    payloadBatchMs: 500,
+    pendingComponents: ['queue', 'payload', 'llmStatus', 'posting'],
+  })
+
+  expect(cycle.claimedComponents).toEqual([
+    'posting',
+    'llmStatus',
+    'queue',
+    'payload',
+    'llmStatus',
+    'llmStatus',
+    'llmStatus',
+  ])
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(cycle.result)).toMatchObject({
+    projectorRunClaimCounts: {llmStatus: 256, payload: 64, posting: 64, queue: 64},
+  })
+})
+
+test('a job-driven batch whose claims the runner deferred does not keep the turn for extra batches', async () => {
   const cycle = await runJobDrivenDirtyWorkCycle({
     backlog: jobDrivenBacklog,
     componentRotationOffset: 2,
     llmStatusBatchMs: 1_000,
     maxWakeMs: 8_000,
     payloadBatchMs: 500,
+    payloadDefersClaims: true,
     pendingComponents: ['queue', 'payload', 'llmStatus'],
   })
 
-  expect(cycle.claimedComponents).toEqual(['payload', 'llmStatus', 'queue', 'payload', 'payload', 'payload'])
-  expect(cycle.harness.wakeInputs).toMatchObject([
-    {componentOrder: ['payload', 'llmStatus', 'queue'], maxRowsPerWake: 512, maxWakeMs: 8_000},
-    {componentOrder: ['payload'], maxRowsPerWake: 64, maxWakeMs: 4_600},
-    {componentOrder: ['payload'], maxRowsPerWake: 64, maxWakeMs: 4_100},
-    {componentOrder: ['payload'], maxRowsPerWake: 64, maxWakeMs: 3_600},
-    {componentOrder: undefined, maxWakeMs: 0},
-  ])
-  expect(cycle.chunkStartedAtMs).toEqual([4_300])
-  expect(cycle.harness.runChunkInputs).toHaveLength(1)
+  expect(cycle.claimedComponents).toEqual(['payload', 'llmStatus', 'queue', 'llmStatus', 'llmStatus', 'llmStatus'])
+  expect(cycle.result.projector.releasedClaimIds).toHaveLength(64)
   expect(getReviewServingProjectorWorkerCycleLogAttrs(cycle.result)).toMatchObject({
-    projectorRunClaimCounts: {llmStatus: 64, payload: 256, queue: 64},
+    projectorRunClaimCounts: {llmStatus: 256, payload: 0, queue: 64},
   })
 })
 
