@@ -4,6 +4,7 @@ import {Effect} from 'effect'
 import type {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {reviewServingListModes} from './reviewServingContracts.ts'
+import type {ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import type {ReviewServingProjectorServiceDependencies} from './reviewServingProjectorService.ts'
 
 setDefaultTimeout(120_000)
@@ -734,4 +735,178 @@ test('payload claims fall back to a requested-only bootstrap when no snapshot ma
   expect(await getDetailRows({projectId: otherGenerationProjectId, snapshotId: 'snapshot-other-generation'})).toEqual(
     [],
   )
+})
+
+type EnsuredManifestRow = {
+  baseGeneration: number
+  component: string
+  definitionVersion: string
+  identity: string
+  inputWatermark: number
+  inputWatermarksJson: string
+  patchWatermark: number
+  reviewConfigIsCurrent: boolean
+  status: string
+}
+
+const getEnsureClaim = (input: {
+  component: 'payload' | 'posting'
+  latestSourceHighWaterMark: number
+  projectId: string | null
+  sourcePartition: string
+}): ReviewServingDirtyWorkClaim => {
+  return {
+    articleId: 'article-a',
+    dirtyKind: 'judgment.llm.created',
+    dirtyRangeEnd: null,
+    dirtyRangeStart: null,
+    dirtyWorkId: `${input.projectId ?? 'none'}-${input.component}-${input.latestSourceHighWaterMark}`,
+    firstSourceHighWaterMark: input.latestSourceHighWaterMark,
+    latestDeltaId: null,
+    latestSourceHighWaterMark: input.latestSourceHighWaterMark,
+    projectId: input.projectId,
+    projectionComponent: input.component,
+    projectionIdentity: `${input.component}:${input.projectId ?? 'none'}`,
+    scopeId: `${input.projectId ?? 'none'}:article-a`,
+    scopeKind: 'article',
+    sourcePartition: input.sourcePartition,
+    status: 'running',
+  }
+}
+
+const getEnsureClaims = (projectId: string) => {
+  return [
+    getEnsureClaim({
+      component: 'payload',
+      latestSourceHighWaterMark: 7,
+      projectId,
+      sourcePartition: 'judgmentSqliteOutboxImport:job-a',
+    }),
+    getEnsureClaim({component: 'posting', latestSourceHighWaterMark: 12, projectId, sourcePartition: jobPartition}),
+    getEnsureClaim({
+      component: 'payload',
+      latestSourceHighWaterMark: 9,
+      projectId,
+      sourcePartition: 'judgmentSqliteOutboxImport:job-b',
+    }),
+    getEnsureClaim({component: 'posting', latestSourceHighWaterMark: 3, projectId, sourcePartition: jobPartition}),
+    getEnsureClaim({
+      component: 'payload',
+      latestSourceHighWaterMark: 11,
+      projectId: null,
+      sourcePartition: jobPartition,
+    }),
+  ]
+}
+
+const insertStalePostingManifest = async (projectId: string) => {
+  const {upsertReviewServingProjectionIdentityManifest} = await import('./reviewServingManifestRepository.ts')
+
+  await upsertReviewServingProjectionIdentityManifest(
+    {
+      baseGeneration: 2,
+      definitionVersion: 'posting:test',
+      inputWatermark: 4,
+      inputWatermarks: {judgmentSqliteOutboxImport: 4},
+      patchWatermark: 1,
+      projectId,
+      projectionComponent: 'posting',
+      projectionIdentity: `posting:${projectId}`,
+      reviewConfigHash: 'review:stale',
+      status: 'active',
+    },
+    getDatabase(),
+  )
+}
+
+const getEnsuredManifestRows = async (projectId: string) => {
+  const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
+
+  return getDatabase().queryJson<EnsuredManifestRow>(`
+    SELECT
+      projection_component AS component,
+      replace(projection_identity, '${projectId}', '<project>') AS identity,
+      CAST(base_generation AS INTEGER) AS baseGeneration,
+      CAST(patch_watermark AS INTEGER) AS patchWatermark,
+      CAST(input_watermark AS INTEGER) AS inputWatermark,
+      CAST(input_watermarks_json AS VARCHAR) AS inputWatermarksJson,
+      definition_version AS definitionVersion,
+      status,
+      review_config_hash = '${reviewConfigHash}' AS reviewConfigIsCurrent
+    FROM app.review_projection_identity_manifest
+    WHERE project_id = '${projectId}'
+    ORDER BY component
+  `)
+}
+
+test('a multi-claim batch ensures the same manifests as ensuring claim by claim with one read per manifest', async () => {
+  const {ensureReviewServingClaimManifests} = await import('./reviewServingProjectorService.ts')
+  const batchProjectId = 'project-ensure-batch'
+  const perClaimProjectId = 'project-ensure-per-claim'
+  const statements: string[] = []
+  const countingDatabase = {
+    queryJson: <T>(statement: string) => {
+      statements.push(statement)
+
+      return getDatabase().queryJson<T>(statement)
+    },
+    run: (statement: string) => {
+      statements.push(statement)
+
+      return getDatabase().run(statement)
+    },
+  }
+  const countStatements = (fragment: string) => {
+    return statements.filter((statement) => {
+      return statement.includes(fragment) && !statement.includes('DELETE FROM')
+    }).length
+  }
+
+  await insertProject(batchProjectId)
+  await insertProject(perClaimProjectId)
+  await insertStalePostingManifest(batchProjectId)
+  await insertStalePostingManifest(perClaimProjectId)
+
+  await ensureReviewServingClaimManifests(getEnsureClaims(batchProjectId), countingDatabase)
+  await getEnsureClaims(perClaimProjectId).reduce<Promise<void>>(async (previousEnsure, claim) => {
+    await previousEnsure
+    await ensureReviewServingClaimManifests([claim], getDatabase())
+  }, Promise.resolve())
+
+  const batchRows = await getEnsuredManifestRows(batchProjectId)
+
+  expect(batchRows).toEqual(await getEnsuredManifestRows(perClaimProjectId))
+  expect(batchRows).toEqual([
+    {
+      baseGeneration: 0,
+      component: 'payload',
+      definitionVersion: 'payload:dirty-claim-seed-v1',
+      identity: 'payload:<project>',
+      inputWatermark: 7,
+      inputWatermarksJson: '{"judgmentSqliteOutboxImport:job-a":7}',
+      patchWatermark: 0,
+      reviewConfigIsCurrent: true,
+      status: 'candidate',
+    },
+    {
+      baseGeneration: 2,
+      component: 'posting',
+      definitionVersion: 'posting:test',
+      identity: 'posting:<project>',
+      inputWatermark: 4,
+      inputWatermarksJson: '{"judgmentSqliteOutboxImport":4}',
+      patchWatermark: 1,
+      reviewConfigIsCurrent: true,
+      status: 'active',
+    },
+  ])
+  expect(
+    await getDatabase().queryJson(`
+    SELECT manifest_id FROM app.review_projection_identity_manifest WHERE projection_identity = 'payload:none'
+  `),
+  ).toEqual([])
+  expect(countStatements('FROM app.project project')).toBe(1)
+  expect(countStatements('FROM app.project_prompt project_prompt')).toBe(1)
+  expect(countStatements('FROM app.review_projection_identity_manifest')).toBe(4)
+  expect(countStatements('INSERT INTO app.review_projection_identity_manifest')).toBe(2)
 })

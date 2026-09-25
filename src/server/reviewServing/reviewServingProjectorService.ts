@@ -24,6 +24,7 @@ import {
   upsertReviewServingProjectionIdentityManifest,
 } from './reviewServingManifestRepository.ts'
 import {
+  getReviewServingProjectionComponentIdentityKey,
   getReviewServingSourceWatermarkKeys,
   type ReviewServingDirtyWorkScope,
   type ReviewServingSourcePartitionWatermarks,
@@ -629,14 +630,11 @@ const getClaimInputWatermarks = (claim: ReviewServingDirtyWorkClaim): ReviewServ
   return {[claim.sourcePartition]: claim.latestSourceHighWaterMark}
 }
 
-const getClaimManifestInput = async (
+const getClaimManifestInput = (
   claim: ReviewServingDirtyWorkClaim,
   existing: Awaited<ReturnType<typeof getReviewServingProjectionIdentityManifest>>,
-  database: ReviewServingManifestRepositoryTransaction,
+  reviewConfigHash: string | null,
 ) => {
-  const reviewConfigHash =
-    claim.projectId === null ? null : await getCurrentReviewServingReviewConfigHash(claim.projectId, database)
-
   return existing === null
     ? {
         baseGeneration: 0,
@@ -653,13 +651,49 @@ const getClaimManifestInput = async (
     : {...existing, reviewConfigHash}
 }
 
-export const ensureReviewServingClaimManifests: ReviewServingClaimManifestEnsurer = async (claims, database) => {
-  await claims.reduce<Promise<void>>(async (previousEnsure, claim) => {
-    await previousEnsure
+type ProjectClaim = ReviewServingDirtyWorkClaim & {projectId: string}
 
-    if (claim.projectId === null) {
-      return
-    }
+const isProjectClaim = (claim: ReviewServingDirtyWorkClaim): claim is ProjectClaim => {
+  return claim.projectId !== null
+}
+
+const getFirstClaimPerProjectionManifest = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  const firstClaimByManifestId = claims.filter(isProjectClaim).reduce((firstClaims, claim) => {
+    const manifestId = getReviewServingProjectionComponentIdentityKey(claim)
+
+    return firstClaims.has(manifestId) ? firstClaims : firstClaims.set(manifestId, claim)
+  }, new Map<string, ProjectClaim>())
+
+  return [...firstClaimByManifestId.values()]
+}
+
+const getReviewConfigHashByProjectId = async (
+  claims: readonly ProjectClaim[],
+  database: ReviewServingManifestRepositoryTransaction,
+) => {
+  const projectIds = [
+    ...new Set(
+      claims.map((claim) => {
+        return claim.projectId
+      }),
+    ),
+  ]
+
+  return projectIds.reduce<Promise<Map<string, string | null>>>(async (previousHashes, projectId) => {
+    const hashes = await previousHashes
+
+    return hashes.set(projectId, await getCurrentReviewServingReviewConfigHash(projectId, database))
+  }, Promise.resolve(new Map<string, string | null>()))
+}
+
+// Claims sharing a projection manifest need one read and at most one write: once the first claim has seeded or
+// refreshed the manifest, the per-claim check finds it at the current review config hash and skips the rest.
+export const ensureReviewServingClaimManifests: ReviewServingClaimManifestEnsurer = async (claims, database) => {
+  const manifestClaims = getFirstClaimPerProjectionManifest(claims)
+  const reviewConfigHashByProjectId = await getReviewConfigHashByProjectId(manifestClaims, database)
+
+  await manifestClaims.reduce<Promise<void>>(async (previousEnsure, claim) => {
+    await previousEnsure
 
     const existing = await getReviewServingProjectionIdentityManifest(
       {
@@ -669,8 +703,11 @@ export const ensureReviewServingClaimManifests: ReviewServingClaimManifestEnsure
       },
       database,
     )
-
-    const manifestInput = await getClaimManifestInput(claim, existing, database)
+    const manifestInput = getClaimManifestInput(
+      claim,
+      existing,
+      reviewConfigHashByProjectId.get(claim.projectId) ?? null,
+    )
 
     if (existing !== null && existing.reviewConfigHash === manifestInput.reviewConfigHash) {
       return
