@@ -54,6 +54,14 @@ const reviewServingV4RebuildRequestsRef = {
 const rejectReviewServingV4RebuildRef = {current: false}
 const reviewServingV4RebuildStatusRef = {current: 'admitted'}
 
+const appRowsRef = {
+  articleDetail: [] as unknown[],
+  assessments: [] as unknown[],
+  humanJudgments: [] as unknown[],
+  judgments: [] as unknown[],
+  statements: [] as string[],
+}
+
 const assertProjectIsActiveRef = {
   current: async (_projectId: string): Promise<unknown> => {
     return {archived: false, id: 'project-1', name: 'Project 1'}
@@ -164,7 +172,30 @@ beforeEach(() => {
       useTitle: true,
     }
   }
+  appRowsRef.articleDetail = []
+  appRowsRef.assessments = []
+  appRowsRef.humanJudgments = []
+  appRowsRef.judgments = []
+  appRowsRef.statements = []
   queryJsonRef.current = async (_statement) => {
+    appRowsRef.statements.push(_statement)
+
+    if (_statement.includes('AS article_external_id')) {
+      return appRowsRef.articleDetail
+    }
+
+    if (_statement.includes('FROM app.judgment_assessment')) {
+      return appRowsRef.assessments
+    }
+
+    if (_statement.includes('AS judgmentId,')) {
+      return appRowsRef.judgments
+    }
+
+    if (_statement.includes('FROM app.judgment_human')) {
+      return appRowsRef.humanJudgments
+    }
+
     if (_statement.includes('FROM app.project_prompt')) {
       return [
         {
@@ -424,40 +455,193 @@ test('project review details reads human answer and comment from scalar detail c
   )
 })
 
-test('project review details returns unavailable when V4 article detail is unavailable', async () => {
-  reviewServingRowsRef.current = async (request) => {
-    return request.contractKey === 'review.detail.row'
-      ? {diagnostics: {snapshotId: null}, reason: 'snapshot unavailable', status: 'rejected'}
-      : {rows: [], status: 'accepted'}
+const getAppArticleDetailRow = () => {
+  return {...getServingArticleRow(), article_title: 'App Article 1', publication_year: undefined}
+}
+
+const getAppJudgmentRow = () => {
+  return {
+    judgmentAnsweredOriginal: 'yes',
+    judgmentAnsweredOriginalAsArray: '["yes"]',
+    judgmentArticleId: 'article-1',
+    judgmentAssessments: [],
+    judgmentChunkingStrategy: null,
+    judgmentConfidenceOriginal: 70,
+    judgmentCreatedAt: '2024-01-03T00:00:00.000Z',
+    judgmentDeletedAt: null,
+    judgmentExplanation: 'app because',
+    judgmentId: 'judgment-app-1',
+    judgmentIsAnswered: true,
+    judgmentModelId: 'model-1',
+    judgmentProjectId: 'project-1',
+    judgmentPromptId: 'prompt-1',
+    judgmentQuotes: '[]',
+    judgmentSnapshotProjectId: null,
+    judgmentSnapshotProjectModelName: null,
+    judgmentUpdatedAt: '2024-01-04T00:00:00.000Z',
+    judgmentUseAbstract: true,
+    judgmentUseFulltext: false,
+    judgmentUseFulltextNoImages: false,
+    judgmentUseTitle: true,
+    modelMetadataJson: null,
+    modelName: 'Model One',
+    modelProvider: 'openai',
+    modelThinking: null,
+    modelVersion: 'v1',
+    promptHeading: 'Prompt 1',
+    promptOriginalText: 'Prompt 1',
   }
+}
+
+const getAppAssessmentRow = (input: {comment: string; id: string; updatedAt: string}) => {
+  return {
+    assessmentComment: input.comment,
+    assessmentIsCorrect: true,
+    createdAt: '2024-01-05T00:00:00.000Z',
+    id: input.id,
+    judgmentId: 'judgment-app-1',
+    updatedAt: input.updatedAt,
+  }
+}
+
+const rejectAllReviewServingReads = () => {
+  reviewServingRowsRef.current = async () => {
+    return {diagnostics: {}, reason: 'missingRequiredComponentState', status: 'rejected'}
+  }
+}
+
+const detailReadinessRepairRequest = {
+  components: ['posting', 'summary', 'payload'],
+  priority: 1000,
+  projectId: 'project-1',
+  reason: 'detailReadinessDirtyWork',
+}
+
+test('project review details reads the article, judgments, assessments, and human answers from app tables when V4 detail state is missing', async () => {
+  rejectAllReviewServingReads()
+  appRowsRef.articleDetail = [getAppArticleDetailRow()]
+  appRowsRef.judgments = [getAppJudgmentRow()]
+  appRowsRef.assessments = [
+    getAppAssessmentRow({comment: 'newest', id: 'assessment-new', updatedAt: '2024-01-07T00:00:00.000Z'}),
+    getAppAssessmentRow({comment: 'older', id: 'assessment-old', updatedAt: '2024-01-06T00:00:00.000Z'}),
+  ]
+  appRowsRef.humanJudgments = [
+    {
+      answered_original: 'no',
+      article_id: 'article-1',
+      detail_updated_at: '2024-01-08T00:00:00.000Z',
+      human_comment: 'human says no',
+      judgment_created_at: '2024-01-08T00:00:00.000Z',
+      judgment_id: 'human-1',
+      prompt_heading: 'Prompt 1',
+      prompt_id: 'prompt-1',
+      prompt_order: 0,
+      prompt_original_text: 'Prompt 1',
+      prompt_type: 'string',
+    },
+  ]
 
   const response = await postReviewDetailsRequest()
-  const body = (await response.json()) as {article: null; reason: string; repairRequested: boolean; status: string}
+  const body = (await response.json()) as {
+    article: {articleTitle: string; id: string}
+    detailSource: string
+    humanAnswersByPrompt: Record<string, Array<{answer: string}>>
+    humanAssessmentsByUser: Array<{judgments: Array<{answer: string; comment: string; id: string}>}>
+    judgments: Array<{assessments: Array<{assessmentComment: string; id: string}>; explanation: string; id: string}>
+    repairRequested: boolean
+    status?: string
+  }
 
   expect(response.status).toBe(200)
-  expect(body).toMatchObject({
-    article: null,
-    reason: 'snapshot unavailable',
-    repairRequested: true,
-    status: 'unavailable',
-  })
-  expect(reviewServingV4RebuildRequestsRef.current).toEqual([
-    {
-      components: ['posting', 'summary', 'payload'],
-      priority: 1000,
-      projectId: 'project-1',
-      reason: 'detailReadinessDirtyWork',
-    },
+  expect(body.status).toBeUndefined()
+  expect(body.article).toMatchObject({articleTitle: 'App Article 1', id: 'article-1'})
+  expect(body.judgments).toHaveLength(1)
+  expect(body.judgments[0]).toMatchObject({explanation: 'app because', id: 'judgment-app-1'})
+  expect(body.judgments[0]?.assessments).toMatchObject([{assessmentComment: 'newest', id: 'assessment-new'}])
+  expect(body.humanAssessmentsByUser[0]?.judgments).toMatchObject([
+    {answer: 'no', comment: 'human says no', id: 'human-1'},
   ])
+  expect(body.humanAnswersByPrompt).toEqual({'prompt-1': [{answer: 'no', userName: 'System'}]})
+  expect(body.detailSource).toBe('app')
+  expect(body.repairRequested).toBe(true)
+  expect(reviewServingV4RebuildRequestsRef.current).toEqual([detailReadinessRepairRequest])
+  expect(
+    appRowsRef.statements.some((statement) => {
+      return statement.includes('FROM app.judgment_human judgment_human')
+    }),
+  ).toBe(true)
 })
 
-test('project review details reports repairRequested false when detail repair enqueue fails', async () => {
-  rejectReviewServingV4RebuildRef.current = true
-  reviewServingRowsRef.current = async (request) => {
-    return request.contractKey === 'review.detail.row'
-      ? {diagnostics: {snapshotId: null}, reason: 'snapshot unavailable', status: 'rejected'}
-      : {rows: [], status: 'accepted'}
+test('project review details reads the human summary answer from app tables in summary mode when V4 detail state is missing', async () => {
+  projectReviewConfigRef.current = async () => {
+    return {
+      humanJudgmentMode: 'summary',
+      modelId: 'model-1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
   }
+  rejectAllReviewServingReads()
+  appRowsRef.articleDetail = [getAppArticleDetailRow()]
+  appRowsRef.humanJudgments = [
+    {
+      answered_original: 'yes',
+      article_id: 'article-1',
+      detail_updated_at: '2024-01-08T00:00:00.000Z',
+      human_comment: null,
+      judgment_created_at: '2024-01-08T00:00:00.000Z',
+      judgment_id: 'human-summary-1',
+      prompt_heading: null,
+      prompt_id: 'summary',
+      prompt_order: -1,
+      prompt_original_text: 'Overall human screening decision',
+      prompt_type: 'summary',
+    },
+  ]
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {detailSource: string; humanSummaryAnswer: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({detailSource: 'app', humanSummaryAnswer: 'yes'})
+  expect(
+    appRowsRef.statements.some((statement) => {
+      return statement.includes('FROM app.judgment_human_summary judgment_human_summary')
+    }),
+  ).toBe(true)
+})
+
+test('project review details reports repairRequested false on the app fallback when detail repair enqueue fails', async () => {
+  rejectReviewServingV4RebuildRef.current = true
+  rejectAllReviewServingReads()
+  appRowsRef.articleDetail = [getAppArticleDetailRow()]
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {detailSource: string; repairRequested: boolean; status?: string}
+
+  expect(response.status).toBe(200)
+  expect(body.status).toBeUndefined()
+  expect(body).toMatchObject({detailSource: 'app', repairRequested: false})
+  expect(reviewServingV4RebuildRequestsRef.current).toEqual([])
+})
+
+test('project review details reports repairRequested false on the app fallback when detail repair is blocked by budget', async () => {
+  reviewServingV4RebuildStatusRef.current = 'blocked_over_budget'
+  rejectAllReviewServingReads()
+  appRowsRef.articleDetail = [getAppArticleDetailRow()]
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {detailSource: string; repairRequested: boolean}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({detailSource: 'app', repairRequested: false})
+  expect(reviewServingV4RebuildRequestsRef.current).toHaveLength(1)
+})
+
+test('project review details returns terminal unavailable when V4 detail state is missing and the article is outside the project', async () => {
+  rejectAllReviewServingReads()
 
   const response = await postReviewDetailsRequest()
   const body = (await response.json()) as {article: null; reason: string; repairRequested: boolean; status: string}
@@ -465,32 +649,11 @@ test('project review details reports repairRequested false when detail repair en
   expect(response.status).toBe(200)
   expect(body).toMatchObject({
     article: null,
-    reason: 'snapshot unavailable',
+    reason: 'article not in project scope',
     repairRequested: false,
     status: 'unavailable',
   })
   expect(reviewServingV4RebuildRequestsRef.current).toEqual([])
-})
-
-test('project review details reports repairRequested false when detail repair is blocked by budget', async () => {
-  reviewServingV4RebuildStatusRef.current = 'blocked_over_budget'
-  reviewServingRowsRef.current = async (request) => {
-    return request.contractKey === 'review.detail.row'
-      ? {diagnostics: {snapshotId: null}, reason: 'snapshot unavailable', status: 'rejected'}
-      : {rows: [], status: 'accepted'}
-  }
-
-  const response = await postReviewDetailsRequest()
-  const body = (await response.json()) as {article: null; reason: string; repairRequested: boolean; status: string}
-
-  expect(response.status).toBe(200)
-  expect(body).toMatchObject({
-    article: null,
-    reason: 'snapshot unavailable',
-    repairRequested: false,
-    status: 'unavailable',
-  })
-  expect(reviewServingV4RebuildRequestsRef.current).toHaveLength(1)
 })
 
 test('project review details treats absent out-of-scope detail rows as terminal', async () => {
@@ -511,7 +674,7 @@ test('project review details treats absent out-of-scope detail rows as terminal'
   expect(reviewServingV4RebuildRequestsRef.current).toEqual([])
 })
 
-test('project review details does not fall back to app judgments when V4 judgment detail is unavailable', async () => {
+test('project review details falls back to app judgments when V4 judgment detail is unavailable', async () => {
   reviewServingRowsRef.current = async (request) => {
     return request.contractKey === 'review.detail.row'
       ? {rows: [getServingArticleRow()], status: 'accepted'}
@@ -519,30 +682,45 @@ test('project review details does not fall back to app judgments when V4 judgmen
         ? {diagnostics: {}, reason: 'judgment detail unavailable', status: 'rejected'}
         : {rows: [], status: 'accepted'}
   }
+  appRowsRef.judgments = [getAppJudgmentRow()]
 
   const response = await postReviewDetailsRequest()
   const body = (await response.json()) as {
-    judgments: unknown[]
-    reason: string
+    article: {articleTitle: string}
+    detailSource: string
+    judgments: Array<{id: string}>
     repairRequested: boolean
-    status: string
   }
 
   expect(response.status).toBe(200)
-  expect(body).toMatchObject({
-    judgments: [],
-    reason: 'detail judgments unavailable',
-    repairRequested: true,
-    status: 'unavailable',
-  })
-  expect(reviewServingV4RebuildRequestsRef.current).toEqual([
-    {
-      components: ['posting', 'summary', 'payload'],
-      priority: 1000,
-      projectId: 'project-1',
-      reason: 'detailReadinessDirtyWork',
-    },
-  ])
+  expect(body.article.articleTitle).toBe('Article 1')
+  expect(
+    body.judgments.map((judgment) => {
+      return judgment.id
+    }),
+  ).toEqual(['judgment-app-1'])
+  expect(body).toMatchObject({detailSource: 'app', repairRequested: true})
+  expect(reviewServingV4RebuildRequestsRef.current).toEqual([detailReadinessRepairRequest])
+})
+
+test('project review details does not request repair when V4 detail state serves every read', async () => {
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.row'
+      ? {rows: [getServingArticleRow()], status: 'accepted'}
+      : {rows: [], status: 'accepted'}
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {detailSource: string; repairRequested: boolean}
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({detailSource: 'serving', repairRequested: false})
+  expect(reviewServingV4RebuildRequestsRef.current).toEqual([])
+  expect(
+    appRowsRef.statements.some((statement) => {
+      return statement.includes('AS article_external_id') || statement.includes('FROM app.judgment_human')
+    }),
+  ).toBe(false)
 })
 
 test('legacy judgment fallback does not cap visible project judgment history', () => {
