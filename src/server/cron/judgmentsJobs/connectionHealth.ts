@@ -16,6 +16,7 @@ export type ConnectionFailureKind =
 export type ConnectionFailure = {
   effectiveBaseURL: string
   endpointPath: string | null
+  errorDetail?: string | null
   kind: ConnectionFailureKind
   likelyCause: string
   message: string
@@ -283,6 +284,33 @@ export const formatConnectionOutageMessage = ({
   return `${failure.message}${formatProbeTiming(cooldownExpiresAt)}${action}`
 }
 
+const connectionErrorDetailMaxLength = 300
+
+// The classified message drops the transport error, so repeated network_unavailable failures
+// could not be told apart (tunnel reset, client timeout, refused connection).
+const getConnectionErrorDetail = (error: unknown): string | null => {
+  if (!(error instanceof Error)) {
+    return null
+  }
+
+  const code = (error as {code?: unknown}).code
+  const cause = error.cause instanceof Error ? error.cause : null
+  const causeCode = (cause as {code?: unknown} | null)?.code
+  const parts = [
+    `${error.name}: ${error.message}`,
+    typeof code === 'string' ? `code=${code}` : null,
+    cause ? `cause=${cause.name}: ${cause.message}` : null,
+    typeof causeCode === 'string' ? `causeCode=${causeCode}` : null,
+  ]
+
+  return parts
+    .filter((part): part is string => {
+      return part !== null
+    })
+    .join(' ')
+    .slice(0, connectionErrorDetailMaxLength)
+}
+
 export const classifyConnectionFailure = ({
   error,
   context,
@@ -341,6 +369,7 @@ export const classifyConnectionFailure = ({
   return {
     effectiveBaseURL: normalizedContext.effectiveBaseURL,
     endpointPath,
+    errorDetail: getConnectionErrorDetail(error),
     kind,
     likelyCause,
     message: getConnectionFailureMessage({
