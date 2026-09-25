@@ -264,6 +264,7 @@ const registerModuleMocks = () => {
       acquireProviderAdmissionLeasePersisted,
       heartbeatProviderAdmissionLeaseThroughOwner,
       providerAdmissionLeaseHeartbeatIntervalMs: 5,
+      providerAdmissionLeaseTtlMs: 60,
       releaseProviderAdmissionLeaseWithResultThroughOwner,
     }
   })
@@ -1228,9 +1229,46 @@ test('rejects a completed provider response when final admission fencing finds t
   expect((result as Error).message).toContain('Provider admission lease lost during active request: missing')
 })
 
-test('aborts and rejects active provider work when the admission heartbeat owner request fails', async () => {
+test('keeps active provider work and its result through a transient owner heartbeat failure', async () => {
   const {withJudgmentRequest} = await loadRuntime()
   heartbeatProviderAdmissionLeaseThroughOwner.mockImplementationOnce(async () => {
+    throw new Error('Unable to connect. Is the computer able to access the url?')
+  })
+  let aborted = false
+
+  const result = await withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-provider-heartbeat-owner-blip',
+      provider: 'openai',
+      fallbackBaseURL: 'http://provider-heartbeat-owner-blip.test/v1',
+      providerConnectionId: 'connection-provider-heartbeat-owner-blip',
+      providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async (_baseURL, requestAttempt) => {
+      requestAttempt.signal.addEventListener(
+        'abort',
+        () => {
+          aborted = true
+        },
+        {once: true},
+      )
+      await new Promise((resolve) => {
+        setTimeout(resolve, 30)
+      })
+
+      return 'judged'
+    },
+  )
+
+  expect(aborted).toBe(false)
+  expect(result).toBe('judged')
+})
+
+test('aborts active provider work when owner heartbeats keep failing past the lease grace', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  heartbeatProviderAdmissionLeaseThroughOwner.mockImplementation(async () => {
     throw new Error('owner unavailable')
   })
   let aborted = false

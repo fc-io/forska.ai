@@ -57,6 +57,19 @@ test('keeps the transport error behind a network failure', () => {
   expect(classifyConnectionFailure({context, error: {status: 503}}).errorDetail).toBeNull()
 })
 
+test('does not treat a lost admission lease as a provider network outage', () => {
+  const error = Object.assign(
+    new Error(
+      'Provider admission lease lost during active request: Unable to connect. Is the computer able to access the url?',
+    ),
+    {name: 'ProviderAdmissionLeaseLostError'},
+  )
+  const failure = classifyConnectionFailure({context, error})
+
+  expect(failure.kind).toBe('other')
+  expect(failure.shouldPauseConnection).toBe(false)
+})
+
 test('formats operator-facing outage messages with next probe timing when known', () => {
   const failure = classifyConnectionFailure({context, error: {status: 503}})
   const cooldownExpiresAt = new Date('2026-04-10T12:34:56.000Z')

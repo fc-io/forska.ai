@@ -90,6 +90,12 @@ const isCircuitOpenError = (error: unknown): boolean => {
 }
 
 const isNetworkError = (error: unknown): boolean => {
+  // A lost admission lease is about the DuckDB owner, not the provider. Its message can quote an
+  // owner connection error, which used to pause dispatch to a healthy LLM endpoint.
+  if (error instanceof Error && error.name === 'ProviderAdmissionLeaseLostError') {
+    return false
+  }
+
   if (error instanceof Error) {
     const msg = error.message.toLowerCase()
     return (
