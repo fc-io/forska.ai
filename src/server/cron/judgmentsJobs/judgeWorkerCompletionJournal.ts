@@ -1289,7 +1289,9 @@ const repairLegacyJournalEvidence = (database: Database): void => {
   repairLegacyPendingTokenUseRows(database)
 }
 
-const getAcceptedClaimRolloutRows = (database: Database): AcceptedClaimRolloutRow[] => {
+const getAcceptedClaimRolloutRows = (database: Database, acceptedBefore?: Date): AcceptedClaimRolloutRow[] => {
+  const acceptedBeforeIso = acceptedBefore?.toISOString() ?? null
+
   return database
     .query(
       `
@@ -1302,10 +1304,11 @@ const getAcceptedClaimRolloutRows = (database: Database): AcceptedClaimRolloutRo
           request_attempt_manifest_version AS requestAttemptManifestVersion,
           request_attempt_manifest_repair_json AS requestAttemptManifestRepairJson
         FROM accepted_claim
+        WHERE ? IS NULL OR accepted_at < ?
         ORDER BY accepted_at ASC, claim_id ASC
       `,
     )
-    .all() as AcceptedClaimRolloutRow[]
+    .all(acceptedBeforeIso, acceptedBeforeIso) as AcceptedClaimRolloutRow[]
 }
 
 const getAcceptedClaimPromptKey = ({jobId, queueRecordId}: AcceptedClaimProtectedPrompt): string => {
@@ -1456,7 +1459,11 @@ const insertRolloutCloseoutIntent = (database: Database, row: AcceptedClaimRollo
   return Number(result.changes ?? 0)
 }
 
-const recordRolloutCloseoutIntents = (database: Database, protectedPromptKeys: Set<string> = new Set()): number => {
+const recordRolloutCloseoutIntents = (
+  database: Database,
+  protectedPromptKeys: Set<string> = new Set(),
+  acceptedBefore?: Date,
+): number => {
   return database.transaction((rows: AcceptedClaimRolloutRow[]) => {
     return rows.reduce((count, row) => {
       return protectedPromptKeys.has(getAcceptedClaimPromptKey(row))
@@ -1464,7 +1471,13 @@ const recordRolloutCloseoutIntents = (database: Database, protectedPromptKeys: S
         ? count
         : count + insertRolloutCloseoutIntent(database, row)
     }, 0)
-  })(getAcceptedClaimRolloutRows(database))
+  })(getAcceptedClaimRolloutRows(database, acceptedBefore))
+}
+
+// A closeout intent means the owner requeues the claim, so the judge must not spend an LLM call
+// on it anymore: the judged result would be dropped as stale.
+export const hasJudgeWorkerCompletionIntent = (claimId: string): boolean => {
+  return acceptedClaimHasCompletionOutboxIntent(openJournalDatabase(), claimId)
 }
 
 const deleteAcceptedClaimsWithOwnerAck = (database: Database): number => {
@@ -2474,19 +2487,25 @@ export const waitForJudgeWorkerStartupRolloutCleanup = async (): Promise<void> =
   }
 }
 
+// The protected prompts are read after the replay, right before the closeout transaction: the
+// replay awaits the owner, and claims enqueued meanwhile were missing from an earlier snapshot, so
+// they were closed out while still queued and their LLM results were discarded as stale.
+// acceptedBefore spares claims accepted but not yet handed to the dispatch runtime.
 export const recoverAbandonedJudgeWorkerAcceptedClaims = async ({
+  acceptedBefore,
+  getProtectedPrompts = async () => {
+    return []
+  },
   limit,
-  protectedPrompts = [],
 }: {
+  acceptedBefore?: Date
+  getProtectedPrompts?: () => Promise<AcceptedClaimProtectedPrompt[]>
   limit?: number
-  protectedPrompts?: AcceptedClaimProtectedPrompt[]
 } = {}): Promise<JudgeWorkerRolloutCleanupResult> => {
   const firstReplay = await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup({limit})
   const database = openJournalDatabase()
-  const closeoutIntentsInserted = recordRolloutCloseoutIntents(
-    database,
-    getProtectedAcceptedClaimPromptKeys(protectedPrompts),
-  )
+  const protectedPromptKeys = getProtectedAcceptedClaimPromptKeys(await getProtectedPrompts())
+  const closeoutIntentsInserted = recordRolloutCloseoutIntents(database, protectedPromptKeys, acceptedBefore)
   const secondReplay =
     closeoutIntentsInserted > 0
       ? await replayJudgeWorkerCompletionOutboxWithoutAcceptedClaimCleanup({limit})

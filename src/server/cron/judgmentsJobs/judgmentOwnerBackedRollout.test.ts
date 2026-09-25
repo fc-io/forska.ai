@@ -6,6 +6,8 @@ import {Database} from 'bun:sqlite'
 import {afterEach, expect, test} from 'bun:test'
 
 import {
+  enqueueJudgeWorkerCompletion,
+  hasJudgeWorkerCompletionIntent,
   mutateAcceptedClaimRequestAttemptManifest,
   recordAcceptedJudgeWorkerClaims,
   recoverAbandonedJudgeWorkerAcceptedClaims,
@@ -261,7 +263,9 @@ test('accepted claim recovery skips prompts still active in dispatch runtime', a
 
   expect(
     await recoverAbandonedJudgeWorkerAcceptedClaims({
-      protectedPrompts: [{jobId: activePrompt.jobId, queueRecordId: activePrompt.recordId}],
+      getProtectedPrompts: async () => {
+        return [{jobId: activePrompt.jobId, queueRecordId: activePrompt.recordId}]
+      },
     }),
   ).toEqual({
     acceptedClaimsDeleted: 1,
@@ -278,5 +282,90 @@ test('accepted claim recovery skips prompts still active in dispatch runtime', a
   expect(readJournalRolloutState(journalPath, abandonedPrompt.claimId)).toMatchObject({
     acceptedClaimCount: 0,
     completionOutboxCount: 1,
+  })
+})
+
+test('accepted claim recovery protects prompts dispatched while its replay awaits the owner', async () => {
+  const pendingPrompt = createPrompt({claimId: 'claim-pending', recordId: 'queue-pending'})
+  const lateQueuedPrompt = createPrompt({claimId: 'claim-late-queued', recordId: 'queue-late-queued'})
+  const dispatchPromptIds: string[] = []
+  const {journalPath} = setupRolloutTest(async (request) => {
+    const body = (await request.json()) as {claimId: string; queueRecordId: string}
+
+    // The judge keeps claiming and queueing prompts while the replay waits for the owner.
+    await addAcceptedClaimWithManifest(lateQueuedPrompt)
+    dispatchPromptIds.push(lateQueuedPrompt.recordId)
+    return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}})
+  })
+
+  await recordAcceptedJudgeWorkerClaims([pendingPrompt])
+  await enqueueJudgeWorkerCompletion({
+    articleId: pendingPrompt.articleId,
+    claimId: pendingPrompt.claimId,
+    executionSnapshotHash: pendingPrompt.executionSnapshotHash,
+    executionSnapshotId: pendingPrompt.executionSnapshotId,
+    jobId: pendingPrompt.jobId,
+    modelId: pendingPrompt.modelId,
+    projectId: pendingPrompt.projectId,
+    promptId: pendingPrompt.promptId,
+    queueRecordId: pendingPrompt.recordId,
+    status: 'retry',
+    useAbstract: pendingPrompt.useAbstract,
+    useFulltext: pendingPrompt.useFulltext,
+    useFulltextNoImages: pendingPrompt.useFulltextNoImages,
+    useTitle: pendingPrompt.useTitle,
+  })
+
+  const recovery = await recoverAbandonedJudgeWorkerAcceptedClaims({
+    getProtectedPrompts: async () => {
+      return dispatchPromptIds.map((queueRecordId) => {
+        return {jobId: lateQueuedPrompt.jobId, queueRecordId}
+      })
+    },
+  })
+
+  expect(recovery.closeoutIntentsInserted).toBe(0)
+  expect(readJournalRolloutState(journalPath, lateQueuedPrompt.claimId)).toMatchObject({
+    acceptedClaimCount: 1,
+    completionOutboxCount: 0,
+  })
+  expect(hasJudgeWorkerCompletionIntent(lateQueuedPrompt.claimId)).toBe(false)
+  expect(hasJudgeWorkerCompletionIntent(pendingPrompt.claimId)).toBe(true)
+})
+
+test('accepted claim recovery spares claims accepted after its cutoff', async () => {
+  const oldPrompt = createPrompt({claimId: 'claim-old', recordId: 'queue-old'})
+  const freshPrompt = createPrompt({claimId: 'claim-fresh', recordId: 'queue-fresh'})
+  const ownerRequests: Array<{claimId: string}> = []
+  const {journalPath} = setupRolloutTest(async (request) => {
+    const body = (await request.json()) as {claimId: string; queueRecordId: string}
+
+    ownerRequests.push(body)
+    return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}})
+  })
+
+  await addAcceptedClaimWithManifest(oldPrompt)
+  const database = new Database(journalPath)
+
+  try {
+    database
+      .query(`UPDATE accepted_claim SET accepted_at = ? WHERE claim_id = ?`)
+      .run(new Date(Date.now() - 120_000).toISOString(), oldPrompt.claimId)
+  } finally {
+    database.close(false)
+  }
+  await addAcceptedClaimWithManifest(freshPrompt)
+
+  expect(
+    await recoverAbandonedJudgeWorkerAcceptedClaims({acceptedBefore: new Date(Date.now() - 60_000)}),
+  ).toMatchObject({closeoutIntentsInserted: 1})
+  expect(
+    ownerRequests.map((request) => {
+      return request.claimId
+    }),
+  ).toEqual([oldPrompt.claimId])
+  expect(readJournalRolloutState(journalPath, freshPrompt.claimId)).toMatchObject({
+    acceptedClaimCount: 1,
+    completionOutboxCount: 0,
   })
 })
