@@ -44,6 +44,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingProjectorWriter.ts'),
   join(reviewServingSourceRoot, 'reviewServingResidualReadAllowlist.ts'),
   join(reviewServingSourceRoot, 'reviewServingSql.ts'),
+  join(reviewServingSourceRoot, 'reviewServingSummaryLedger.ts'),
   join(reviewServingSourceRoot, 'reviewServingHumanAssessmentCompletedCount.ts'),
   join(reviewServingSourceRoot, 'reviewServingV4RebuildRequestService.ts'),
 ])

@@ -1,4 +1,5 @@
-import {existsSync, rmSync} from 'node:fs'
+import {existsSync, readFileSync, rmSync} from 'node:fs'
+import {resolve} from 'node:path'
 
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
@@ -178,7 +179,8 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       project_id VARCHAR,
       snapshot_id VARCHAR,
       projection_component VARCHAR NOT NULL,
-      status VARCHAR NOT NULL
+      status VARCHAR NOT NULL,
+      checksum VARCHAR
     )
   `)
   await database.run(`
@@ -293,6 +295,9 @@ const createSummaryReductionSchema = async (database: ReviewServingSummaryProjec
       PRIMARY KEY(project_id, review_config_hash, snapshot_id, summary_identity, facet_kind, facet_key, facet_value, summary_definition_version)
     )
   `)
+  await database.run(
+    readFileSync(resolve(import.meta.dir, '../../db/duckdbMigrations/0241_reviewSummaryBucketLedger.sql'), 'utf8'),
+  )
 }
 
 const createSummarySourceSchema = async (database: ReviewServingSummaryProjectorDatabase) => {
