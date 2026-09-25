@@ -15,14 +15,17 @@ import {
   claimReviewServingRebuildChunk,
   claimReviewServingRebuildChunks,
   getNextClaimableReviewServingRebuildChunk,
+  getReviewServingRebuildChunkClaimOrder,
   getReviewServingRebuildChunkClaimWhere,
   getReviewServingRebuildChunkManifest,
   heartbeatReviewServingRebuildChunkLease,
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
   releaseInactiveRequestRebuildChunkManifests,
+  resetExpiredRunningReviewServingRebuildChunks,
   type ReviewServingChunkManifestRepositoryDatabase,
   type ReviewServingChunkManifestRepositoryTransaction,
+  type ReviewServingRebuildChunkClaimOrder,
   type ReviewServingRebuildChunkIdentity,
   type ReviewServingRebuildChunkManifest,
   type ReviewServingRebuildChunkTimingSink,
@@ -186,6 +189,7 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
   claimChunks?: typeof claimReviewServingRebuildChunks
   failChunk: typeof markReviewServingRebuildChunkFailed
   getNextChunk: (input: {
+    claimOrder?: ReviewServingRebuildChunkClaimOrder
     database: ReviewServingChunkManifestRepositoryDatabase
     now: Date
     projectId?: string | null
@@ -327,6 +331,7 @@ type ReviewServingProjectorWorkerRunResult = {
   /**
    * Rotation offset the next cycle should use. The heartbeat carries it into the next bounded loop
    * so the tail components keep getting their turn when loops restart after almost every cycle.
+   * It also picks the cycles whose first rebuild chunk claim goes to the longest-waiting request.
    */
   componentRotationOffset: number
   /**
@@ -5354,13 +5359,13 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
     claimChunk: claimReviewServingRebuildChunk,
     claimChunks: claimReviewServingRebuildChunks,
     failChunk: markReviewServingRebuildChunkFailed,
-    getNextChunk: ({database, now, projectId, timings}) => {
+    getNextChunk: ({claimOrder, database, now, projectId, timings}) => {
       return runReviewServingProjectorWorkerCyclePhase('releaseInactiveRequestChunks', async () => {
         await releaseInactiveRequestRebuildChunkManifests(database)
 
         return runReviewServingProjectorWorkerCyclePhase('selectNextRebuildChunk', () => {
           return getNextClaimableReviewServingRebuildChunk(
-            {now, projectId, releaseInactiveRequests: false, timings},
+            {claimOrder, now, projectId, releaseInactiveRequests: false, timings},
             database,
           )
         })
@@ -7885,6 +7890,15 @@ const claimReviewServingProjectorWorkerRebuildChunkInput = async ({
   return {chunk: claimedChunk, service, status: 'claimed', timings}
 }
 
+const getReviewServingProjectorWorkerRebuildChunkClaimOrder = (input: {
+  claimedChunkCount: number
+  options: ReviewServingProjectorWorkerCycleOptions
+}): ReviewServingRebuildChunkClaimOrder => {
+  return input.claimedChunkCount === 0
+    ? getReviewServingRebuildChunkClaimOrder(getNonNegativeInteger(input.options.componentRotationOffset, 0))
+    : 'priority'
+}
+
 const claimNextReviewServingProjectorWorkerRebuildChunk = async ({
   database,
   dependencies,
@@ -7899,7 +7913,13 @@ const claimNextReviewServingProjectorWorkerRebuildChunk = async ({
   const service = dependencies.rebuildChunkService
   const timings: Record<string, number> = {}
   const chunkInput = await measureReviewServingProjectorWorkerPhase(timings, 'claimSelectMs', async () => {
-    return service?.getNextChunk({database, now: getWorkerNow(options), projectId: options.rebuildProjectId, timings})
+    return service?.getNextChunk({
+      claimOrder: getReviewServingProjectorWorkerRebuildChunkClaimOrder({claimedChunkCount: 0, options}),
+      database,
+      now: getWorkerNow(options),
+      projectId: options.rebuildProjectId,
+      timings,
+    })
   })
 
   return !service || chunkInput === null || chunkInput === undefined
@@ -8267,6 +8287,10 @@ const claimCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
     const timings: Record<string, number> = {}
     const chunkInput = await measureReviewServingProjectorWorkerPhase(timings, 'claimSelectMs', async () => {
       return service.getNextChunk({
+        claimOrder: getReviewServingProjectorWorkerRebuildChunkClaimOrder({
+          claimedChunkCount: claimedChunks.length,
+          options: input.options,
+        }),
         database: input.database,
         now: getWorkerNow(input.options),
         projectId: input.options.rebuildProjectId,
@@ -9992,6 +10016,12 @@ export const runReviewServingProjectorWorkerCycle = async (
 
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
+  await runReviewServingProjectorWorkerCyclePhase('resetExpiredRunningRebuildChunks', () => {
+    return resetExpiredRunningReviewServingRebuildChunks(
+      {now: getWorkerNow(options), projectId: options.rebuildProjectId},
+      database,
+    )
+  })
   await runReviewServingProjectorWorkerCyclePhase('failInconsistentForegroundRequests', () => {
     return failInconsistentAndSupersededForegroundRebuildRequests({database, projectId: options.rebuildProjectId})
   })
