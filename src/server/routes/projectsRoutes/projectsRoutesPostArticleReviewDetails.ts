@@ -14,7 +14,7 @@ import {
   detailReadyReviewServingComponents,
   type ReviewServingProjectionComponent,
 } from '../../reviewServing/reviewServingContracts.ts'
-import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
+import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
@@ -451,12 +451,77 @@ const getProjectReviewDetailJudgmentRows = async (params: {
   return {judgmentRows, promptRows: [...promptRowsById.values()]}
 }
 
+const getAppHumanPromptDetailRowsSql = (params: {articleId: string; projectId: string}) => {
+  return `
+    SELECT
+      judgment_human.id AS judgment_id,
+      judgment_human.article_id AS article_id,
+      judgment_human.prompt_id AS prompt_id,
+      judgment_human.answer AS answered_original,
+      judgment_human.comment AS human_comment,
+      judgment_human.created_at AS judgment_created_at,
+      judgment_human.updated_at AS detail_updated_at,
+      prompt.original_text AS prompt_original_text,
+      prompt.prompt_heading AS prompt_heading,
+      project_prompt.prompt_order AS prompt_order,
+      prompt.type AS prompt_type,
+      project_prompt.criteria_disposition AS prompt_criteria_disposition
+    FROM app.judgment_human judgment_human
+    INNER JOIN app.project_prompt project_prompt
+      ON project_prompt.project_id = ${getSqlLiteral(params.projectId)}
+      AND project_prompt.prompt_id = judgment_human.prompt_id
+      AND project_prompt.enabled
+      AND NOT project_prompt.archived
+    INNER JOIN app.prompt prompt
+      ON prompt.id = judgment_human.prompt_id
+      AND COALESCE(prompt.archived, FALSE) = FALSE
+    WHERE judgment_human.project_id = ${getSqlLiteral(params.projectId)}
+      AND judgment_human.article_id = ${getSqlLiteral(params.articleId)}
+    ORDER BY project_prompt.prompt_order ASC NULLS LAST, judgment_human.prompt_id ASC
+  `
+}
+
+const getAppHumanSummaryDetailRowsSql = (params: {articleId: string; projectId: string}) => {
+  return `
+    SELECT
+      judgment_human_summary.id AS judgment_id,
+      judgment_human_summary.article_id AS article_id,
+      'summary' AS prompt_id,
+      judgment_human_summary.answer AS answered_original,
+      NULL AS human_comment,
+      judgment_human_summary.created_at AS judgment_created_at,
+      judgment_human_summary.updated_at AS detail_updated_at,
+      'Overall human screening decision' AS prompt_original_text,
+      NULL AS prompt_heading,
+      -1 AS prompt_order,
+      'summary' AS prompt_type,
+      NULL AS prompt_criteria_disposition
+    FROM app.judgment_human_summary judgment_human_summary
+    WHERE judgment_human_summary.project_id = ${getSqlLiteral(params.projectId)}
+      AND judgment_human_summary.article_id = ${getSqlLiteral(params.articleId)}
+    ORDER BY judgment_human_summary.updated_at DESC NULLS LAST, judgment_human_summary.id ASC
+  `
+}
+
+const getAppHumanDetailRows = async (params: {
+  articleId: string
+  humanJudgmentMode: ProjectReviewConfig['humanJudgmentMode']
+  projectId: string
+}) => {
+  return getAppDatabaseService().queryJson<ServingHumanJudgmentDetailRow>(
+    params.humanJudgmentMode === 'summary'
+      ? getAppHumanSummaryDetailRowsSql(params)
+      : getAppHumanPromptDetailRowsSql(params),
+    getProjectReviewDetailsWorkloadContext({operation: 'appHumanJudgments', projectId: params.projectId}),
+  )
+}
+
 const getProjectReviewDetailHumanRows = async (params: {
   articleId: string
   projectId: string
   reviewConfigHash: string | null
 }) => {
-  const rows = await readAllReviewServingRows<ServingHumanJudgmentDetailRow>({
+  return readAllReviewServingRows<ServingHumanJudgmentDetailRow>({
     allowStale: true,
     articleId: params.articleId,
     contractKey: 'review.detail.humanJudgments',
@@ -465,11 +530,9 @@ const getProjectReviewDetailHumanRows = async (params: {
     reviewConfigHash: params.reviewConfigHash,
     searchMode: 'none',
   })
+}
 
-  if (rows === null) {
-    return []
-  }
-
+const getReviewDetailHumanRows = (rows: readonly ServingHumanJudgmentDetailRow[]) => {
   return rows
     .map((row) => {
       const promptId = row.prompt_id ?? ''
@@ -490,13 +553,9 @@ const getProjectReviewDetailHumanRows = async (params: {
     })
 }
 
-const getArticleJudgmentRows = async (params: {
-  articleId: string
-  projectId: string
-}): Promise<ArticleJudgmentRow[]> => {
-  return getAppDatabaseService().queryJson<ArticleJudgmentRow>(
-    `
-    WITH project_scope_article AS (
+const getProjectScopeArticleCteSql = (params: {articleId: string; projectId: string}) => {
+  return `
+    project_scope_article AS (
       SELECT pir.project_id, air.article_id
       FROM app.project_import_route pir
       INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
@@ -508,6 +567,16 @@ const getArticleJudgmentRows = async (params: {
       WHERE pa.project_id = ${getSqlLiteral(params.projectId)}
         AND pa.article_id = ${getSqlLiteral(params.articleId)}
     )
+  `
+}
+
+const getArticleJudgmentRows = async (params: {
+  articleId: string
+  projectId: string
+}): Promise<ArticleJudgmentRow[]> => {
+  return getAppDatabaseService().queryJson<ArticleJudgmentRow>(
+    `
+    WITH ${getProjectScopeArticleCteSql(params)}
     SELECT
       j.id AS judgmentId,
       [] AS judgmentAssessments,
@@ -618,6 +687,34 @@ const getAssessmentValue = (row: {
     createdAt: getDateValue(row.createdAt) ?? new Date(0),
     updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
   }
+}
+
+const getAppJudgmentAssessmentRows = async (params: {judgmentIds: string[]; projectId: string}) => {
+  return params.judgmentIds.length > 0
+    ? getAppDatabaseService().queryJson<AssessmentRow>(
+        `
+        SELECT
+          assessment.id AS id,
+          assessment.judgment_id AS judgmentId,
+          assessment.assessment_is_correct AS assessmentIsCorrect,
+          assessment.assessment_comment AS assessmentComment,
+          assessment.created_at AS createdAt,
+          assessment.updated_at AS updatedAt
+        FROM app.judgment_assessment assessment
+        WHERE assessment.judgment_id IN (${getQuotedStringList(params.judgmentIds).join(', ')})
+        ORDER BY assessment.updated_at DESC NULLS LAST, assessment.created_at DESC NULLS LAST, assessment.id DESC
+      `,
+        getProjectReviewDetailsWorkloadContext({operation: 'appJudgmentAssessments', projectId: params.projectId}),
+      )
+    : []
+}
+
+const getLatestAssessmentRows = (rows: readonly AssessmentRow[]) => {
+  const latestAssessmentsByJudgment = rows.reduce((latestByJudgment, row) => {
+    return latestByJudgment.has(row.judgmentId) ? latestByJudgment : latestByJudgment.set(row.judgmentId, row)
+  }, new Map<string, AssessmentRow>())
+
+  return [...latestAssessmentsByJudgment.values()]
 }
 
 const getCovidenceRelatedRecords = async (params: {
@@ -743,18 +840,13 @@ const getCovidenceRelatedRecords = async (params: {
   }
 }
 
-const getUnavailableReviewDetail = (input: {
-  articleId: string
-  diagnostics?: ReviewServingReaderResult<ServingArticleDetailRow>['diagnostics'] | null
-  reason: string
-  repairRequested?: boolean
-}) => {
+const getUnavailableReviewDetail = (input: {articleId: string; reason: string}) => {
   return {
     article: null,
     allJudgments: [],
     covidenceRelatedRecords: [],
     covidenceRelatedRecordsOverflow: false,
-    diagnostics: input.diagnostics ?? null,
+    diagnostics: null,
     humanAnswersByPrompt: undefined,
     humanAssessmentsByUser: [],
     humanJudgmentMode: undefined,
@@ -765,7 +857,7 @@ const getUnavailableReviewDetail = (input: {
     projectsById: {},
     prompts: [],
     reason: input.reason,
-    repairRequested: input.repairRequested ?? false,
+    repairRequested: false,
     requestedArticleId: input.articleId,
     status: 'unavailable' as const,
   }
@@ -787,32 +879,39 @@ const readProjectReviewArticleDetail = async (input: {
   })
 }
 
-const hasArticleProjectMembership = async (input: {articleId: string; projectId: string}) => {
-  const rows = await getAppDatabaseService().queryJson<{articleId: string}>(
+const getAppArticleDetailRow = async (input: {articleId: string; projectId: string}) => {
+  const rows = await getAppDatabaseService().queryJson<ServingArticleDetailRow>(
     `
-    SELECT scoped_article.article_id AS articleId
-    FROM (
-      SELECT air.article_id
-      FROM app.project_import_route pir
-      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-      WHERE pir.project_id = ${getSqlLiteral(input.projectId)}
-        AND air.article_id = ${getSqlLiteral(input.articleId)}
-      UNION
-      SELECT pa.article_id
-      FROM app.project_article pa
-      WHERE pa.project_id = ${getSqlLiteral(input.projectId)}
-        AND pa.article_id = ${getSqlLiteral(input.articleId)}
-    ) scoped_article
+    WITH ${getProjectScopeArticleCteSql(input)}
+    SELECT
+      article.article_created_at AS article_created_at,
+      article.article_id AS article_external_id,
+      article.id AS article_id,
+      article.article_title AS article_title,
+      article.article_updated_at AS article_updated_at,
+      article.arxiv_id AS arxiv_id,
+      article.biorxiv_id AS biorxiv_id,
+      article.doi AS doi,
+      article.full_text_conversion_status AS full_text_conversion_status,
+      article.full_text_fetched_at AS full_text_fetched_at,
+      article.full_text_pdf AS full_text_pdf,
+      article.medrxiv_id AS medrxiv_id,
+      article.pubmed_id AS pmid,
+      article.source_metadata AS source_metadata,
+      article.url AS url
+    FROM app.article article
+    INNER JOIN project_scope_article scope_article ON scope_article.article_id = article.id
+    WHERE article.id = ${getSqlLiteral(input.articleId)}
     LIMIT 1
   `,
     getProjectReviewDetailsWorkloadContext({
       maxResultRows: 1,
-      operation: 'articleProjectMembership',
+      operation: 'appArticleDetail',
       projectId: input.projectId,
     }),
   )
 
-  return rows.length > 0
+  return rows[0] ?? null
 }
 
 const getArticleRecordFromServing = (input: {
@@ -894,28 +993,12 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       }
 
       const articleDetailResult = await readProjectReviewArticleDetail({articleId, projectId, reviewConfigHash})
-
-      if (articleDetailResult.status === 'rejected') {
-        const repairRequested = await requestReviewDetailReadinessRepair(projectId)
-        return getUnavailableReviewDetail({
-          articleId,
-          diagnostics: articleDetailResult.diagnostics,
-          reason: articleDetailResult.reason,
-          repairRequested,
-        })
-      }
-
-      const [articleDetail] = articleDetailResult.rows
+      const servingArticleDetail =
+        articleDetailResult.status === 'rejected' ? null : (articleDetailResult.rows[0] ?? null)
+      const articleDetail = servingArticleDetail ?? (await getAppArticleDetailRow({articleId, projectId}))
 
       if (!articleDetail) {
-        const isProjectArticle = await hasArticleProjectMembership({articleId, projectId})
-
-        if (!isProjectArticle) {
-          return getUnavailableReviewDetail({articleId, reason: 'article not in project scope'})
-        }
-
-        const repairRequested = await requestReviewDetailReadinessRepair(projectId)
-        return getUnavailableReviewDetail({articleId, reason: 'detail row unavailable', repairRequested})
+        return getUnavailableReviewDetail({articleId, reason: 'article not in project scope'})
       }
 
       const [articleFullTextRows, allArticleJudgments] = await Promise.all([
@@ -945,16 +1028,11 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const covidenceRelatedRecordsResult = await getCovidenceRelatedRecords({article, projectId})
       const covidenceRelatedRecords = covidenceRelatedRecordsResult.records
 
-      const [projectReviewDetailJudgmentResult, appPromptRows] = await Promise.all([
+      const [servingJudgmentResult, appPromptRows] = await Promise.all([
         getProjectReviewDetailJudgmentRows({projectId, articleId, projectReviewConfig, reviewConfigHash}),
         getProjectPromptRows(projectId),
       ])
-
-      if (projectReviewDetailJudgmentResult === null) {
-        const repairRequested = await requestReviewDetailReadinessRepair(projectId)
-        return getUnavailableReviewDetail({articleId, reason: 'detail judgments unavailable', repairRequested})
-      }
-
+      const projectReviewDetailJudgmentResult = servingJudgmentResult ?? {judgmentRows: [], promptRows: []}
       const projectReviewDetailJudgmentRows = projectReviewDetailJudgmentResult.judgmentRows
       const projectPromptRows = mergePromptRows(appPromptRows, projectReviewDetailJudgmentResult.promptRows).sort(
         (a, b) => {
@@ -1049,7 +1127,13 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             )
           : null
 
-      const normalizedAssessments = projectReviewDetailJudgmentRows.flatMap((row) => {
+      const appAssessmentRows = await getAppJudgmentAssessmentRows({
+        judgmentIds: fallbackAppJudgmentDetails.map((detail) => {
+          return detail.judgment.id
+        }),
+        projectId,
+      })
+      const servingAssessments = projectReviewDetailJudgmentRows.flatMap((row) => {
         const assessments = Array.isArray(row.judgmentAssessments) ? row.judgmentAssessments : []
         return assessments
           .filter((assessment): assessment is AssessmentRow => {
@@ -1059,6 +1143,12 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             return getAssessmentValue(assessment)
           })
       })
+      const normalizedAssessments = [
+        ...servingAssessments,
+        ...getLatestAssessmentRows(appAssessmentRows).map((assessment) => {
+          return getAssessmentValue(assessment)
+        }),
+      ]
 
       const assessmentsByJudgment = normalizedAssessments.reduce<Record<string, Array<JudgmentAssessmentRecord>>>(
         (acc, assessment) => {
@@ -1168,7 +1258,18 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const systemActor = getSystemActor()
 
-      const humanRows = await getProjectReviewDetailHumanRows({articleId, projectId, reviewConfigHash})
+      const servingHumanRows = await getProjectReviewDetailHumanRows({articleId, projectId, reviewConfigHash})
+      const humanRows = getReviewDetailHumanRows(
+        servingHumanRows
+          ?? (await getAppHumanDetailRows({
+            articleId,
+            humanJudgmentMode: projectReviewConfig.humanJudgmentMode,
+            projectId,
+          })),
+      )
+      const detailSource =
+        servingArticleDetail !== null && servingJudgmentResult !== null && servingHumanRows !== null ? 'serving' : 'app'
+      const repairRequested = detailSource === 'app' ? await requestReviewDetailReadinessRepair(projectId) : false
 
       const humanAssessmentsByUser =
         humanRows.length === 0
@@ -1234,6 +1335,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         article,
         covidenceRelatedRecords,
         covidenceRelatedRecordsOverflow: covidenceRelatedRecordsResult.overflow,
+        detailSource,
+        repairRequested,
         humanJudgmentMode: projectReviewConfig.humanJudgmentMode,
         humanSummaryAnswer,
         llmSummaryAnswer,
