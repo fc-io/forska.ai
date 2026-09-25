@@ -13,10 +13,12 @@ import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLM
 import {judgmentsJobsCleanupStale} from './judgmentsJobs/judgmentsJobsCleanupStale.ts'
 import {judgmentsJobsSampleProviderTelemetry} from './judgmentsJobs/judgmentsJobsSampleProviderTelemetry.ts'
 import {
+  clearAddToQueueBlockedByImport,
   getJudgmentsCleanupStaleCronActivity,
   getJudgmentsImportCronActivity,
   JUDGMENTS_CLEANUP_STALE_MARKER_STALE_AFTER_MS,
   JUDGMENTS_IMPORT_STALE_AFTER_MS,
+  markAddToQueueBlockedByImport,
 } from './judgmentsJobsCronState.ts'
 import {judgmentsJobsImportCron} from './judgmentsJobsImportCron.ts'
 
@@ -128,6 +130,7 @@ const runAddToQueue = async (): Promise<void> => {
   if (!shouldRunOperationalJudgmentCron(cronName)) return
   const importActivity = getJudgmentsImportCronActivity()
   if (importActivity.shouldBlockOtherJudgmentWork) {
+    markAddToQueueBlockedByImport()
     recordCronRuntimeTick(cronName, 'skipped')
     return
   }
@@ -167,6 +170,7 @@ const runAddToQueue = async (): Promise<void> => {
   }
 
   const runId = beginAddToQueueRun()
+  clearAddToQueueBlockedByImport()
   recordCronRuntimeTick(cronName, 'started')
   try {
     await judgmentsJobsAddToQueue(serverJobId)
