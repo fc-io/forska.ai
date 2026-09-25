@@ -72,6 +72,48 @@ const createReviewImportDelta = (input: Record<string, unknown>) => {
   }
 }
 
+const getTopLevelValueTuples = (valuesSql: string): string[] => {
+  const state = [...valuesSql].reduce<{current: string; depth: number; inQuote: boolean; tuples: string[]}>(
+    (current, character) => {
+      if (character === "'") {
+        return {...current, current: current.current + character, inQuote: !current.inQuote}
+      }
+
+      if (current.inQuote) {
+        return {...current, current: current.current + character}
+      }
+
+      if (character === '(') {
+        return {...current, current: current.current + character, depth: current.depth + 1}
+      }
+
+      if (character === ')') {
+        const depth = current.depth - 1
+        const tuple = current.current + character
+
+        return depth === 0
+          ? {...current, current: '', depth, tuples: [...current.tuples, tuple]}
+          : {...current, current: tuple, depth}
+      }
+
+      return current.depth > 0 ? {...current, current: current.current + character} : current
+    },
+    {current: '', depth: 0, inQuote: false, tuples: []},
+  )
+
+  return state.tuples
+}
+
+const getDirtyWorkInsertStatements = (statement: string): string[] => {
+  const valuesIndex = statement.indexOf('VALUES')
+
+  return valuesIndex === -1
+    ? [statement]
+    : getTopLevelValueTuples(statement.slice(valuesIndex + 'VALUES'.length)).map((tuple) => {
+        return `${statement.slice(0, valuesIndex)}VALUES ${tuple}`
+      })
+}
+
 const createFakeIntakeDatabase = (rows: readonly Record<string, unknown>[]) => {
   const statements: string[] = []
   const dirtyWorkIds = new Set<string>()
@@ -99,11 +141,15 @@ const createFakeIntakeDatabase = (rows: readonly Record<string, unknown>[]) => {
     return [] as T[]
   }
   const run = async (statement: string) => {
-    statements.push(statement)
-
     if (statement.includes('INSERT INTO app.review_serving_dirty_work (')) {
-      dirtyWorkIds.add(getDirtyWorkId(statement))
+      getDirtyWorkInsertStatements(statement).forEach((rowStatement) => {
+        statements.push(rowStatement)
+        dirtyWorkIds.add(getDirtyWorkId(rowStatement))
+      })
+      return
     }
+
+    statements.push(statement)
   }
   const database: ReviewImportDeltaDirtyIntakeDatabase = {
     queryJson,

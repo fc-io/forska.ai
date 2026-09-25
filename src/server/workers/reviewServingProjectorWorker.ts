@@ -292,6 +292,7 @@ type ReviewServingProjectorWorkerCycleOptions = {
   cleanupIntervalMs?: number
   completedRebuildChunksInRun?: number
   componentRotationOffset?: number
+  deltaIntakeBudgetMs?: number
   foregroundRebuildDrainChunkBudget?: number
   foregroundRebuildDrainCompletedCount?: number
   foregroundRebuildDrainStartedAtMs?: number | null
@@ -514,6 +515,7 @@ const defaultReviewServingProjectorWorkerLeaseMs = 120_000
 const defaultReviewServingProjectorWorkerMaxRetries = 1
 const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
+const defaultReviewServingProjectorWorkerDeltaIntakeBudgetMs = 5_000
 const defaultReviewServingProjectorWorkerWakeStarvationMs = 30_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerActiveYieldMs = 1
@@ -9655,6 +9657,56 @@ const getHasPendingJobDrivenLlmStatusDirtyWork = async (input: {
   return Number(row?.pendingCount ?? 0) > 0
 }
 
+type DeltaIntakePartitionRunner =
+  | typeof intakeReviewChangeDeltasToDirtyWork
+  | typeof intakeReviewImportDeltasToDirtyWork
+
+const isDeltaIntakeBudgetSpent = (input: {
+  deadlineAtMs: number
+  dependencies: ReviewServingProjectorWorkerDependencies
+  previousResult: ReviewServingProjectorWorkerDeltaIntakeResult
+  result: ReviewServingProjectorWorkerDeltaIntakeResult
+}) => {
+  return (
+    input.result.convertedPartitions > input.previousResult.convertedPartitions
+    && (input.dependencies.nowMs?.() ?? Date.now()) >= input.deadlineAtMs
+  )
+}
+
+const runDeltaIntakePartitions = (input: {
+  database: ReviewServingProjectorWorkerDatabase
+  deadlineAtMs: number
+  dependencies: ReviewServingProjectorWorkerDependencies
+  intake: DeltaIntakePartitionRunner
+  limit: number
+  partitions: readonly DeltaIntakePartitionRow[]
+  previousResult: ReviewServingProjectorWorkerDeltaIntakeResult
+}) => {
+  return input.partitions.reduce<Promise<ReviewServingProjectorWorkerDeltaIntakeResult>>(
+    async (previousResult, partition) => {
+      const result = await previousResult
+
+      if (result.status === 'failed' || isDeltaIntakeBudgetSpent({...input, result})) {
+        return result
+      }
+
+      const intake = await input.intake(
+        {...partition, deadlineAtMs: input.deadlineAtMs, limit: input.limit},
+        input.database,
+      )
+
+      return intake.status === 'failed'
+        ? {...result, status: 'failed'}
+        : {
+            convertedPartitions: result.convertedPartitions + 1,
+            dirtyWorkCount: result.dirtyWorkCount + intake.dirtyWorkCount,
+            status: 'completed',
+          }
+    },
+    Promise.resolve(input.previousResult),
+  )
+}
+
 const runReviewServingProjectorWorkerDeltaIntake = async ({
   database,
   dependencies,
@@ -9669,53 +9721,30 @@ const runReviewServingProjectorWorkerDeltaIntake = async ({
     return getIdleReviewServingProjectorWorkerDeltaIntakeResult()
   }
 
-  const intakeReviewChangeDeltas = dependencies.intakeReviewChangeDeltas ?? intakeReviewChangeDeltasToDirtyWork
-  const intakeImportDeltas = dependencies.intakeImportDeltas ?? intakeReviewImportDeltasToDirtyWork
+  const deadlineAtMs =
+    (dependencies.nowMs?.() ?? Date.now())
+    + getPositiveInteger(options.deltaIntakeBudgetMs, defaultReviewServingProjectorWorkerDeltaIntakeBudgetMs)
   const reviewChangePartitions = await getDeltaIntakePartitions(database, 'app.review_change_delta', limit)
   const importPartitions = await getDeltaIntakePartitions(database, 'app.import_run_article_delta', limit)
-  const reviewChangeResults = await reviewChangePartitions.reduce<
-    Promise<ReviewServingProjectorWorkerDeltaIntakeResult>
-  >(
-    async (previousResult, partition) => {
-      const result = await previousResult
+  const reviewChangeResult = await runDeltaIntakePartitions({
+    database,
+    deadlineAtMs,
+    dependencies,
+    intake: dependencies.intakeReviewChangeDeltas ?? intakeReviewChangeDeltasToDirtyWork,
+    limit,
+    partitions: reviewChangePartitions,
+    previousResult: getIdleReviewServingProjectorWorkerDeltaIntakeResult(),
+  })
 
-      if (result.status === 'failed') {
-        return result
-      }
-
-      const intake = await intakeReviewChangeDeltas({...partition, limit}, database)
-
-      return intake.status === 'failed'
-        ? {...result, status: 'failed'}
-        : {
-            convertedPartitions: result.convertedPartitions + 1,
-            dirtyWorkCount: result.dirtyWorkCount + intake.dirtyWorkCount,
-            status: 'completed',
-          }
-    },
-    Promise.resolve({convertedPartitions: 0, dirtyWorkCount: 0, status: 'idle'}),
-  )
-
-  return importPartitions.reduce<Promise<ReviewServingProjectorWorkerDeltaIntakeResult>>(
-    async (previousResult, partition) => {
-      const result = await previousResult
-
-      if (result.status === 'failed') {
-        return result
-      }
-
-      const intake = await intakeImportDeltas({...partition, limit}, database)
-
-      return intake.status === 'failed'
-        ? {...result, status: 'failed'}
-        : {
-            convertedPartitions: result.convertedPartitions + 1,
-            dirtyWorkCount: result.dirtyWorkCount + intake.dirtyWorkCount,
-            status: 'completed',
-          }
-    },
-    Promise.resolve(reviewChangeResults),
-  )
+  return runDeltaIntakePartitions({
+    database,
+    deadlineAtMs,
+    dependencies,
+    intake: dependencies.intakeImportDeltas ?? intakeReviewImportDeltasToDirtyWork,
+    limit,
+    partitions: importPartitions,
+    previousResult: reviewChangeResult,
+  })
 }
 
 const getWorkerProjectorServiceDependencies = (input: {

@@ -5,7 +5,11 @@ import {getIntegerValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {reviewImportHotFieldProjectorColumns} from './reviewImportHotFieldService.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
-import {type ReviewServingDirtyWorkTransaction, upsertReviewServingDirtyWork} from './reviewServingDirtyWorkService.ts'
+import {getReviewServingDeltaIntakeGroups, runReviewServingDeltaIntakeGroups} from './reviewServingDeltaIntakeGroups.ts'
+import {
+  type ReviewServingDirtyWorkTransaction,
+  upsertReviewServingDirtyWorkBatch,
+} from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingInvalidationRuleOrNull,
   type ReviewServingInvalidationRule,
@@ -22,6 +26,7 @@ export type ReviewImportDeltaDirtyIntakeDatabase = {
 }
 
 export type IntakeReviewImportDeltaDirtyWorkParams = {
+  deadlineAtMs?: number | null
   endSourceHighWaterMark: number
   limit: number
   sourcePartition: string
@@ -62,6 +67,7 @@ type ValidatedReviewImportDelta = {
   sourceHighWaterMark: number
 }
 type InvalidReviewImportDelta = {reason: string}
+type ReviewImportDeltaIntakeEntry = {delta: ValidatedReviewImportDelta | null; row: ReviewImportDeltaRow}
 
 const supportedPayloadVersion = 1
 
@@ -273,6 +279,49 @@ const markReviewImportDeltasReconciled = async (
   }
 }
 
+const getCommittableReviewImportDeltas = (entries: readonly ReviewImportDeltaIntakeEntry[]) => {
+  return entries.flatMap((entry) => {
+    return entry.delta === null ? [] : [entry.delta]
+  })
+}
+
+const getReviewImportDeltaDirtyWorkInputs = (deltas: readonly ValidatedReviewImportDelta[]) => {
+  return deltas.flatMap((delta) => {
+    return delta.projections.map((projection) => {
+      return {
+        articleId: delta.scope.scopeId.split(':').at(-1) ?? null,
+        latestDeltaId: delta.deltaId,
+        projectionComponent: projection.projectionComponent,
+        projectionIdentity: projection.projectionIdentity,
+        scope: delta.scope,
+      }
+    })
+  })
+}
+
+const commitReviewImportDeltaIntakeGroup = (
+  entries: readonly ReviewImportDeltaIntakeEntry[],
+  database: ReviewImportDeltaDirtyIntakeDatabase,
+) => {
+  return database.transaction(async (tx) => {
+    const upserts = await upsertReviewServingDirtyWorkBatch(
+      getReviewImportDeltaDirtyWorkInputs(getCommittableReviewImportDeltas(entries)),
+      tx,
+    )
+
+    await markReviewImportDeltasReconciled(
+      tx,
+      entries.map((entry) => {
+        return entry.row
+      }),
+    )
+
+    return upserts.filter((result) => {
+      return !result.skipped
+    }).length
+  })
+}
+
 export const intakeReviewImportDeltasToDirtyWork = async (
   params: IntakeReviewImportDeltaDirtyWorkParams,
   database: ReviewImportDeltaDirtyIntakeDatabase = getAppDatabaseService() as ReviewImportDeltaDirtyIntakeDatabase,
@@ -287,40 +336,30 @@ export const intakeReviewImportDeltasToDirtyWork = async (
     return {deltaId: row?.deltaId ?? 'unknown', reason: invalid.reason, status: 'failed'}
   }
 
-  const deltas = validated.filter((delta) => {
-    return delta !== null
-  }) as ValidatedReviewImportDelta[]
-
-  return database.transaction(async (tx) => {
-    const projectionDeltas = deltas.flatMap((delta) => {
-      return delta.projections.map((projection) => {
-        return {...delta, ...projection}
-      })
-    })
-    const upserts = await projectionDeltas.reduce<Promise<{skipped: boolean}[]>>(async (previousRun, delta) => {
-      const results = await previousRun
-      const result = await upsertReviewServingDirtyWork(
-        {
-          articleId: delta.scope.scopeId.split(':').at(-1) ?? null,
-          latestDeltaId: delta.deltaId,
-          projectionComponent: delta.projectionComponent,
-          projectionIdentity: delta.projectionIdentity,
-          scope: delta.scope,
-        },
-        tx,
-      )
-
-      return [...results, result]
-    }, Promise.resolve([]))
-
-    await markReviewImportDeltasReconciled(tx, rows)
-
-    return {
-      dirtyWorkCount: upserts.filter((result) => {
-        return !result.skipped
-      }).length,
-      maxSourceHighWaterMark: deltas.at(-1)?.sourceHighWaterMark ?? null,
-      status: 'converted' as const,
-    }
+  const groups = getReviewServingDeltaIntakeGroups({
+    entries: rows.map((row, index) => {
+      return {delta: (validated[index] ?? null) as ValidatedReviewImportDelta | null, row}
+    }),
+    getDeltaId: (entry) => {
+      return entry.row.deltaId
+    },
+    getDirtyWorkCount: (entry) => {
+      return entry.delta?.projections.length ?? 0
+    },
   })
+  const intake = await runReviewServingDeltaIntakeGroups({
+    deadlineAtMs: params.deadlineAtMs,
+    groups,
+    runGroup: (group) => {
+      return commitReviewImportDeltaIntakeGroup(group, database)
+    },
+  })
+
+  return {
+    dirtyWorkCount: intake.dirtyWorkCount,
+    maxSourceHighWaterMark:
+      getCommittableReviewImportDeltas(groups.slice(0, intake.committedGroupCount).flat()).at(-1)?.sourceHighWaterMark
+      ?? null,
+    status: 'converted',
+  }
 }
