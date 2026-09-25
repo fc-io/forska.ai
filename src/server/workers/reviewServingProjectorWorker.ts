@@ -567,10 +567,11 @@ const foregroundActivationRebuildDrainComponents = new Set<ReviewServingProjecti
   dispatchReadyReviewServingComponents,
 )
 const foregroundActivationDirtyWorkComponents = dispatchReadyReviewServingComponents
-// Judgment imports also dirty payload/posting/summary, but those become rebuild requests instead of per-claim patches.
+// Judgment imports also dirty posting/summary, but their article claims still wait for a requested-only bootstrap.
 const jobDrivenDirtyWorkComponents = [
   'llmStatus',
   'queue',
+  'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 // Keep status chunks out of this set: they are small SQL-native updates, and per-chunk forced GC is unnecessary.
 const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
