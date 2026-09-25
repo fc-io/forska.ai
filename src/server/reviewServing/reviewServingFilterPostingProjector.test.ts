@@ -149,7 +149,7 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[], listModeKe
   }
 }
 
-test('answer changes invalidate lazy prompt-answer postings without derived stats writes', async () => {
+test('answer changes move articles between cached prompt-answer postings without derived stats writes', async () => {
   const {database, statements} = createPostingDatabase({
     existingRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:no'})],
     newRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:yes'})],
@@ -159,7 +159,8 @@ test('answer changes invalidate lazy prompt-answer postings without derived stat
   const joined = statements.join('\n')
 
   expect(result.patchRowCount).toBe(0)
-  expect(result.servingRowCount).toBe(0)
+  expect(result.servingRowCount).toBe(1)
+  expect(result.diagnosticsJson.postingProjector).toMatchObject({addedRowCount: 1, tombstoneRowCount: 1})
   expect(result.validationResult).toBeUndefined()
   expect(result.diagnosticsJson.phaseTimings.sourceQueryMs).toBeGreaterThanOrEqual(0)
   expect(result.diagnosticsJson.phaseTimings.writerMs).toBeGreaterThanOrEqual(0)
@@ -171,8 +172,28 @@ test('answer changes invalidate lazy prompt-answer postings without derived stat
   expect(joined).not.toContain('mart.review_article_filter_posting_patch_v4')
   expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
   expect(joined).toContain('UPDATE mart.review_article_filter_posting_serving_v4 serving')
-  expect(joined).toContain('list_filter(article_ids')
+  expect(joined).toContain('list_filter(serving.article_ids')
+  expect(joined).toContain("('promptAnswer', 'review:promptAnswer:prompt-1:yes', 'llm', ['article-1']::VARCHAR[])")
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_serving_v4')
+  expect(joined).not.toContain("AND filter_kind = 'promptAnswer'")
+})
+
+test('snapshots without judgment details drop cached prompt-answer postings instead of patching them', async () => {
+  const {database, statements} = createPostingDatabase({
+    existingRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:no'})],
+    newRows: [postingRow({filterValue: 'review:promptAnswer:prompt-1:yes'})],
+  })
+
+  const result = await projectReviewServingFilterPostings(
+    {...projectInput([postingClaim()]), patchPromptAnswerPostings: false},
+    database,
+  )
+  const joined = statements.join('\n')
+
+  expect(result.diagnosticsJson.postingProjector).toMatchObject({addedRowCount: 0, tombstoneRowCount: 0})
+  expect(joined).toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
+  expect(joined).toContain("AND filter_kind = 'promptAnswer'")
+  expect(joined).not.toContain('review:promptAnswer:prompt-1:yes')
 })
 
 test('posting no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
@@ -620,12 +641,12 @@ test('embedded filter state patches aggregate state rows per article', async () 
   const joined = statements.join('\n')
 
   expect(result.servingRowCount).toBe(1)
-  expect(updateStatement).toContain("('article-1', TRUE, TRUE, 'unanswered', 'answered', FALSE)")
+  expect(updateStatement).toContain("('article-1', TRUE, TRUE)")
   expect(joined).not.toContain('FROM mart.review_article_filter_state_serving_v4')
   expect(joined).not.toContain('SELECT\n          state.article_id AS articleId')
 })
 
-test('embedded filter state patches keep partial LLM judgment presence independent from status', async () => {
+test('claim patches write only the duplicate and conflict flags of the list-mode state', async () => {
   const {database, statements} = createPostingDatabase({
     newRows: [
       postingRow({filterKind: 'llmStatus', filterValue: 'unanswered', listModeKey: 'llm'}),
@@ -634,17 +655,18 @@ test('embedded filter state patches keep partial LLM judgment presence independe
   })
 
   await projectReviewServingFilterPostings(projectInput([postingClaim()], ['llm']), database)
-  const updateStatement = statements.find((statement) => {
-    return (
-      statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
-      && statement.includes('FROM (VALUES')
-    )
+  const stateStatements = statements.filter((statement) => {
+    return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
   })
   const insertStatement = statements.find((statement) => {
     return statement.includes('INSERT INTO mart.review_article_filter_posting_serving_v4')
   })
 
-  expect(updateStatement).toContain("('article-1', FALSE, FALSE, 'unanswered', NULL, TRUE)")
+  expect(stateStatements).toHaveLength(1)
+  expect(stateStatements[0]).toContain("FROM (VALUES ('article-1', FALSE, FALSE))")
+  expect(stateStatements[0]).not.toContain('llm_status')
+  expect(stateStatements[0]).not.toContain('human_status')
+  expect(stateStatements[0]).not.toContain('llm_has_judgment')
   expect(insertStatement).toBeUndefined()
 })
 
@@ -699,7 +721,7 @@ test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows 
   const deleteStatement = statements.find((statement) => {
     return (
       statement.includes('UPDATE mart.review_article_filter_posting_serving_v4 serving')
-      && statement.includes('USING deleted')
+      && statement.includes('AS deleted(filter_kind, filter_value, list_mode_key, article_ids)')
     )
   })
   const existingSelect = statements.find((statement) => {
@@ -707,7 +729,7 @@ test('prompt-scoped posting rebuilds clear only changed tombstoned serving rows 
   })
 
   expect(existingSelect).not.toContain('article_id IN')
-  expect(deleteStatement).toContain('USING deleted')
+  expect(deleteStatement).toContain('AS deleted(filter_kind, filter_value, list_mode_key, article_ids)')
   expect(deleteStatement).toContain('filter_kind = deleted.filter_kind')
   expect(deleteStatement).toContain('snapshot_id')
   expect(deleteStatement).not.toContain('article_id IN')
@@ -731,11 +753,11 @@ test('project-scoped posting rebuilds delete tombstoned serving rows without pro
   const deleteStatement = statements.find((statement) => {
     return (
       statement.includes('UPDATE mart.review_article_filter_posting_serving_v4 serving')
-      && statement.includes('USING deleted')
+      && statement.includes('AS deleted(filter_kind, filter_value, list_mode_key, article_ids)')
     )
   })
 
-  expect(deleteStatement).toContain('USING deleted')
+  expect(deleteStatement).toContain('AS deleted(filter_kind, filter_value, list_mode_key, article_ids)')
   expect(deleteStatement).toContain('filter_kind = deleted.filter_kind')
   expect(deleteStatement).not.toContain('article_id IN')
 })

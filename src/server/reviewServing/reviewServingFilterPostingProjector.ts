@@ -3,7 +3,13 @@ import {createHash} from 'node:crypto'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
-import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {getReviewServingArticlesInRunningRebuildChunks} from './reviewServingCandidateRebuildCoverage.ts'
+import {type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  getReviewServingDirtyWorkClaimIdsAwaitingUpstream,
+  releaseReviewServingDirtyWorkClaims,
+  type ReviewServingDirtyWorkClaim,
+} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
@@ -24,6 +30,9 @@ export type ProjectReviewServingFilterPostingsInput = {
   claims: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion: string
   listModeKeys: readonly string[]
+  // Claim patches move articles between cached prompt-answer lists only when the snapshot's judgment detail rows are
+  // maintained (it carries payload); otherwise the snapshot's cached prompt-answer lists are dropped and rebuilt lazily.
+  patchPromptAnswerPostings?: boolean
   projectId: string
   projectScopeIdentity: string
   projectionIdentity: string
@@ -43,16 +52,7 @@ type PostingContributionRow = {
   tombstone: boolean
 }
 
-type FilterStateServingRow = {
-  articleId: string
-  conflictFlag: boolean
-  duplicateFlag: boolean
-  humanStatus: string | null
-  llmHasJudgment: boolean
-  listModeKey: string
-  llmStatus: string | null
-  tombstone: boolean
-}
+type FilterFlagStateRow = {articleId: string; conflictFlag: boolean; duplicateFlag: boolean; tombstone: boolean}
 
 type PostingValidationCountRow = {actualChecksum: string | null; actualCount: number | string | null}
 type CompactPostingRow = {articleIds: readonly string[]; filterKind: string; filterValue: string; listModeKey: string}
@@ -104,16 +104,19 @@ const getClaimKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ].join(',')
 }
 
+const getClaimArticleId = (claim: ReviewServingDirtyWorkClaim) => {
+  const articleId =
+    claim.articleId ?? (claim.scopeKind === 'article' ? (claim.scopeId.split(':').at(-1) ?? null) : null)
+
+  return articleId !== null && articleId.trim().length > 0 ? articleId : null
+}
+
 const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return [
     ...new Set(
-      claims
-        .map((claim) => {
-          return claim.articleId ?? (claim.scopeKind === 'article' ? (claim.scopeId.split(':').at(-1) ?? null) : null)
-        })
-        .filter((articleId) => {
-          return articleId !== null && articleId.trim().length > 0
-        }) as string[],
+      claims.map(getClaimArticleId).filter((articleId): articleId is string => {
+        return articleId !== null
+      }),
     ),
   ]
 }
@@ -223,7 +226,7 @@ const getCompactPostingRows = (rows: readonly PostingContributionRow[]) => {
   return [...compactRows.values()]
 }
 
-const getStateContributionKey = (row: Pick<FilterStateServingRow, 'articleId'>) => {
+const getStateContributionKey = (row: Pick<FilterFlagStateRow, 'articleId'>) => {
   return getStableReviewServingJson({articleId: row.articleId})
 }
 
@@ -663,24 +666,14 @@ const splitCompactPostingRowsForStatements = (rows: readonly CompactPostingRow[]
   return batches
 }
 
+// Claim patches remove an article only from the lists it has left, so the lists it stays in are not rewritten.
 const getDeleteServingRowsStatement = (
   input: ProjectReviewServingFilterPostingsInput,
   tombstoneRows: readonly PostingContributionRow[],
 ) => {
-  const articleIds = getClaimArticleIds(input.claims)
-
-  return articleIds.length > 0
+  return hasChunkArticleRange(input)
     ? [
         `UPDATE mart.review_article_filter_posting_serving_v4 serving
-        SET article_ids = list_filter(article_ids, lambda article_id: NOT list_contains(${getArticleIdsArraySql(articleIds)}, article_id))
-        WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-          AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          AND list_has_any(serving.article_ids, ${getArticleIdsArraySql(articleIds)})`,
-      ]
-    : hasChunkArticleRange(input)
-      ? [
-          `UPDATE mart.review_article_filter_posting_serving_v4 serving
         SET article_ids = list_filter(article_ids, lambda article_id: NOT (
           ${input.chunkStartArticleId === undefined || input.chunkStartArticleId === null ? 'TRUE' : `article_id >= ${getSqlLiteral(input.chunkStartArticleId)}`}
           AND ${input.chunkEndArticleId === undefined || input.chunkEndArticleId === null ? 'TRUE' : `article_id <= ${getSqlLiteral(input.chunkEndArticleId)}`}
@@ -688,19 +681,16 @@ const getDeleteServingRowsStatement = (
         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
           AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}`,
-        ]
-      : tombstoneRows.length === 0
-        ? []
-        : splitCompactPostingRowsForStatements(getCompactPostingRows(tombstoneRows)).flatMap((rowBatch) => {
-            const tombstoneValues = getCompactPostingValuesSql(rowBatch)
+      ]
+    : tombstoneRows.length === 0
+      ? []
+      : splitCompactPostingRowsForStatements(getCompactPostingRows(tombstoneRows)).flatMap((rowBatch) => {
+          const tombstoneValues = getCompactPostingValuesSql(rowBatch)
 
-            return [
-              `WITH deleted(filter_kind, filter_value, list_mode_key, article_ids) AS (
-          SELECT * FROM (VALUES ${tombstoneValues})
-        )
-        UPDATE mart.review_article_filter_posting_serving_v4 serving
+          return [
+            `UPDATE mart.review_article_filter_posting_serving_v4 serving
         SET article_ids = list_filter(serving.article_ids, lambda article_id: NOT list_contains(deleted.article_ids, article_id))
-        USING deleted
+        FROM (VALUES ${tombstoneValues}) AS deleted(filter_kind, filter_value, list_mode_key, article_ids)
         WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
           AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
@@ -708,8 +698,8 @@ const getDeleteServingRowsStatement = (
           AND serving.filter_value = deleted.filter_value
           AND serving.list_mode_key = deleted.list_mode_key
           AND list_has_any(serving.article_ids, deleted.article_ids)`,
-            ]
-          })
+          ]
+        })
 }
 
 const getSubtractFullRebuildServingRowsStatement = (
@@ -766,9 +756,7 @@ const getResetListModeStateRowsStatement = (
   input: ProjectReviewServingFilterPostingsInput,
   options: {resetAllWhenUnscoped?: boolean} = {},
 ) => {
-  const articleIds = getClaimArticleIds(input.claims)
-
-  return articleIds.length > 0
+  return hasChunkArticleRange(input)
     ? `UPDATE mart.review_article_serving_list_mode_state_v4 state
         SET duplicate_flag = FALSE,
             conflict_flag = FALSE,
@@ -778,12 +766,8 @@ const getResetListModeStateRowsStatement = (
         WHERE state.project_id = ${getSqlLiteral(input.projectId)}
           AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          AND state.article_id IN (${articleIds
-            .map((articleId) => {
-              return getSqlLiteral(articleId)
-            })
-            .join(', ')})`
-    : hasChunkArticleRange(input)
+          ${getArticleRangePredicate({alias: 'state', ...input})}`
+    : options.resetAllWhenUnscoped === true
       ? `UPDATE mart.review_article_serving_list_mode_state_v4 state
         SET duplicate_flag = FALSE,
             conflict_flag = FALSE,
@@ -792,19 +776,8 @@ const getResetListModeStateRowsStatement = (
             llm_has_judgment = FALSE
         WHERE state.project_id = ${getSqlLiteral(input.projectId)}
           AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-          AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-          ${getArticleRangePredicate({alias: 'state', ...input})}`
-      : options.resetAllWhenUnscoped === true
-        ? `UPDATE mart.review_article_serving_list_mode_state_v4 state
-        SET duplicate_flag = FALSE,
-            conflict_flag = FALSE,
-            llm_status = NULL,
-            human_status = NULL,
-            llm_has_judgment = FALSE
-        WHERE state.project_id = ${getSqlLiteral(input.projectId)}
-          AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
           AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}`
-        : null
+      : null
 }
 
 const getInsertFullRebuildServingRowsStatement = (
@@ -874,6 +847,36 @@ const getInsertFullRebuildServingRowsStatement = (
   ]
 }
 
+const getMergeCompactServingRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  compactRowsSql: string,
+) => {
+  return `UPDATE mart.review_article_filter_posting_serving_v4 serving
+    SET article_ids = ${getMergePostingArticleIdsSql('row.article_ids', 'serving.article_ids')}
+    FROM ${compactRowsSql}
+    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
+      AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+      AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND serving.filter_kind = row.filter_kind
+      AND serving.filter_value = row.filter_value
+      AND serving.list_mode_key = row.list_mode_key`
+}
+
+const getCompactRowsSql = (rows: readonly CompactPostingRow[]) => {
+  return `(VALUES ${getCompactPostingValuesSql(rows)}) AS row(filter_kind, filter_value, list_mode_key, article_ids)`
+}
+
+// A cached prompt-answer list is complete for its value, so an article joins only lists that are already cached; a
+// new row would publish a list holding just the patched articles.
+const getMergeCachedPromptAnswerServingRowsStatements = (
+  input: ProjectReviewServingFilterPostingsInput,
+  rows: readonly CompactPostingRow[],
+) => {
+  return splitCompactPostingRowsForStatements(rows).map((rowBatch) => {
+    return getMergeCompactServingRowsStatement(input, getCompactRowsSql(rowBatch))
+  })
+}
+
 const getInsertCompactServingRowsStatements = (
   input: ProjectReviewServingFilterPostingsInput,
   rows: readonly CompactPostingRow[],
@@ -883,18 +886,10 @@ const getInsertCompactServingRowsStatements = (
   }
 
   return splitCompactPostingRowsForStatements(rows).flatMap((rowBatch) => {
-    const compactRowsSql = `(VALUES ${getCompactPostingValuesSql(rowBatch)}) AS row(filter_kind, filter_value, list_mode_key, article_ids)`
+    const compactRowsSql = getCompactRowsSql(rowBatch)
 
     return [
-      `UPDATE mart.review_article_filter_posting_serving_v4 serving
-    SET article_ids = ${getMergePostingArticleIdsSql('row.article_ids', 'serving.article_ids')}
-    FROM ${compactRowsSql}
-    WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
-      AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
-      AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      AND serving.filter_kind = row.filter_kind
-      AND serving.filter_value = row.filter_value
-      AND serving.list_mode_key = row.list_mode_key`,
+      getMergeCompactServingRowsStatement(input, compactRowsSql),
       `INSERT INTO mart.review_article_filter_posting_serving_v4 (
       project_id,
       review_config_hash,
@@ -927,17 +922,41 @@ const getInsertCompactServingRowsStatements = (
   })
 }
 
-const getFilterStateValuesSql = (rows: readonly FilterStateServingRow[]) => {
+const getFilterFlagStateValuesSql = (rows: readonly FilterFlagStateRow[]) => {
   return rows
     .map((row) => {
-      return `(${getSqlLiteral(row.articleId)}, ${row.duplicateFlag ? 'TRUE' : 'FALSE'}, ${row.conflictFlag ? 'TRUE' : 'FALSE'}, ${getSqlLiteral(row.llmStatus)}, ${getSqlLiteral(row.humanStatus)}, ${row.llmHasJudgment ? 'TRUE' : 'FALSE'})`
+      return `(${getSqlLiteral(row.articleId)}, ${row.duplicateFlag ? 'TRUE' : 'FALSE'}, ${row.conflictFlag ? 'TRUE' : 'FALSE'})`
     })
     .join(', ')
 }
 
-const getUpdateCompactListModeStateRowsStatement = (
+// Claimed articles without a live flag row fall back to FALSE, which is what the per-article reset used to write.
+const getClaimedArticleFlagStateRows = (
   input: ProjectReviewServingFilterPostingsInput,
-  rows: readonly FilterStateServingRow[],
+  rows: readonly FilterFlagStateRow[],
+) => {
+  const rowsByArticleId = new Map(
+    rows.map((row) => {
+      return [row.articleId, row]
+    }),
+  )
+  const unflaggedClaimedRows = getClaimArticleIds(input.claims)
+    .filter((articleId) => {
+      return !rowsByArticleId.has(articleId)
+    })
+    .map((articleId) => {
+      return {articleId, conflictFlag: false, duplicateFlag: false, tombstone: false}
+    })
+
+  return [...rows, ...unflaggedClaimedRows]
+}
+
+// Claim patches write only the flags posting owns. llm_status, human_status and llm_has_judgment belong to the
+// llmStatus and humanStatus projectors; posting read them outside its write transaction, so writing them back could
+// overwrite a newer status patched in between.
+const getUpdateListModeFlagStateRowsStatement = (
+  input: ProjectReviewServingFilterPostingsInput,
+  rows: readonly FilterFlagStateRow[],
 ) => {
   if (rows.length === 0) {
     return null
@@ -945,15 +964,13 @@ const getUpdateCompactListModeStateRowsStatement = (
 
   return `UPDATE mart.review_article_serving_list_mode_state_v4 state
     SET duplicate_flag = incoming.duplicate_flag,
-        conflict_flag = incoming.conflict_flag,
-        llm_status = incoming.llm_status,
-        human_status = incoming.human_status,
-        llm_has_judgment = incoming.llm_has_judgment
-    FROM (VALUES ${getFilterStateValuesSql(rows)}) AS incoming(article_id, duplicate_flag, conflict_flag, llm_status, human_status, llm_has_judgment)
+        conflict_flag = incoming.conflict_flag
+    FROM (VALUES ${getFilterFlagStateValuesSql(rows)}) AS incoming(article_id, duplicate_flag, conflict_flag)
     WHERE state.project_id = ${getSqlLiteral(input.projectId)}
       AND state.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
       AND state.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      AND state.article_id = incoming.article_id`
+      AND state.article_id = incoming.article_id
+      AND (state.duplicate_flag <> incoming.duplicate_flag OR state.conflict_flag <> incoming.conflict_flag)`
 }
 
 const getUpdateFullRebuildListModeStateRowsStatement = (
@@ -1118,80 +1135,82 @@ const getFullPostingRebuildOutputValidationResult = async (
   }
 }
 
-const getFilterStateRows = (rows: readonly PostingContributionRow[]) => {
-  const stateRows = new Map<string, FilterStateServingRow>()
+const isFlagFilterKind = (filterKind: string) => {
+  return filterKind === 'duplicateFlag' || filterKind === 'conflictFlag'
+}
 
-  const maxStatus = (left: string | null, right: string | null) => {
-    if (left === null) {
-      return right
-    }
-
-    if (right === null) {
-      return left
-    }
-
-    return left > right ? left : right
-  }
-
-  for (const row of rows) {
-    if (!isStateFilterKind(row.filterKind)) {
-      continue
-    }
-
-    const key = getStateContributionKey(row)
-    const stateRow =
-      stateRows.get(key)
-      ?? ({
+const getFilterFlagStateRows = (rows: readonly PostingContributionRow[]) => {
+  const stateRows = rows
+    .filter((row) => {
+      return isFlagFilterKind(row.filterKind)
+    })
+    .reduce((flagRows, row) => {
+      const key = getStateContributionKey(row)
+      const stateRow = flagRows.get(key) ?? {
         articleId: row.articleId,
         conflictFlag: false,
         duplicateFlag: false,
-        humanStatus: null,
-        llmHasJudgment: false,
-        listModeKey: 'all',
-        llmStatus: null,
         tombstone: row.tombstone,
-      } satisfies FilterStateServingRow)
+      }
 
-    if (row.filterKind === 'duplicateFlag') {
-      stateRow.duplicateFlag = stateRow.duplicateFlag || row.filterValue === 'true'
-    } else if (row.filterKind === 'conflictFlag') {
-      stateRow.conflictFlag = stateRow.conflictFlag || row.filterValue === 'true'
-    } else if (row.filterKind === 'llmStatus') {
-      stateRow.llmStatus = maxStatus(stateRow.llmStatus, row.filterValue)
-    } else if (row.filterKind === 'humanStatus') {
-      stateRow.humanStatus = maxStatus(stateRow.humanStatus, row.filterValue)
-    } else if (row.filterKind === 'llmHasJudgment') {
-      stateRow.llmHasJudgment = stateRow.llmHasJudgment || row.filterValue === 'true'
-    }
-
-    stateRow.tombstone = stateRow.tombstone && row.tombstone
-    stateRows.set(key, stateRow)
-  }
+      return flagRows.set(key, {
+        ...stateRow,
+        conflictFlag: stateRow.conflictFlag || (row.filterKind === 'conflictFlag' && row.filterValue === 'true'),
+        duplicateFlag: stateRow.duplicateFlag || (row.filterKind === 'duplicateFlag' && row.filterValue === 'true'),
+        tombstone: stateRow.tombstone && row.tombstone,
+      })
+    }, new Map<string, FilterFlagStateRow>())
 
   return [...stateRows.values()]
 }
 
-const getTombstoneRows = (input: {
+const getContributionKeys = (rows: readonly PostingContributionRow[]) => {
+  return new Set(rows.map(getContributionKey))
+}
+
+// The diff runs over the claimed articles only: memberships an article has left become tombstones, memberships it
+// gained become additions, and unchanged memberships are not written.
+const getPostingMembershipDiff = (input: {
   existingRows: readonly PostingContributionRow[]
   newRows: readonly PostingContributionRow[]
+  patchPromptAnswerPostings: boolean
 }) => {
-  const liveNewKeys = new Set(
-    input.newRows
+  const isDiffedRow = (row: PostingContributionRow) => {
+    return input.patchPromptAnswerPostings || !isLazyPromptAnswerPostingRow(row)
+  }
+  const existingRows = input.existingRows.filter(isDiffedRow)
+  const liveNewRows = input.newRows.filter((row) => {
+    return isDiffedRow(row) && !isStateFilterKind(row.filterKind) && !row.tombstone
+  })
+  const existingKeys = getContributionKeys(existingRows)
+  const liveNewKeys = getContributionKeys(liveNewRows)
+  const addedRows = liveNewRows.filter((row) => {
+    return !existingKeys.has(getContributionKey(row))
+  })
+
+  return {
+    addedPromptAnswerRows: addedRows.filter(isLazyPromptAnswerPostingRow),
+    addedRows: addedRows.filter((row) => {
+      return !isLazyPromptAnswerPostingRow(row)
+    }),
+    liveNewRows,
+    tombstoneRows: existingRows
       .filter((row) => {
-        return !row.tombstone
+        return !liveNewKeys.has(getContributionKey(row))
       })
       .map((row) => {
-        return getContributionKey(row)
+        return {...row, tombstone: true}
       }),
-  )
+  }
+}
 
-  return input.existingRows
-    .filter((row) => {
-      return !liveNewKeys.has(getContributionKey(row))
-    })
-    .map((row) => {
-      return {...row, tombstone: true}
-    })
+const getPromptAnswerCacheStatements = (
+  input: ProjectReviewServingFilterPostingsInput,
+  addedPromptAnswerRows: readonly PostingContributionRow[],
+) => {
+  return input.patchPromptAnswerPostings === false
+    ? [getDeleteLazyPromptAnswerPostingRowsStatement(input)]
+    : getMergeCachedPromptAnswerServingRowsStatements(input, getCompactPostingRows(addedPromptAnswerRows))
 }
 
 export const projectReviewServingFilterPostings = async (
@@ -1251,23 +1270,16 @@ export const projectReviewServingFilterPostings = async (
   const [existingRows, newRows] = await measure('sourceQueryMs', async () => {
     return Promise.all([getExistingPostingRows(input, database), getPostingContributionRows(input, database)])
   })
-  const {contributionRows, liveRows} = measureSync('diffInputTransformMs', () => {
-    const genericNewRows = newRows.filter((row) => {
-      return !isStateFilterKind(row.filterKind) && !isLazyPromptAnswerPostingRow(row)
+  const {addedPromptAnswerRows, addedRows, liveNewRows, tombstoneRows} = measureSync('diffInputTransformMs', () => {
+    return getPostingMembershipDiff({
+      existingRows,
+      newRows,
+      patchPromptAnswerPostings: input.patchPromptAnswerPostings !== false,
     })
-    const transformedContributionRows = [
-      ...genericNewRows,
-      ...getTombstoneRows({existingRows, newRows: genericNewRows}),
-    ]
-    const transformedLiveRows = transformedContributionRows.filter((row) => {
-      return !row.tombstone
-    })
-
-    return {contributionRows: transformedContributionRows, liveRows: transformedLiveRows}
   })
   const {compactServingRows, stateRows} = measureSync('recordTransformMs', () => {
-    const nextCompactServingRows = getCompactPostingRows(liveRows)
-    const nextStateRows = getFilterStateRows(newRows).filter((row) => {
+    const nextCompactServingRows = getCompactPostingRows([...addedRows, ...addedPromptAnswerRows])
+    const nextStateRows = getFilterFlagStateRows(newRows).filter((row) => {
       return !row.tombstone
     })
 
@@ -1277,22 +1289,23 @@ export const projectReviewServingFilterPostings = async (
   const {compactServingRowBatchCount, compactTombstoneRowBatchCount, writeStatements} = measureSync(
     'deleteStatementBuildMs',
     () => {
-      const tombstoneRows = contributionRows.filter((row) => {
-        return row.tombstone
-      })
+      const compactAddedRows = getCompactPostingRows(addedRows)
       const nextDeleteServingRowsStatement = getDeleteServingRowsStatement(input, tombstoneRows)
-      const nextInsertServingRowsStatements = getInsertCompactServingRowsStatements(input, compactServingRows)
-      const nextResetStateRowsStatement = getResetListModeStateRowsStatement(input)
-      const nextUpdateStateRowsStatement = getUpdateCompactListModeStateRowsStatement(input, stateRows)
+      const nextInsertServingRowsStatements = getInsertCompactServingRowsStatements(input, compactAddedRows)
+      const nextPromptAnswerCacheStatements = getPromptAnswerCacheStatements(input, addedPromptAnswerRows)
+      const nextUpdateStateRowsStatement = getUpdateListModeFlagStateRowsStatement(
+        input,
+        getClaimedArticleFlagStateRows(input, stateRows),
+      )
 
       return {
-        compactServingRowBatchCount: splitCompactPostingRowsForStatements(compactServingRows).length,
+        compactServingRowBatchCount: splitCompactPostingRowsForStatements(compactAddedRows).length,
         compactTombstoneRowBatchCount: splitCompactPostingRowsForStatements(getCompactPostingRows(tombstoneRows))
           .length,
         writeStatements: [
           ...nextDeleteServingRowsStatement,
           ...nextInsertServingRowsStatements,
-          nextResetStateRowsStatement,
+          ...nextPromptAnswerCacheStatements,
           nextUpdateStateRowsStatement,
         ].flatMap((statement) => {
           return statement === null ? [] : [statement]
@@ -1329,14 +1342,15 @@ export const projectReviewServingFilterPostings = async (
     diagnosticsJson: {
       phaseTimings,
       postingProjector: {
+        addedRowCount: addedRows.length + addedPromptAnswerRows.length,
         contributionRecordCount: 0,
-        contributionRowCount: contributionRows.length,
         existingRowCount: existingRows.length,
         compactServingRowBatchCount,
         compactTombstoneRowBatchCount,
-        liveRowCount: liveRows.length,
+        liveRowCount: liveNewRows.length,
         newRowCount: newRows.length,
         stateRowCount: stateRows.length,
+        tombstoneRowCount: tombstoneRows.length,
         writer: writerResult.diagnostics,
       },
     },
@@ -1397,4 +1411,48 @@ export const projectReviewServingFilterPostingRanges = async (
     servingRowCount: 0,
     validationResult: undefined,
   }
+}
+
+const postingUpstreamComponents = [
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'payload',
+  'selectedImport',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+// A posting patch reads the list-mode state, judgment detail and selected-import rows of its articles, so a claim
+// waits while the same article has unfinished upstream work at or below its watermark. A claim whose article lies in
+// a running posting rebuild chunk waits for the chunk: chunk inserts have no key and could duplicate a list row the
+// patch creates.
+export const deferReviewServingPostingClaimsAwaitingInputs = async (
+  input: {claims: readonly ReviewServingDirtyWorkClaim[]; projectId: string; projectionIdentity: string},
+  database: ReviewServingFilterPostingProjectorDatabase,
+) => {
+  const runningArticleIds = await getReviewServingArticlesInRunningRebuildChunks(
+    {
+      articleIds: getClaimArticleIds(input.claims),
+      component: 'posting',
+      projectId: input.projectId,
+      projectionIdentity: input.projectionIdentity,
+    },
+    database,
+  )
+  const awaitingUpstreamClaimIds = await getReviewServingDirtyWorkClaimIdsAwaitingUpstream(
+    {claims: input.claims, projectId: input.projectId, upstreamComponents: postingUpstreamComponents},
+    database,
+  )
+  const deferredClaimIds = input.claims
+    .filter((claim) => {
+      return awaitingUpstreamClaimIds.has(claim.dirtyWorkId) || runningArticleIds.has(getClaimArticleId(claim) ?? '')
+    })
+    .map((claim) => {
+      return claim.dirtyWorkId
+    })
+
+  await releaseReviewServingDirtyWorkClaims(deferredClaimIds, database)
+
+  return input.claims.filter((claim) => {
+    return !deferredClaimIds.includes(claim.dirtyWorkId)
+  })
 }
