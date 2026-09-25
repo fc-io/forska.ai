@@ -47,6 +47,8 @@ import {
   getProviderBucketSnapshot,
   heartbeatProviderAdmissionLeaseThroughOwner,
   providerAdmissionLeaseHeartbeatIntervalMs,
+  type ProviderAdmissionLeaseHeartbeatResult,
+  providerAdmissionLeaseTtlMs,
   type ProviderBucketSnapshot,
   releaseProviderAdmissionLeaseWithResultThroughOwner,
   resetProviderAdmissionLeaseForTests,
@@ -618,8 +620,46 @@ export const isProviderAdmissionLeaseLostError = (error: unknown): error is Prov
   return error instanceof ProviderAdmissionLeaseLostError
 }
 
+// The owner can be unreachable for a few seconds, for example while the projector reopens
+// DuckDB. The lease stays valid for providerAdmissionLeaseTtlMs after its last heartbeat, so a
+// failed owner request is not a lost lease: only an explicit missing/notHolder answer is, or no
+// confirmed heartbeat for longer than the grace below. Aborting on the first failed request
+// threw away every in-flight LLM request, including finished ones.
+const getProviderAdmissionLeaseHeartbeatGraceMs = (): number => {
+  return Math.max(
+    providerAdmissionLeaseHeartbeatIntervalMs,
+    providerAdmissionLeaseTtlMs - providerAdmissionLeaseHeartbeatIntervalMs,
+  )
+}
+
+const getProviderAdmissionLeaseHeartbeatRetryDelayMs = (): number => {
+  return Math.min(1_000, Math.max(1, Math.floor(providerAdmissionLeaseHeartbeatIntervalMs / 3)))
+}
+
+const confirmProviderRequestAdmissionLease = async (
+  lease: ProviderRequestAdmissionLease,
+  lastConfirmedAtMs: number,
+): Promise<ProviderAdmissionLeaseHeartbeatResult | {heartbeat: false; reason: string}> => {
+  try {
+    return await heartbeatProviderAdmissionLeaseThroughOwner(lease)
+  } catch (error) {
+    const retryDelayMs = getProviderAdmissionLeaseHeartbeatRetryDelayMs()
+
+    if (Date.now() + retryDelayMs - lastConfirmedAtMs >= getProviderAdmissionLeaseHeartbeatGraceMs()) {
+      return {heartbeat: false, reason: getErrorMessage(error)}
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, retryDelayMs)
+    })
+
+    return confirmProviderRequestAdmissionLease(lease, lastConfirmedAtMs)
+  }
+}
+
 const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmissionLease) => {
   let heartbeatInFlight = false
+  let lastConfirmedAtMs = Date.now()
   let rejectLeaseLoss = (_error: unknown): void => {
     return undefined
   }
@@ -644,10 +684,15 @@ const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmis
     heartbeatInFlight = true
     void heartbeatProviderAdmissionLeaseThroughOwner(lease)
       .then((result) => {
-        if (!result.heartbeat) loseLease(result.reason)
+        if (!result.heartbeat) {
+          loseLease(result.reason)
+          return
+        }
+
+        lastConfirmedAtMs = Date.now()
       })
       .catch((error) => {
-        loseLease(error)
+        if (Date.now() - lastConfirmedAtMs >= getProviderAdmissionLeaseHeartbeatGraceMs()) loseLease(error)
       })
       .finally(() => {
         heartbeatInFlight = false
@@ -658,6 +703,9 @@ const startProviderRequestAdmissionLeaseHeartbeat = (lease: ProviderRequestAdmis
   interval.unref?.()
 
   return {
+    confirm: () => {
+      return confirmProviderRequestAdmissionLease(lease, lastConfirmedAtMs)
+    },
     leaseLoss,
     signal: controller.signal,
     stop: () => {
@@ -1917,11 +1965,7 @@ export const withJudgmentRequest = async <T>(
         providerAdmissionHeartbeat.stop()
         await waitAtJudgeWorkerLeaseLossTestBarrier()
       }
-      const finalHeartbeat = await heartbeatProviderAdmissionLeaseThroughOwner(providerAdmissionLease).catch(
-        (error) => {
-          return {heartbeat: false as const, reason: getErrorMessage(error)}
-        },
-      )
+      const finalHeartbeat = await providerAdmissionHeartbeat.confirm()
 
       if (isJudgeWorkerLeaseLossTestBarrierActive()) {
         recordJudgeWorkerLeaseLossTestBarrierOutcome(
