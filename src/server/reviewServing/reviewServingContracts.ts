@@ -37,6 +37,11 @@ export const filterReadyReviewServingComponents = [
   'summary',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
+export const snapshotIndependentReviewServingComponents = [
+  'projectScope',
+  'selectedImport',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
 export const detailReadyReviewServingComponents = [
   'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]

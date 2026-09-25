@@ -79,6 +79,7 @@ import {
   createCandidateReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
+  hasOtherInFlightRebuildForCandidateSnapshot,
   markCandidateReviewServingSnapshotManifestFailed,
   type ReviewServingSnapshotManifest,
 } from '../reviewServing/reviewServingManifestRepository.ts'
@@ -6504,6 +6505,23 @@ const finalizeErroredCompletedReviewServingRebuildRequest = async (
   )
 }
 
+type FailedRebuildRequestPromotion = {error: string; row: RebuildRequestSnapshotPromotionRow}
+
+const getTerminalFailedRebuildRequestPromotions = async (
+  input: {failedPromotions: readonly FailedRebuildRequestPromotion[]; requestId: string},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  return input.failedPromotions.reduce<Promise<FailedRebuildRequestPromotion[]>>(async (previous, failed) => {
+    const terminalFailedPromotions = await previous
+    const isBuiltByOtherRebuild = await hasOtherInFlightRebuildForCandidateSnapshot(
+      {excludedRequestId: input.requestId, projectId: failed.row.projectId, snapshotId: failed.row.snapshotId},
+      database,
+    )
+
+    return isBuiltByOtherRebuild ? terminalFailedPromotions : [...terminalFailedPromotions, failed]
+  }, Promise.resolve([]))
+}
+
 const finalizeCompletedReviewServingRebuildRequest = async (
   chunk: ReviewServingRebuildChunkManifest,
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -6560,7 +6578,11 @@ const finalizeCompletedReviewServingRebuildRequest = async (
   const failedPromotions = promotions.flatMap(({promotion, row}) => {
     return promotion.promoted ? [] : [{error: promotion.error, row}]
   })
-  const failedPromotion = failedPromotions[0]
+  const terminalFailedPromotions = await getTerminalFailedRebuildRequestPromotions(
+    {failedPromotions, requestId: chunk.requestId},
+    database,
+  )
+  const failedPromotion = terminalFailedPromotions[0]
 
   await markCompletedRebuildRequestFinalized(
     {
@@ -6573,8 +6595,9 @@ const finalizeCompletedReviewServingRebuildRequest = async (
 
   // The rebuild request is terminal now; a candidate snapshot that failed validation can never be
   // promoted by this request, so mark it failed instead of leaving it as a stuck candidate that
-  // retention ignores and the warnings route reports as operator_intervention_required.
-  await failedPromotions.reduce<Promise<void>>(async (previous, failed) => {
+  // retention ignores and the warnings route reports as operator_intervention_required. Candidates
+  // another rebuild is still building stay with that rebuild, which promotes or fails them itself.
+  await terminalFailedPromotions.reduce<Promise<void>>(async (previous, failed) => {
     await previous
     await markCandidateReviewServingSnapshotManifestFailed(
       {lastError: failed.error, projectId: failed.row.projectId, snapshotId: failed.row.snapshotId},
