@@ -1516,6 +1516,38 @@ export const resetDispatchProviderWarmupForTests = (): void => {
   anthropicConnectionWarmupStartedAt.clear()
 }
 
+const eventLoopLagSampleIntervalMs = 250
+const eventLoopLagWarnThresholdMs = 750
+let eventLoopLagMonitor: ReturnType<typeof setInterval> | null = null
+
+// Logs when the judge's event loop was blocked long enough to stall dispatch and completion
+// handling (synchronous SQLite work shows up here), with the send loop's current stage.
+export const startJudgeWorkerEventLoopLagMonitor = (): void => {
+  if (eventLoopLagMonitor) {
+    return
+  }
+
+  let expectedAtMs = Date.now() + eventLoopLagSampleIntervalMs
+
+  eventLoopLagMonitor = setInterval(() => {
+    const now = Date.now()
+    const lagMs = now - expectedAtMs
+
+    expectedAtMs = now + eventLoopLagSampleIntervalMs
+
+    if (lagMs >= eventLoopLagWarnThresholdMs) {
+      schedulerLogger.warn('scheduler:event-loop-lag', '[capacity] judge event loop blocked', {
+        component: sendToLLMComponent,
+        event: 'eventLoopLag',
+        lagMs,
+        sendToLLMRunningForMs: getActiveSendToLLMRunningForMs(now),
+        sendToLLMStage: activeSendToLLMRun?.stage ?? null,
+      })
+    }
+  }, eventLoopLagSampleIntervalMs)
+  eventLoopLagMonitor.unref?.()
+}
+
 export const getJudgmentsJobsSendToLLMRunState = (): (SendToLLMRunState & {runningForMs: number}) | null => {
   return activeSendToLLMRun ? {...activeSendToLLMRun, runningForMs: Date.now() - activeSendToLLMRun.startedAtMs} : null
 }
