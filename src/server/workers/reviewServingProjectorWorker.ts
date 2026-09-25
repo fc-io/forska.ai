@@ -573,6 +573,8 @@ const jobDrivenDirtyWorkComponents = [
   'queue',
   'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
+const jobDrivenDirtyWorkMaxBatchesPerTurn = 4
+const jobDrivenDirtyWorkBacklogWakeReserveShare = 0.2
 // Keep status chunks out of this set: they are small SQL-native updates, and per-chunk forced GC is unnecessary.
 const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
 const reviewServingDuckdbRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>([
@@ -7341,6 +7343,12 @@ const shouldRunCleanup = (input: {cleanupIntervalMs: number; lastCleanupAtMs: nu
   return input.lastCleanupAtMs === null || input.nowMs - input.lastCleanupAtMs >= input.cleanupIntervalMs
 }
 
+const getProjectorRunClaimCounts = (projector: WakeReviewServingProjectorServiceResult) => {
+  return projector.runs.reduce<Partial<Record<ReviewServingProjectionComponent, number>>>((claimCounts, run) => {
+    return {...claimCounts, [run.component]: (claimCounts[run.component] ?? 0) + run.claimCount}
+  }, {})
+}
+
 export const getReviewServingProjectorWorkerCycleLogAttrs = (result: ReviewServingProjectorWorkerCycleResult) => {
   return {
     appendQueueDepth: result.admission.appendQueueDepth,
@@ -7360,6 +7368,7 @@ export const getReviewServingProjectorWorkerCycleLogAttrs = (result: ReviewServi
     projectorBlockedReason:
       result.projector.status === 'idle' ? ('idle' as const) : (result.projector.blockedReason ?? null),
     projectorRanBeforeChunks: result.admission.ranBeforeChunks,
+    projectorRunClaimCounts: getProjectorRunClaimCounts(result.projector),
     projectorStarvationAdmitted: result.admission.starvationAdmitted,
     projectorStatus: result.projector.status,
     status: result.status,
@@ -9872,6 +9881,135 @@ const getWorkerProjectorServiceDependencies = (input: {
   }
 }
 
+type JobDrivenDirtyWorkWakeContext = {
+  admissionDeadlineMs: number
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+  projectorServiceDependencies: ReviewServingProjectorServiceDependencies
+  wakeInput: WakeReviewServingProjectorServiceInput
+}
+
+type JobDrivenDirtyWorkTurn = {
+  batchCount: number
+  claimedRows: number
+  component: ReviewServingProjectionComponent
+  estimatedBatchMs: number
+  projector: WakeReviewServingProjectorServiceResult
+}
+
+const getProjectorRunClaimCount = (
+  projector: WakeReviewServingProjectorServiceResult,
+  component: ReviewServingProjectionComponent,
+) => {
+  return projector.runs
+    .filter((run) => {
+      return run.component === component
+    })
+    .reduce((claimCount, run) => {
+      return claimCount + run.claimCount
+    }, 0)
+}
+
+const getProjectorClaimedRowCount = (projector: WakeReviewServingProjectorServiceResult) => {
+  const failedClaimCount = projector.failures.reduce((claimCount, failure) => {
+    return claimCount + failure.claimIds.length
+  }, 0)
+  const projectedClaimCount = projector.runs.reduce((claimCount, run) => {
+    return claimCount + run.claimCount
+  }, 0)
+
+  return failedClaimCount + projectedClaimCount + projector.releasedClaimIds.length
+}
+
+const hasFullJobDrivenBatch = (
+  projector: WakeReviewServingProjectorServiceResult,
+  component: ReviewServingProjectionComponent,
+  batchSize: number,
+) => {
+  return (
+    projector.failures.every((failure) => {
+      return failure.component !== component
+    }) && getProjectorRunClaimCount(projector, component) >= batchSize
+  )
+}
+
+const getJobDrivenExtraBatchDeadlineMs = (context: JobDrivenDirtyWorkWakeContext) => {
+  return (
+    context.admissionDeadlineMs - Math.floor(context.wakeInput.maxWakeMs * jobDrivenDirtyWorkBacklogWakeReserveShare)
+  )
+}
+
+const canRunJobDrivenExtraBatch = (context: JobDrivenDirtyWorkWakeContext, turn: JobDrivenDirtyWorkTurn) => {
+  const nowMs = getWorkerNowMs(context.dependencies, context.options)
+
+  return (
+    turn.batchCount < jobDrivenDirtyWorkMaxBatchesPerTurn
+    && context.wakeInput.maxRowsPerWake - turn.claimedRows >= context.wakeInput.batchSize
+    && nowMs + turn.estimatedBatchMs <= getJobDrivenExtraBatchDeadlineMs(context)
+    && !isReviewServingProjectorWakeStarved(context.dependencies, context.options)
+  )
+}
+
+const runJobDrivenExtraBatches = async (
+  context: JobDrivenDirtyWorkWakeContext,
+  turn: JobDrivenDirtyWorkTurn,
+): Promise<WakeReviewServingProjectorServiceResult> => {
+  if (!canRunJobDrivenExtraBatch(context, turn)) {
+    return turn.projector
+  }
+
+  const startedAtMs = getWorkerNowMs(context.dependencies, context.options)
+  const extraBatch = await context.dependencies.wakeProjectors(
+    {
+      ...context.wakeInput,
+      componentOrder: [turn.component],
+      maxRowsPerWake: context.wakeInput.batchSize,
+      maxWakeMs: Math.max(0, getJobDrivenExtraBatchDeadlineMs(context) - startedAtMs),
+    },
+    context.projectorServiceDependencies,
+  )
+  const nextTurn = {
+    ...turn,
+    batchCount: turn.batchCount + 1,
+    claimedRows: turn.claimedRows + getProjectorClaimedRowCount(extraBatch),
+    estimatedBatchMs: getWorkerNowMs(context.dependencies, context.options) - startedAtMs,
+    projector: combineReviewServingProjectorWakeResults(turn.projector, extraBatch),
+  }
+
+  return hasFullJobDrivenBatch(extraBatch, turn.component, context.wakeInput.batchSize)
+    ? runJobDrivenExtraBatches(context, nextTurn)
+    : nextTurn.projector
+}
+
+const getJobDrivenDirtyWorkTurn = (input: {
+  batchSize: number
+  componentOrder: readonly ReviewServingProjectionComponent[]
+  firstRoundMs: number
+  projector: WakeReviewServingProjectorServiceResult
+}): JobDrivenDirtyWorkTurn | null => {
+  const component = input.componentOrder.find((candidate) => {
+    return hasFullJobDrivenBatch(input.projector, candidate, input.batchSize)
+  })
+  const projectedComponentCount = new Set(
+    input.projector.runs.map((run) => {
+      return run.component
+    }),
+  ).size
+
+  return component === undefined
+    ? null
+    : {
+        batchCount: 1,
+        claimedRows: getProjectorClaimedRowCount(input.projector),
+        component,
+        estimatedBatchMs: input.firstRoundMs / Math.max(1, projectedComponentCount),
+        projector: input.projector,
+      }
+}
+
+// The first round gives every pending job-driven component one batch. Then the first component in rotation order that
+// still claimed a full batch keeps its turn for up to jobDrivenDirtyWorkMaxBatchesPerTurn batches, as long as the next
+// batch is expected to end before the deadline minus the backlog wake's reserve and the backlog wake is not starved.
 const runJobDrivenDirtyWorkBeforeBacklog = async (input: {
   admissionDeadlineMs: number
   database: ReviewServingProjectorWorkerDatabase
@@ -9890,16 +10028,25 @@ const runJobDrivenDirtyWorkBeforeBacklog = async (input: {
   }
 
   const wakeInput = getWakeInput({dependencies: input.dependencies, options: input.options, wakeId: input.wakeId})
+  const componentOrder = getJobDrivenDirtyWorkComponentOrder(pendingComponents, wakeInput.componentRotationOffset ?? 0)
+  const startedAtMs = getWorkerNowMs(input.dependencies, input.options)
   const projector = await input.dependencies.wakeProjectors(
-    {
-      ...wakeInput,
-      componentOrder: getJobDrivenDirtyWorkComponentOrder(pendingComponents, wakeInput.componentRotationOffset ?? 0),
-      maxWakeMs: Math.max(0, input.admissionDeadlineMs - getWorkerNowMs(input.dependencies, input.options)),
-    },
+    {...wakeInput, componentOrder, maxWakeMs: Math.max(0, input.admissionDeadlineMs - startedAtMs)},
     input.projectorServiceDependencies,
   )
 
-  return projector.status === 'blocked' ? null : projector
+  if (projector.status === 'blocked') {
+    return null
+  }
+
+  const turn = getJobDrivenDirtyWorkTurn({
+    batchSize: wakeInput.batchSize,
+    componentOrder,
+    firstRoundMs: getWorkerNowMs(input.dependencies, input.options) - startedAtMs,
+    projector,
+  })
+
+  return turn === null ? projector : runJobDrivenExtraBatches({...input, wakeInput}, turn)
 }
 
 type ReviewServingProjectorWorkerCycleContext = {

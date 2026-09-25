@@ -489,28 +489,48 @@ const isJobDrivenTestComponent = (component: string): component is JobDrivenTest
   return component === 'llmStatus' || component === 'payload' || component === 'queue'
 }
 
-const getJobDrivenDirtyWorkClaim = (projectionComponent: JobDrivenTestComponent): ReviewServingDirtyWorkClaim => {
+const getJobDrivenDirtyWorkClaim = (
+  projectionComponent: JobDrivenTestComponent,
+  index: number,
+): ReviewServingDirtyWorkClaim => {
   return {
-    articleId: 'article-1',
+    articleId: `article-${index + 1}`,
     dirtyKind: 'llmJudgment',
     dirtyRangeEnd: null,
     dirtyRangeStart: null,
-    dirtyWorkId: `dirty-work-${projectionComponent}`,
+    dirtyWorkId: `dirty-work-${projectionComponent}-${index}`,
     firstSourceHighWaterMark: 1,
     latestDeltaId: null,
     latestSourceHighWaterMark: 1,
     projectId: 'project-1',
     projectionComponent,
     projectionIdentity: `${projectionComponent}:project-1`,
-    scopeId: 'article:article-1',
+    scopeId: `article:article-${index + 1}`,
     scopeKind: 'article',
     sourcePartition: 'judgmentSqliteOutboxImport:job-1',
     status: 'running',
   }
 }
 
+const claimJobDrivenBacklog = (
+  backlog: Partial<Record<JobDrivenTestComponent, number>>,
+  projectionComponent: JobDrivenTestComponent,
+  limit: number,
+) => {
+  const remaining = backlog[projectionComponent]
+  const claimCount = remaining === undefined ? 1 : Math.min(limit, remaining)
+
+  if (remaining !== undefined) {
+    backlog[projectionComponent] = remaining - claimCount
+  }
+
+  return Array.from({length: claimCount}, (_claim, index) => {
+    return getJobDrivenDirtyWorkClaim(projectionComponent, index)
+  })
+}
+
 const getIncrementalPayloadRouteRows = (statement: string) => {
-  if (statement.includes('FROM app.project project')) {
+  if (statement.includes('project.human_judgment_mode')) {
     return [
       {
         humanJudgmentMode: 'prompt',
@@ -533,12 +553,19 @@ const getIncrementalPayloadRouteRows = (statement: string) => {
 }
 
 const runJobDrivenDirtyWorkCycle = async (input: {
+  backlog?: Partial<Record<JobDrivenTestComponent, number>>
+  chunkIdle?: boolean
   componentRotationOffset: number
+  lastAdmittedWakeAtMs?: number
   llmStatusBatchMs: number
+  maxRowsPerWake?: number
+  maxWakeMs?: number
   payloadBatchMs?: number
   pendingComponents?: readonly JobDrivenTestComponent[]
 }) => {
   const harness = createWorkerHarness()
+  const backlog = {...input.backlog}
+  const chunkStartedAtMs: number[] = []
   const claimedComponents: string[] = []
   const projectedComponents: string[] = []
   let nowMs = 1_000
@@ -557,7 +584,13 @@ const runJobDrivenDirtyWorkCycle = async (input: {
   }
   harness.dependencies.rebuildChunkService = {
     ...harness.dependencies.rebuildChunkService,
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return input.chunkIdle === true ? null : chunkInput
+    },
     runClaimedChunk: async ({chunk}) => {
+      chunkStartedAtMs.push(nowMs)
       harness.runChunkInputs.push(chunk)
       nowMs += 5_000
 
@@ -565,14 +598,16 @@ const runJobDrivenDirtyWorkCycle = async (input: {
     },
   } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
   harness.dependencies.projectorServiceDependencies = {
-    claimDirtyWork: async ({projectionComponent}) => {
-      if (!isJobDrivenTestComponent(projectionComponent)) {
-        return []
+    claimDirtyWork: async ({limit, projectionComponent}) => {
+      const claims = isJobDrivenTestComponent(projectionComponent)
+        ? claimJobDrivenBacklog(backlog, projectionComponent, limit)
+        : []
+
+      if (claims.length > 0) {
+        claimedComponents.push(projectionComponent)
       }
 
-      claimedComponents.push(projectionComponent)
-
-      return [getJobDrivenDirtyWorkClaim(projectionComponent)]
+      return claims
     },
     ensureClaimManifests: async () => {},
     runners: {
@@ -603,11 +638,17 @@ const runJobDrivenDirtyWorkCycle = async (input: {
   }
 
   const result = await runReviewServingProjectorWorkerOnce(
-    {componentRotationOffset: input.componentRotationOffset, maxWakeMs: 5_000, workerId: 'worker-1'},
+    {
+      componentRotationOffset: input.componentRotationOffset,
+      lastAdmittedWakeAtMs: input.lastAdmittedWakeAtMs,
+      maxRowsPerWake: input.maxRowsPerWake,
+      maxWakeMs: input.maxWakeMs ?? 5_000,
+      workerId: 'worker-1',
+    },
     harness.dependencies,
   )
 
-  return {claimedComponents, harness, projectedComponents, result}
+  return {chunkStartedAtMs, claimedComponents, harness, projectedComponents, result}
 }
 
 test('job-driven llmStatus and queue dirty work both progress in one cycle before the rebuild chunk uses up the wake budget', async () => {
@@ -659,6 +700,98 @@ test('job-driven payload dirty work takes its turn in the pre-chunk wake with ll
     componentOrder: ['llmStatus', 'queue', 'payload'],
   })
   expect(payloadAfterSlowLlmStatus.claimedComponents).toEqual(['llmStatus'])
+})
+
+const jobDrivenBacklog = {llmStatus: 1_000, payload: 1_000, queue: 1_000}
+
+test('a job-driven component with a full-batch backlog keeps its turn for up to four batches after the others had theirs, then the rebuild chunk runs', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: jobDrivenBacklog,
+    componentRotationOffset: 2,
+    llmStatusBatchMs: 1_000,
+    maxWakeMs: 8_000,
+    payloadBatchMs: 500,
+    pendingComponents: ['queue', 'payload', 'llmStatus'],
+  })
+
+  expect(cycle.claimedComponents).toEqual(['payload', 'llmStatus', 'queue', 'payload', 'payload', 'payload'])
+  expect(cycle.harness.wakeInputs).toMatchObject([
+    {componentOrder: ['payload', 'llmStatus', 'queue'], maxRowsPerWake: 512, maxWakeMs: 8_000},
+    {componentOrder: ['payload'], maxRowsPerWake: 64, maxWakeMs: 4_600},
+    {componentOrder: ['payload'], maxRowsPerWake: 64, maxWakeMs: 4_100},
+    {componentOrder: ['payload'], maxRowsPerWake: 64, maxWakeMs: 3_600},
+    {componentOrder: undefined, maxWakeMs: 0},
+  ])
+  expect(cycle.chunkStartedAtMs).toEqual([4_300])
+  expect(cycle.harness.runChunkInputs).toHaveLength(1)
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(cycle.result)).toMatchObject({
+    projectorRunClaimCounts: {llmStatus: 64, payload: 256, queue: 64},
+  })
+})
+
+test('job-driven extra batches stop before the wake deadline minus the backlog reserve, so the backlog wake still runs when no chunk is claimable', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: jobDrivenBacklog,
+    chunkIdle: true,
+    componentRotationOffset: 0,
+    llmStatusBatchMs: 1_000,
+    maxWakeMs: 5_000,
+    payloadBatchMs: 500,
+    pendingComponents: ['queue', 'payload', 'llmStatus'],
+  })
+
+  expect(cycle.harness.wakeInputs).toMatchObject([
+    {componentOrder: ['llmStatus', 'queue', 'payload'], maxWakeMs: 5_000},
+    {componentOrder: ['llmStatus'], maxWakeMs: 2_200},
+    {componentOrder: ['llmStatus'], maxWakeMs: 1_200},
+    {componentOrder: undefined, maxWakeMs: 1_200},
+  ])
+  expect(cycle.claimedComponents).toEqual([
+    'llmStatus',
+    'queue',
+    'payload',
+    'llmStatus',
+    'llmStatus',
+    'llmStatus',
+    'queue',
+  ])
+  expect(cycle.harness.runChunkInputs).toEqual([])
+  expect(cycle.result.projector.status).toBe('completed')
+})
+
+test('job-driven extra batches stay within the wake row budget', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: jobDrivenBacklog,
+    componentRotationOffset: 2,
+    llmStatusBatchMs: 1_000,
+    maxRowsPerWake: 256,
+    maxWakeMs: 5_000,
+    payloadBatchMs: 500,
+    pendingComponents: ['queue', 'payload', 'llmStatus'],
+  })
+
+  expect(cycle.claimedComponents).toEqual(['payload', 'llmStatus', 'queue', 'payload'])
+  expect(cycle.harness.runChunkInputs).toHaveLength(1)
+})
+
+test('job-driven extra batches wait while the backlog wake is starved so the starved wake keeps the rest of the budget', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: jobDrivenBacklog,
+    componentRotationOffset: 2,
+    lastAdmittedWakeAtMs: 1_000 - 30_000,
+    llmStatusBatchMs: 1_000,
+    maxWakeMs: 8_000,
+    payloadBatchMs: 500,
+    pendingComponents: ['queue', 'payload', 'llmStatus'],
+  })
+
+  expect(cycle.harness.wakeInputs).toMatchObject([
+    {componentOrder: ['payload', 'llmStatus', 'queue'], maxWakeMs: 8_000},
+    {maxRowsPerWake: 512, maxWakeMs: 6_200},
+  ])
+  expect(cycle.harness.wakeInputs[1]).not.toHaveProperty('componentOrder')
+  expect(cycle.result.admission.ranBeforeChunks).toBe(true)
+  expect(cycle.harness.runChunkInputs).toHaveLength(1)
 })
 
 test('rebuild timing summaries keep compact aggregate phase stats', () => {
