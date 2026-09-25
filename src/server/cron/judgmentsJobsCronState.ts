@@ -1,4 +1,5 @@
 export const JUDGMENTS_IMPORT_STALE_AFTER_MS = 120_000
+export const JUDGMENTS_IMPORT_YIELD_TO_ADD_TO_QUEUE_MAX_MS = 10_000
 export const JUDGMENTS_CLEANUP_STALE_DEFAULT_BUDGET_MS = 3_000
 export const JUDGMENTS_CLEANUP_STALE_MARKER_STALE_AFTER_MS = 60_000
 
@@ -46,9 +47,28 @@ export const judgmentsJobsCronState = {
   cleanupStaleRunId: null as string | null,
   cleanupStaleStartedAtMs: null as number | null,
   isCleaningUpStaleJudgments: false,
+  addToQueueBlockedByImportAtMs: null as number | null,
   importingJudgmentsRunId: null as string | null,
   importingJudgmentsStartedAtMs: null as number | null,
   isImportingJudgments: false,
+}
+
+// Both crons tick every second and add-to-queue skips while an import runs, so back-to-back
+// imports starved the ready-queue top-up for minutes and the LLM went idle. An import tick
+// yields to a top-up that was skipped for an import; the bound keeps imports going if the
+// top-up never gets to run.
+export const markAddToQueueBlockedByImport = (nowMs = Date.now()): void => {
+  judgmentsJobsCronState.addToQueueBlockedByImportAtMs ??= nowMs
+}
+
+export const clearAddToQueueBlockedByImport = (): void => {
+  judgmentsJobsCronState.addToQueueBlockedByImportAtMs = null
+}
+
+export const shouldImportYieldToAddToQueue = (nowMs = Date.now()): boolean => {
+  const blockedAtMs = judgmentsJobsCronState.addToQueueBlockedByImportAtMs
+
+  return blockedAtMs !== null && nowMs - blockedAtMs < JUDGMENTS_IMPORT_YIELD_TO_ADD_TO_QUEUE_MAX_MS
 }
 
 export const beginJudgmentsImportCronRun = (nowMs = Date.now()): string => {

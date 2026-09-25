@@ -3,13 +3,17 @@ import {expect, test} from 'bun:test'
 import {
   beginJudgmentsCleanupStaleCronRun,
   beginJudgmentsImportCronRun,
+  clearAddToQueueBlockedByImport,
   finishJudgmentsCleanupStaleCronRun,
   finishJudgmentsImportCronRun,
   getJudgmentsCleanupStaleCronActivity,
   getJudgmentsImportCronActivity,
   JUDGMENTS_CLEANUP_STALE_MARKER_STALE_AFTER_MS,
   JUDGMENTS_IMPORT_STALE_AFTER_MS,
+  JUDGMENTS_IMPORT_YIELD_TO_ADD_TO_QUEUE_MAX_MS,
+  markAddToQueueBlockedByImport,
   markJudgmentsCleanupStaleCronPartial,
+  shouldImportYieldToAddToQueue,
   updateJudgmentsCleanupStaleCronStep,
 } from './judgmentsJobsCronState.ts'
 
@@ -48,6 +52,19 @@ test('judgments import cron latch is stale-aware and run-token guarded', () => {
     shouldBlockOtherJudgmentWork: false,
     stale: false,
   })
+})
+
+test('an import yields to a ready-queue top-up that it blocked, within a bound', () => {
+  clearAddToQueueBlockedByImport()
+  expect(shouldImportYieldToAddToQueue(5_000)).toBe(false)
+
+  markAddToQueueBlockedByImport(5_000)
+  markAddToQueueBlockedByImport(7_000)
+  expect(shouldImportYieldToAddToQueue(5_000 + JUDGMENTS_IMPORT_YIELD_TO_ADD_TO_QUEUE_MAX_MS - 1)).toBe(true)
+  expect(shouldImportYieldToAddToQueue(5_000 + JUDGMENTS_IMPORT_YIELD_TO_ADD_TO_QUEUE_MAX_MS)).toBe(false)
+
+  clearAddToQueueBlockedByImport()
+  expect(shouldImportYieldToAddToQueue(5_001)).toBe(false)
 })
 
 test('cleanup-stale cron activity tracks current step and over-budget state without blocking other work', () => {

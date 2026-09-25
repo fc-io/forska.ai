@@ -15,6 +15,7 @@ import {
   finishJudgmentsImportCronRun,
   getJudgmentsImportCronActivity,
   JUDGMENTS_IMPORT_STALE_AFTER_MS,
+  shouldImportYieldToAddToQueue,
 } from './judgmentsJobsCronState.ts'
 
 const IMPORT_JUDGMENTS_INTERVAL = '*/1 * * * * *'
@@ -57,6 +58,11 @@ export const importJudgmentsCron = async (): Promise<void> => {
   }
 
   if (hasActiveDuckdbExclusiveWork() || hasActiveProjectTransferBackgroundActivity()) {
+    recordCronRuntimeTick(cronName, 'skipped')
+    return
+  }
+
+  if (shouldImportYieldToAddToQueue()) {
     recordCronRuntimeTick(cronName, 'skipped')
     return
   }
