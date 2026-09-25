@@ -887,6 +887,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
                 {
                   articleId: promptToProcess.articleId,
                   component: processPromptComponent,
+                  errorDetail: error.failure.errorDetail ?? null,
                   event: 'connectionRetry',
                   failureKind: error.failure.kind,
                   jobId: promptToProcess.jobId,

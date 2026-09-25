@@ -45,6 +45,18 @@ test('classifies missing required OpenAI-compatible endpoints as endpoint unavai
   expect(failure.message).toContain('Forska paused dispatch for this connection until the provider health check passes')
 })
 
+test('keeps the transport error behind a network failure', () => {
+  const cause = Object.assign(new Error('socket hang up'), {code: 'ECONNRESET'})
+  const error = Object.assign(new TypeError('fetch failed', {cause}), {code: 'UND_ERR_SOCKET'})
+  const failure = classifyConnectionFailure({context, error})
+
+  expect(failure.kind).toBe('network_unavailable')
+  expect(failure.errorDetail).toBe(
+    'TypeError: fetch failed code=UND_ERR_SOCKET cause=Error: socket hang up causeCode=ECONNRESET',
+  )
+  expect(classifyConnectionFailure({context, error: {status: 503}}).errorDetail).toBeNull()
+})
+
 test('formats operator-facing outage messages with next probe timing when known', () => {
   const failure = classifyConnectionFailure({context, error: {status: 503}})
   const cooldownExpiresAt = new Date('2026-04-10T12:34:56.000Z')
