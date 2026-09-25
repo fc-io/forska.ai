@@ -47,6 +47,8 @@ export type ReviewServingProjectorRunContext = {
 export type ReviewServingProjectorRunResult = {
   candidateSnapshots?: readonly PromoteReviewServingProjectorSnapshotInput[]
   processedCount?: number
+  // Claims the runner deferred and released back to pending: reported as released, not as projected.
+  releasedClaimIds?: readonly string[]
 }
 
 export type ReviewServingProjectorRunner = (
@@ -997,16 +999,18 @@ export const wakeReviewServingProjectorService = async (
           return [...promotions, promotion]
         }, Promise.resolve([]))
         const processedCount = result.processedCount ?? claims.length
+        const runnerReleasedClaimIds = result.releasedClaimIds ?? []
 
         return {
           ...state,
           processedRows: state.processedRows + claims.length,
           promotions: [...state.promotions, ...promotions],
+          releasedClaimIds: [...state.releasedClaimIds, ...runnerReleasedClaimIds],
           runs: [
             ...state.runs,
             {
               attempts: result.attempts,
-              claimCount: claims.length,
+              claimCount: claims.length - runnerReleasedClaimIds.length,
               component,
               processedCount,
               status: 'completed' as const,

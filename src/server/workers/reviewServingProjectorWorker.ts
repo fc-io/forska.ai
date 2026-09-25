@@ -568,12 +568,16 @@ const foregroundActivationRebuildDrainComponents = new Set<ReviewServingProjecti
   dispatchReadyReviewServingComponents,
 )
 const foregroundActivationDirtyWorkComponents = dispatchReadyReviewServingComponents
-// Judgment imports also dirty posting/summary, but their article claims still wait for a requested-only bootstrap.
+// Judgment imports also dirty summary, but its article claims still wait for a requested-only bootstrap.
 const jobDrivenDirtyWorkComponents = [
   'llmStatus',
   'queue',
   'payload',
+  'posting',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
+// Posting waits for the serving rows llmStatus, queue and payload write, so extra batches go to those components and
+// posting keeps to its first-round batch.
+const jobDrivenExtraBatchComponents = new Set<ReviewServingProjectionComponent>(['llmStatus', 'queue', 'payload'])
 const jobDrivenDirtyWorkMaxBatchesPerTurn = 4
 const jobDrivenDirtyWorkBacklogWakeReserveShare = 0.2
 // Keep status chunks out of this set: they are small SQL-native updates, and per-chunk forced GC is unnecessary.
@@ -4840,6 +4844,19 @@ const runSnapshotProjectors = async <T>(
     : [...resultsWithoutAcknowledgement, await runSnapshot(finalSnapshot, true)]
 }
 
+const getDeferredClaimIds = (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  remainingClaims: readonly ReviewServingDirtyWorkClaim[],
+) => {
+  return claims
+    .filter((claim) => {
+      return !remainingClaims.includes(claim)
+    })
+    .map((claim) => {
+      return claim.dirtyWorkId
+    })
+}
+
 const getNonAcknowledgingSnapshotComponentStates = (
   snapshots: readonly ReviewServingSnapshotContext[],
   component: ReviewServingProjectionComponent,
@@ -5007,15 +5024,16 @@ export const getDefaultReviewServingProjectorRunners = (
         {claims: context.claims, projectId, projectionIdentity: manifest.projectionIdentity},
         database,
       )
+      const releasedClaimIds = getDeferredClaimIds(context.claims, claims)
 
       if (claims.length === 0) {
-        return {processedCount: 0}
+        return {processedCount: 0, releasedClaimIds}
       }
 
       if (payloadSnapshots.length === 0) {
         await completeReviewServingDirtyWorkClaims(claims, database)
 
-        return {processedCount: 0}
+        return {processedCount: 0, releasedClaimIds}
       }
 
       const results = await runSnapshotProjectors(payloadSnapshots, async (snapshot, acknowledgeClaims) => {
@@ -5052,6 +5070,7 @@ export const getDefaultReviewServingProjectorRunners = (
         processedCount: results.reduce((total, count) => {
           return total + count
         }, 0),
+        releasedClaimIds,
       }
     },
     posting: async (context) => {
@@ -5060,9 +5079,10 @@ export const getDefaultReviewServingProjectorRunners = (
         {claims: context.claims, projectId, projectionIdentity: manifest.projectionIdentity},
         database,
       )
+      const releasedClaimIds = getDeferredClaimIds(context.claims, claims)
 
       if (claims.length === 0) {
-        return {processedCount: 0}
+        return {processedCount: 0, releasedClaimIds}
       }
 
       const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
@@ -5089,6 +5109,7 @@ export const getDefaultReviewServingProjectorRunners = (
         processedCount: results.reduce((total, result) => {
           return total + result.servingRowCount
         }, 0),
+        releasedClaimIds,
       }
     },
     projectScope: async (context) => {
@@ -9999,7 +10020,9 @@ const getJobDrivenDirtyWorkTurn = (input: {
   projector: WakeReviewServingProjectorServiceResult
 }): JobDrivenDirtyWorkTurn | null => {
   const component = input.componentOrder.find((candidate) => {
-    return hasFullJobDrivenBatch(input.projector, candidate, input.batchSize)
+    return (
+      jobDrivenExtraBatchComponents.has(candidate) && hasFullJobDrivenBatch(input.projector, candidate, input.batchSize)
+    )
   })
   const projectedComponentCount = new Set(
     input.projector.runs.map((run) => {
