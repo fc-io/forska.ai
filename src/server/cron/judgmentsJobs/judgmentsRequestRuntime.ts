@@ -185,9 +185,37 @@ const trimProviderRequestState = (providerKey: string): void => {
   }
 }
 
+// Prompts carry the provider cap from the moment they were claimed. After a cap change, prompts
+// claimed before it kept the old cap: raising 200 to 384 left ~200 of them waiting for in-flight
+// to drop below 200, which never happened, and each still held a dispatch slot, so real requests
+// stayed at ~310 until an endpoint pause rejected the waiters. The admission lease store reports
+// the provider's current snapshot on every acquire; that cap applies to every waiting prompt.
+const currentProviderMaxInflightByKey = new Map<string, number | null>()
+
+const getProviderRequestMaxInflight = (providerScope: ProviderRequestScope): number | null => {
+  const providerKey = getProviderRequestKey(providerScope)
+
+  return currentProviderMaxInflightByKey.has(providerKey)
+    ? (currentProviderMaxInflightByKey.get(providerKey) ?? null)
+    : providerScope.providerMaxInflightRequests
+}
+
+const recordCurrentProviderSnapshot = (snapshot: ProviderBucketSnapshot): void => {
+  const maxInflight = snapshot.providerUsesFamilyDefault ? null : snapshot.maxInflightRequests
+  const changed =
+    !currentProviderMaxInflightByKey.has(snapshot.providerKey)
+    || currentProviderMaxInflightByKey.get(snapshot.providerKey) !== maxInflight
+
+  currentProviderMaxInflightByKey.set(snapshot.providerKey, maxInflight)
+
+  if (changed) {
+    drainProviderScopedWaiters()
+  }
+}
+
 const acquireProviderRequestRelease = (providerScope: ProviderRequestScope): (() => void) | null => {
   const providerKey = getProviderRequestKey(providerScope)
-  const maxInflight = providerScope.providerMaxInflightRequests
+  const maxInflight = getProviderRequestMaxInflight(providerScope)
 
   if (maxInflight == null) {
     return () => {
@@ -587,6 +615,8 @@ const acquireProviderRequestAdmissionLease = async ({
       snapshot,
     })
   })
+
+  recordCurrentProviderSnapshot(result.currentSnapshot)
 
   if (result.acquired) {
     return {holderToken, leaseIdentity, providerKey: snapshot.providerKey}
@@ -1069,7 +1099,7 @@ const hasHealthyWorker = ({
 
 const getWorkerMaxActiveRequests = (providerScope: ProviderRequestScope): number => {
   const runtimeLimit = getNonCodexCapacity().perWorkerMaxInflightRequests
-  const providerLimit = Math.max(1, providerScope.providerMaxInflightRequests ?? 1)
+  const providerLimit = Math.max(1, getProviderRequestMaxInflight(providerScope) ?? 1)
 
   return providerScope.providerUsesFamilyDefault ? runtimeLimit : Math.max(runtimeLimit, providerLimit)
 }
@@ -2012,6 +2042,7 @@ export const resetJudgmentRequestRuntimeForTests = (): void => {
   })
   jobRequestStates.clear()
   providerRequestStates.clear()
+  currentProviderMaxInflightByKey.clear()
   fallbackInFlightByProviderKey.clear()
   providerAdmissionAcquireAttempts.splice(0, providerAdmissionAcquireAttempts.length)
   localEndpointProbePermits.clear()
