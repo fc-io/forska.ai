@@ -36,6 +36,7 @@ import {
 } from './reviewServingProjectorWriter.ts'
 import type {ReviewServingRebuildRequest} from './reviewServingRebuildRequestRepository.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
+import {getReviewServingSummaryLedgerSnapshotPredicateSql} from './reviewServingSummaryLedger.ts'
 import {requestReviewServingV4RebuildEffect} from './reviewServingV4RebuildRequestService.ts'
 
 export type ReviewServingProjectorRunContext = {
@@ -128,7 +129,11 @@ const optionalDirtyWorkBootstrapComponents = new Set<ReviewServingProjectionComp
   'search',
 ])
 const articleRoutedDirtyWorkComponents = new Set<ReviewServingProjectionComponent>(['payload', 'posting', 'summary'])
-const incrementalArticleDirtyWorkComponents = new Set<ReviewServingProjectionComponent>(['payload', 'posting'])
+const incrementalArticleDirtyWorkComponents = new Set<ReviewServingProjectionComponent>([
+  'payload',
+  'posting',
+  'summary',
+])
 
 type ArticleDirtyWorkRoute = 'bootstrap' | 'incremental'
 
@@ -515,6 +520,16 @@ const getClaimProjectionIdentities = (claims: readonly ReviewServingDirtyWorkCla
   ]
 }
 
+// Summary patches need the snapshot's bucket ledger; snapshots published before it existed keep the bootstrap route.
+const getIncrementalSnapshotPredicateSql = (
+  component: ReviewServingProjectionComponent,
+  projectionIdentity: string,
+) => {
+  return component === 'summary'
+    ? getReviewServingSummaryLedgerSnapshotPredicateSql({projectionIdentity, snapshotAlias: 'snapshot'})
+    : undefined
+}
+
 const hasIncrementalArticleDirtyWorkSnapshot = async (input: {
   claims: readonly ReviewServingDirtyWorkClaim[]
   component: ReviewServingProjectionComponent
@@ -532,7 +547,13 @@ const hasIncrementalArticleDirtyWorkSnapshot = async (input: {
     && otherProjectIds.length === 0
     && otherProjectionIdentities.length === 0
     && (await hasReviewServingSnapshotComponentAtBaseGeneration(
-      {projectId, projectionComponent: input.component, projectionIdentity, reviewConfigHash},
+      {
+        projectId,
+        projectionComponent: input.component,
+        projectionIdentity,
+        reviewConfigHash,
+        snapshotPredicateSql: getIncrementalSnapshotPredicateSql(input.component, projectionIdentity),
+      },
       input.database,
     ))
   )

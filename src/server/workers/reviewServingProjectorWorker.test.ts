@@ -483,10 +483,12 @@ test('worker runs fresh job-driven llmStatus dirty work before rebuild backlog c
   expect(pendingLlmStatusStatements[0]).toContain('project.delete_pending_at IS NULL')
 })
 
-type JobDrivenTestComponent = 'llmStatus' | 'payload' | 'posting' | 'queue'
+type JobDrivenTestComponent = 'llmStatus' | 'payload' | 'posting' | 'queue' | 'summary'
+
+const jobDrivenTestComponents = new Set<string>(['llmStatus', 'payload', 'posting', 'queue', 'summary'])
 
 const isJobDrivenTestComponent = (component: string): component is JobDrivenTestComponent => {
-  return component === 'llmStatus' || component === 'payload' || component === 'posting' || component === 'queue'
+  return jobDrivenTestComponents.has(component)
 }
 
 const getJobDrivenDirtyWorkClaim = (
@@ -643,6 +645,12 @@ const runJobDrivenDirtyWorkCycle = async (input: {
 
         return {processedCount: 1}
       },
+      summary: async () => {
+        projectedComponents.push('summary')
+        nowMs += 300
+
+        return {processedCount: 1}
+      },
     },
   }
   harness.dependencies.wakeProjectors = async (wakeInput, serviceDependencies) => {
@@ -760,6 +768,31 @@ test('a full posting batch keeps to its first-round batch and the extra batches 
   ])
   expect(getReviewServingProjectorWorkerCycleLogAttrs(cycle.result)).toMatchObject({
     projectorRunClaimCounts: {llmStatus: 256, payload: 64, posting: 64, queue: 64},
+  })
+})
+
+test('a full summary batch takes its first-round turn in the pre-chunk wake and never an extra batch', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: {...jobDrivenBacklog, posting: 1_000, summary: 1_000},
+    componentRotationOffset: 4,
+    llmStatusBatchMs: 1_000,
+    maxWakeMs: 8_000,
+    payloadBatchMs: 500,
+    pendingComponents: ['summary', 'queue', 'payload', 'llmStatus', 'posting'],
+  })
+
+  expect(cycle.harness.wakeInputs[0]).toMatchObject({
+    componentOrder: ['summary', 'llmStatus', 'queue', 'payload', 'posting'],
+  })
+  expect(
+    cycle.claimedComponents.filter((component) => {
+      return component === 'summary'
+    }),
+  ).toEqual(['summary'])
+  expect(cycle.claimedComponents.slice(0, 5)).toEqual(['summary', 'llmStatus', 'queue', 'payload', 'posting'])
+  expect(cycle.claimedComponents.slice(5)).toEqual(['llmStatus', 'llmStatus', 'llmStatus'])
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(cycle.result)).toMatchObject({
+    projectorRunClaimCounts: {llmStatus: 256, payload: 64, posting: 64, queue: 64, summary: 64},
   })
 })
 
@@ -9195,7 +9228,7 @@ test('worker adopts requestless bootstrap chunks into one rebuild request before
   expect(joined).toContain('"projectScope"')
   expect(joined).toContain('"selectedImport"')
   expect(joined).toContain(`request_id = '${requestId}'`)
-  expect(joined).not.toContain("projection_component = 'summary'")
+  expect(joined).not.toMatch(/(?<!state\.)projection_component = 'summary'/u)
   expect(joined).not.toContain("status NOT IN ('completed', 'blocked_over_budget', 'quarantined')")
   expect(setIntervalMock).toHaveBeenCalledTimes(1)
   expect(clearIntervalMock).toHaveBeenCalledWith(intervalToken)

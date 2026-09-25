@@ -52,6 +52,7 @@ import {
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 import {getReviewServingSelectedImportSnapshotId} from './reviewServingSelectedImportProjector.ts'
 import {composeReviewServingCandidateSnapshotManifest} from './reviewServingSnapshotPromotionService.ts'
+import {getCloneReviewServingSummaryLedgerStatements} from './reviewServingSummaryLedger.ts'
 import {getReviewServingRebuildChunkBuiltPredicateSql} from './reviewServingSupersededRebuildChunk.ts'
 
 export const defaultReviewServingV4RebuildComponents = [
@@ -1097,6 +1098,17 @@ const reviewServingV4BootstrapCloneTablesByComponent = {
 
 type ReviewServingV4BootstrapCloneComponent = keyof typeof reviewServingV4BootstrapCloneTablesByComponent
 
+// Cloned summary rows equal the source's published bucket ledger, so the ledger is cloned with them and the new snapshot
+// can take summary patches.
+const getReviewServingV4BootstrapCloneLedgerStatements = (input: {
+  component: ReviewServingProjectionComponent
+  projectId: string
+  sourceSnapshotId: string
+  targetSnapshotId: string
+}) => {
+  return input.component === 'summary' ? getCloneReviewServingSummaryLedgerStatements(input) : []
+}
+
 const isReviewServingV4BootstrapCloneComponent = (
   component: ReviewServingProjectionComponent,
 ): component is ReviewServingV4BootstrapCloneComponent => {
@@ -1130,6 +1142,10 @@ const cloneReviewServingV4BootstrapComponentRows = async (
       WHERE project_id = ${getSqlLiteral(input.projectId)}
         AND snapshot_id = ${getSqlLiteral(input.sourceSnapshotId)}
     `)
+  }, Promise.resolve())
+  await getReviewServingV4BootstrapCloneLedgerStatements(input).reduce<Promise<void>>(async (previous, statement) => {
+    await previous
+    await database.run(statement)
   }, Promise.resolve())
 }
 

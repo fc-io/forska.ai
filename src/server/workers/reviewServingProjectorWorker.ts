@@ -43,6 +43,7 @@ import {
   type CleanupReviewServingDirtyWorkRetentionResult,
   completeReviewServingDirtyWorkClaims,
   getReviewServingDirtyWorkActiveProjectPredicate,
+  getReviewServingDirtyWorkClaimIdsAwaitingUpstream,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
 } from '../reviewServing/reviewServingDirtyWorkService.ts'
@@ -125,6 +126,11 @@ import {
 } from '../reviewServing/reviewServingSelectedImportProjector.ts'
 import {composeReviewServingCandidateSnapshotManifest} from '../reviewServing/reviewServingSnapshotPromotionService.ts'
 import {
+  planReviewServingSummaryLedgerPatches,
+  type ReviewServingSummaryLedgerSnapshotPatch,
+} from '../reviewServing/reviewServingSummaryLedger.ts'
+import {
+  patchReviewServingSummaryLedgerBuckets,
   projectReviewServingSummaries,
   reduceReviewServingSummaryRebuildPartialsForRequestSnapshots,
 } from '../reviewServing/reviewServingSummaryProjector.ts'
@@ -569,15 +575,15 @@ const foregroundActivationRebuildDrainComponents = new Set<ReviewServingProjecti
   dispatchReadyReviewServingComponents,
 )
 const foregroundActivationDirtyWorkComponents = dispatchReadyReviewServingComponents
-// Judgment imports also dirty summary, but its article claims still wait for a requested-only bootstrap.
 const jobDrivenDirtyWorkComponents = [
   'llmStatus',
   'queue',
   'payload',
   'posting',
+  'summary',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
-// Posting waits for the serving rows llmStatus, queue and payload write, so extra batches go to those components and
-// posting keeps to its first-round batch.
+// Posting and summary wait for the serving rows llmStatus, queue and payload write, so extra batches go to those
+// components and posting and summary keep to their first-round batch.
 const jobDrivenExtraBatchComponents = new Set<ReviewServingProjectionComponent>(['llmStatus', 'queue', 'payload'])
 const jobDrivenDirtyWorkMaxBatchesPerTurn = 4
 const jobDrivenDirtyWorkBacklogWakeReserveShare = 0.2
@@ -4872,6 +4878,178 @@ const getNonAcknowledgingSnapshotComponentStates = (
   })
 }
 
+// Summary reads the serving rows these components write (posting owns the duplicate and conflict flags).
+const summaryUpstreamComponents = [
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'payload',
+  'selectedImport',
+  'posting',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+const getSummaryLedgerPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return Math.max(
+    0,
+    ...claims.map((claim) => {
+      return claim.latestSourceHighWaterMark
+    }),
+  )
+}
+
+const getSummaryLedgerClaimKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Set(
+      claims.map((claim) => {
+        return claim.dirtyKind
+      }),
+    ),
+  ].join(',')
+}
+
+const acknowledgeSummaryLedgerClaims = async (
+  input: {
+    claims: readonly ReviewServingDirtyWorkClaim[]
+    manifest: Awaited<ReturnType<typeof getDefaultClaimManifestInput>>['manifest']
+    projectId: string
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const patchWatermark = getSummaryLedgerPatchWatermark(input.claims)
+  const claimKinds = getSummaryLedgerClaimKinds(input.claims)
+
+  await writeReviewServingProjectorComponent(
+    {
+      acknowledgements: input.claims,
+      component: 'summary',
+      projectionManifests: [
+        {
+          baseGeneration: input.manifest.baseGeneration,
+          definitionVersion: input.manifest.definitionVersion,
+          inputDigest: claimKinds,
+          inputWatermark: patchWatermark,
+          inputWatermarks: getReviewServingSourcePartitionWatermarks(input.claims),
+          invalidationReason: claimKinds,
+          patchRangeEnd: patchWatermark,
+          patchRangeStart: Math.min(
+            ...input.claims.map((claim) => {
+              return claim.firstSourceHighWaterMark
+            }),
+          ),
+          patchWatermark,
+          projectId: input.projectId,
+          projectionComponent: 'summary',
+          projectionIdentity: input.manifest.projectionIdentity,
+          reviewConfigHash: input.manifest.reviewConfigHash,
+          status: 'candidate',
+        },
+      ],
+      watermark: {
+        projectId: input.projectId,
+        projectionComponent: 'summary',
+        projectorName: 'summary-projector',
+        sourceHighWaterMark: patchWatermark,
+        sourcePartition: input.claims[0]?.sourcePartition ?? 'review-change',
+      },
+    },
+    database,
+  )
+}
+
+const patchSummaryLedgerSnapshot = async (
+  input: {
+    manifest: Awaited<ReturnType<typeof getDefaultClaimManifestInput>>['manifest']
+    patch: ReviewServingSummaryLedgerSnapshotPatch
+    projectId: string
+    snapshot: ReviewServingSnapshotContext
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const result = await patchReviewServingSummaryLedgerBuckets(
+    {
+      ...input.patch,
+      listModeKeys: reviewServingListModes,
+      projectScopeIdentity: requireSnapshotComponentIdentity(input.snapshot, 'projectScope'),
+      selectedImportSnapshotId: requireSelectedImportSnapshotId(input.snapshot),
+    },
+    database,
+  )
+  const optionRowCount =
+    result.publishedBucketCount === 0
+      ? 0
+      : await refreshSummaryFilterOptionsForSnapshot(
+          {
+            baseGeneration: input.manifest.baseGeneration,
+            definitionVersion: input.manifest.definitionVersion,
+            deleteExisting: true,
+            projectId: input.projectId,
+            projectionIdentity: input.manifest.projectionIdentity,
+            snapshot: input.snapshot,
+          },
+          database,
+        )
+
+  return result.partialRowCount + optionRowCount
+}
+
+// Summary article claims patch the per-bucket ledger of every snapshot that has one (published, or being built by an
+// in-flight rebuild). Claims whose upstream serving rows are not written yet, or whose bucket's chunk is running, are
+// released; the rest are acknowledged once every snapshot patch has committed.
+const runSummaryLedgerPatches = async (
+  context: Parameters<ReviewServingProjectorRunner>[0],
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
+  const awaitingUpstreamClaimIds = await getReviewServingDirtyWorkClaimIdsAwaitingUpstream(
+    {claims: context.claims, projectId, upstreamComponents: summaryUpstreamComponents},
+    database,
+  )
+  const plan = await planReviewServingSummaryLedgerPatches(
+    {
+      claims: context.claims.filter((claim) => {
+        return !awaitingUpstreamClaimIds.has(claim.dirtyWorkId)
+      }),
+      projectId,
+      projectionIdentity: manifest.projectionIdentity,
+      snapshots: snapshots.map((snapshot) => {
+        return {reviewConfigHash: requireReviewConfigHash(snapshot), snapshotId: snapshot.snapshotId}
+      }),
+    },
+    database,
+  )
+  const deferredClaimIds = new Set([...awaitingUpstreamClaimIds, ...plan.deferredClaimIds])
+  const claims = context.claims.filter((claim) => {
+    return !deferredClaimIds.has(claim.dirtyWorkId)
+  })
+  const releasedClaimIds = getDeferredClaimIds(context.claims, claims)
+
+  await releaseReviewServingDirtyWorkClaims(releasedClaimIds, database)
+
+  if (claims.length === 0) {
+    return {processedCount: 0, releasedClaimIds}
+  }
+
+  const rowCounts = await plan.getSnapshotPatches(claims).reduce<Promise<number[]>>(async (previous, patch) => {
+    const counts = await previous
+    const snapshot = snapshots.find((candidate) => {
+      return candidate.snapshotId === patch.snapshotId
+    })
+
+    return snapshot === undefined
+      ? counts
+      : [...counts, await patchSummaryLedgerSnapshot({manifest, patch, projectId, snapshot}, database)]
+  }, Promise.resolve([]))
+
+  await acknowledgeSummaryLedgerClaims({claims, manifest, projectId}, database)
+
+  return {
+    processedCount: rowCounts.reduce((total, count) => {
+      return total + count
+    }, 0),
+    releasedClaimIds,
+  }
+}
+
 export const getDefaultReviewServingProjectorRunners = (
   database: ReviewServingProjectorWorkerDatabase,
 ): ReviewServingProjectorServiceDependencies['runners'] => {
@@ -5247,93 +5425,7 @@ export const getDefaultReviewServingProjectorRunners = (
       }
     },
     summary: async (context) => {
-      const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
-      const results = await runSnapshotProjectors(snapshots, async (snapshot, acknowledgeClaims) => {
-        const result = await projectReviewServingSummaries(
-          {
-            acknowledgeClaims,
-            baseGeneration: manifest.baseGeneration,
-            claims: context.claims,
-            listModeKeys: reviewServingListModes,
-            projectId,
-            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-            projectionIdentity: manifest.projectionIdentity,
-            reviewConfigHash: requireReviewConfigHash(snapshot),
-            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-            snapshotId: snapshot.snapshotId,
-          },
-          database,
-        )
-        const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
-        const displayIdentity = requireSnapshotComponentIdentity(snapshot, 'display')
-        const payloadIdentity = requireSnapshotComponentIdentity(snapshot, 'payload')
-        const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
-        const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
-        const reviewFilterOptionsResult = await projectReviewServingFilterOptions(
-          {
-            acknowledgeClaims: false,
-            baseGeneration: manifest.baseGeneration,
-            claims: context.claims,
-            definitionVersion: manifest.definitionVersion,
-            deleteExisting: false,
-            displayIdentity,
-            filterOptionIdentity: getReviewServingFilterOptionIdentity({
-              filterKeys: defaultReviewFilterOptionKeys,
-              listModeKeys: reviewServingListModes,
-              optionMode: 'review',
-              searchIdentity,
-            }),
-            listModeKeys: reviewServingListModes,
-            optionMode: 'review',
-            payloadIdentity,
-            projectId,
-            projectScopeIdentity,
-            projectionIdentity: manifest.projectionIdentity,
-            reviewConfigHash: requireReviewConfigHash(snapshot),
-            searchIdentity,
-            selectedImportSnapshotId,
-            snapshotId: snapshot.snapshotId,
-          },
-          database,
-        )
-        const humanFilterOptionsResult = await projectReviewServingFilterOptions(
-          {
-            acknowledgeClaims: false,
-            baseGeneration: manifest.baseGeneration,
-            claims: context.claims,
-            definitionVersion: manifest.definitionVersion,
-            deleteExisting: false,
-            displayIdentity,
-            filterOptionIdentity: getReviewServingFilterOptionIdentity({
-              filterKeys: defaultHumanFilterOptionKeys,
-              listModeKeys: defaultReviewServingHumanListModeKeys,
-              optionMode: 'human',
-              searchIdentity,
-            }),
-            listModeKeys: defaultReviewServingHumanListModeKeys,
-            optionMode: 'human',
-            payloadIdentity,
-            projectId,
-            projectScopeIdentity,
-            projectionIdentity: manifest.projectionIdentity,
-            reviewConfigHash: requireReviewConfigHash(snapshot),
-            searchIdentity,
-            selectedImportSnapshotId,
-            snapshotId: snapshot.snapshotId,
-          },
-          database,
-        )
-
-        return (
-          result.summaryRowCount + reviewFilterOptionsResult.optionRowCount + humanFilterOptionsResult.optionRowCount
-        )
-      })
-
-      return {
-        processedCount: results.reduce((total, count) => {
-          return total + count
-        }, 0),
-      }
+      return runSummaryLedgerPatches(context, database)
     },
   }
 }
@@ -6068,6 +6160,67 @@ const getRebuildRequestSummaryFilterOptionProjections = async (
   `)
 }
 
+const refreshSummaryFilterOptionsForSnapshot = async (
+  input: {
+    baseGeneration: number
+    definitionVersion: string
+    deleteExisting?: boolean
+    projectId: string
+    projectionIdentity: string
+    snapshot: ReviewServingSnapshotContext
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const {snapshot} = input
+  const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
+  const optionInput = {
+    acknowledgeClaims: false,
+    baseGeneration: input.baseGeneration,
+    claims: [],
+    definitionVersion: input.definitionVersion,
+    deleteExisting: input.deleteExisting,
+    displayIdentity: requireSnapshotComponentIdentity(snapshot, 'display'),
+    payloadIdentity: requireSnapshotComponentIdentity(snapshot, 'payload'),
+    projectId: input.projectId,
+    projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+    projectionIdentity: input.projectionIdentity,
+    reviewConfigHash: requireReviewConfigHash(snapshot),
+    searchIdentity,
+    selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+    snapshotId: snapshot.snapshotId,
+  }
+  const reviewOptions = await projectReviewServingFilterOptions(
+    {
+      ...optionInput,
+      filterOptionIdentity: getReviewServingFilterOptionIdentity({
+        filterKeys: defaultReviewFilterOptionKeys,
+        listModeKeys: reviewServingListModes,
+        optionMode: 'review',
+        searchIdentity,
+      }),
+      listModeKeys: reviewServingListModes,
+      optionMode: 'review',
+    },
+    database,
+  )
+  const humanOptions = await projectReviewServingFilterOptions(
+    {
+      ...optionInput,
+      filterOptionIdentity: getReviewServingFilterOptionIdentity({
+        filterKeys: defaultHumanFilterOptionKeys,
+        listModeKeys: defaultReviewServingHumanListModeKeys,
+        optionMode: 'human',
+        searchIdentity,
+      }),
+      listModeKeys: defaultReviewServingHumanListModeKeys,
+      optionMode: 'human',
+    },
+    database,
+  )
+
+  return reviewOptions.optionRowCount + humanOptions.optionRowCount
+}
+
 const refreshSummaryFilterOptionsForProjections = async (
   summaryProjections: readonly SummaryFilterOptionProjectionRow[],
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -6105,63 +6258,14 @@ const refreshSummaryFilterOptionsForProjections = async (
 
     await matchingSnapshots.reduce<Promise<void>>(async (previousSnapshot, snapshot) => {
       await previousSnapshot
-      const searchIdentity = getSnapshotComponentState(snapshot, 'search')?.projectionIdentity ?? ''
-      const displayIdentity = requireSnapshotComponentIdentity(snapshot, 'display')
-      const payloadIdentity = requireSnapshotComponentIdentity(snapshot, 'payload')
-      const projectScopeIdentity = requireSnapshotComponentIdentity(snapshot, 'projectScope')
-      const selectedImportSnapshotId = requireSelectedImportSnapshotId(snapshot)
-
-      await projectReviewServingFilterOptions(
+      await refreshSummaryFilterOptionsForSnapshot(
         {
-          acknowledgeClaims: false,
           baseGeneration: Number(row.outputBaseGeneration),
-          claims: [],
           definitionVersion: manifest.definitionVersion,
           deleteExisting: options.deleteExisting,
-          displayIdentity,
-          filterOptionIdentity: getReviewServingFilterOptionIdentity({
-            filterKeys: defaultReviewFilterOptionKeys,
-            listModeKeys: reviewServingListModes,
-            optionMode: 'review',
-            searchIdentity,
-          }),
-          listModeKeys: reviewServingListModes,
-          optionMode: 'review',
-          payloadIdentity,
           projectId: row.projectId,
-          projectScopeIdentity,
           projectionIdentity: row.projectionIdentity,
-          reviewConfigHash: requireReviewConfigHash(snapshot),
-          searchIdentity,
-          selectedImportSnapshotId,
-          snapshotId: snapshot.snapshotId,
-        },
-        database,
-      )
-      await projectReviewServingFilterOptions(
-        {
-          acknowledgeClaims: false,
-          baseGeneration: Number(row.outputBaseGeneration),
-          claims: [],
-          definitionVersion: manifest.definitionVersion,
-          deleteExisting: options.deleteExisting,
-          displayIdentity,
-          filterOptionIdentity: getReviewServingFilterOptionIdentity({
-            filterKeys: defaultHumanFilterOptionKeys,
-            listModeKeys: defaultReviewServingHumanListModeKeys,
-            optionMode: 'human',
-            searchIdentity,
-          }),
-          listModeKeys: defaultReviewServingHumanListModeKeys,
-          optionMode: 'human',
-          payloadIdentity,
-          projectId: row.projectId,
-          projectScopeIdentity,
-          projectionIdentity: row.projectionIdentity,
-          reviewConfigHash: requireReviewConfigHash(snapshot),
-          searchIdentity,
-          selectedImportSnapshotId,
-          snapshotId: snapshot.snapshotId,
+          snapshot,
         },
         database,
       )
