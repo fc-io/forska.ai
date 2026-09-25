@@ -69,6 +69,7 @@ const getClaim = (input: {
 const getAdmittedRebuildRequest = (input: {projectId?: string; sourceWatermark?: number} = {}) => {
   return {
     projectId: input.projectId ?? 'project-1',
+    requestId: 'rebuild-1',
     sourceWatermarksJson: {dirtySourceWatermarks: {reviewChange: input.sourceWatermark ?? 1}},
     status: 'admitted',
   } as never
@@ -523,6 +524,53 @@ for (const component of ['payload', 'posting', 'summary', 'judgmentInputContent'
     expect(completedClaimIds).toEqual([`${component}-article-1`])
     expect(failedClaimIds).toEqual([])
     expect(releasedClaimIds).toEqual([])
+  })
+}
+
+for (const component of ['payload', 'posting', 'summary'] as const) {
+  test(`wake parks article-scoped ${component} dirty work above the rebuild seed instead of releasing it`, async () => {
+    const {blockedClaimIds, completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} =
+      createDependencyHarness({
+        [component]: [
+          getClaim({component, dirtyWorkId: `${component}-covered`, latestSourceHighWaterMark: 1}),
+          getClaim({
+            articleId: 'article-2',
+            component,
+            dirtyWorkId: `${component}-above-seed`,
+            latestSourceHighWaterMark: 5,
+            scopeId: 'project-1:article-2',
+          }),
+        ],
+      })
+
+    dependencies.requestRebuild = () => {
+      return Effect.succeed(getAdmittedRebuildRequest({sourceWatermark: 1}))
+    }
+    dependencies.runners = {
+      [component]: async () => {
+        throw new Error(`${component} runner should not execute without a matching snapshot`)
+      },
+    }
+
+    const result = await wakeReviewServingProjectorService(
+      {batchSize: 2, componentOrder: [component], maxRowsPerWake: 2, maxWakeMs: 1_000, wakeId: 'wake-1'},
+      dependencies,
+    )
+
+    expect(result.status).toBe('partial')
+    expect(result.runs).toEqual([{attempts: 1, claimCount: 1, component, processedCount: 0, status: 'completed'}])
+    expect(result.blockedRebuilds).toEqual([
+      {
+        claimIds: [`${component}-above-seed`],
+        component,
+        diagnostic: 'waiting for review rebuild rebuild-1 to activate',
+        status: 'blocked_by_rebuild',
+      },
+    ])
+    expect(completedClaimIds).toEqual([`${component}-covered`])
+    expect(blockedClaimIds).toEqual([`${component}-above-seed`])
+    expect(releasedClaimIds).toEqual([])
+    expect(failedClaimIds).toEqual([])
   })
 }
 
