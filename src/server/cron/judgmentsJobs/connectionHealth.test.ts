@@ -16,6 +16,7 @@ import {
   getJudgmentEndpointAvailabilityDiagnostics,
   judgmentEndpointProbeStaleThresholdMs,
   resetJudgmentEndpointAvailabilityForTests,
+  setJudgmentEndpointModelsProbeFetchForTests,
 } from './judgmentEndpointAvailability.ts'
 
 const context = {
@@ -29,6 +30,7 @@ const realDateNow = Date.now
 afterEach(() => {
   Date.now = realDateNow
   resetJudgmentEndpointAvailabilityForTests()
+  setJudgmentEndpointModelsProbeFetchForTests(null)
 })
 
 test('classifies missing required OpenAI-compatible endpoints as endpoint unavailable', () => {
@@ -479,4 +481,80 @@ test('expires stale half-open probes into a retryable cooldown and resolves prob
       providerConnectionId: 'connection-a',
     }),
   ).toBe(true)
+})
+
+const sglangEndpoint = {
+  effectiveBaseURL: 'http://127.0.0.1:30001/v1',
+  modelProvider: 'sglang',
+  providerConnectionId: 'connection-sglang',
+} as const
+
+const recordSglangNetworkFailure = () => {
+  recordConnectionFailure({
+    ...sglangEndpoint,
+    failure: classifyConnectionFailure({
+      context: {
+        effectiveBaseURL: sglangEndpoint.effectiveBaseURL,
+        endpointPath: '/v1/chat/completions',
+        providerKind: 'sglang',
+      },
+      error: new Error('socket connection was closed unexpectedly'),
+    }),
+  })
+}
+
+test('isolated network failures on a self-hosted endpoint keep dispatch open until they cluster', () => {
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+  setJudgmentEndpointModelsProbeFetchForTests(async () => {
+    return new Response('{}', {status: 500})
+  })
+
+  recordSglangNetworkFailure()
+  now += 20_000
+  recordSglangNetworkFailure()
+  now += 1_000
+  recordSglangNetworkFailure()
+
+  expect(getJudgmentEndpointAvailability(sglangEndpoint).status).toBe('healthy')
+
+  now += 1_000
+  recordSglangNetworkFailure()
+
+  const gated = getJudgmentEndpointAvailability(sglangEndpoint)
+
+  expect(gated.status).toBe('cooldown')
+  expect(gated.cooldownExpiresAt?.getTime()).toBe(now + 10_000)
+})
+
+test('a self-hosted endpoint recovers from cooldown as soon as its models endpoint answers', async () => {
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+  const probedUrls: string[] = []
+  setJudgmentEndpointModelsProbeFetchForTests(async (url) => {
+    probedUrls.push(url)
+    return new Response('{"data":[]}', {status: 200})
+  })
+
+  recordSglangNetworkFailure()
+  recordSglangNetworkFailure()
+  recordSglangNetworkFailure()
+
+  expect(getJudgmentEndpointAvailability(sglangEndpoint).status).toBe('cooldown')
+
+  now += 10_001
+
+  expect(claimJudgmentEndpointAvailability(sglangEndpoint)).toBe(true)
+  expect(getJudgmentEndpointAvailability(sglangEndpoint).status).toBe('probing')
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0)
+  })
+
+  expect(probedUrls).toEqual(['http://127.0.0.1:30001/v1/models'])
+  expect(getJudgmentEndpointAvailability(sglangEndpoint).status).toBe('healthy')
 })

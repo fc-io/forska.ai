@@ -2,7 +2,14 @@ import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getEndpointAvailabilityKey} from './endpointAvailabilityKey.ts'
 import type {ProviderKeyInput} from './providerKey.ts'
 
-const COOLDOWN_MS = 30_000
+const COOLDOWN_MS = 10_000
+// Self-hosted OpenAI-compatible servers run ~200 concurrent requests, often through a tunnel, and
+// an occasional reset fails one request while the endpoint is fine. For them, gate the whole
+// endpoint only when network failures cluster, and probe the cheap models endpoint to recover.
+const selfHostedOpenAiCompatibleProviders = new Set(['sglang', 'vllm'])
+const networkFailureGateWindowMs = 10_000
+const networkFailureGateThreshold = 3
+const modelsProbeTimeoutMs = 5_000
 export const judgmentEndpointProbeStaleThresholdMs = 120_000
 
 const endpointAvailabilityLogger = createRateLimitedLogger({windowMs: 30_000})
@@ -55,6 +62,20 @@ export type JudgmentEndpointAvailabilityDiagnostics = {
 type JudgmentEndpointProviderInput = ProviderKeyInput & {providerKey?: string | null}
 
 const endpointAvailabilityStates = new Map<string, JudgmentEndpointAvailabilityState>()
+const recentNetworkFailureTimesByEndpointKey = new Map<string, number[]>()
+let fetchEndpointModels = (url: string, signal: AbortSignal): Promise<Response> => {
+  return fetch(url, {signal})
+}
+
+export const setJudgmentEndpointModelsProbeFetchForTests = (
+  fetchModels: ((url: string, signal: AbortSignal) => Promise<Response>) | null,
+): void => {
+  fetchEndpointModels =
+    fetchModels
+    ?? ((url, signal) => {
+      return fetch(url, {signal})
+    })
+}
 const localProbeLiveCountsByEndpointKey = new Map<string, number>()
 const observedAggregateProbeLiveCountsByEndpointKey = new Map<string, number>()
 
@@ -429,8 +450,77 @@ export const claimJudgmentEndpointAvailability = ({
     `endpoint-availability:probing:${key.endpointAvailabilityKey}`,
     `Endpoint availability probing for ${effectiveBaseURL}`,
   )
+  startModelsProbe({
+    effectiveBaseURL,
+    modelId,
+    modelProvider,
+    providerConnectionId,
+    providerKey,
+    useOwnerBackedSyntheticProviderId,
+  })
 
   return true
+}
+
+// For self-hosted servers, a network failure while the endpoint is healthy only gates it once
+// several land within the window; a failure during a probe or cooldown gates as before.
+const isSelfHostedOpenAiCompatibleProvider = (modelProvider: string | null | undefined): boolean => {
+  return selfHostedOpenAiCompatibleProviders.has(modelProvider?.trim().toLowerCase() ?? '')
+}
+
+const shouldGateNetworkFailure = (input: {effectiveBaseURL: string} & JudgmentEndpointProviderInput): boolean => {
+  if (!isSelfHostedOpenAiCompatibleProvider(input.modelProvider)) {
+    return true
+  }
+
+  const key = getEndpointAvailabilityKey(input)
+  const state = getOrCreateEndpointAvailabilityState(input)
+  const now = Date.now()
+  const recentFailureTimes = [
+    ...(recentNetworkFailureTimesByEndpointKey.get(key.endpointAvailabilityKey) ?? []).filter((failedAt) => {
+      return now - failedAt < networkFailureGateWindowMs
+    }),
+    now,
+  ]
+
+  recentNetworkFailureTimesByEndpointKey.set(key.endpointAvailabilityKey, recentFailureTimes)
+
+  if (state.status !== 'healthy' || recentFailureTimes.length >= networkFailureGateThreshold) {
+    return true
+  }
+
+  endpointAvailabilityLogger.log(
+    `endpoint-availability:isolated-network-failure:${key.endpointAvailabilityKey}`,
+    `Isolated network failure for ${input.effectiveBaseURL}; dispatch continues`,
+  )
+
+  return false
+}
+
+// A probe of an OpenAI-compatible self-hosted server checks its models endpoint as well, so the
+// endpoint recovers as soon as the server answers instead of after a full generation.
+const startModelsProbe = (input: {effectiveBaseURL: string} & JudgmentEndpointProviderInput): void => {
+  if (!isSelfHostedOpenAiCompatibleProvider(input.modelProvider)) {
+    return undefined
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => {
+    controller.abort()
+  }, modelsProbeTimeoutMs)
+
+  void fetchEndpointModels(`${input.effectiveBaseURL.replace(/\/+$/u, '')}/models`, controller.signal)
+    .then((response) => {
+      if (response.ok) {
+        recordJudgmentEndpointSuccess(input)
+      }
+    })
+    .catch(() => {
+      return undefined
+    })
+    .finally(() => {
+      clearTimeout(timeout)
+    })
 }
 
 export const recordJudgmentEndpointFailure = ({
@@ -448,6 +538,20 @@ export const recordJudgmentEndpointFailure = ({
   failureMessage: string
 } & JudgmentEndpointProviderInput): void => {
   if (failureKind === 'other' || failureKind === 'circuit_open') {
+    return undefined
+  }
+
+  if (
+    failureKind === 'network_unavailable'
+    && !shouldGateNetworkFailure({
+      effectiveBaseURL,
+      modelId,
+      modelProvider,
+      providerConnectionId,
+      providerKey,
+      useOwnerBackedSyntheticProviderId,
+    })
+  ) {
     return undefined
   }
 
@@ -518,4 +622,5 @@ export const resetJudgmentEndpointAvailabilityForTests = (): void => {
   endpointAvailabilityStates.clear()
   localProbeLiveCountsByEndpointKey.clear()
   observedAggregateProbeLiveCountsByEndpointKey.clear()
+  recentNetworkFailureTimesByEndpointKey.clear()
 }
