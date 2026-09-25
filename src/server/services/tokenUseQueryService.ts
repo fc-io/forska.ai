@@ -9,7 +9,10 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from './appQueryHelpers.ts'
-import {projectRequestAttemptCloseoutsForTokenUse} from './requestAttemptCloseoutService.ts'
+import {
+  projectRequestAttemptCloseoutsForTokenUse,
+  projectRequestAttemptCloseoutsForTokenUses,
+} from './requestAttemptCloseoutService.ts'
 
 type TokenUseMutationRunner = {
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
@@ -445,19 +448,31 @@ const getInsertTokenUseSql = (insertValues: Record<string, unknown>): string => 
   `
 }
 
-const getInsertTokenUseOnceSql = (insertValues: Record<string, unknown>): string => {
-  const columns = Object.keys(insertValues)
+const getTokenUseInsertValuesSql = (columns: string[], insertValues: Record<string, unknown>): string => {
+  return `(${columns
+    .map((column) => {
+      return getTokenUseInsertLiteral(column, insertValues[column])
+    })
+    .join(', ')})`
+}
+
+const getInsertTokenUsesOnceSql = (insertValuesList: Array<Record<string, unknown>>): string => {
+  const columns = Object.keys(insertValuesList[0] ?? {})
 
   return `
     INSERT INTO app.token_use (${columns.join(', ')})
-    VALUES (${columns
-      .map((column) => {
-        return getTokenUseInsertLiteral(column, insertValues[column])
+    VALUES ${insertValuesList
+      .map((insertValues) => {
+        return getTokenUseInsertValuesSql(columns, insertValues)
       })
-      .join(', ')})
+      .join(', ')}
     ON CONFLICT(id) DO NOTHING
     RETURNING ${tokenUseSelectClause}
   `
+}
+
+const getInsertTokenUseOnceSql = (insertValues: Record<string, unknown>): string => {
+  return getInsertTokenUsesOnceSql([insertValues])
 }
 
 const getTokenUseById = async (runner: TokenUseMutationRunner, id: string): Promise<TokenUseRecord | null> => {
@@ -471,20 +486,43 @@ const getTokenUseById = async (runner: TokenUseMutationRunner, id: string): Prom
   return existingRow ? getTokenUseValue(existingRow) : null
 }
 
+const getTokenUsesByIds = async (
+  runner: TokenUseMutationRunner,
+  ids: string[],
+): Promise<Map<string, TokenUseRecord>> => {
+  const rows =
+    ids.length === 0
+      ? []
+      : await runner.queryJson<TokenUseRow>(`
+          SELECT ${tokenUseSelectClause}
+          FROM app.token_use
+          WHERE id IN (${getQuotedStringList(ids).join(', ')})
+        `)
+
+  return new Map(
+    rows.map((row) => {
+      const tokenUse = getTokenUseValue(row)
+
+      return [tokenUse.id, tokenUse]
+    }),
+  )
+}
+
+const getRequestAttemptCloseoutTokenUseInput = (tokenUse: TokenUseRecord) => {
+  return {
+    requestAttemptsJson: tokenUse.requestAttemptsJson,
+    tokenUseCreatedAt: tokenUse.createdAt,
+    tokenUseFinishedAt: tokenUse.finishedAt,
+    tokenUseId: tokenUse.id,
+    tokenUseStartedAt: tokenUse.startedAt,
+  }
+}
+
 const projectRequestAttemptCloseoutsForTokenUseValue = async (
   runner: TokenUseMutationRunner,
   tokenUse: TokenUseRecord,
 ): Promise<void> => {
-  await projectRequestAttemptCloseoutsForTokenUse({
-    runner,
-    tokenUse: {
-      requestAttemptsJson: tokenUse.requestAttemptsJson,
-      tokenUseCreatedAt: tokenUse.createdAt,
-      tokenUseFinishedAt: tokenUse.finishedAt,
-      tokenUseId: tokenUse.id,
-      tokenUseStartedAt: tokenUse.startedAt,
-    },
-  })
+  await projectRequestAttemptCloseoutsForTokenUse({runner, tokenUse: getRequestAttemptCloseoutTokenUseInput(tokenUse)})
 }
 
 const insertTokenUse = async (values: Record<string, unknown>) => {
@@ -535,6 +573,116 @@ const insertTokenUseOnce = async (values: Record<string, unknown>) => {
   }, tokenUseInsertOnceWorkloadContext)
 }
 
+const getTokenUseInsertId = (insertValues: Record<string, unknown>): string => {
+  return typeof insertValues.id === 'string' ? insertValues.id : ''
+}
+
+const getFirstTokenUseInsertIndexById = (insertValuesList: Array<Record<string, unknown>>) => {
+  return insertValuesList.reduce<Map<string, number>>((firstIndexById, insertValues, index) => {
+    const id = getTokenUseInsertId(insertValues)
+
+    return firstIndexById.has(id) ? firstIndexById : firstIndexById.set(id, index)
+  }, new Map())
+}
+
+const getTokenUseInsertGroups = (insertValuesList: Array<Record<string, unknown>>) => {
+  return [
+    ...insertValuesList
+      .reduce<Map<string, Array<Record<string, unknown>>>>((groups, insertValues) => {
+        const columnsKey = Object.keys(insertValues).join(',')
+
+        return groups.set(columnsKey, [...(groups.get(columnsKey) ?? []), insertValues])
+      }, new Map())
+      .values(),
+  ]
+}
+
+const insertTokenUseGroupsOnce = async (
+  runner: TokenUseMutationRunner,
+  insertGroups: Array<Array<Record<string, unknown>>>,
+): Promise<TokenUseRecord[]> => {
+  return insertGroups.reduce<Promise<TokenUseRecord[]>>(async (previous, insertGroup) => {
+    const insertedTokenUses = await previous
+    const rows = await runner.queryJson<TokenUseRow>(getInsertTokenUsesOnceSql(insertGroup))
+
+    return [
+      ...insertedTokenUses,
+      ...rows.map((row) => {
+        return getTokenUseValue(row)
+      }),
+    ]
+  }, Promise.resolve([]))
+}
+
+type TokenUseReplayResult = {conflicts: TokenUseIdempotencyConflictError[]; tokenUses: TokenUseRecord[]}
+
+const addReplayedTokenUse = (
+  result: TokenUseReplayResult,
+  existingTokenUse: TokenUseRecord,
+  insertValues: Record<string, unknown>,
+): TokenUseReplayResult => {
+  const mismatch = getTokenUseConflictMismatch(existingTokenUse, insertValues)
+
+  return mismatch
+    ? {
+        ...result,
+        conflicts: [...result.conflicts, new TokenUseIdempotencyConflictError({id: existingTokenUse.id, mismatch})],
+      }
+    : {...result, tokenUses: [...result.tokenUses, existingTokenUse]}
+}
+
+const getReplayedTokenUses = (
+  replayInsertValuesList: Array<Record<string, unknown>>,
+  existingTokenUseById: Map<string, TokenUseRecord>,
+): TokenUseReplayResult => {
+  return replayInsertValuesList.reduce<TokenUseReplayResult>(
+    (result, insertValues) => {
+      const existingTokenUse = existingTokenUseById.get(getTokenUseInsertId(insertValues))
+
+      return existingTokenUse ? addReplayedTokenUse(result, existingTokenUse, insertValues) : result
+    },
+    {conflicts: [], tokenUses: []},
+  )
+}
+
+const insertTokenUsesOnceWithRunner = async (
+  runner: TokenUseMutationRunner,
+  insertValuesList: Array<Record<string, unknown>>,
+): Promise<{conflicts: TokenUseIdempotencyConflictError[]}> => {
+  const firstIndexById = getFirstTokenUseInsertIndexById(insertValuesList)
+  const firstInsertValuesList = insertValuesList.filter((insertValues, index) => {
+    return firstIndexById.get(getTokenUseInsertId(insertValues)) === index
+  })
+  const insertedTokenUses = await insertTokenUseGroupsOnce(runner, getTokenUseInsertGroups(firstInsertValuesList))
+  const insertedIds = new Set(
+    insertedTokenUses.map((tokenUse) => {
+      return tokenUse.id
+    }),
+  )
+  const replayInsertValuesList = insertValuesList.filter((insertValues, index) => {
+    const id = getTokenUseInsertId(insertValues)
+
+    return firstIndexById.get(id) !== index || !insertedIds.has(id)
+  })
+  const replayIds = [
+    ...new Set(
+      replayInsertValuesList.map((insertValues) => {
+        return getTokenUseInsertId(insertValues)
+      }),
+    ),
+  ]
+  const replayed = getReplayedTokenUses(replayInsertValuesList, await getTokenUsesByIds(runner, replayIds))
+
+  await projectRequestAttemptCloseoutsForTokenUses({
+    runner,
+    tokenUses: [...insertedTokenUses, ...replayed.tokenUses].map((tokenUse) => {
+      return getRequestAttemptCloseoutTokenUseInput(tokenUse)
+    }),
+  })
+
+  return {conflicts: replayed.conflicts}
+}
+
 // Idempotent batch variant: one transaction for many rows. A row whose id already exists with
 // different values is reported as a conflict and skipped instead of failing the whole batch.
 const insertTokenUsesOnce = async (
@@ -544,24 +692,12 @@ const insertTokenUsesOnce = async (
     return {conflicts: []}
   }
 
+  const insertValuesList = valuesList.map((values) => {
+    return getInsertTokenUseValues(values)
+  })
+
   return getAppDatabaseService().transaction(async (tx) => {
-    return valuesList.reduce<Promise<{conflicts: TokenUseIdempotencyConflictError[]}>>(
-      async (previous, values) => {
-        const state = await previous
-
-        try {
-          await insertTokenUseOnceWithRunner(tx, getInsertTokenUseValues(values))
-          return state
-        } catch (error) {
-          if (error instanceof TokenUseIdempotencyConflictError) {
-            return {conflicts: [...state.conflicts, error]}
-          }
-
-          throw error
-        }
-      },
-      Promise.resolve({conflicts: []}),
-    )
+    return insertTokenUsesOnceWithRunner(tx, insertValuesList)
   }, tokenUseInsertOnceBatchWorkloadContext) as Promise<{conflicts: TokenUseIdempotencyConflictError[]}>
 }
 

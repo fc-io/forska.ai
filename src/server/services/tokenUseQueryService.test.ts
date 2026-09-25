@@ -231,6 +231,101 @@ test('insertTokenUseOnce repairs missing closeout projections from canonical sto
   ])
 })
 
+const getBatchTokenUseValues = (id: string, requestAttemptId: string | null, totalTokens = 15) => {
+  return {
+    id,
+    judgment_job_id: null,
+    requests: 1,
+    total_prompt_tokens: 10,
+    total_completion_tokens: totalTokens - 10,
+    total_tokens: totalTokens,
+    request_attempts_json:
+      requestAttemptId === null
+        ? null
+        : JSON.stringify([
+            {
+              closeoutKind: 'token_use',
+              durableCloseoutRef: {id: `closeout-${requestAttemptId}`, kind: 'token_use', jobId: 'job-batch'},
+              finishedAt: '2026-05-04T12:00:01.000Z',
+              lifecycleState: 'completedRequest',
+              outcome: 'success',
+              providerKey: 'provider-batch',
+              requestAttemptId,
+            },
+          ]),
+    started_at: new Date('2026-05-04T12:00:00.000Z'),
+    finished_at: new Date('2026-05-04T12:00:01.000Z'),
+    duration: 1000,
+  }
+}
+
+test('insertTokenUsesOnce inserts new rows, replays matches, repairs closeouts and reports conflicts in one batch', async () => {
+  if (!tokenUseQueryService) {
+    throw new Error('Token use query service not initialized')
+  }
+
+  const {getAppDatabaseService} = await import('./appDatabaseService.ts')
+  const database = getAppDatabaseService()
+  const existingValues = getBatchTokenUseValues('batch-existing', 'attempt-batch-existing')
+  const conflictValues = getBatchTokenUseValues('batch-conflict', 'attempt-batch-conflict')
+
+  await tokenUseQueryService.insertTokenUseOnce(existingValues)
+  await tokenUseQueryService.insertTokenUseOnce(conflictValues)
+  await database.run("DELETE FROM app.request_attempt_closeout WHERE request_attempt_id = 'attempt-batch-existing'")
+
+  const {request_attempts_json: _existingRequestAttemptsJson, ...existingReplayValues} = existingValues
+  const {conflicts} = await tokenUseQueryService.insertTokenUsesOnce([
+    getBatchTokenUseValues('batch-new-a', 'attempt-batch-a'),
+    getBatchTokenUseValues('batch-new-b', 'attempt-batch-b'),
+    getBatchTokenUseValues('batch-new-a', 'attempt-batch-a'),
+    getBatchTokenUseValues('batch-new-b', 'attempt-batch-b', 17),
+    existingReplayValues,
+    getBatchTokenUseValues('batch-conflict', 'attempt-batch-conflict', 16),
+    getBatchTokenUseValues('batch-new-c', null),
+  ])
+  const storedRows = await database.queryJson<{id: string; totalTokens: number}>(`
+    SELECT id, CAST(total_tokens AS INTEGER) AS totalTokens
+    FROM app.token_use
+    WHERE id LIKE 'batch-%'
+    ORDER BY id
+  `)
+  const closeoutRows = await Promise.all(
+    ['attempt-batch-a', 'attempt-batch-b', 'attempt-batch-existing', 'attempt-batch-conflict'].map(
+      (requestAttemptId) => {
+        return getRequestAttemptCloseoutRows(requestAttemptId)
+      },
+    ),
+  )
+
+  expect(
+    conflicts.map((conflict) => {
+      return conflict.message
+    }),
+  ).toEqual([
+    'token use idempotency conflict for batch-new-b: total_completion_tokens mismatch',
+    'token use idempotency conflict for batch-conflict: total_completion_tokens mismatch',
+  ])
+  expect(storedRows).toEqual([
+    {id: 'batch-conflict', totalTokens: 15},
+    {id: 'batch-existing', totalTokens: 15},
+    {id: 'batch-new-a', totalTokens: 15},
+    {id: 'batch-new-b', totalTokens: 15},
+    {id: 'batch-new-c', totalTokens: 15},
+  ])
+  expect(
+    closeoutRows.map((rows) => {
+      return rows.map((row) => {
+        return `${row.requestAttemptId}:${row.tokenUseId}:${row.durableCloseoutId}`
+      })
+    }),
+  ).toEqual([
+    ['attempt-batch-a:batch-new-a:closeout-attempt-batch-a'],
+    ['attempt-batch-b:batch-new-b:closeout-attempt-batch-b'],
+    ['attempt-batch-existing:batch-existing:closeout-attempt-batch-existing'],
+    ['attempt-batch-conflict:batch-conflict:closeout-attempt-batch-conflict'],
+  ])
+})
+
 test('getFailedRequestById keeps failed request detail objects readable', async () => {
   const failedRequest = await getStoredFailedRequestDetails([buildFailedRequestDetail(['prompt-1'])])
   const firstDetail = Array.isArray(failedRequest?.failedRequestsDetails)
