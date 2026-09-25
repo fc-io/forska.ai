@@ -1,6 +1,11 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
+import {
+  getReviewServingCandidateArticlesAwaitingRebuild,
+  type ReviewServingCandidateArticleAwaitingRebuild,
+  type ReviewServingCandidateComponentState,
+} from './reviewServingCandidateRebuildCoverage.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
@@ -263,16 +268,19 @@ const getClaimScopeKinds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   ]
 }
 
+const getClaimArticleId = (claim: ReviewServingDirtyWorkClaim) => {
+  const articleId =
+    claim.articleId ?? (claim.scopeKind === 'article' ? (claim.scopeId.split(':').at(-1) ?? null) : null)
+
+  return articleId !== null && articleId.trim().length > 0 ? articleId : null
+}
+
 const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return [
     ...new Set(
-      claims
-        .map((claim) => {
-          return claim.articleId ?? (claim.scopeKind === 'article' ? (claim.scopeId.split(':').at(-1) ?? null) : null)
-        })
-        .filter((articleId) => {
-          return articleId !== null && articleId.trim().length > 0
-        }) as string[],
+      claims.map(getClaimArticleId).filter((articleId) => {
+        return articleId !== null
+      }),
     ),
   ]
 }
@@ -933,6 +941,81 @@ export const projectReviewServingQueuePatches = async (
   }
 
   return projectReviewServingQueuePatchChunk(input, database)
+}
+
+const getArticlesAwaitingRebuildBySnapshot = (rows: readonly ReviewServingCandidateArticleAwaitingRebuild[]) => {
+  return rows.reduce<Map<string, Set<string>>>((articlesBySnapshot, row) => {
+    articlesBySnapshot.set(row.snapshotId, (articlesBySnapshot.get(row.snapshotId) ?? new Set()).add(row.articleId))
+
+    return articlesBySnapshot
+  }, new Map())
+}
+
+const getDeleteQueueRowsAwaitingRebuildStatement = (
+  projectId: string,
+  rows: readonly ReviewServingCandidateArticleAwaitingRebuild[],
+) => {
+  return `
+    DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4 queue
+    USING (
+      VALUES ${rows
+        .map((row) => {
+          return `(${getSqlLiteral(row.snapshotId)}, ${getSqlLiteral(row.articleId)})`
+        })
+        .join(', ')}
+    ) awaiting(snapshot_id, article_id)
+    WHERE queue.project_id = ${getSqlLiteral(projectId)}
+      AND queue.snapshot_id = awaiting.snapshot_id
+      AND queue.article_id = awaiting.article_id
+  `
+}
+
+// The queue rebuild writer only updates and inserts, so rows patched into a candidate earlier are dropped here and the
+// pending chunk re-inserts them from source; patching them now would be overwritten by that chunk anyway.
+export const deferReviewServingQueueCandidatePatchesToPendingRebuild = async (
+  input: {
+    candidates: readonly ReviewServingCandidateComponentState[]
+    claims: readonly ReviewServingDirtyWorkClaim[]
+    projectId: string
+  },
+  database: ReviewServingQueueProjectorDatabase,
+): Promise<ReadonlyMap<string, ReadonlySet<string>>> => {
+  const articleIds = getClaimArticleIds(input.claims)
+  const everyClaimHasArticle = input.claims.every((claim) => {
+    return getClaimArticleId(claim) !== null
+  })
+
+  if (!everyClaimHasArticle || articleIds.length === 0 || input.candidates.length === 0) {
+    return new Map()
+  }
+
+  const rows = await database.transaction(async (tx) => {
+    const awaitingRows = await getReviewServingCandidateArticlesAwaitingRebuild(
+      {articleIds, candidates: input.candidates, component: 'queue', projectId: input.projectId},
+      tx,
+    )
+
+    if (awaitingRows.length > 0) {
+      await tx.run(getDeleteQueueRowsAwaitingRebuildStatement(input.projectId, awaitingRows))
+    }
+
+    return awaitingRows
+  })
+
+  return getArticlesAwaitingRebuildBySnapshot(rows)
+}
+
+export const getReviewServingQueueClaimsOutsideArticles = (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  articleIds: ReadonlySet<string> | undefined,
+) => {
+  return articleIds === undefined
+    ? claims
+    : claims.filter((claim) => {
+        const articleId = getClaimArticleId(claim)
+
+        return articleId === null || !articleIds.has(articleId)
+      })
 }
 
 export const projectReviewServingQueueRebuildRows = async (
