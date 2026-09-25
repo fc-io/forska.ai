@@ -498,3 +498,54 @@ test('delta intake converts search tokenizer upgrades into project-scoped search
   expect(dirtyInserts[0]).not.toContain('llmStatus')
   expect(dirtyInserts[0]).not.toContain('display')
 })
+
+test('delta intake commits bounded groups and stops at a spent deadline after the first one', async () => {
+  const deltas = Array.from({length: 120}, (_value, index) => {
+    const articleId = `article-${index}`
+
+    return createReviewChangeDelta({
+      articleId,
+      deltaId: `delta-${String(index).padStart(3, '0')}`,
+      judgmentId: `judgment-${index}`,
+      modelId: 'model-1',
+      payloadJson: {
+        articleId,
+        contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+        judgmentId: `judgment-${index}`,
+        modelId: 'model-1',
+        projectId: 'project-1',
+        promptId: 'prompt-1',
+      },
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      sourceHighWaterMark: index + 1,
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    })
+  })
+  const params = {
+    endSourceHighWaterMark: 120,
+    limit: 512,
+    sourcePartition: 'reviewChange:project-1',
+    startSourceHighWaterMark: 1,
+  }
+  const bounded = createFakeIntakeDatabase(deltas)
+  const unbounded = createFakeIntakeDatabase(deltas)
+
+  const stopped = await intakeReviewChangeDeltasToDirtyWork({...params, deadlineAtMs: 0}, bounded.database)
+  const completed = await intakeReviewChangeDeltasToDirtyWork(params, unbounded.database)
+  const getReconciledStatements = (statements: readonly string[]) => {
+    return statements.filter((statement) => {
+      return statement.includes('SET reconciled_at = current_timestamp')
+    })
+  }
+
+  expect(stopped).toEqual({dirtyWorkCount: 500, maxSourceHighWaterMark: 100, status: 'converted'})
+  expect(getReconciledStatements(bounded.statements)).toHaveLength(1)
+  expect(getReconciledStatements(bounded.statements)[0]).toContain("'delta-099'")
+  expect(getReconciledStatements(bounded.statements)[0]).not.toContain("'delta-100'")
+  expect(completed).toEqual({dirtyWorkCount: 600, maxSourceHighWaterMark: 120, status: 'converted'})
+  expect(getReconciledStatements(unbounded.statements)).toHaveLength(2)
+})

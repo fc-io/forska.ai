@@ -4,6 +4,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getIntegerValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {getReviewServingDeltaIntakeGroups, runReviewServingDeltaIntakeGroups} from './reviewServingDeltaIntakeGroups.ts'
 import {
   type ReviewServingDirtyWorkTransaction,
   upsertReviewServingDirtyWorkBatch,
@@ -24,6 +25,7 @@ export type ReviewChangeDeltaDirtyIntakeDatabase = {
 }
 
 export type IntakeReviewChangeDeltaDirtyWorkParams = {
+  deadlineAtMs?: number | null
   endSourceHighWaterMark: number
   limit: number
   sourcePartition: string
@@ -411,9 +413,30 @@ export const intakeReviewChangeDeltasToDirtyWork = async (
     return {deltaId: invalid.deltaId, reason: invalid.reason, status: 'failed'}
   }
 
-  const deltas = validated as ValidatedReviewChangeDelta[]
-
-  return database.transaction(async (tx) => {
-    return commitValidatedReviewChangeDeltasToDirtyWork(deltas, tx)
+  const groups = getReviewServingDeltaIntakeGroups({
+    entries: validated as ValidatedReviewChangeDelta[],
+    getDeltaId: (delta) => {
+      return delta.deltaId
+    },
+    getDirtyWorkCount: (delta) => {
+      return delta.projections.length
+    },
   })
+  const intake = await runReviewServingDeltaIntakeGroups({
+    deadlineAtMs: params.deadlineAtMs,
+    groups,
+    runGroup: async (group) => {
+      const result = await database.transaction(async (tx) => {
+        return commitValidatedReviewChangeDeltasToDirtyWork(group, tx)
+      })
+
+      return result.dirtyWorkCount
+    },
+  })
+
+  return {
+    dirtyWorkCount: intake.dirtyWorkCount,
+    maxSourceHighWaterMark: groups.slice(0, intake.committedGroupCount).flat().at(-1)?.sourceHighWaterMark ?? null,
+    status: 'converted',
+  }
 }
