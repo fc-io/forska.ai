@@ -135,18 +135,23 @@ const getDetailListModeExpansionPredicate = (input: ProjectReviewServingFilterOp
     : "detail.payload_kind = 'llm' AND list_mode_key.list_mode_key IN ('llm', 'both')"
 }
 
-const getListModeFlagExpansionJoinSql = (stateAlias: string, listModeAlias: string) => {
-  return `
-          INNER JOIN list_mode_key_filter ${listModeAlias}_filter ON TRUE
-          INNER JOIN LATERAL (
-            VALUES
-              ('llm', ${stateAlias}.has_llm_list_mode),
-              ('human', ${stateAlias}.has_human_list_mode),
-              ('both', ${stateAlias}.has_both_list_mode),
-              ('unassessed', ${stateAlias}.has_unassessed_list_mode)
-          ) ${listModeAlias}(list_mode_key, has_list_mode)
-            ON ${listModeAlias}_filter.list_mode_key = ${listModeAlias}.list_mode_key
-            AND ${listModeAlias}.has_list_mode IS TRUE`
+const listModeFlagColumns: Record<string, string> = {
+  both: 'has_both_list_mode',
+  human: 'has_human_list_mode',
+  llm: 'has_llm_list_mode',
+  unassessed: 'has_unassessed_list_mode',
+}
+
+// A plain flag predicate instead of expanding each state row over the requested list modes: with CTE inlining disabled
+// the expansion joined every snapshot's list-mode state before the snapshot filter (minutes on the primary DB).
+const getListModeFlagPredicateSql = (stateAlias: string, listModeKeys: readonly string[]) => {
+  const flagPredicates = listModeKeys.flatMap((listModeKey) => {
+    const column = listModeFlagColumns[listModeKey]
+
+    return column === undefined ? [] : [`${stateAlias}.${column} IS TRUE`]
+  })
+
+  return flagPredicates.length === 0 ? 'FALSE' : `(${flagPredicates.join(' OR ')})`
 }
 
 const getDirectServingStateJoinSql = (stateAlias = 'list_mode_state') => {
@@ -156,8 +161,7 @@ const getDirectServingStateJoinSql = (stateAlias = 'list_mode_state') => {
             ON ${stateAlias}.project_id = serving.project_id
             AND ${stateAlias}.review_config_hash = serving.review_config_hash
             AND ${stateAlias}.snapshot_id = serving.snapshot_id
-            AND ${stateAlias}.article_id = serving.article_id
-          ${getListModeFlagExpansionJoinSql(stateAlias, 'list_mode_key')}`
+            AND ${stateAlias}.article_id = serving.article_id`
 }
 
 const getScopedSelectedArticleCteSql = (
@@ -188,6 +192,7 @@ const getScopedSelectedArticleCteSql = (
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND ${getListModeFlagPredicateSql('list_mode_state', input.listModeKeys)}
             ${
               options?.searchScoped
                 ? getSearchPredicate(
@@ -211,6 +216,7 @@ const getScopedStateArticleCteSql = (input: ProjectReviewServingFilterOptionsInp
           WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
             AND serving.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
             AND serving.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+            AND ${getListModeFlagPredicateSql('list_mode_state', input.listModeKeys)}
         )`
 }
 
