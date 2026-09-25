@@ -609,6 +609,60 @@ test('worker requests enforce provider caps and release after success', async ()
   expect(secondStarted).toBe(true)
 })
 
+test('prompts claimed under an older provider cap use the current cap once the lease store reports it', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  const firstRelease = createSignal()
+  let firstStarted = false
+  let secondStarted = false
+  const staleScope = {
+    fallbackBaseURL: 'http://provider-cap-raise.test/v1',
+    provider: 'sglang',
+    providerConnectionId: 'connection-cap-raise',
+    providerFamily: 'sglang',
+    providerId: 'connection-cap-raise',
+    providerKey: 'provider-cap-raise',
+    providerLimit: 1,
+    providerLimitVersion: 'provider-cap-raise-v1',
+    providerMaxInflightRequests: 1,
+    providerName: 'sglang',
+    providerUsesFamilyDefault: false,
+    resolvedDefaultCapacity: 1,
+    workerUrls: [],
+  }
+
+  // The cap was raised to 3 after these prompts were claimed with cap 1.
+  realProviderAdmissionLeaseModule.publishProviderBucketSnapshot({
+    maxInflightRequests: 3,
+    providerFamily: 'sglang',
+    providerId: 'connection-cap-raise',
+    providerKey: 'provider-cap-raise',
+    providerLimit: 3,
+    providerLimitVersion: 'provider-cap-raise-v3',
+    providerName: 'sglang',
+    providerUsesFamilyDefault: false,
+    resolvedDefaultCapacity: 1,
+  })
+
+  const firstRequest = withJudgmentRequest({...staleScope, judgmentsJobId: 'job-cap-raise-1'}, async () => {
+    firstStarted = true
+    await firstRelease.promise
+  })
+
+  await flush()
+  expect(firstStarted).toBe(true)
+
+  const secondRequest = withJudgmentRequest({...staleScope, judgmentsJobId: 'job-cap-raise-2'}, async () => {
+    secondStarted = true
+  })
+
+  await flush()
+  expect(secondStarted).toBe(true)
+
+  firstRelease.resolve()
+  await firstRequest
+  await secondRequest
+})
+
 test('fallback requests honor saved provider caps even when local runtime capacity is lower', async () => {
   getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
     return createJudgmentsCapacity({maxInflight: 2})
