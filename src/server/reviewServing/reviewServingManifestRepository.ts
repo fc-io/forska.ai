@@ -1237,7 +1237,10 @@ export const getActiveOrLastKnownGoodReviewServingSnapshotManifest = async (
   )
 }
 
-const getLiveSnapshotComponentStatesSql = (input: {projectId: string; reviewConfigHash: string}, group: string) => {
+const getLiveSnapshotComponentStatesSql = (
+  input: {projectId: string; reviewConfigHash: string; snapshotPredicateSql?: string},
+  group: string,
+) => {
   return `
       SELECT component_state.value AS state
       FROM app.review_serving_snapshot_manifest snapshot
@@ -1245,11 +1248,17 @@ const getLiveSnapshotComponentStatesSql = (input: {projectId: string; reviewConf
       WHERE snapshot.project_id = ${getSqlLiteral(input.projectId)}
         AND snapshot.review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
         AND snapshot.snapshot_status IN ('candidate', 'active')
+        ${input.snapshotPredicateSql === undefined ? '' : `AND ${input.snapshotPredicateSql}`}
   `
 }
 
+// snapshotPredicateSql narrows the live snapshots further; it refers to the snapshot manifest row as `snapshot`.
 export const hasReviewServingSnapshotComponentAtBaseGeneration = async (
-  input: ReviewServingProjectionComponentIdentity & {projectId: string; reviewConfigHash: string},
+  input: ReviewServingProjectionComponentIdentity & {
+    projectId: string
+    reviewConfigHash: string
+    snapshotPredicateSql?: string
+  },
   database: ReviewServingManifestReaderDatabase,
 ) => {
   const rows = await database.queryJson<{baseGeneration: number | string}>(`

@@ -15,6 +15,16 @@ import {
   type ReviewServingProjectorWriterDatabase,
   writeReviewServingProjectorComponent,
 } from './reviewServingProjectorWriter.ts'
+import {
+  getCreateReviewServingSummaryLedgerAffectedKeyStatement,
+  getInvalidateReviewServingSummaryLedgerStatements,
+  getPublishReviewServingSummaryLedgerServingStatements,
+  getPublishReviewServingSummaryLedgerStatusStatements,
+  getReplaceReviewServingSummaryLedgerPartialsStatements,
+  getReviewServingSummaryLedgerPublicationState,
+  getWriteReviewServingSummaryLedgerChunkStatements,
+  type ReviewServingSummaryLedgerSnapshotPatch,
+} from './reviewServingSummaryLedger.ts'
 
 export type ReviewServingSummaryProjectorDatabase = ReviewServingProjectorWriterDatabase
 
@@ -42,6 +52,7 @@ export type ReviewServingSummarySnapshotReductionDiagnostics = {
   chunkCount: number
   countPublicationRowCount: number
   facetPublicationRowCount: number
+  ledgerPublished?: boolean
   maxAccumulatorChunkBatchSize: number
   phaseTimings: Record<string, number>
   projectId: string
@@ -289,11 +300,35 @@ const getSummaryDefinitionVersionSql = (countKindSql: string) => {
       END`
 }
 
-const getSummaryContributionSourceCtes = (
+type SummaryContributionSourceInput = Pick<
+  ProjectReviewServingSummariesInput,
+  | 'chunkEndArticleId'
+  | 'chunkStartArticleId'
+  | 'listModeKeys'
+  | 'projectId'
+  | 'projectScopeIdentity'
+  | 'reviewConfigHash'
+  | 'selectedImportSnapshotId'
+  | 'snapshotId'
+>
+
+type SummaryContributionSourceOptions = {articleFilterCte: string; projectPromptDerivedBuckets: boolean}
+
+const getSummaryContributionSourceOptions = (
   input: ProjectReviewServingSummariesInput,
   articleIds: readonly string[] = [],
+): SummaryContributionSourceOptions => {
+  return {
+    articleFilterCte: getDirtyArticleCte(input, articleIds),
+    projectPromptDerivedBuckets: shouldProjectPromptDerivedSummaryBuckets(input),
+  }
+}
+
+const getSummaryContributionSourceCtes = (
+  input: SummaryContributionSourceInput,
+  options: SummaryContributionSourceOptions,
 ) => {
-  return `${getDirtyArticleCte(input, articleIds)},
+  return `${options.articleFilterCte},
         ${getListModeCte(input.listModeKeys)},
         project_settings AS (
           SELECT COALESCE((SELECT project.human_judgment_mode FROM app.project project WHERE project.id = ${getSqlLiteral(input.projectId)}), 'prompt') AS human_judgment_mode
@@ -479,21 +514,21 @@ const getSummaryContributionSourceCtes = (
           SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, llm.answered_original AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, llm.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM llm_detail llm
           INNER JOIN selected_article selected ON selected.article_id = llm.article_id
-          WHERE ${shouldProjectPromptDerivedSummaryBuckets(input)}
+          WHERE ${options.projectPromptDerivedBuckets}
             AND llm.list_mode_key = 'llm' AND llm.answered_original IS NOT NULL AND llm.answered_original_as_array IS NULL
           UNION ALL
           SELECT llm.article_id AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, answer.answer_value AS facetValue, llm.prompt_id AS promptId, NULL AS answerId, answer.answer_value AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM llm_detail llm
           INNER JOIN selected_article selected ON selected.article_id = llm.article_id
           CROSS JOIN UNNEST(llm.answered_original_as_array) AS answer(answer_value)
-          WHERE ${shouldProjectPromptDerivedSummaryBuckets(input)}
+          WHERE ${options.projectPromptDerivedBuckets}
             AND llm.list_mode_key = 'llm' AND llm.answered_original_as_array IS NOT NULL
           UNION ALL
           SELECT human.article_id AS articleId, 'facet' AS summaryKind, 'review.human.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.promptAnswer' AS summaryIdentity, 'human' AS facetKind, 'promptAnswer' AS facetKey, human.answered_original AS facetValue, human.prompt_id AS promptId, NULL AS answerId, human.answered_original AS answerValue, 'ready' AS availability, NULL AS staleReason
           FROM human_detail human
           INNER JOIN selected_article selected ON selected.article_id = human.article_id
           CROSS JOIN project_settings
-          WHERE ${shouldProjectPromptDerivedSummaryBuckets(input)}
+          WHERE ${options.projectPromptDerivedBuckets}
             AND human.list_mode_key = 'human' AND human.prompt_id <> 'summary' AND human.answered_original IS NOT NULL
             AND project_settings.human_judgment_mode <> 'summary'
           UNION ALL
@@ -501,18 +536,18 @@ const getSummaryContributionSourceCtes = (
           FROM human_detail human
           INNER JOIN selected_article selected ON selected.article_id = human.article_id
           CROSS JOIN project_settings
-          WHERE ${shouldProjectPromptDerivedSummaryBuckets(input)}
+          WHERE ${options.projectPromptDerivedBuckets}
             AND human.list_mode_key = 'human' AND human.prompt_id = 'summary' AND human.answered_original IS NOT NULL
             AND project_settings.human_judgment_mode = 'summary'
           UNION ALL
           SELECT NULL AS articleId, 'facet' AS summaryKind, 'review.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.filter.promptAnswer' AS summaryIdentity, 'review' AS facetKind, 'promptAnswer' AS facetKey, '__lazy_prompt_answer__' AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'unavailable' AS availability, ${getSqlLiteral(promptDerivedSummaryStaleReason)} AS staleReason
-          WHERE NOT ${shouldProjectPromptDerivedSummaryBuckets(input)}
+          WHERE NOT ${options.projectPromptDerivedBuckets}
           UNION ALL
           SELECT NULL AS articleId, 'facet' AS summaryKind, 'review.human.filter.promptAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.promptAnswer' AS summaryIdentity, 'human' AS facetKind, 'promptAnswer' AS facetKey, '__lazy_prompt_answer__' AS facetValue, NULL AS promptId, NULL AS answerId, NULL AS answerValue, 'unavailable' AS availability, ${getSqlLiteral(promptDerivedSummaryStaleReason)} AS staleReason
-          WHERE NOT ${shouldProjectPromptDerivedSummaryBuckets(input)}
+          WHERE NOT ${options.projectPromptDerivedBuckets}
           UNION ALL
           SELECT NULL AS articleId, 'facet' AS summaryKind, 'review.human.filter.summaryAnswer' AS countKind, NULL AS filterKey, NULL AS listModeKey, 'review.human.filter.summaryAnswer' AS summaryIdentity, 'human' AS facetKind, 'summaryAnswer' AS facetKey, '__lazy_prompt_answer__' AS facetValue, 'summary' AS promptId, NULL AS answerId, NULL AS answerValue, 'unavailable' AS availability, ${getSqlLiteral(promptDerivedSummaryStaleReason)} AS staleReason
-          WHERE NOT ${shouldProjectPromptDerivedSummaryBuckets(input)}
+          WHERE NOT ${options.projectPromptDerivedBuckets}
         ),
         summary_union AS (
           SELECT * FROM base_counts
@@ -532,7 +567,7 @@ const getFullRebuildSummaryContributionRows = async (
   return input.listModeKeys.length === 0
     ? []
     : database.queryJson<SummaryContributionSourceRow>(`
-        WITH ${getSummaryContributionSourceCtes(input, articleIds)}
+        WITH ${getSummaryContributionSourceCtes(input, getSummaryContributionSourceOptions(input, articleIds))}
         SELECT * FROM summary_union
       `)
 }
@@ -711,6 +746,7 @@ const getDirectFullSummaryDeleteStatements = (input: ProjectReviewServingSummari
   return [
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_article_count_serving_v4'}),
     getDeleteReviewServingProjectorRowsStatement({predicates, table: 'mart.review_filter_facet_serving_v4'}),
+    ...getInvalidateReviewServingSummaryLedgerStatements(input),
   ]
 }
 
@@ -895,7 +931,7 @@ const getInsertSummaryRebuildAccumulatorChunkFromSourceStatement = (input: Proje
     DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_chunk;
 
     CREATE TEMPORARY TABLE temp_summary_rebuild_accumulator_chunk AS
-    WITH ${getSummaryContributionSourceCtes(input)},
+    WITH ${getSummaryContributionSourceCtes(input, getSummaryContributionSourceOptions(input))},
     grouped_summary AS (
       SELECT
         ${getSqlLiteral(requestId)} AS request_id,
@@ -1047,6 +1083,17 @@ const getInsertSummaryRebuildAccumulatorChunkFromSourceStatement = (input: Proje
         AND accumulator_chunk.chunk_id = ${getSqlLiteral(chunkId)}
         ${getSummaryRebuildAccumulatorScalarKeyPredicate({leftAlias: 'accumulator_chunk', rightAlias: 'incoming'})}
     );
+
+    ${getWriteReviewServingSummaryLedgerChunkStatements({
+      chunkEndKey: input.chunkEndArticleId ?? null,
+      chunkId,
+      chunkStartKey: input.chunkStartArticleId ?? null,
+      projectId: input.projectId,
+      requestId,
+      reviewConfigHash: input.reviewConfigHash,
+      snapshotId: input.snapshotId,
+      sourceTable: 'temp_summary_rebuild_accumulator_chunk',
+    })}
 
     DROP TABLE IF EXISTS temp_summary_rebuild_accumulator_chunk
   `
@@ -1293,28 +1340,133 @@ const publishSummaryRebuildFacetPartials = async (
   })
 }
 
-const reduceSummaryRebuildPartialsForRequestSnapshot = async (
-  input: {
-    hasSummaryRebuildChunks?: boolean
-    onFinalizationPhaseComplete?: (phase: ReviewServingSummaryFinalizationPhase) => Promise<void> | void
-    projectId: string
-    requestId: string
-    reviewConfigHash: string
-    snapshotId: string
-  },
-  database: ReviewServingSummaryProjectorDatabase,
-): Promise<ReviewServingSummarySnapshotReductionDiagnostics> => {
-  const phaseTimings: Record<string, number> = {}
-  const {chunkIds} = await measureSummaryFinalizationPhase(phaseTimings, 'readAccumulatorStateMs', async () => {
-    return getSummaryRebuildPartialAccumulatorState(input, database)
-  })
-  const scopedInput = {...input, chunkIds, phaseTimings}
+type SummaryRebuildPublicationInput = {
+  onFinalizationPhaseComplete?: (phase: ReviewServingSummaryFinalizationPhase) => Promise<void> | void
+  phaseTimings: Record<string, number>
+  projectId: string
+  requestId: string
+  reviewConfigHash: string
+  snapshotId: string
+}
 
+const runSummaryStatements = async (
+  statements: readonly string[],
+  database: Pick<ReviewServingSummaryProjectorDatabase, 'run'>,
+) => {
+  await statements.reduce<Promise<void>>(async (previous, statement) => {
+    await previous
+    await database.run(statement)
+  }, Promise.resolve())
+}
+
+const getSummaryServingRowCounts = async (
+  input: {projectId: string; reviewConfigHash: string; snapshotId: string},
+  database: Pick<ReviewServingSummaryProjectorDatabase, 'queryJson'>,
+) => {
+  const scopePredicate = `project_id = ${getSqlLiteral(input.projectId)}
+        AND review_config_hash = ${getSqlLiteral(input.reviewConfigHash)}
+        AND snapshot_id = ${getSqlLiteral(input.snapshotId)}`
+  const [row] = await database.queryJson<{countRowCount: number; facetRowCount: number}>(`
+    SELECT
+      CAST((SELECT COUNT(*) FROM mart.review_article_count_serving_v4 WHERE ${scopePredicate}) AS INTEGER) AS countRowCount,
+      CAST((SELECT COUNT(*) FROM mart.review_filter_facet_serving_v4 WHERE ${scopePredicate}) AS INTEGER) AS facetRowCount
+  `)
+
+  return {countRowCount: Number(row?.countRowCount ?? 0), facetRowCount: Number(row?.facetRowCount ?? 0)}
+}
+
+const yieldSummaryPublicationPhases = async (input: SummaryRebuildPublicationInput) => {
+  await yieldSummaryFinalizationPhase({...input, phase: 'countPublication'})
+  await yieldSummaryFinalizationPhase({...input, phase: 'facetPublication'})
+}
+
+// Every chunk of the request wrote its bucket, so the snapshot's serving summaries become the SUM of this request's
+// buckets and its ledger is published for article patches.
+const publishSummaryBucketLedger = async (
+  input: SummaryRebuildPublicationInput,
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  const rowCounts = await measureSummaryFinalizationPhase(input.phaseTimings, 'ledgerPublicationMs', async () => {
+    return database.transaction(async (tx) => {
+      await runSummaryStatements(
+        [
+          ...getPublishReviewServingSummaryLedgerServingStatements({
+            ...input,
+            bucketPredicateSql: `bucket.request_id = ${getSqlLiteral(input.requestId)}`,
+          }),
+          ...getPublishReviewServingSummaryLedgerStatusStatements(input),
+        ],
+        tx,
+      )
+
+      return getSummaryServingRowCounts(input, tx)
+    })
+  })
+  await yieldSummaryPublicationPhases(input)
+
+  return {countPublicationRowCount: rowCounts.countRowCount, facetPublicationRowCount: rowCounts.facetRowCount}
+}
+
+const publishSummaryRebuildAccumulatorPartials = async (
+  input: SummaryRebuildPublicationInput,
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  const countPublicationRowCount = await publishSummaryRebuildCountPartials(input, database)
+  await yieldSummaryFinalizationPhase({...input, phase: 'countPublication'})
+  const facetPublicationRowCount = await publishSummaryRebuildFacetPartials(input, database)
+  await yieldSummaryFinalizationPhase({...input, phase: 'facetPublication'})
+  await database.transaction(async (tx) => {
+    await runSummaryStatements(getInvalidateReviewServingSummaryLedgerStatements(input), tx)
+  })
+
+  return {countPublicationRowCount, facetPublicationRowCount}
+}
+
+type SummaryRebuildSnapshotReductionInput = {
+  hasSummaryRebuildChunks?: boolean
+  onFinalizationPhaseComplete?: (phase: ReviewServingSummaryFinalizationPhase) => Promise<void> | void
+  projectId: string
+  requestId: string
+  reviewConfigHash: string
+  snapshotId: string
+}
+
+const getSummaryRebuildSnapshotReductionDiagnostics = (
+  input: SummaryRebuildSnapshotReductionInput & {
+    accumulatorChunkBatchCount: number
+    accumulatorPartialCount: number
+    chunkCount: number
+    ledgerPublished: boolean
+    phaseTimings: Record<string, number>
+    publication: {countPublicationRowCount: number; facetPublicationRowCount: number} | null
+  },
+): ReviewServingSummarySnapshotReductionDiagnostics => {
+  return {
+    accumulatorChunkBatchCount: input.accumulatorChunkBatchCount,
+    accumulatorPartialCount: input.accumulatorPartialCount,
+    chunkCount: input.chunkCount,
+    countPublicationRowCount: input.publication?.countPublicationRowCount ?? 0,
+    facetPublicationRowCount: input.publication?.facetPublicationRowCount ?? 0,
+    ledgerPublished: input.ledgerPublished,
+    maxAccumulatorChunkBatchSize: summaryRebuildPartialReductionBatchSize,
+    phaseTimings: input.phaseTimings,
+    projectId: input.projectId,
+    reviewConfigHash: input.reviewConfigHash,
+    skipped: input.publication === null,
+    snapshotId: input.snapshotId,
+  }
+}
+
+const reduceSummaryRebuildAccumulatorForRequestSnapshot = async (
+  input: SummaryRebuildSnapshotReductionInput & {chunkIds: readonly string[]; phaseTimings: Record<string, number>},
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  const {phaseTimings} = input
   const accumulatorChunkBatchCount = await measureSummaryFinalizationPhase(
     phaseTimings,
     'accumulatorReductionMs',
     async () => {
-      return reduceSummaryRebuildPartialBatchesIntoAccumulator(scopedInput, database)
+      return reduceSummaryRebuildPartialBatchesIntoAccumulator(input, database)
     },
   )
   await yieldSummaryFinalizationPhase({
@@ -1327,52 +1479,49 @@ const reduceSummaryRebuildPartialsForRequestSnapshot = async (
     phaseTimings,
     'accumulatorPartialCountMs',
     async () => {
-      return getSummaryRebuildAccumulatorPartialCount(scopedInput, database)
+      return getSummaryRebuildAccumulatorPartialCount(input, database)
     },
   )
+  const publication =
+    accumulatorPartialCount === 0 && input.hasSummaryRebuildChunks !== true
+      ? null
+      : await publishSummaryRebuildAccumulatorPartials(input, database)
 
-  if (accumulatorPartialCount === 0 && input.hasSummaryRebuildChunks !== true) {
-    return {
-      accumulatorChunkBatchCount,
-      accumulatorPartialCount,
-      chunkCount: chunkIds.length,
-      countPublicationRowCount: 0,
-      facetPublicationRowCount: 0,
-      maxAccumulatorChunkBatchSize: summaryRebuildPartialReductionBatchSize,
-      phaseTimings,
-      projectId: input.projectId,
-      reviewConfigHash: input.reviewConfigHash,
-      skipped: true,
-      snapshotId: input.snapshotId,
-    }
-  }
-
-  const countPublicationRowCount = await publishSummaryRebuildCountPartials({...input, phaseTimings}, database)
-  await yieldSummaryFinalizationPhase({
-    onFinalizationPhaseComplete: input.onFinalizationPhaseComplete,
-    phase: 'countPublication',
-    phaseTimings,
-  })
-  const facetPublicationRowCount = await publishSummaryRebuildFacetPartials({...input, phaseTimings}, database)
-  await yieldSummaryFinalizationPhase({
-    onFinalizationPhaseComplete: input.onFinalizationPhaseComplete,
-    phase: 'facetPublication',
-    phaseTimings,
-  })
-
-  return {
+  return getSummaryRebuildSnapshotReductionDiagnostics({
+    ...input,
     accumulatorChunkBatchCount,
     accumulatorPartialCount,
-    chunkCount: chunkIds.length,
-    countPublicationRowCount,
-    facetPublicationRowCount,
-    maxAccumulatorChunkBatchSize: summaryRebuildPartialReductionBatchSize,
-    phaseTimings,
-    projectId: input.projectId,
-    reviewConfigHash: input.reviewConfigHash,
-    skipped: false,
-    snapshotId: input.snapshotId,
-  }
+    chunkCount: input.chunkIds.length,
+    ledgerPublished: false,
+    publication,
+  })
+}
+
+// A request whose chunks all wrote their buckets publishes the ledger and never touches the accumulator; requests with
+// chunks that ran before the ledger existed keep the accumulator publication.
+const reduceSummaryRebuildPartialsForRequestSnapshot = async (
+  input: SummaryRebuildSnapshotReductionInput,
+  database: ReviewServingSummaryProjectorDatabase,
+): Promise<ReviewServingSummarySnapshotReductionDiagnostics> => {
+  const phaseTimings: Record<string, number> = {}
+  const {chunkIds} = await measureSummaryFinalizationPhase(phaseTimings, 'readAccumulatorStateMs', async () => {
+    return getSummaryRebuildPartialAccumulatorState(input, database)
+  })
+  const ledgerState = await measureSummaryFinalizationPhase(phaseTimings, 'ledgerStateMs', async () => {
+    return getReviewServingSummaryLedgerPublicationState(input, database)
+  })
+
+  return ledgerState.bucketCount > 0 && ledgerState.legacyChunkCount === 0
+    ? getSummaryRebuildSnapshotReductionDiagnostics({
+        ...input,
+        accumulatorChunkBatchCount: 0,
+        accumulatorPartialCount: 0,
+        chunkCount: chunkIds.length,
+        ledgerPublished: true,
+        phaseTimings,
+        publication: await publishSummaryBucketLedger({...input, phaseTimings}, database),
+      })
+    : reduceSummaryRebuildAccumulatorForRequestSnapshot({...input, chunkIds, phaseTimings}, database)
 }
 
 export const reduceReviewServingSummaryRebuildPartialsForRequestSnapshots = async (
@@ -1508,6 +1657,186 @@ const projectPartialFullReviewServingSummaries = async (input: {
     summaryRowCount: 0,
     summaryValues: [],
   }
+}
+
+export type PatchReviewServingSummaryLedgerBucketsInput = ReviewServingSummaryLedgerSnapshotPatch & {
+  listModeKeys: readonly string[]
+  projectScopeIdentity: string
+  selectedImportSnapshotId: string
+}
+
+const summaryLedgerPatchTable = 'temp_summary_ledger_bucket_patch'
+const summaryLedgerAffectedKeyTable = 'temp_summary_ledger_affected_key'
+
+const getSummaryLedgerBucketValuesSql = (input: PatchReviewServingSummaryLedgerBucketsInput) => {
+  return input.buckets
+    .map((bucket) => {
+      return `(${getSqlLiteral(bucket.bucketId)}, CAST(${getSqlLiteral(bucket.effectiveStartKey)} AS VARCHAR), CAST(${getSqlLiteral(bucket.effectiveEndKey)} AS VARCHAR))`
+    })
+    .join(', ')
+}
+
+const getSummaryLedgerBucketArticleCte = (input: PatchReviewServingSummaryLedgerBucketsInput) => {
+  return `patched_bucket(bucket_id, effective_start_key, effective_end_key) AS (
+        SELECT * FROM (VALUES ${getSummaryLedgerBucketValuesSql(input)})
+      ),
+      bucket_article AS (
+        SELECT scope.article_id, patched_bucket.bucket_id
+        FROM mart.project_scope_article scope
+        INNER JOIN patched_bucket
+          ON (patched_bucket.effective_start_key IS NULL OR scope.article_id >= patched_bucket.effective_start_key)
+          AND (patched_bucket.effective_end_key IS NULL OR scope.article_id < patched_bucket.effective_end_key)
+        WHERE scope.project_id = ${getSqlLiteral(input.projectId)}
+      ),
+      article_id_filter(article_id) AS (
+        SELECT DISTINCT article_id
+        FROM bucket_article
+      )`
+}
+
+// The bucket is recomputed with the chunk rebuild's SQL over the bucket's whole effective range; rows without an article
+// (the lazy prompt-answer placeholders) belong to every bucket, as each chunk writes them once.
+const getCreateSummaryLedgerPatchStatements = (input: PatchReviewServingSummaryLedgerBucketsInput) => {
+  return [
+    `DROP TABLE IF EXISTS ${summaryLedgerPatchTable}`,
+    `
+      CREATE TEMPORARY TABLE ${summaryLedgerPatchTable} AS
+      WITH ${getSummaryContributionSourceCtes(input, {
+        articleFilterCte: getSummaryLedgerBucketArticleCte(input),
+        projectPromptDerivedBuckets: false,
+      })},
+      bucket_summary AS (
+        SELECT bucket_article.bucket_id, summary_union.*
+        FROM summary_union
+        LEFT JOIN bucket_article
+          ON bucket_article.article_id = summary_union.articleId
+      ),
+      grouped_summary AS (
+        SELECT
+          bucket_id,
+          summaryKind AS summary_kind,
+          summaryIdentity AS summary_identity,
+          listModeKey AS list_mode_key,
+          countKind AS count_kind,
+          ${getSummaryDefinitionVersionSql('countKind')} AS summary_definition_version,
+          filterKey AS filter_key,
+          facetKind AS facet_kind,
+          facetKey AS facet_key,
+          facetValue AS facet_value,
+          ANY_VALUE(promptId) AS prompt_id,
+          ANY_VALUE(answerId) AS answer_id,
+          ANY_VALUE(answerValue) AS answer_value,
+          ANY_VALUE(availability) AS availability,
+          ANY_VALUE(staleReason) AS stale_reason,
+          CAST(CASE WHEN ANY_VALUE(availability) = 'ready' THEN COUNT(*) ELSE NULL END AS BIGINT) AS count_value
+        FROM bucket_summary
+        GROUP BY bucket_id, summaryKind, summaryIdentity, listModeKey, countKind, filterKey, facetKind, facetKey, facetValue
+      )
+      SELECT *
+      FROM grouped_summary
+      WHERE summary_definition_version IS NOT NULL
+        AND (
+          (summary_kind = 'count' AND count_kind IS NOT NULL AND filter_key IS NOT NULL)
+          OR (summary_kind = 'facet' AND count_kind IS NOT NULL AND facet_kind IS NOT NULL AND facet_key IS NOT NULL AND facet_value IS NOT NULL)
+        )
+    `,
+    `
+      INSERT INTO ${summaryLedgerPatchTable}
+      SELECT placeholder.* REPLACE (patched_bucket.bucket_id AS bucket_id)
+      FROM ${summaryLedgerPatchTable} placeholder
+      CROSS JOIN (VALUES ${getSummaryLedgerBucketValuesSql(input)}) patched_bucket(bucket_id, effective_start_key, effective_end_key)
+      WHERE placeholder.bucket_id IS NULL
+    `,
+    `DELETE FROM ${summaryLedgerPatchTable} WHERE bucket_id IS NULL`,
+  ]
+}
+
+const getSummaryLedgerBucketIds = (
+  input: PatchReviewServingSummaryLedgerBucketsInput,
+  ledgerStatus?: 'building' | 'published',
+) => {
+  return input.buckets
+    .filter((bucket) => {
+      return ledgerStatus === undefined || bucket.ledgerStatus === ledgerStatus
+    })
+    .map((bucket) => {
+      return bucket.bucketId
+    })
+}
+
+const getSummaryLedgerRecountStatements = (input: PatchReviewServingSummaryLedgerBucketsInput) => {
+  const publishedBucketIds = getSummaryLedgerBucketIds(input, 'published')
+
+  return publishedBucketIds.length === 0
+    ? []
+    : getPublishReviewServingSummaryLedgerServingStatements({
+        ...input,
+        affectedKeyTable: summaryLedgerAffectedKeyTable,
+        bucketPredicateSql: "bucket.ledger_status = 'published'",
+      })
+}
+
+const getSummaryLedgerAffectedKeyStatements = (input: PatchReviewServingSummaryLedgerBucketsInput) => {
+  const publishedBucketIds = getSummaryLedgerBucketIds(input, 'published')
+
+  return publishedBucketIds.length === 0
+    ? []
+    : [
+        getCreateReviewServingSummaryLedgerAffectedKeyStatement({
+          ...input,
+          affectedKeyTable: summaryLedgerAffectedKeyTable,
+          bucketIds: publishedBucketIds,
+          replacementTable: summaryLedgerPatchTable,
+        }),
+      ]
+}
+
+// Replace semantics only: the touched buckets' partials are recomputed from source and replaced, then every serving key
+// the old or new partials of a published bucket carry is recounted as the SUM over the published ledger, all in one
+// transaction. Running a patch twice leaves the same rows.
+export const patchReviewServingSummaryLedgerBuckets = async (
+  input: PatchReviewServingSummaryLedgerBucketsInput,
+  database: ReviewServingSummaryProjectorDatabase,
+) => {
+  const bucketIds = getSummaryLedgerBucketIds(input)
+
+  if (bucketIds.length === 0 || input.listModeKeys.length === 0) {
+    return {affectedKeyCount: 0, bucketCount: 0, partialRowCount: 0, publishedBucketCount: 0}
+  }
+
+  return database.transaction(async (tx) => {
+    await runSummaryStatements(
+      [
+        ...getCreateSummaryLedgerPatchStatements(input),
+        `DROP TABLE IF EXISTS ${summaryLedgerAffectedKeyTable}`,
+        ...getSummaryLedgerAffectedKeyStatements(input),
+        ...getReplaceReviewServingSummaryLedgerPartialsStatements({
+          ...input,
+          bucketIds,
+          replacementTable: summaryLedgerPatchTable,
+        }),
+        ...getSummaryLedgerRecountStatements(input),
+      ],
+      tx,
+    )
+    const publishedBucketCount = getSummaryLedgerBucketIds(input, 'published').length
+    const [row] = await tx.queryJson<{affectedKeyCount: number; partialRowCount: number}>(`
+      SELECT
+        CAST((SELECT COUNT(*) FROM ${summaryLedgerPatchTable}) AS INTEGER) AS partialRowCount,
+        ${publishedBucketCount === 0 ? '0' : `CAST((SELECT COUNT(*) FROM ${summaryLedgerAffectedKeyTable}) AS INTEGER)`} AS affectedKeyCount
+    `)
+    await runSummaryStatements(
+      [`DROP TABLE IF EXISTS ${summaryLedgerPatchTable}`, `DROP TABLE IF EXISTS ${summaryLedgerAffectedKeyTable}`],
+      tx,
+    )
+
+    return {
+      affectedKeyCount: Number(row?.affectedKeyCount ?? 0),
+      bucketCount: bucketIds.length,
+      partialRowCount: Number(row?.partialRowCount ?? 0),
+      publishedBucketCount,
+    }
+  })
 }
 
 export const projectReviewServingSummaries = async (
