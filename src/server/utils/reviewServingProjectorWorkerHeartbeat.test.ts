@@ -408,7 +408,7 @@ test('review serving projector worker heartbeat scales default batch size above 
 
   expect(result.events).toEqual([
     {
-      rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+      rebuildChunkBatchMaxRssBytes: getDefaultReviewServingRebuildChunkBatchMaxRssBytes(undefined, '16GB'),
       rebuildChunkBatchSize: 4,
       searchRebuildChunkBatchSize: 32,
       wakeStarvationMs: 45_000,

@@ -21,7 +21,7 @@ test('uses local dev port defaults without env files', () => {
   expect(resolvedEnv.PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE).toBe(4)
   expect(resolvedEnv.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS).toBe(1000)
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES).toBe(
-    getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+    getDefaultReviewServingRebuildChunkBatchMaxRssBytes(undefined, resolvedEnv.DUCKDB_MEMORY_LIMIT),
   )
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(2)
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE).toBe(
@@ -120,6 +120,17 @@ test('bounds default review serving rebuild chunk batch RSS cap from system memo
   expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(4 * gibibyte)).toBe(4 * gibibyte)
   expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(10 * gibibyte)).toBe(7 * gibibyte)
   expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(128 * gibibyte)).toBe(12 * gibibyte)
+})
+
+test('keeps the review serving rebuild RSS cap above the DuckDB memory limit', () => {
+  const gibibyte = 1024 ** 3
+
+  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(48 * gibibyte, '20GiB')).toBe(24 * gibibyte)
+  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(48 * gibibyte, '4GiB')).toBe(12 * gibibyte)
+  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(24 * gibibyte, '20GiB')).toBe(
+    Math.floor(24 * gibibyte * 0.7),
+  )
+  expect(getDefaultReviewServingRebuildChunkBatchMaxRssBytes(48 * gibibyte, 'not a limit')).toBe(12 * gibibyte)
 })
 
 test('uses configured runtime log filtering and profile values', () => {
