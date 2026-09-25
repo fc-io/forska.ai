@@ -182,7 +182,7 @@ type DeltaIntakePartitionRow = {
 }
 
 type DeltaIntakePartitionSampleRow = {sourceHighWaterMark: number; sourcePartition: string}
-type JobDrivenLlmStatusDirtyWorkPendingRow = {pendingCount: number}
+type JobDrivenDirtyWorkPendingRow = {projectionComponent: ReviewServingProjectionComponent}
 
 type ReviewServingProjectorWorkerRebuildChunkService = {
   claimChunk: typeof claimReviewServingRebuildChunk
@@ -562,6 +562,11 @@ const foregroundActivationRebuildDrainComponents = new Set<ReviewServingProjecti
   dispatchReadyReviewServingComponents,
 )
 const foregroundActivationDirtyWorkComponents = dispatchReadyReviewServingComponents
+// Judgment imports also dirty payload/posting/summary, but those become rebuild requests instead of per-claim patches.
+const jobDrivenDirtyWorkComponents = [
+  'llmStatus',
+  'queue',
+] as const satisfies readonly ReviewServingProjectionComponent[]
 // Keep status chunks out of this set: they are small SQL-native updates, and per-chunk forced GC is unnecessary.
 const reviewServingNativeHeavyRebuildComponents = new Set<ReviewServingProjectionComponent>(['posting', 'summary'])
 const reviewServingDuckdbRecycleAfterRebuildComponents = new Set<ReviewServingProjectionComponent>([
@@ -9656,26 +9661,56 @@ const getDeltaIntakePartitions = async (
   })
 }
 
-const getHasPendingJobDrivenLlmStatusDirtyWork = async (input: {
-  database: ReviewServingProjectorWorkerDatabase
-  projectId?: string | null
-}) => {
-  const projectPredicate = input.projectId ? `AND state.project_id = ${getSqlLiteral(input.projectId)}` : ''
-  const [row] = await input.database.queryJson<JobDrivenLlmStatusDirtyWorkPendingRow>(`
-    SELECT 1 AS pendingCount
+const getPendingJobDrivenDirtyWorkComponentSql = (
+  component: ReviewServingProjectionComponent,
+  projectId: string | null | undefined,
+) => {
+  const projectPredicate = projectId ? `AND state.project_id = ${getSqlLiteral(projectId)}` : ''
+
+  return `(
+    SELECT state.projection_component AS projectionComponent
     FROM app.review_serving_dirty_work_claim_state state
     INNER JOIN app.judgment_job job
       ON state.source_partition = 'judgmentSqliteOutboxImport:' || job.id
       AND state.project_id = job.project_id
-    WHERE state.projection_component = 'llmStatus'
+    WHERE state.projection_component = ${getSqlLiteral(component)}
       AND state.status = 'pending'
       AND job.storage_state IN ('active', 'draining')
       AND ${getReviewServingDirtyWorkActiveProjectPredicate('state.project_id')}
       ${projectPredicate}
     LIMIT 1
-  `)
+  )`
+}
 
-  return Number(row?.pendingCount ?? 0) > 0
+const getPendingJobDrivenDirtyWorkComponents = async (input: {
+  database: ReviewServingProjectorWorkerDatabase
+  projectId?: string | null
+}) => {
+  const rows = await input.database.queryJson<JobDrivenDirtyWorkPendingRow>(
+    jobDrivenDirtyWorkComponents
+      .map((component) => {
+        return getPendingJobDrivenDirtyWorkComponentSql(component, input.projectId)
+      })
+      .join('\n    UNION ALL\n    '),
+  )
+  const pendingComponents = new Set(
+    rows.map((row) => {
+      return row.projectionComponent
+    }),
+  )
+
+  return jobDrivenDirtyWorkComponents.filter((component) => {
+    return pendingComponents.has(component)
+  })
+}
+
+const getJobDrivenDirtyWorkComponentOrder = (
+  components: readonly ReviewServingProjectionComponent[],
+  rotationOffset: number,
+) => {
+  const startIndex = components.length === 0 ? 0 : rotationOffset % components.length
+
+  return [...components.slice(startIndex), ...components.slice(0, startIndex)]
 }
 
 const runReviewServingProjectorWorkerDeltaIntake = async ({
@@ -9770,7 +9805,7 @@ const getWorkerProjectorServiceDependencies = (input: {
   }
 }
 
-const runJobDrivenLlmStatusDirtyWorkBeforeBacklog = async (input: {
+const runJobDrivenDirtyWorkBeforeBacklog = async (input: {
   admissionDeadlineMs: number
   database: ReviewServingProjectorWorkerDatabase
   dependencies: ReviewServingProjectorWorkerDependencies
@@ -9778,19 +9813,20 @@ const runJobDrivenLlmStatusDirtyWorkBeforeBacklog = async (input: {
   projectorServiceDependencies: ReviewServingProjectorServiceDependencies
   wakeId: string
 }) => {
-  const hasPendingLlmStatusWork = await getHasPendingJobDrivenLlmStatusDirtyWork({
+  const pendingComponents = await getPendingJobDrivenDirtyWorkComponents({
     database: input.database,
     projectId: input.options.rebuildProjectId,
   })
 
-  if (!hasPendingLlmStatusWork) {
+  if (pendingComponents.length === 0) {
     return null
   }
 
+  const wakeInput = getWakeInput({dependencies: input.dependencies, options: input.options, wakeId: input.wakeId})
   const projector = await input.dependencies.wakeProjectors(
     {
-      ...getWakeInput({dependencies: input.dependencies, options: input.options, wakeId: input.wakeId}),
-      componentOrder: ['llmStatus'],
+      ...wakeInput,
+      componentOrder: getJobDrivenDirtyWorkComponentOrder(pendingComponents, wakeInput.componentRotationOffset ?? 0),
       maxWakeMs: Math.max(0, input.admissionDeadlineMs - getWorkerNowMs(input.dependencies, input.options)),
     },
     input.projectorServiceDependencies,
@@ -10056,10 +10092,10 @@ export const runReviewServingProjectorWorkerCycle = async (
     dependencies,
     options,
   })
-  const jobDrivenLlmStatusProjector =
+  const jobDrivenProjector =
     terminalFailedChunk === null
-      ? await runReviewServingProjectorWorkerCyclePhase('wakeJobDrivenLlmStatusDirtyWork', () => {
-          return runJobDrivenLlmStatusDirtyWorkBeforeBacklog({
+      ? await runReviewServingProjectorWorkerCyclePhase('wakeJobDrivenDirtyWork', () => {
+          return runJobDrivenDirtyWorkBeforeBacklog({
             admissionDeadlineMs,
             database,
             dependencies,
@@ -10086,7 +10122,7 @@ export const runReviewServingProjectorWorkerCycle = async (
     : await runNormalReviewServingProjectorWorkerCycleWork(cycleContext)
   const {cleanup, deltaIntake} = work
   const chunk = work.finalizedChunkBatch.chunk
-  const projector = combineReviewServingProjectorWakeResults(jobDrivenLlmStatusProjector, work.backlogProjector)
+  const projector = combineReviewServingProjectorWakeResults(jobDrivenProjector, work.backlogProjector)
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
   const nextAdmittedWakeAtMs =
