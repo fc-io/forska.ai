@@ -6,6 +6,7 @@ import {startJudgeWorkerStartupRolloutCleanup} from './cron/judgmentsJobs/judgeW
 import {runStartupAutomaticOrphanedQueueRepair} from './cron/judgmentsJobs/judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from './cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {startJudgeWorkerEventLoopLagMonitor} from './cron/judgmentsJobs/judgmentsJobsSendToLLM.ts'
 import {runStartupJudgmentRolloutCleanup} from './cron/judgmentsJobs/judgmentStartupRolloutCleanup.ts'
 import {apiProxyRoutes} from './routes/ApiProxyRoutes.ts'
 import {duckdbOwnerPrivateApiPrefix} from './routes/apiRouteClassification.ts'
@@ -362,6 +363,7 @@ writeRuntimeOperatorLogEvent({
   severity: 'INFO',
 })
 if (shouldRunMutatingServerWork && getCurrentServerRole() === 'judge-worker') {
+  startJudgeWorkerEventLoopLagMonitor()
   void startJudgeWorkerStartupRolloutCleanup().catch((error) => {
     writeRuntimeOperatorLogEvent({
       attrs: {error},
