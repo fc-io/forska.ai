@@ -414,6 +414,33 @@ test('wake releases claimed work when the duration budget is exhausted after cla
   expect(releasedClaimIds).toEqual(['posting-1'])
 })
 
+test('wake reports claims a runner deferred as released instead of projected', async () => {
+  const {dependencies} = createDependencyHarness({
+    queue: [
+      getClaim({component: 'queue', dirtyWorkId: 'queue-1'}),
+      getClaim({component: 'queue', dirtyWorkId: 'queue-2'}),
+      getClaim({component: 'queue', dirtyWorkId: 'queue-3'}),
+    ],
+  })
+
+  dependencies.runners = {
+    queue: async () => {
+      return {processedCount: 1, releasedClaimIds: ['queue-2', 'queue-3']}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 3, componentOrder: ['queue'], maxRowsPerWake: 3, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(result.status).toBe('partial')
+  expect(result.releasedClaimIds).toEqual(['queue-2', 'queue-3'])
+  expect(result.runs).toEqual([
+    {attempts: 1, claimCount: 1, component: 'queue', processedCount: 1, status: 'completed'},
+  ])
+})
+
 test('wake requests page-first V4 rebuild and blocks claims when a snapshot is not ready yet', async () => {
   const {blockedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
