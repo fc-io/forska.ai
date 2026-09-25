@@ -16,6 +16,7 @@ let closeDatabase: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let deleteProviderConnection: typeof import('./providerConnectionRepository.ts').deleteProviderConnection
+let updateProviderConnection: typeof import('./providerConnectionRepository.ts').updateProviderConnection
 
 const insertProviderConnectionFixture = async ({connectionId, modelId}: {connectionId: string; modelId: string}) => {
   if (!runDatabase) {
@@ -79,6 +80,7 @@ beforeAll(async () => {
     return database.run(statement)
   }
   deleteProviderConnection = repository.deleteProviderConnection
+  updateProviderConnection = repository.updateProviderConnection
 })
 
 afterAll(async () => {
@@ -301,4 +303,45 @@ test('deleteProviderConnection rolls back archive writes when model archive clea
   expect(storedConnection?.enabled).toBe(true)
   expect(JSON.parse(storedConnection?.configJson ?? '{}')).toMatchObject({archived: false})
   expect(storedModel).toEqual({enabled: true, providerConnectionId: 'rollback-archive-connection'})
+})
+
+test('updateProviderConnection only marks projects changed when the execution identity changes', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await insertProviderConnectionFixture({connectionId: 'cap-connection', modelId: 'cap-model'})
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id)
+    VALUES ('cap-project', 'Cap Project', 'cap-model')
+  `)
+
+  const query = queryDatabase
+  const countIdentityDeltas = async () => {
+    const [row] = await query<{count: number}>(`
+      SELECT COUNT(*)::INTEGER AS count
+      FROM app.review_change_delta
+      WHERE source_partition = 'providerConnectionExecutionIdentity:cap-connection'
+    `)
+
+    return Number(row?.count ?? 0)
+  }
+  const update = (input: {baseURL: string | null; maxInflightRequests: number | null}) => {
+    return updateProviderConnection({
+      authMode: 'api-key',
+      baseURL: input.baseURL,
+      config: {archived: false, disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+      enabled: true,
+      id: 'cap-connection',
+      label: 'OpenRouter',
+      maxInflightRequests: input.maxInflightRequests,
+      secretRef: null,
+    })
+  }
+
+  await update({baseURL: null, maxInflightRequests: 384})
+  expect(await countIdentityDeltas()).toBe(0)
+
+  await update({baseURL: 'http://127.0.0.1:30001/v1', maxInflightRequests: 384})
+  expect(await countIdentityDeltas()).toBeGreaterThan(0)
 })

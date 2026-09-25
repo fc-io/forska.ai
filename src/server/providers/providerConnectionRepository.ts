@@ -686,6 +686,13 @@ export const createProviderConnection = async ({
   return getProviderConnectionRecordFromRow(created)
 }
 
+export const hasProviderConnectionExecutionIdentityChanged = (
+  current: Pick<ProviderConnectionRow, 'baseURL' | 'providerKind'>,
+  next: Pick<ProviderConnectionRow, 'baseURL' | 'providerKind'>,
+): boolean => {
+  return (current.baseURL ?? null) !== (next.baseURL ?? null) || current.providerKind !== next.providerKind
+}
+
 export const updateProviderConnection = async ({
   authMode,
   baseURL,
@@ -713,6 +720,11 @@ export const updateProviderConnection = async ({
 
   const persistedConfig = getPersistedProviderConnectionConfigValue({config, providerKind: current.providerKind})
   const updated = await getAppDatabaseService().transaction(async (tx) => {
+    const [previousIdentity] = await tx.queryJson<Pick<ProviderConnectionRow, 'baseURL' | 'providerKind'>>(`
+      SELECT base_url AS baseURL, provider_kind AS providerKind
+      FROM app.provider_connection
+      WHERE id = ${getSqlLiteral(id)}
+    `)
     const [nextConnection] = await tx.queryJson<ProviderConnectionRow>(`
       UPDATE app.provider_connection
       SET label = ${getSqlLiteral(label)},
@@ -744,11 +756,17 @@ export const updateProviderConnection = async ({
       throw new Error('Failed to update provider connection')
     }
 
-    await appendProviderConnectionExecutionIdentityReviewServingDeltas(tx, {
-      providerConnectionIds: [id],
-      sourceMutationKey: `providerConnection.update|${id}|${getProviderConnectionUpdateMutationTimestamp(nextConnection.updatedAt)}`,
-      sourceOperation: 'update',
-    })
+    // Only the provider kind and base URL of a connection are part of a project's model execution
+    // identity (see getReviewServingReviewConfigHash). Every other update, such as the max
+    // in-flight cap, used to mark every project on the connection as changed and queued full
+    // top-priority review-serving rebuilds of unchanged data.
+    if (!previousIdentity || hasProviderConnectionExecutionIdentityChanged(previousIdentity, nextConnection)) {
+      await appendProviderConnectionExecutionIdentityReviewServingDeltas(tx, {
+        providerConnectionIds: [id],
+        sourceMutationKey: `providerConnection.update|${id}|${getProviderConnectionUpdateMutationTimestamp(nextConnection.updatedAt)}`,
+        sourceOperation: 'update',
+      })
+    }
     await advanceProviderConnectionProjectTransferDirtyTokens({databaseRunner: tx, reason: 'providerConnection.update'})
 
     return getProviderConnectionRecordFromRow(nextConnection)
