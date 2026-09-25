@@ -18,6 +18,7 @@ import {
 import {getReviewServingInvalidationRuleOrNull} from './reviewServingInvalidationRegistry.ts'
 import {
   getReviewServingProjectionIdentityManifest,
+  hasReviewServingSnapshotComponentAtBaseGeneration,
   type ReviewServingManifestRepositoryDatabase,
   type ReviewServingManifestRepositoryTransaction,
   upsertReviewServingProjectionIdentityManifest,
@@ -123,6 +124,10 @@ const optionalDirtyWorkBootstrapComponents = new Set<ReviewServingProjectionComp
   'judgmentInputContent',
   'search',
 ])
+const articleRoutedDirtyWorkComponents = new Set<ReviewServingProjectionComponent>(['payload', 'posting', 'summary'])
+const incrementalArticleDirtyWorkComponents = new Set<ReviewServingProjectionComponent>(['payload'])
+
+type ArticleDirtyWorkRoute = 'bootstrap' | 'incremental'
 
 export type IntakeReviewServingProjectorDirtyWorkInput = {
   identityResolver: ReviewServingProjectorIdentityResolver
@@ -493,6 +498,123 @@ const getChunkedDirtyWorkProjectIds = (
     : []
 }
 
+const isArticleScopedDirtyWorkClaim = (claim: ReviewServingDirtyWorkClaim) => {
+  return claim.projectId !== null && claim.scopeKind === 'article'
+}
+
+const getClaimProjectionIdentities = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Set(
+      claims.map((claim) => {
+        return claim.projectionIdentity
+      }),
+    ),
+  ]
+}
+
+const hasIncrementalArticleDirtyWorkSnapshot = async (input: {
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  component: ReviewServingProjectionComponent
+  database: ReviewServingProjectorServiceDatabase
+}) => {
+  const [projectId, ...otherProjectIds] = getClaimProjectIds(input.claims)
+  const [projectionIdentity, ...otherProjectionIdentities] = getClaimProjectionIdentities(input.claims)
+  const reviewConfigHash =
+    projectId === undefined ? null : await getCurrentReviewServingReviewConfigHash(projectId, input.database)
+
+  return (
+    projectId !== undefined
+    && projectionIdentity !== undefined
+    && reviewConfigHash !== null
+    && otherProjectIds.length === 0
+    && otherProjectionIdentities.length === 0
+    && (await hasReviewServingSnapshotComponentAtBaseGeneration(
+      {projectId, projectionComponent: input.component, projectionIdentity, reviewConfigHash},
+      input.database,
+    ))
+  )
+}
+
+// Article claims of these components are patched only into snapshots that carry the component at its current base
+// generation and review config; otherwise they wait for a requested-only bootstrap instead of being released each wake.
+const getArticleDirtyWorkRoute = async (input: {
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  component: ReviewServingProjectionComponent
+  database: ReviewServingProjectorServiceDatabase
+}): Promise<ArticleDirtyWorkRoute | null> => {
+  if (!articleRoutedDirtyWorkComponents.has(input.component) || !input.claims.every(isArticleScopedDirtyWorkClaim)) {
+    return null
+  }
+
+  const hasIncrementalSnapshot =
+    incrementalArticleDirtyWorkComponents.has(input.component)
+    && (await hasIncrementalArticleDirtyWorkSnapshot(input).catch(() => {
+      return false
+    }))
+
+  return hasIncrementalSnapshot ? 'incremental' : 'bootstrap'
+}
+
+const getAwaitedRebuildRequestDiagnostic = (requests: readonly ReviewServingRebuildRequest[]) => {
+  return `waiting for review rebuild ${requests
+    .map((request) => {
+      return request.requestId
+    })
+    .join(', ')} to activate`
+}
+
+const settleBootstrapRoutedArticleDirtyWork = async (input: {
+  blockDirtyWorkForRebuild: typeof blockReviewServingDirtyWorkClaimsForRebuild
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  completeDirtyWork: typeof completeReviewServingDirtyWorkClaims
+  component: ReviewServingProjectionComponent
+  database: ReviewServingProjectorServiceDatabase
+  requests: readonly ReviewServingRebuildRequest[]
+  state: WakeReviewServingProjectorState
+}): Promise<WakeReviewServingProjectorState> => {
+  const coveredClaims = input.claims.filter((claim) => {
+    return input.requests.some((request) => {
+      return isClaimCoveredByRebuildRequest(claim, request)
+    })
+  })
+  const waitingClaims = input.claims.filter((claim) => {
+    return !coveredClaims.includes(claim)
+  })
+
+  if (coveredClaims.length > 0) {
+    await input.completeDirtyWork(coveredClaims, input.database)
+  }
+
+  const completedState =
+    coveredClaims.length === 0
+      ? input.state
+      : {
+          ...input.state,
+          processedRows: input.state.processedRows + coveredClaims.length,
+          runs: [
+            ...input.state.runs,
+            {
+              attempts: 1,
+              claimCount: coveredClaims.length,
+              component: input.component,
+              processedCount: 0,
+              status: 'completed' as const,
+            },
+          ],
+        }
+
+  return waitingClaims.length === 0
+    ? completedState
+    : parkDirtyWorkClaimsBlockedByRebuild({
+        blockDirtyWorkForRebuild: input.blockDirtyWorkForRebuild,
+        claims: waitingClaims,
+        component: input.component,
+        database: input.database,
+        diagnostic: getAwaitedRebuildRequestDiagnostic(input.requests),
+        state: completedState,
+      })
+}
+
 export const getChunkedDirtyWorkRebuildPriority = (component: ReviewServingProjectionComponent) => {
   return countReadyRepairComponents.has(component)
     ? activationReviewServingRebuildPriority
@@ -736,7 +858,9 @@ export const wakeReviewServingProjectorService = async (
         return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
       }
 
-      const chunkedDirtyWorkProjectIds = getChunkedDirtyWorkProjectIds(component, claims)
+      const articleDirtyWorkRoute = await getArticleDirtyWorkRoute({claims, component, database})
+      const chunkedDirtyWorkProjectIds =
+        articleDirtyWorkRoute === 'incremental' ? [] : getChunkedDirtyWorkProjectIds(component, claims)
 
       if (chunkedDirtyWorkProjectIds.length > 0) {
         const rebuildResult = await Effect.runPromise(
@@ -784,6 +908,18 @@ export const wakeReviewServingProjectorService = async (
             component,
             database,
             diagnostic: getBlockedRebuildRequestDiagnostic(blockedRebuildRequests),
+            state,
+          })
+        }
+
+        if (articleDirtyWorkRoute === 'bootstrap') {
+          return settleBootstrapRoutedArticleDirtyWork({
+            blockDirtyWorkForRebuild,
+            claims,
+            completeDirtyWork,
+            component,
+            database,
+            requests: rebuildResult.right,
             state,
           })
         }

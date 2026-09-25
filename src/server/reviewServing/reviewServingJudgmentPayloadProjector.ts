@@ -1,7 +1,8 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getReviewServingArticlesInRunningRebuildChunks} from './reviewServingCandidateRebuildCoverage.ts'
 import {type ReviewServingListMode} from './reviewServingContracts.ts'
-import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {releaseReviewServingDirtyWorkClaims, type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingPayloadPatchManifest} from './reviewServingDisplayPayloadProjector.ts'
 import {
   getDeleteReviewServingProjectorRowsStatement,
@@ -47,16 +48,19 @@ type ProjectReviewServingJudgmentPayloadProjectSettings = {
 
 const rowNumberSql = ['row', 'number'].join('_')
 
+const getClaimArticleId = (claim: ReviewServingDirtyWorkClaim) => {
+  const articleId =
+    claim.articleId ?? (claim.scopeKind === 'article' ? (claim.scopeId.split(':').at(-1) ?? null) : null)
+
+  return articleId !== null && articleId.trim().length > 0 ? articleId : null
+}
+
 const getClaimArticleIds = (claims: readonly ReviewServingDirtyWorkClaim[] = []) => {
   return [
     ...new Set(
-      claims
-        .map((claim) => {
-          return claim.articleId ?? (claim.scopeKind === 'article' ? (claim.scopeId.split(':').at(-1) ?? null) : null)
-        })
-        .filter((articleId) => {
-          return articleId !== null && articleId.trim().length > 0
-        }) as string[],
+      claims.map(getClaimArticleId).filter((articleId): articleId is string => {
+        return articleId !== null
+      }),
     ),
   ]
 }
@@ -708,6 +712,35 @@ export const ensureReviewServingJudgmentPayloadRowsForArticleSet = async (
   )
 
   return {articleCount: articleIds.length, ...result, status: 'completed' as const}
+}
+
+export const deferReviewServingPayloadClaimsInRunningRebuildChunks = async (
+  input: {claims: readonly ReviewServingDirtyWorkClaim[]; projectId: string; projectionIdentity: string},
+  database: ReviewServingJudgmentPayloadProjectorDatabase,
+) => {
+  const runningArticleIds = await getReviewServingArticlesInRunningRebuildChunks(
+    {
+      articleIds: getClaimArticleIds(input.claims),
+      component: 'payload',
+      projectId: input.projectId,
+      projectionIdentity: input.projectionIdentity,
+    },
+    database,
+  )
+  const deferredClaims = input.claims.filter((claim) => {
+    return runningArticleIds.has(getClaimArticleId(claim) ?? '')
+  })
+
+  await releaseReviewServingDirtyWorkClaims(
+    deferredClaims.map((claim) => {
+      return claim.dirtyWorkId
+    }),
+    database,
+  )
+
+  return input.claims.filter((claim) => {
+    return !deferredClaims.includes(claim)
+  })
 }
 
 const canUseSetBasedJudgmentPayloadRangeInsert = (
