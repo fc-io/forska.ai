@@ -5295,10 +5295,11 @@ const shouldRecycleDuckdbAfterCompletedRebuildChunk = (input: {
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  if (input.chunk.projectionComponent === 'summary') {
-    return true
-  }
-
+  // Request-associated summary chunks used to recycle unconditionally (a 6.2 GiB low-memory OOM
+  // fix from 2026-07). A recycle closes the owner's DuckDB for about 10 s, and summary chunks
+  // finish every 20-40 s during a large rebuild, so the owner was unreachable half the time.
+  // They now follow the other native-heavy chunks: recycle at the RSS cap, which low-memory
+  // runtimes set low enough to keep recycling.
   return (
     (reviewServingDuckdbRecycleAfterRebuildComponents.has(input.chunk.projectionComponent)
       && input.chunk.requestId === null)
