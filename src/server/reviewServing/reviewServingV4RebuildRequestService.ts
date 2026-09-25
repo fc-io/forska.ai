@@ -23,6 +23,7 @@ import {
   reviewServingListModes,
   type ReviewServingProjectionComponent,
   reviewServingProjectionComponents,
+  snapshotIndependentReviewServingComponents,
 } from './reviewServingContracts.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
@@ -287,10 +288,9 @@ const fullProjectBootstrapComponents = [] as const satisfies readonly ReviewServ
 const reusableBootstrapSnapshotStatuses = new Set(['active', 'candidate'] as const)
 const reusableBootstrapManifestStatuses = new Set(['active', 'candidate'] as const)
 const reusableBootstrapSourceSnapshotStatuses = new Set(['active', 'retired'] as const)
-const crossSnapshotMetadataOnlyBootstrapReuseComponents = new Set<ReviewServingProjectionComponent>([
-  'projectScope',
-  'selectedImport',
-])
+const crossSnapshotMetadataOnlyBootstrapReuseComponents = new Set<ReviewServingProjectionComponent>(
+  snapshotIndependentReviewServingComponents,
+)
 const crossSnapshotCloneableBootstrapReuseComponents = new Set<ReviewServingProjectionComponent>([
   'payload',
   'queue',

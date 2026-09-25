@@ -8,6 +8,7 @@ import {
   type ReviewServingProjectionComponent,
   type ReviewServingSnapshotComponentStates,
   type ReviewServingSnapshotStatus,
+  snapshotIndependentReviewServingComponents,
 } from './reviewServingContracts.ts'
 import {
   getReviewServingProjectionComponentIdentityKey,
@@ -263,8 +264,22 @@ const getSnapshotManifestComponentStates = (manifest: ReviewServingSnapshotManif
   return [...manifest.componentState.required, ...manifest.componentState.optional]
 }
 
-const isProjectionStatusTrustedWithoutChunks = (manifest: ReviewServingSnapshotManifest, status: string | null) => {
-  return manifest.status !== 'candidate' || status === 'active'
+const snapshotIndependentComponentSet = new Set<ReviewServingProjectionComponent>(
+  snapshotIndependentReviewServingComponents,
+)
+
+const isSharedSnapshotIndependentProjection = (component: ReviewServingProjectionComponent, status: string | null) => {
+  return snapshotIndependentComponentSet.has(component) && status === 'candidate'
+}
+
+const isProjectionStatusTrustedWithoutChunks = (
+  manifest: ReviewServingSnapshotManifest,
+  component: ReviewServingProjectionComponent,
+  status: string | null,
+) => {
+  return (
+    manifest.status !== 'candidate' || status === 'active' || isSharedSnapshotIndependentProjection(component, status)
+  )
 }
 
 const snapshotManifestAvailabilityResultRowLimit = 64
@@ -483,7 +498,7 @@ const getAvailableSnapshotManifest = async (
     const chunkAvailability = chunkAvailabilityByKey.get(key)
 
     if (chunkAvailability === undefined) {
-      return isProjectionStatusTrustedWithoutChunks(manifest, projectionStatusByKey.get(key) ?? null)
+      return isProjectionStatusTrustedWithoutChunks(manifest, state.component, projectionStatusByKey.get(key) ?? null)
     }
 
     const totalChunkCount = getNonNegativeFiniteInteger(chunkAvailability.totalChunkCount)
@@ -746,7 +761,13 @@ const getSqlBoolean = (value: boolean | number | string | null | undefined) => {
   return value === true || value === 1 || value === 'true' || value === 't' || value === '1'
 }
 
-const getCandidateSnapshotInFlightRebuildSql = (candidateAlias: string) => {
+const getExcludedRebuildRequestPredicateSql = (excludedRequestId: string | undefined) => {
+  return excludedRequestId === undefined
+    ? ''
+    : `AND chunk.request_id IS DISTINCT FROM ${getSqlLiteral(excludedRequestId)}`
+}
+
+const getCandidateSnapshotInFlightRebuildSql = (candidateAlias: string, excludedRequestId?: string) => {
   const nonTerminalRequestStatusSql = nonTerminalReviewServingRebuildRequestStatuses.map(getSqlLiteral).join(', ')
   const inFlightChunkStatusSql = inFlightReviewServingRebuildChunkStatuses.map(getSqlLiteral).join(', ')
 
@@ -758,11 +779,29 @@ const getCandidateSnapshotInFlightRebuildSql = (candidateAlias: string) => {
           AND (request.request_id || '') = chunk.request_id
         WHERE chunk.project_id IS NOT DISTINCT FROM ${candidateAlias}.project_id
           AND chunk.snapshot_id IS NOT DISTINCT FROM ${candidateAlias}.snapshot_id
+          ${getExcludedRebuildRequestPredicateSql(excludedRequestId)}
           AND (
             chunk.status IN (${inFlightChunkStatusSql})
             OR request.status IN (${nonTerminalRequestStatusSql})
           )
       )`
+}
+
+export const hasOtherInFlightRebuildForCandidateSnapshot = async (
+  input: {excludedRequestId: string; projectId: string; snapshotId: string},
+  database: ReviewServingManifestReaderDatabase = getAppDatabaseService(),
+) => {
+  const [row] = await database.queryJson<{hasOtherInFlightRebuild: boolean | number | string | null}>(`
+    SELECT
+      CAST(${getCandidateSnapshotInFlightRebuildSql('candidate', input.excludedRequestId)} AS BOOLEAN) AS hasOtherInFlightRebuild
+    FROM (
+      SELECT
+        ${getSqlLiteral(input.projectId)} AS project_id,
+        ${getSqlLiteral(input.snapshotId)} AS snapshot_id
+    ) candidate
+  `)
+
+  return getSqlBoolean(row?.hasOtherInFlightRebuild)
 }
 
 const getCandidateSnapshotSupersessionRowFromRow = (
