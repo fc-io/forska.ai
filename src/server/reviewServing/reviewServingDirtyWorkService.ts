@@ -1666,6 +1666,55 @@ export const claimReviewServingDirtyWork = async (
   })
 }
 
+const getUpstreamGateClaimValuesSql = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return claims
+    .map((claim) => {
+      return `(${getSqlLiteral(claim.dirtyWorkId)}, ${getSqlLiteral(claim.articleId)}, ${getSqlLiteral(claim.sourcePartition)}, CAST(${getSqlLiteral(claim.latestSourceHighWaterMark)} AS BIGINT))`
+    })
+    .join(', ')
+}
+
+// Watermarks only order changes within one source partition, so a claim waits for unfinished upstream work of its own
+// article and partition that started at or below the claim's watermark. Upstream rows keep their first watermark
+// across re-dirtying, which makes the check conservative rather than exact.
+export const getReviewServingDirtyWorkClaimIdsAwaitingUpstream = async (
+  input: {
+    claims: readonly ReviewServingDirtyWorkClaim[]
+    projectId: string
+    upstreamComponents: readonly ReviewServingProjectionComponent[]
+  },
+  database: Pick<ReviewServingDirtyWorkTransaction, 'queryJson'>,
+) => {
+  const articleClaims = input.claims.filter((claim) => {
+    return claim.articleId !== null
+  })
+
+  if (articleClaims.length === 0 || input.upstreamComponents.length === 0) {
+    return new Set<string>()
+  }
+
+  const rows = await database.queryJson<{dirtyWorkId: string}>(`
+    WITH claimed(dirty_work_id, article_id, source_partition, latest_source_high_water_mark) AS (
+      VALUES ${getUpstreamGateClaimValuesSql(articleClaims)}
+    )
+    SELECT DISTINCT claimed.dirty_work_id AS dirtyWorkId
+    FROM claimed
+    INNER JOIN app.review_serving_dirty_work upstream
+      ON upstream.article_id = claimed.article_id
+      AND upstream.source_partition = claimed.source_partition
+      AND upstream.first_source_high_water_mark <= claimed.latest_source_high_water_mark
+    WHERE upstream.project_id = ${getSqlLiteral(input.projectId)}
+      AND upstream.projection_component IN (${input.upstreamComponents.map(getSqlLiteral).join(', ')})
+      AND upstream.status IN ('pending', 'running', 'failed', 'blocked_by_rebuild')
+  `)
+
+  return new Set(
+    rows.map((row) => {
+      return row.dirtyWorkId
+    }),
+  )
+}
+
 export const releaseReviewServingDirtyWorkClaims = async (
   dirtyWorkIds: readonly string[],
   database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),

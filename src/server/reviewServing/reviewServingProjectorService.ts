@@ -126,7 +126,7 @@ const optionalDirtyWorkBootstrapComponents = new Set<ReviewServingProjectionComp
   'search',
 ])
 const articleRoutedDirtyWorkComponents = new Set<ReviewServingProjectionComponent>(['payload', 'posting', 'summary'])
-const incrementalArticleDirtyWorkComponents = new Set<ReviewServingProjectionComponent>(['payload'])
+const incrementalArticleDirtyWorkComponents = new Set<ReviewServingProjectionComponent>(['payload', 'posting'])
 
 type ArticleDirtyWorkRoute = 'bootstrap' | 'incremental'
 

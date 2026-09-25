@@ -56,6 +56,7 @@ import {
   projectReviewServingFilterOptions,
 } from '../reviewServing/reviewServingFilterOptionProjector.ts'
 import {
+  deferReviewServingPostingClaimsAwaitingInputs,
   projectReviewServingFilterPostingRanges,
   projectReviewServingFilterPostings,
 } from '../reviewServing/reviewServingFilterPostingProjector.ts'
@@ -5053,14 +5054,24 @@ export const getDefaultReviewServingProjectorRunners = (
     },
     posting: async (context) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
+      const claims = await deferReviewServingPostingClaimsAwaitingInputs(
+        {claims: context.claims, projectId, projectionIdentity: manifest.projectionIdentity},
+        database,
+      )
+
+      if (claims.length === 0) {
+        return {processedCount: 0}
+      }
+
       const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
         return projectReviewServingFilterPostings(
           {
             acknowledgeClaims,
             baseGeneration: manifest.baseGeneration,
-            claims: context.claims,
+            claims,
             definitionVersion: manifest.definitionVersion,
             listModeKeys: reviewServingListModes,
+            patchPromptAnswerPostings: getSnapshotComponentState(snapshot, 'payload') !== null,
             projectId,
             projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
             projectionIdentity: manifest.projectionIdentity,
