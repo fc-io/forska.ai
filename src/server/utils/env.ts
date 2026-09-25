@@ -63,14 +63,25 @@ const lowMemoryReviewServingSearchRebuildChunkBatchSize = 8
 const standardMemoryReviewServingSearchRebuildChunkBatchSize = 16
 const elevatedMemoryReviewServingSearchRebuildChunkBatchSize = 32
 const minimumReviewServingRebuildChunkBatchMaxRssBytes = 4 * gibibyte
-const maximumReviewServingRebuildChunkBatchMaxRssBytes = 12 * gibibyte
+const baseReviewServingRebuildChunkBatchMaxRssBytes = 12 * gibibyte
+const reviewServingRebuildChunkBatchRssHeadroomBytes = 4 * gibibyte
 
-export const getDefaultReviewServingRebuildChunkBatchMaxRssBytes = (totalMemoryBytes = totalmem()) => {
+// Past this RSS the projector closes and reopens DuckDB after a heavy rebuild chunk to hand
+// native memory back. DuckDB may hold its whole memory_limit, so a cap below that limit
+// recycled after nearly every chunk; each recycle left the owner's database closed for about
+// 10 s and stalled judge dispatch. The cap stays above the configured limit, within 70% of RAM.
+export const getDefaultReviewServingRebuildChunkBatchMaxRssBytes = (
+  totalMemoryBytes = totalmem(),
+  duckdbMemoryLimit: string | null = null,
+) => {
   const memoryBasedCapBytes = Math.floor(totalMemoryBytes * 0.7)
+  const duckdbLimitMiB = parseDuckdbMemoryLimitToMiB(duckdbMemoryLimit)
+  const duckdbBasedCapBytes =
+    duckdbLimitMiB === null ? 0 : Math.ceil(duckdbLimitMiB * 1024 ** 2) + reviewServingRebuildChunkBatchRssHeadroomBytes
 
   return Math.max(
     minimumReviewServingRebuildChunkBatchMaxRssBytes,
-    Math.min(maximumReviewServingRebuildChunkBatchMaxRssBytes, memoryBasedCapBytes),
+    Math.min(Math.max(baseReviewServingRebuildChunkBatchMaxRssBytes, duckdbBasedCapBytes), memoryBasedCapBytes),
   )
 }
 
@@ -224,7 +235,7 @@ export const loadEnv = ({
     || String(merged.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES).trim() === ''
   ) {
     ;(merged as Record<string, string>).FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES = String(
-      getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+      getDefaultReviewServingRebuildChunkBatchMaxRssBytes(totalmem(), String(merged.DUCKDB_MEMORY_LIMIT ?? '')),
     )
   }
   if (

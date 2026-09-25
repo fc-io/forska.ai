@@ -76,7 +76,7 @@ const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
   return (
     options.rebuildChunkBatchMaxRssBytes
     ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
-    ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes()
+    ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes(undefined, env.DUCKDB_MEMORY_LIMIT)
   )
 }
 
@@ -272,7 +272,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       rebuildChunkBatchMaxRssBytes:
         options.rebuildChunkBatchMaxRssBytes
         ?? env.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES
-        ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes(),
+        ?? getDefaultReviewServingRebuildChunkBatchMaxRssBytes(undefined, env.DUCKDB_MEMORY_LIMIT),
       rebuildChunkBatchSoftRssBytes: getReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes(options),
       rebuildChunkBatchSize:
         options.rebuildChunkBatchSize
