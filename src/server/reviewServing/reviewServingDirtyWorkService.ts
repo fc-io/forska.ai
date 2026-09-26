@@ -1,4 +1,4 @@
-import {createHash} from 'node:crypto'
+import {createHash, randomUUID} from 'node:crypto'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getDateValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
@@ -858,11 +858,18 @@ type DirtyWorkClaimStateInput = Pick<
   | 'storageRowId'
 >
 
+const getDirtyWorkIdListSql = (dirtyWorkIds: readonly string[]) => {
+  return dirtyWorkIds.map(getSqlLiteral).join(', ')
+}
+
+const isDirtyWorkClaimStateMaintainable = (
+  claim: Pick<DirtyWorkClaimStateInput, 'projectionIdentity' | 'sourcePartition'>,
+) => {
+  return claim.projectionIdentity.trim().length > 0 && claim.sourcePartition.trim().length > 0
+}
+
 const getDirtyWorkClaimStateValuesSql = (claims: readonly DirtyWorkClaimStateInput[]) => {
   return claims
-    .filter((claim) => {
-      return claim.projectionIdentity.trim().length > 0 && claim.sourcePartition.trim().length > 0
-    })
     .map((claim) => {
       return `(
         ${getSqlLiteral(claim.dirtyWorkId)},
@@ -889,11 +896,20 @@ const maintainReviewServingDirtyWorkClaimStates = async (
   claims: readonly DirtyWorkClaimStateInput[],
   database: ReviewServingDirtyWorkTransaction,
 ) => {
-  const valuesSql = getDirtyWorkClaimStateValuesSql(claims)
+  const maintainableClaims = claims.filter(isDirtyWorkClaimStateMaintainable)
 
-  if (valuesSql.length === 0) {
+  if (maintainableClaims.length === 0) {
     return
   }
+
+  const valuesSql = getDirtyWorkClaimStateValuesSql(maintainableClaims)
+  const dirtyWorkIdsSql = getDirtyWorkIdListSql([
+    ...new Set(
+      maintainableClaims.map((claim) => {
+        return claim.dirtyWorkId
+      }),
+    ),
+  ])
 
   const changedRowsSql = `
     SELECT
@@ -944,6 +960,7 @@ const maintainReviewServingDirtyWorkClaimStates = async (
       ${changedRowsSql}
     ) AS changed
     WHERE existing.dirty_work_id = changed.dirty_work_id
+      AND existing.dirty_work_id IN (${dirtyWorkIdsSql})
   `)
 
   await database.run(`
@@ -981,6 +998,7 @@ const maintainReviewServingDirtyWorkClaimStates = async (
       SELECT 1
       FROM app.review_serving_dirty_work_claim_state existing
       WHERE existing.dirty_work_id = changed.dirty_work_id
+        AND existing.dirty_work_id IN (${dirtyWorkIdsSql})
     )
   `)
 }
@@ -1226,54 +1244,283 @@ const getMaxNonNull = (left: string | null, right: string | null) => {
   return left === null ? right : right === null ? left : left > right ? left : right
 }
 
+const getMergedDirtyWorkInput = (
+  existing: MergedDirtyWorkInput | undefined,
+  dirtyWorkId: string,
+  input: ReviewServingDirtyWorkInput,
+): MergedDirtyWorkInput => {
+  const dirtyRangeStart = input.scope.dirtyRangeStart ?? null
+  const dirtyRangeEnd = input.scope.dirtyRangeEnd ?? null
+
+  return existing
+    ? {
+        ...existing,
+        dirtyRangeEnd: getMaxNonNull(existing.dirtyRangeEnd, dirtyRangeEnd),
+        dirtyRangeStart: getMinNonNull(existing.dirtyRangeStart, dirtyRangeStart),
+        firstSourceHighWaterMark: Math.min(existing.firstSourceHighWaterMark, input.scope.sourceHighWaterMark),
+        latestDeltaId: input.latestDeltaId ?? null,
+        latestSourceHighWaterMark: Math.max(existing.latestSourceHighWaterMark, input.scope.sourceHighWaterMark),
+      }
+    : {
+        dirtyRangeEnd,
+        dirtyRangeStart,
+        dirtyWorkId,
+        firstSourceHighWaterMark: input.scope.sourceHighWaterMark,
+        input,
+        latestDeltaId: input.latestDeltaId ?? null,
+        latestSourceHighWaterMark: input.scope.sourceHighWaterMark,
+      }
+}
+
 // Folds repeated inputs for one dirty-work id the same way sequential upserts would: widest
 // watermark and range, and the last input's delta id.
-const getMergedDirtyWorkInputs = (inputs: readonly ReviewServingDirtyWorkInput[]): MergedDirtyWorkInput[] => {
-  const merged = inputs.reduce((state, input) => {
-    const dirtyWorkId = getDirtyWorkId(input)
-    const existing = state.get(dirtyWorkId)
-    const dirtyRangeStart = input.scope.dirtyRangeStart ?? null
-    const dirtyRangeEnd = input.scope.dirtyRangeEnd ?? null
+const getMergedDirtyWorkInputs = (
+  inputs: readonly ReviewServingDirtyWorkInput[],
+  dirtyWorkIds: readonly string[],
+): MergedDirtyWorkInput[] => {
+  const merged = inputs.reduce((state, input, index) => {
+    const dirtyWorkId = dirtyWorkIds[index] ?? getDirtyWorkId(input)
 
-    return new Map(state).set(
-      dirtyWorkId,
-      existing
-        ? {
-            ...existing,
-            dirtyRangeEnd: getMaxNonNull(existing.dirtyRangeEnd, dirtyRangeEnd),
-            dirtyRangeStart: getMinNonNull(existing.dirtyRangeStart, dirtyRangeStart),
-            firstSourceHighWaterMark: Math.min(existing.firstSourceHighWaterMark, input.scope.sourceHighWaterMark),
-            latestDeltaId: input.latestDeltaId ?? null,
-            latestSourceHighWaterMark: Math.max(existing.latestSourceHighWaterMark, input.scope.sourceHighWaterMark),
-          }
-        : {
-            dirtyRangeEnd,
-            dirtyRangeStart,
-            dirtyWorkId,
-            firstSourceHighWaterMark: input.scope.sourceHighWaterMark,
-            input,
-            latestDeltaId: input.latestDeltaId ?? null,
-            latestSourceHighWaterMark: input.scope.sourceHighWaterMark,
-          },
-    )
+    return state.set(dirtyWorkId, getMergedDirtyWorkInput(state.get(dirtyWorkId), dirtyWorkId, input))
   }, new Map<string, MergedDirtyWorkInput>())
 
   return Array.from(merged.values())
 }
 
-const getDirtyWorkIdListSql = (dirtyWorkIds: readonly string[]) => {
-  return dirtyWorkIds.map(getSqlLiteral).join(', ')
+const dirtyWorkBatchStageColumns = [
+  'input_index',
+  'dirty_work_id',
+  'project_id',
+  'scope_kind',
+  'scope_id',
+  'article_id',
+  'projection_key',
+  'projection_component',
+  'projection_identity',
+  'dirty_kind',
+  'source_partition',
+  'first_source_high_water_mark',
+  'latest_source_high_water_mark',
+  'latest_delta_id',
+  'dirty_range_start',
+  'dirty_range_end',
+  'claim_state_maintainable',
+] as const
+
+type DirtyWorkBatchStageColumn = (typeof dirtyWorkBatchStageColumns)[number]
+
+const dirtyWorkBatchStageColumnTypes: Record<DirtyWorkBatchStageColumn, 'BIGINT' | 'BOOLEAN' | 'VARCHAR'> = {
+  article_id: 'VARCHAR',
+  claim_state_maintainable: 'BOOLEAN',
+  dirty_kind: 'VARCHAR',
+  dirty_range_end: 'VARCHAR',
+  dirty_range_start: 'VARCHAR',
+  dirty_work_id: 'VARCHAR',
+  first_source_high_water_mark: 'BIGINT',
+  input_index: 'BIGINT',
+  latest_delta_id: 'VARCHAR',
+  latest_source_high_water_mark: 'BIGINT',
+  project_id: 'VARCHAR',
+  projection_component: 'VARCHAR',
+  projection_identity: 'VARCHAR',
+  projection_key: 'VARCHAR',
+  scope_id: 'VARCHAR',
+  scope_kind: 'VARCHAR',
+  source_partition: 'VARCHAR',
 }
 
-const updateMergedDirtyWork = async (
-  entries: readonly MergedDirtyWorkInput[],
+const dirtyWorkBatchInsertColumns = dirtyWorkBatchStageColumns.filter((column) => {
+  return column !== 'input_index' && column !== 'claim_state_maintainable'
+})
+
+const getDirtyWorkBatchStageTableName = () => {
+  return `temp_review_serving_dirty_work_batch_${randomUUID().replaceAll('-', '_')}`
+}
+
+const getCreateDirtyWorkBatchStageTableSql = (tableName: string) => {
+  return `
+    CREATE TEMP TABLE ${tableName} (
+      ${dirtyWorkBatchStageColumns
+        .map((column) => {
+          return `${column} ${dirtyWorkBatchStageColumnTypes[column]}`
+        })
+        .join(',\n      ')}
+    )
+  `
+}
+
+const dirtyWorkBatchStageProjectionColumns = [
+  'projection_component',
+  'projection_identity',
+  'projection_key',
+] as const satisfies readonly DirtyWorkBatchStageColumn[]
+
+const dirtyWorkBatchStageScopeColumns = [
+  'project_id',
+  'scope_kind',
+  'scope_id',
+  'article_id',
+  'dirty_kind',
+  'source_partition',
+  'first_source_high_water_mark',
+  'latest_source_high_water_mark',
+  'latest_delta_id',
+  'dirty_range_start',
+  'dirty_range_end',
+] as const satisfies readonly DirtyWorkBatchStageColumn[]
+
+type DirtyWorkBatchStageValues = (string | null)[]
+
+type DirtyWorkBatchStage = {
+  projectionIndexes: Map<string, number>
+  projections: DirtyWorkBatchStageValues[]
+  rows: DirtyWorkBatchStageValues[]
+  scopeIndexes: Map<string, number>
+  scopes: DirtyWorkBatchStageValues[]
+}
+
+const getDirtyWorkBatchStageProjectionValues = (entry: MergedDirtyWorkInput) => {
+  return [
+    entry.input.projectionComponent,
+    entry.input.projectionIdentity,
+    getProjectionKey({
+      projectionComponent: entry.input.projectionComponent,
+      projectionIdentity: entry.input.projectionIdentity,
+    }),
+  ]
+}
+
+const getDirtyWorkBatchStageScopeValues = (entry: MergedDirtyWorkInput) => {
+  return [
+    entry.input.scope.projectId,
+    entry.input.scope.scopeKind,
+    entry.input.scope.scopeId,
+    getArticleId(entry.input),
+    entry.input.scope.dirtyKind,
+    entry.input.scope.sourcePartition,
+    String(entry.firstSourceHighWaterMark),
+    String(entry.latestSourceHighWaterMark),
+    entry.latestDeltaId,
+    entry.dirtyRangeStart,
+    entry.dirtyRangeEnd,
+  ]
+}
+
+const getDirtyWorkBatchStageIndex = (
+  indexes: Map<string, number>,
+  entries: DirtyWorkBatchStageValues[],
+  values: DirtyWorkBatchStageValues,
+) => {
+  const key = JSON.stringify(values)
+  const existingIndex = indexes.get(key)
+  const index = existingIndex ?? indexes.size + 1
+
+  if (existingIndex === undefined) {
+    indexes.set(key, index)
+    entries.push([String(index), ...values])
+  }
+
+  return String(index)
+}
+
+const getDirtyWorkBatchStage = (entries: readonly MergedDirtyWorkInput[]) => {
+  return entries.reduce<DirtyWorkBatchStage>(
+    (stage, entry, inputIndex) => {
+      const projectionIndex = getDirtyWorkBatchStageIndex(
+        stage.projectionIndexes,
+        stage.projections,
+        getDirtyWorkBatchStageProjectionValues(entry),
+      )
+      const scopeIndex = getDirtyWorkBatchStageIndex(
+        stage.scopeIndexes,
+        stage.scopes,
+        getDirtyWorkBatchStageScopeValues(entry),
+      )
+      const claimStateMaintainable = isDirtyWorkClaimStateMaintainable({
+        projectionIdentity: entry.input.projectionIdentity,
+        sourcePartition: entry.input.scope.sourcePartition,
+      })
+
+      stage.rows.push([
+        String(inputIndex),
+        entry.dirtyWorkId,
+        claimStateMaintainable ? '1' : '0',
+        projectionIndex,
+        scopeIndex,
+      ])
+
+      return stage
+    },
+    {projectionIndexes: new Map(), projections: [], rows: [], scopeIndexes: new Map(), scopes: []},
+  )
+}
+
+const getDirtyWorkBatchStageValueSql = (alias: string, column: DirtyWorkBatchStageColumn, position: number) => {
+  return dirtyWorkBatchStageColumnTypes[column] === 'VARCHAR'
+    ? `${alias}.value[${position}]`
+    : `CAST(${alias}.value[${position}] AS ${dirtyWorkBatchStageColumnTypes[column]})`
+}
+
+const getDirtyWorkBatchStageValuesSql = (values: readonly DirtyWorkBatchStageValues[]) => {
+  return `SELECT unnest(from_json(${getSqlLiteral(JSON.stringify(values))}, '[["VARCHAR"]]')) AS value`
+}
+
+const getStageDirtyWorkBatchSql = (tableName: string, entries: readonly MergedDirtyWorkInput[]) => {
+  const stage = getDirtyWorkBatchStage(entries)
+
+  return `
+    INSERT INTO ${tableName} (
+      input_index,
+      dirty_work_id,
+      claim_state_maintainable,
+      ${[...dirtyWorkBatchStageProjectionColumns, ...dirtyWorkBatchStageScopeColumns].join(',\n      ')}
+    )
+    SELECT
+      CAST(staged_row.value[1] AS BIGINT),
+      staged_row.value[2],
+      staged_row.value[3] = '1',
+      ${[
+        ...dirtyWorkBatchStageProjectionColumns.map((column, index) => {
+          return getDirtyWorkBatchStageValueSql('staged_projection', column, index + 2)
+        }),
+        ...dirtyWorkBatchStageScopeColumns.map((column, index) => {
+          return getDirtyWorkBatchStageValueSql('staged_scope', column, index + 2)
+        }),
+      ].join(',\n      ')}
+    FROM (${getDirtyWorkBatchStageValuesSql(stage.rows)}) staged_row
+    INNER JOIN (${getDirtyWorkBatchStageValuesSql(stage.projections)}) staged_projection
+      ON staged_projection.value[1] = staged_row.value[4]
+    INNER JOIN (${getDirtyWorkBatchStageValuesSql(stage.scopes)}) staged_scope
+      ON staged_scope.value[1] = staged_row.value[5]
+  `
+}
+
+const getReservedDirtyWorkBatchIds = async (tableName: string, database: ReviewServingDirtyWorkTransaction) => {
+  const rows = await database.queryJson<{dirtyWorkId: string}>(`
+    SELECT lookup.dirty_work_id AS dirtyWorkId
+    FROM app.review_serving_dirty_work_id_lookup lookup
+    WHERE lookup.dirty_work_id IN (
+      SELECT staged.dirty_work_id
+      FROM ${tableName} staged
+    )
+  `)
+
+  return rows.map((row) => {
+    return row.dirtyWorkId
+  })
+}
+
+const updateReservedDirtyWorkBatch = async (
+  tableName: string,
+  reservedIds: readonly string[],
   database: ReviewServingDirtyWorkTransaction,
 ) => {
-  if (entries.length === 0) {
+  if (reservedIds.length === 0) {
     return
   }
 
-  await database.run(`
+  const reservedIdsSql = getDirtyWorkIdListSql(reservedIds)
+  const updatedRows = await database.queryJson<DirtyWorkRow>(`
     UPDATE app.review_serving_dirty_work existing
     SET
       first_source_high_water_mark = LEAST(existing.first_source_high_water_mark, changed.first_source_high_water_mark),
@@ -1294,113 +1541,103 @@ const updateMergedDirtyWork = async (
       status = 'pending',
       lifecycle_reason = NULL,
       updated_at = current_timestamp
-    FROM (
-      SELECT
-        CAST(dirty_work_id AS VARCHAR) AS dirty_work_id,
-        CAST(first_source_high_water_mark AS BIGINT) AS first_source_high_water_mark,
-        CAST(latest_source_high_water_mark AS BIGINT) AS latest_source_high_water_mark,
-        CAST(latest_delta_id AS VARCHAR) AS latest_delta_id,
-        CAST(projection_component AS VARCHAR) AS projection_component,
-        CAST(projection_identity AS VARCHAR) AS projection_identity,
-        CAST(dirty_range_start AS VARCHAR) AS dirty_range_start,
-        CAST(dirty_range_end AS VARCHAR) AS dirty_range_end
-      FROM (
-        VALUES
-        ${entries
-          .map((entry) => {
-            return `(
-          ${getSqlLiteral(entry.dirtyWorkId)},
-          ${getSqlLiteral(entry.firstSourceHighWaterMark)},
-          ${getSqlLiteral(entry.latestSourceHighWaterMark)},
-          ${getSqlLiteral(entry.latestDeltaId)},
-          ${getSqlLiteral(entry.input.projectionComponent)},
-          ${getSqlLiteral(entry.input.projectionIdentity)},
-          ${getSqlLiteral(entry.dirtyRangeStart)},
-          ${getSqlLiteral(entry.dirtyRangeEnd)}
-        )`
-          })
-          .join(',\n        ')}
-      ) AS input_values(
-        dirty_work_id,
-        first_source_high_water_mark,
-        latest_source_high_water_mark,
-        latest_delta_id,
-        projection_component,
-        projection_identity,
-        dirty_range_start,
-        dirty_range_end
-      )
-    ) AS changed
+    FROM ${tableName} changed
     WHERE existing.dirty_work_id = changed.dirty_work_id
+      AND existing.dirty_work_id IN (${reservedIdsSql})
+    RETURNING
+      CAST(NULL AS BIGINT) AS storageRowId,
+      dirty_work_id AS dirtyWorkId,
+      project_id AS projectId,
+      scope_kind AS scopeKind,
+      scope_id AS scopeId,
+      article_id AS articleId,
+      projection_key AS projectionKey,
+      dirty_kind AS dirtyKind,
+      source_partition AS sourcePartition,
+      first_source_high_water_mark AS firstSourceHighWaterMark,
+      latest_source_high_water_mark AS latestSourceHighWaterMark,
+      lifecycle_reason AS lifecycleReason,
+      latest_delta_id AS latestDeltaId,
+      dirty_range_start AS dirtyRangeStart,
+      dirty_range_end AS dirtyRangeEnd,
+      projection_component AS projectionComponent,
+      projection_identity AS projectionIdentity,
+      status,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+  `)
+
+  await maintainReviewServingDirtyWorkClaimStates(updatedRows.map(getDirtyWorkRecordFromRow), database)
+  await database.run(`
+    DELETE FROM ${tableName}
+    WHERE dirty_work_id IN (${reservedIdsSql})
   `)
 }
 
-const insertMergedDirtyWork = async (
-  entries: readonly MergedDirtyWorkInput[],
-  database: ReviewServingDirtyWorkTransaction,
-) => {
-  if (entries.length === 0) {
-    return
-  }
+const insertNewDirtyWorkBatch = async (tableName: string, database: ReviewServingDirtyWorkTransaction) => {
+  const [storageCursor] = await database.queryJson<{maxStorageRowId: number | string}>(`
+    SELECT COALESCE(MAX(rowid), -1) AS maxStorageRowId
+    FROM app.review_serving_dirty_work
+  `)
 
   await database.run(`
     INSERT INTO app.review_serving_dirty_work_id_lookup (dirty_work_id)
-    VALUES ${entries
-      .map((entry) => {
-        return `(${getSqlLiteral(entry.dirtyWorkId)})`
-      })
-      .join(', ')}
+    SELECT dirty_work_id
+    FROM ${tableName}
+    ORDER BY input_index
   `)
   await database.run(`
     INSERT INTO app.review_serving_dirty_work (
-      dirty_work_id,
-      project_id,
-      scope_kind,
-      scope_id,
-      article_id,
-      projection_key,
-      projection_component,
-      projection_identity,
-      dirty_kind,
-      source_partition,
-      first_source_high_water_mark,
-      latest_source_high_water_mark,
-      latest_delta_id,
-      dirty_range_start,
-      dirty_range_end,
+      ${dirtyWorkBatchInsertColumns.join(',\n      ')},
       status,
       lifecycle_reason,
       updated_at
     )
-    VALUES ${entries
-      .map((entry) => {
-        return `(
-      ${getSqlLiteral(entry.dirtyWorkId)},
-      ${getSqlLiteral(entry.input.scope.projectId)},
-      ${getSqlLiteral(entry.input.scope.scopeKind)},
-      ${getSqlLiteral(entry.input.scope.scopeId)},
-      ${getSqlLiteral(getArticleId(entry.input))},
-      ${getSqlLiteral(
-        getProjectionKey({
-          projectionComponent: entry.input.projectionComponent,
-          projectionIdentity: entry.input.projectionIdentity,
-        }),
-      )},
-      ${getSqlLiteral(entry.input.projectionComponent)},
-      ${getSqlLiteral(entry.input.projectionIdentity)},
-      ${getSqlLiteral(entry.input.scope.dirtyKind)},
-      ${getSqlLiteral(entry.input.scope.sourcePartition)},
-      ${getSqlLiteral(entry.firstSourceHighWaterMark)},
-      ${getSqlLiteral(entry.latestSourceHighWaterMark)},
-      ${getSqlLiteral(entry.latestDeltaId)},
-      ${getSqlLiteral(entry.dirtyRangeStart)},
-      ${getSqlLiteral(entry.dirtyRangeEnd)},
+    SELECT
+      ${dirtyWorkBatchInsertColumns.join(',\n      ')},
       'pending',
       NULL,
       current_timestamp
-    )`
-      })
-      .join(',\n    ')}
+    FROM ${tableName}
+    ORDER BY input_index
+  `)
+  await database.run(`
+    INSERT INTO app.review_serving_dirty_work_claim_state (
+      dirty_work_id,
+      storage_row_id,
+      project_id,
+      projection_component,
+      projection_identity,
+      source_partition,
+      status,
+      lifecycle_reason,
+      latest_source_high_water_mark,
+      dirty_range_start,
+      dirty_range_end,
+      updated_at
+    )
+    SELECT
+      staged.dirty_work_id,
+      stored.storage_row_id,
+      COALESCE(staged.project_id, ''),
+      staged.projection_component,
+      staged.projection_identity,
+      staged.source_partition,
+      'pending',
+      NULL,
+      staged.latest_source_high_water_mark,
+      staged.dirty_range_start,
+      staged.dirty_range_end,
+      current_timestamp
+    FROM ${tableName} staged
+    INNER JOIN (
+      SELECT rowid AS storage_row_id, dirty_work_id
+      FROM app.review_serving_dirty_work
+      WHERE rowid > ${getStorageRowIdSql(storageCursor?.maxStorageRowId ?? -1)}
+    ) stored
+      ON stored.dirty_work_id = staged.dirty_work_id
+    WHERE staged.claim_state_maintainable
+    ORDER BY staged.input_index
   `)
 }
 
@@ -1408,70 +1645,23 @@ const upsertReviewServingDirtyWorkBatchChunk = async (
   entries: readonly MergedDirtyWorkInput[],
   database: ReviewServingDirtyWorkTransaction,
 ) => {
-  const dirtyWorkIds = entries.map((entry) => {
-    return entry.dirtyWorkId
-  })
-  const existingIds = new Set(
-    (
-      await database.queryJson<{dirtyWorkId: string}>(`
-        SELECT dirty_work_id AS dirtyWorkId
-        FROM app.review_serving_dirty_work
-        WHERE dirty_work_id IN (${getDirtyWorkIdListSql(dirtyWorkIds)})
-      `)
-    ).map((row) => {
-      return row.dirtyWorkId
-    }),
-  )
-  const missingEntries = entries.filter((entry) => {
-    return !existingIds.has(entry.dirtyWorkId)
-  })
-  const reservedIds = new Set(
-    missingEntries.length === 0
-      ? []
-      : (
-          await database.queryJson<{dirtyWorkId: string}>(`
-            SELECT dirty_work_id AS dirtyWorkId
-            FROM app.review_serving_dirty_work_id_lookup
-            WHERE dirty_work_id IN (${getDirtyWorkIdListSql(
-              missingEntries.map((entry) => {
-                return entry.dirtyWorkId
-              }),
-            )})
-          `)
-        ).map((row) => {
-          return row.dirtyWorkId
-        }),
-  )
+  const tableName = getDirtyWorkBatchStageTableName()
 
-  await updateMergedDirtyWork(
-    entries.filter((entry) => {
-      return existingIds.has(entry.dirtyWorkId)
-    }),
-    database,
-  )
-  await insertMergedDirtyWork(
-    missingEntries.filter((entry) => {
-      return !reservedIds.has(entry.dirtyWorkId)
-    }),
-    database,
-  )
+  await database.run(getCreateDirtyWorkBatchStageTableSql(tableName))
+  await database.run(getStageDirtyWorkBatchSql(tableName, entries))
 
-  const currentRows = await database.queryJson<DirtyWorkRow>(`
-    ${getDirtyWorkSelect()}
-    WHERE dirty_work_id IN (${getDirtyWorkIdListSql(dirtyWorkIds)})
-  `)
+  const reservedIds = await getReservedDirtyWorkBatchIds(tableName, database)
 
-  await maintainReviewServingDirtyWorkClaimStates(
-    currentRows.map((row) => {
-      const record = getDirtyWorkRecordFromRow(row)
+  await updateReservedDirtyWorkBatch(tableName, reservedIds, database)
 
-      return existingIds.has(record.dirtyWorkId) ? {...record, storageRowId: null} : record
-    }),
-    database,
-  )
+  if (reservedIds.length < entries.length) {
+    await insertNewDirtyWorkBatch(tableName, database)
+  }
+
+  await database.run(`DROP TABLE IF EXISTS ${tableName}`)
 }
 
-const dirtyWorkBatchChunkSize = 500
+export const reviewServingDirtyWorkBatchChunkSize = 4_096
 
 // Set-based equivalent of calling upsertReviewServingDirtyWork for each input in order. A few
 // statements per chunk instead of about seven per input keeps judgment imports from holding the
@@ -1480,18 +1670,25 @@ export const upsertReviewServingDirtyWorkBatch = async (
   inputs: readonly ReviewServingDirtyWorkInput[],
   database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),
 ) => {
-  const merged = getMergedDirtyWorkInputs(inputs)
-  const chunks = Array.from({length: Math.ceil(merged.length / dirtyWorkBatchChunkSize)}, (_value, index) => {
-    return merged.slice(index * dirtyWorkBatchChunkSize, (index + 1) * dirtyWorkBatchChunkSize)
-  })
+  const dirtyWorkIds = inputs.map(getDirtyWorkId)
+  const merged = getMergedDirtyWorkInputs(inputs, dirtyWorkIds)
+  const chunks = Array.from(
+    {length: Math.ceil(merged.length / reviewServingDirtyWorkBatchChunkSize)},
+    (_value, index) => {
+      return merged.slice(
+        index * reviewServingDirtyWorkBatchChunkSize,
+        (index + 1) * reviewServingDirtyWorkBatchChunkSize,
+      )
+    },
+  )
 
   await chunks.reduce(async (previous, chunk) => {
     await previous
     await upsertReviewServingDirtyWorkBatchChunk(chunk, database)
   }, Promise.resolve())
 
-  return inputs.map((input) => {
-    return {dirtyWorkId: getDirtyWorkId(input), skipped: false}
+  return dirtyWorkIds.map((dirtyWorkId) => {
+    return {dirtyWorkId, skipped: false}
   })
 }
 

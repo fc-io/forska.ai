@@ -59,6 +59,9 @@ type TestDatabase = {
 type DeltaIntakeParams = Parameters<
   NonNullable<ReviewServingProjectorWorkerDependencies['intakeReviewChangeDeltas']>
 >[0]
+type ImportDeltaIntakeParams = Parameters<
+  NonNullable<ReviewServingProjectorWorkerDependencies['intakeImportDeltas']>
+>[0]
 
 const chunkInput = {
   chunkEndKey: 'article-099',
@@ -5484,7 +5487,7 @@ test('worker resumes normal projector work after the foreground drain TTL expire
 
 test('worker runs delta intake before waking projectors', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
-  const intakeCalls: Array<{kind: 'import' | 'review'; params: DeltaIntakeParams}> = []
+  const intakeCalls: Array<{kind: 'import' | 'review'; params: DeltaIntakeParams | ImportDeltaIntakeParams}> = []
   const deltaPartitionStatements: string[] = []
 
   harness.database.queryJson = async <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => {
@@ -5517,7 +5520,7 @@ test('worker runs delta intake before waking projectors', async () => {
 
     return {dirtyWorkCount: 2, maxSourceHighWaterMark: 7, status: 'converted'}
   }
-  harness.dependencies.intakeImportDeltas = async (params: DeltaIntakeParams) => {
+  harness.dependencies.intakeImportDeltas = async (params: ImportDeltaIntakeParams) => {
     intakeCalls.push({kind: 'import', params})
 
     return {dirtyWorkCount: 1, maxSourceHighWaterMark: 11, status: 'converted'}
@@ -5536,7 +5539,7 @@ test('worker runs delta intake before waking projectors', async () => {
     {
       kind: 'review',
       params: {
-        deadlineAtMs: 6_000,
+        deadlineAtMs: 3_500,
         endSourceHighWaterMark: 7,
         limit: 25,
         sourcePartition: 'review_change_delta:project-1',
@@ -5548,7 +5551,7 @@ test('worker runs delta intake before waking projectors', async () => {
       params: {
         deadlineAtMs: 6_000,
         endSourceHighWaterMark: 11,
-        limit: 25,
+        limit: 1_024,
         sourcePartition: 'import_run_article_delta:project-1',
         startSourceHighWaterMark: 10,
       },
@@ -5557,7 +5560,12 @@ test('worker runs delta intake before waking projectors', async () => {
   expect(harness.wakeInputs).toHaveLength(1)
 })
 
-test('worker delta intake stops taking partitions once its time budget is spent and still gives each delta table one', async () => {
+const runDeltaIntakeBudgetCycle = async (input: {
+  importPartitions: readonly string[]
+  importStepMs: number
+  reviewChangePartitions: readonly string[]
+  reviewChangeStepMs: number
+}) => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const intakeCalls: string[] = []
   let nowMs = 1_000
@@ -5566,30 +5574,27 @@ test('worker delta intake stops taking partitions once its time budget is spent 
     return nowMs
   }
   harness.database.queryJson = async <T>(statement: string) => {
-    if (statement.includes('FROM app.review_change_delta')) {
-      return [
-        {sourceHighWaterMark: 1, sourcePartition: 'review_change_delta:project-1'},
-        {sourceHighWaterMark: 2, sourcePartition: 'review_change_delta:project-2'},
-        {sourceHighWaterMark: 3, sourcePartition: 'review_change_delta:project-3'},
-      ] as T[]
-    }
-
-    return (
-      statement.includes('FROM app.import_run_article_delta')
-        ? [{sourceHighWaterMark: 4, sourcePartition: 'import_run_article_delta:project-1'}]
+    const partitions = statement.includes('FROM app.review_change_delta')
+      ? input.reviewChangePartitions
+      : statement.includes('FROM app.import_run_article_delta')
+        ? input.importPartitions
         : []
-    ) as T[]
+
+    return partitions.map((sourcePartition, index) => {
+      return {sourceHighWaterMark: index + 1, sourcePartition}
+    }) as T[]
   }
   harness.dependencies.intakeReviewChangeDeltas = async (params: DeltaIntakeParams) => {
     intakeCalls.push(`${params.sourcePartition}@${nowMs}<${params.deadlineAtMs}`)
-    nowMs += 3_000
+    nowMs += input.reviewChangeStepMs
 
     return {dirtyWorkCount: 9, maxSourceHighWaterMark: params.endSourceHighWaterMark, status: 'converted'}
   }
-  harness.dependencies.intakeImportDeltas = async (params: DeltaIntakeParams) => {
-    intakeCalls.push(`${params.sourcePartition}@${nowMs}`)
+  harness.dependencies.intakeImportDeltas = async (params: ImportDeltaIntakeParams) => {
+    intakeCalls.push(`${params.sourcePartition}@${nowMs}<${params.deadlineAtMs}`)
+    nowMs += input.importStepMs
 
-    return {dirtyWorkCount: 9, maxSourceHighWaterMark: params.endSourceHighWaterMark, status: 'converted'}
+    return {dirtyWorkCount: 9, maxSourceHighWaterMark: params.startSourceHighWaterMark, status: 'converted'}
   }
 
   const result = await runReviewServingProjectorWorkerOnce(
@@ -5597,12 +5602,63 @@ test('worker delta intake stops taking partitions once its time budget is spent 
     harness.dependencies,
   )
 
-  expect(result.deltaIntake).toEqual({convertedPartitions: 3, dirtyWorkCount: 27, status: 'completed'})
-  expect(intakeCalls).toEqual([
-    'review_change_delta:project-1@1000<6000',
-    'review_change_delta:project-2@4000<6000',
-    'import_run_article_delta:project-1@7000',
-  ])
+  return {deltaIntake: result.deltaIntake, intakeCalls}
+}
+
+test('worker delta intake gives import deltas their own budget share after review-change partitions spend theirs', async () => {
+  expect(
+    await runDeltaIntakeBudgetCycle({
+      importPartitions: ['import-route:route-1', 'import-route:route-2'],
+      importStepMs: 1_000,
+      reviewChangePartitions: ['article:a', 'article:b', 'article:c'],
+      reviewChangeStepMs: 1_000,
+    }),
+  ).toEqual({
+    deltaIntake: {convertedPartitions: 5, dirtyWorkCount: 45, status: 'completed'},
+    intakeCalls: [
+      'article:a@1000<3500',
+      'article:b@2000<3500',
+      'article:c@3000<3500',
+      'import-route:route-1@4000<6500',
+      'import-route:route-2@5000<6500',
+    ],
+  })
+  expect(
+    await runDeltaIntakeBudgetCycle({
+      importPartitions: ['import-route:route-1'],
+      importStepMs: 1_000,
+      reviewChangePartitions: ['article:a', 'article:b'],
+      reviewChangeStepMs: 3_000,
+    }),
+  ).toEqual({
+    deltaIntake: {convertedPartitions: 2, dirtyWorkCount: 18, status: 'completed'},
+    intakeCalls: ['article:a@1000<3500', 'import-route:route-1@4000<6500'],
+  })
+})
+
+test('worker delta intake gives one delta table the whole budget when the other has no backlog', async () => {
+  expect(
+    await runDeltaIntakeBudgetCycle({
+      importPartitions: [],
+      importStepMs: 1_000,
+      reviewChangePartitions: ['article:a', 'article:b', 'article:c'],
+      reviewChangeStepMs: 2_000,
+    }),
+  ).toEqual({
+    deltaIntake: {convertedPartitions: 3, dirtyWorkCount: 27, status: 'completed'},
+    intakeCalls: ['article:a@1000<6000', 'article:b@3000<6000', 'article:c@5000<6000'],
+  })
+  expect(
+    await runDeltaIntakeBudgetCycle({
+      importPartitions: ['import-route:route-1', 'import-route:route-2'],
+      importStepMs: 4_000,
+      reviewChangePartitions: [],
+      reviewChangeStepMs: 1_000,
+    }),
+  ).toEqual({
+    deltaIntake: {convertedPartitions: 2, dirtyWorkCount: 18, status: 'completed'},
+    intakeCalls: ['import-route:route-1@1000<6000', 'import-route:route-2@5000<6000'],
+  })
 })
 
 test('worker skips completed rebuild chunks whose maintained input digest still matches', async () => {

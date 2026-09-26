@@ -535,6 +535,7 @@ const defaultReviewServingProjectorWorkerMaxRetries = 1
 const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
 const defaultReviewServingProjectorWorkerDeltaIntakeBudgetMs = 5_000
+const reviewServingProjectorWorkerImportDeltaIntakeWindowLimit = 1_024
 const defaultReviewServingProjectorWorkerWakeStarvationMs = 30_000
 const defaultReviewServingProjectorWorkerPollIntervalMs = 2_000
 const defaultReviewServingProjectorWorkerActiveYieldMs = 1
@@ -10018,6 +10019,16 @@ const runDeltaIntakePartitions = (input: {
   )
 }
 
+const getDeltaIntakeTableBudgetMs = (input: {
+  budgetMs: number
+  importPartitions: readonly DeltaIntakePartitionRow[]
+  reviewChangePartitions: readonly DeltaIntakePartitionRow[]
+}) => {
+  return input.importPartitions.length > 0 && input.reviewChangePartitions.length > 0
+    ? Math.floor(input.budgetMs / 2)
+    : input.budgetMs
+}
+
 const runReviewServingProjectorWorkerDeltaIntake = async ({
   database,
   dependencies,
@@ -10032,14 +10043,17 @@ const runReviewServingProjectorWorkerDeltaIntake = async ({
     return getIdleReviewServingProjectorWorkerDeltaIntakeResult()
   }
 
-  const deadlineAtMs =
-    (dependencies.nowMs?.() ?? Date.now())
-    + getPositiveInteger(options.deltaIntakeBudgetMs, defaultReviewServingProjectorWorkerDeltaIntakeBudgetMs)
+  const startedAtMs = dependencies.nowMs?.() ?? Date.now()
+  const budgetMs = getPositiveInteger(
+    options.deltaIntakeBudgetMs,
+    defaultReviewServingProjectorWorkerDeltaIntakeBudgetMs,
+  )
   const reviewChangePartitions = await getDeltaIntakePartitions(database, 'app.review_change_delta', limit)
   const importPartitions = await getDeltaIntakePartitions(database, 'app.import_run_article_delta', limit)
+  const tableBudgetMs = getDeltaIntakeTableBudgetMs({budgetMs, importPartitions, reviewChangePartitions})
   const reviewChangeResult = await runDeltaIntakePartitions({
     database,
-    deadlineAtMs,
+    deadlineAtMs: startedAtMs + tableBudgetMs,
     dependencies,
     intake: dependencies.intakeReviewChangeDeltas ?? intakeReviewChangeDeltasToDirtyWork,
     limit,
@@ -10049,10 +10063,10 @@ const runReviewServingProjectorWorkerDeltaIntake = async ({
 
   return runDeltaIntakePartitions({
     database,
-    deadlineAtMs,
+    deadlineAtMs: Math.max(startedAtMs + budgetMs, (dependencies.nowMs?.() ?? Date.now()) + tableBudgetMs),
     dependencies,
     intake: dependencies.intakeImportDeltas ?? intakeReviewImportDeltasToDirtyWork,
-    limit,
+    limit: Math.max(limit, reviewServingProjectorWorkerImportDeltaIntakeWindowLimit),
     partitions: importPartitions,
     previousResult: reviewChangeResult,
   })

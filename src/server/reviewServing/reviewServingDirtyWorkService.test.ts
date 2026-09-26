@@ -1504,6 +1504,66 @@ test('batched dirty-work upserts match sequential upserts in DuckDB', async () =
   }
 })
 
+test('batched dirty-work upserts inside one transaction match sequential upserts, including reserved ids without rows', async () => {
+  const getInput = (articleIndex: number, component: 'display' | 'payload', sourceHighWaterMark: number) => {
+    return {
+      latestDeltaId: `delta-${articleIndex}-${component}-${sourceHighWaterMark}`,
+      projectionComponent: component,
+      projectionIdentity: `${component}:identity-1`,
+      scope: getArticleDisplayScope(`article-${articleIndex}`, sourceHighWaterMark, null, String(sourceHighWaterMark)),
+    }
+  }
+  const seedInputs = [getInput(0, 'display', 1), getInput(1, 'display', 2), getInput(2, 'payload', 3)]
+  const inputs = [
+    ...Array.from({length: 40}, (_value, index) => {
+      return getInput(index, index % 2 === 0 ? 'display' : 'payload', 10 + index)
+    }),
+    getInput(0, 'display', 5),
+    getInput(1, 'display', 60),
+    getInput(2, 'payload', 61),
+    getInput(3, 'payload', 62),
+  ]
+  const sequential = await createDuckdbDirtyWorkDatabase()
+  const batched = await createDuckdbDirtyWorkDatabase()
+  const seed = async (database: ReviewServingDirtyWorkDatabase) => {
+    const seeded = await seedInputs.reduce<Promise<string[]>>(async (previous, input) => {
+      const dirtyWorkIds = await previous
+      const result = await upsertReviewServingDirtyWork(input, database)
+
+      return [...dirtyWorkIds, result.dirtyWorkId]
+    }, Promise.resolve([]))
+
+    await database.run(`
+      DELETE FROM app.review_serving_dirty_work WHERE dirty_work_id = ${getSqlLiteral(seeded[0] ?? '')}
+    `)
+  }
+
+  try {
+    await seed(sequential.database)
+    await seed(batched.database)
+    await sequential.database.transaction(async (tx) => {
+      await inputs.reduce(async (previous, input) => {
+        await previous
+        await upsertReviewServingDirtyWork(input, tx)
+      }, Promise.resolve())
+    })
+
+    const batchResults = await batched.database.transaction((tx) => {
+      return upsertReviewServingDirtyWorkBatch(inputs, tx)
+    })
+    const sequentialState = await readDirtyWorkState(sequential.database)
+    const batchedState = await readDirtyWorkState(batched.database)
+
+    expect(batchResults).toHaveLength(inputs.length)
+    expect(sequentialState.dirtyWorkRows).toHaveLength(41)
+    expect(sequentialState.lookupRows).toHaveLength(42)
+    expect(batchedState).toEqual(sequentialState)
+  } finally {
+    sequential.close()
+    batched.close()
+  }
+})
+
 test('claims pending work by component without exceeding wake budget', async () => {
   const {database} = createFakeDirtyWorkDatabase()
 
