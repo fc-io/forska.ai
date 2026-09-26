@@ -52,6 +52,7 @@ export const dataSourcesImportRoutesPostEuropePmcPpr = async (
           toDate,
           importRoute,
           cursor: record.cursor ?? null,
+          dataSourceId: record.id,
           onCursorUpdate: saveCursorWithLease,
         })
         await assertLeaseOwned()

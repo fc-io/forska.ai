@@ -11,6 +11,7 @@ type PprHostLabelUpdate = {id: string; articleId: string; patch: PprHostLabelPat
 
 const europePmcCursorQuery = 'SRC:PPR'
 const europePmcCursorPageSize = 1000
+const europePmcCursorSort = 'FIRST_PDATE_D asc'
 const europePmcFetchTimeoutMs = 20_000
 const europePmcRetryDelays = [5_000, 15_000, 60_000, 300_000]
 const targetedLookupBatchSize = 25
@@ -117,12 +118,21 @@ const fetchWithTimeoutAndRetry = (url: URL, timeoutMs: number, retryDelays: numb
   return attempt(0)
 }
 
-const getEuropePmcSearchPage = async (params: {query: string; pageSize: number; cursorMark?: string}) => {
+const getEuropePmcSearchPage = async (params: {
+  query: string
+  pageSize: number
+  cursorMark?: string
+  sort?: string
+}) => {
   const url = new URL('https://www.ebi.ac.uk/europepmc/webservices/rest/search')
   url.searchParams.set('query', params.query)
   url.searchParams.set('format', 'json')
   url.searchParams.set('resultType', 'lite')
   url.searchParams.set('pageSize', String(params.pageSize))
+
+  if (params.sort) {
+    url.searchParams.set('sort', params.sort)
+  }
 
   if (params.cursorMark) {
     url.searchParams.set('cursorMark', params.cursorMark)
@@ -236,6 +246,7 @@ const backfillFromEuropePmc = async (params: {
     query: europePmcCursorQuery,
     pageSize: europePmcCursorPageSize,
     cursorMark: params.cursorMark,
+    sort: europePmcCursorSort,
   })
   const updates = page.items
     .map((item) => {
