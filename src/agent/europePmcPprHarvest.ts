@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto'
 import {type} from 'arktype'
 
 import type {ArticleImportStoreRow} from '../server/services/articleImportStoreService.ts'
+import {withDataSourceImportPageRetry} from '../server/services/dataSourceImportRetry.ts'
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {
@@ -439,12 +440,14 @@ export const europePmcPprHarvest = async (input: InputData & HarvestOptions): Pr
     importRoute: input.importRoute,
     cursor: input.cursor,
     onPage: async (page) => {
-      if (page.workflowEntries.length > 0) {
-        await europePmcPprWorkflowStoreEntries(page.workflowEntries)
-      }
-      if (input.onCursorUpdate) {
-        await input.onCursorUpdate(page.cursorAfter)
-      }
+      await withDataSourceImportPageRetry(`Europe PMC PPR page ${page.pageIndex + 1}`, async () => {
+        if (page.workflowEntries.length > 0) {
+          await europePmcPprWorkflowStoreEntries(page.workflowEntries)
+        }
+        if (input.onCursorUpdate) {
+          await input.onCursorUpdate(page.cursorAfter)
+        }
+      })
     },
   })
   console.log(`Europe PMC PPR harvest complete. Fetched ${fetchedTotal} preprints.`)

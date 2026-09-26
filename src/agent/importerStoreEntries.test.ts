@@ -12,6 +12,7 @@ type StoredArticleRow = Record<string, unknown>
 
 const storedRowsRef: {current: StoredArticleRow[][]} = {current: []}
 const storeFailureRef: {current: Error | null} = {current: null}
+const storeFailureQueueRef: {current: Error[]} = {current: []}
 const importEventsRef: {current: string[]} = {current: []}
 const originalFetch = globalThis.fetch
 
@@ -26,6 +27,11 @@ const registerModuleMocks = () => {
         workloadClass: 'background.importStore',
       },
       storeImportedArticles: async (rows: StoredArticleRow[]) => {
+        const queuedFailure = storeFailureQueueRef.current.shift()
+        if (queuedFailure) {
+          importEventsRef.current.push(`store-failed:${rows.length}`)
+          throw queuedFailure
+        }
         if (storeFailureRef.current) {
           throw storeFailureRef.current
         }
@@ -100,6 +106,7 @@ const mockEuropePmcFetchPages = (pages: unknown[]) => {
 afterEach(() => {
   storedRowsRef.current = []
   storeFailureRef.current = null
+  storeFailureQueueRef.current = []
   importEventsRef.current = []
   globalThis.fetch = originalFetch
   mock.restore()
@@ -340,6 +347,141 @@ test('europe pmc harvests keep the previous cursor when storing a page fails', a
 
     expect(String(error)).toContain('store failed')
     expect(importEventsRef.current).toEqual([])
+  }, Promise.resolve())
+})
+
+test('europe pmc harvests retry the same page after a transient store failure', async () => {
+  const harvests = await getCursorOrderHarvests()
+
+  await harvests.reduce(async (previous, harvest) => {
+    await previous
+    importEventsRef.current = []
+    storeFailureQueueRef.current = [
+      new Error(
+        'DuckDB workload budget exceeded for import.storeArticles: duration 487605ms exceeded timeout 120000ms',
+      ),
+    ]
+
+    await runCursorOrderHarvest(harvest)
+
+    expect(importEventsRef.current).toEqual(['store-failed:1', 'store:1', 'cursor:cursor-1', 'store:1', 'cursor:null'])
+  }, Promise.resolve())
+})
+
+test('europe pmc harvests store the page again when saving its cursor fails transiently', async () => {
+  const harvests = await getCursorOrderHarvests()
+
+  await harvests.reduce(async (previous, harvest) => {
+    await previous
+    importEventsRef.current = []
+    mockEuropePmcFetchPages(getTwoPageEuropePmcResponses(harvest.source))
+    const cursorFailures = [new Error('DuckDB connection not started')]
+
+    await harvest.harvest({
+      fromDate: '2024-03-01',
+      toDate: '2024-03-01',
+      importRoute: harvest.importRoute,
+      cursor: null,
+      onCursorUpdate: async (cursor) => {
+        const failure = cursorFailures.shift()
+        if (failure) {
+          importEventsRef.current.push(`cursor-failed:${cursor}`)
+          throw failure
+        }
+        importEventsRef.current.push(`cursor:${cursor}`)
+      },
+    })
+
+    expect(importEventsRef.current).toEqual([
+      'store:1',
+      'cursor-failed:cursor-1',
+      'store:1',
+      'cursor:cursor-1',
+      'store:1',
+      'cursor:null',
+    ])
+  }, Promise.resolve())
+})
+
+test('europe pmc harvests fail a page right away when its cursor save loses the import lease', async () => {
+  const harvests = await getCursorOrderHarvests()
+
+  await harvests.reduce(async (previous, harvest) => {
+    await previous
+    importEventsRef.current = []
+    mockEuropePmcFetchPages(getTwoPageEuropePmcResponses(harvest.source))
+
+    const error = await harvest
+      .harvest({
+        fromDate: '2024-03-01',
+        toDate: '2024-03-01',
+        importRoute: harvest.importRoute,
+        cursor: null,
+        onCursorUpdate: async (cursor) => {
+          importEventsRef.current.push(`cursor-failed:${cursor}`)
+          throw new Error('Data source import lease was lost')
+        },
+      })
+      .then(
+        () => {
+          return null
+        },
+        (caught: unknown) => {
+          return caught
+        },
+      )
+
+    expect(String(error)).toContain('Data source import lease was lost')
+    expect(importEventsRef.current).toEqual(['store:1', 'cursor-failed:cursor-1'])
+  }, Promise.resolve())
+})
+
+test('medrxiv and biorxiv harvests retry the same page after a transient store failure', async () => {
+  const {medrxivHarvest} = await loadAgentModule<typeof import('./medrxivHarvest.ts')>('./medrxivHarvest.ts')
+  const {biorxivHarvest} = await loadAgentModule<typeof import('./biorxivHarvest.ts')>('./biorxivHarvest.ts')
+  const harvests = [
+    {harvest: medrxivHarvest, importRoute: '/api/datasources/import/medrxiv', server: 'medrxiv'},
+    {harvest: biorxivHarvest, importRoute: '/api/datasources/import/biorxiv', server: 'biorxiv'},
+  ]
+
+  await harvests.reduce(async (previous, harvest) => {
+    await previous
+    importEventsRef.current = []
+    storeFailureQueueRef.current = [new Error('The operation timed out.')]
+    const pages = [
+      {
+        collection: [
+          {
+            doi: '10.1101/2024.03.01.123456',
+            server: harvest.server,
+            title: 'Preprint page',
+            date: '2024-03-01',
+            version: '1',
+          },
+        ],
+      },
+      {collection: []},
+    ]
+    globalThis.fetch = mock(async () => {
+      const page = pages.shift()
+      if (!page) {
+        throw new Error('Unexpected preprint fetch')
+      }
+
+      return new Response(JSON.stringify(page), {status: 200, statusText: 'OK'})
+    }) as unknown as typeof fetch
+
+    await harvest.harvest({
+      fromDate: '2024-03-01',
+      toDate: '2024-03-01',
+      importRoute: harvest.importRoute,
+      cursor: null,
+      onCursorUpdate: async (cursor) => {
+        importEventsRef.current.push(`cursor:${cursor}`)
+      },
+    })
+
+    expect(importEventsRef.current).toEqual(['store-failed:1', 'store:1', 'cursor:1', 'cursor:1'])
   }, Promise.resolve())
 })
 
