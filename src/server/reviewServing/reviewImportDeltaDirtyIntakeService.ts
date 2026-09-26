@@ -278,7 +278,14 @@ const getReviewImportDeltaRows = async (
           ON hot.import_route_id = delta.import_route_id
           AND hot.article_id = delta.article_id
           AND hot.source_record_key = delta.source_record_key
-        LEFT JOIN app.project_import_route project_route
+        LEFT JOIN (
+          SELECT route_link.import_route_id, route_link.project_id
+          FROM app.project_import_route route_link
+          INNER JOIN app.project project
+            ON project.id = route_link.project_id
+            AND project.archived = FALSE
+            AND project.delete_pending_at IS NULL
+        ) project_route
           ON project_route.import_route_id = delta.import_route_id
         ORDER BY delta.source_high_water_mark ASC, delta.delta_id ASC, project_route.project_id ASC
       `)
@@ -367,6 +374,31 @@ const getReviewImportDeltaWindowDeltaCount = (rows: readonly ReviewImportDeltaRo
   ).size
 }
 
+const getImportRouteArticleProjectKey = (row: ReviewImportDeltaRow) => {
+  return `${row.projectId}\t${row.importRouteId}\t${row.articleId}`
+}
+
+const getRankFieldRowsSupersededByLaterAdd = (rows: readonly ReviewImportDeltaRow[]) => {
+  const addedHighWaterMarks = rows.reduce((highWaterMarks, row) => {
+    const key = getImportRouteArticleProjectKey(row)
+    const sourceHighWaterMark = getIntegerValue(row.sourceHighWaterMark) ?? -1
+
+    return row.changeKind === 'importRoute.article.added' && row.projectId !== null
+      ? highWaterMarks.set(key, Math.max(highWaterMarks.get(key) ?? -1, sourceHighWaterMark))
+      : highWaterMarks
+  }, new Map<string, number>())
+
+  return new Set(
+    rows.filter((row) => {
+      return (
+        row.changeKind === 'importRoute.article.rankFields.updated'
+        && (getIntegerValue(row.sourceHighWaterMark) ?? Number.POSITIVE_INFINITY)
+          < (addedHighWaterMarks.get(getImportRouteArticleProjectKey(row)) ?? -1)
+      )
+    }),
+  )
+}
+
 const intakeReviewImportDeltaWindow = async (
   params: IntakeReviewImportDeltaDirtyWorkParams,
   database: ReviewImportDeltaDirtyIntakeDatabase,
@@ -382,9 +414,12 @@ const intakeReviewImportDeltaWindow = async (
     return {deltaId: row?.deltaId ?? 'unknown', reason: invalid.reason, status: 'failed'}
   }
 
+  const supersededRankFieldRows = getRankFieldRowsSupersededByLaterAdd(rows)
   const groups = getReviewServingDeltaIntakeGroups({
     entries: rows.map((row, index) => {
-      return {delta: (validated[index] ?? null) as ValidatedReviewImportDelta | null, row}
+      const delta = supersededRankFieldRows.has(row) ? null : (validated[index] ?? null)
+
+      return {delta: delta as ValidatedReviewImportDelta | null, row}
     }),
     getDeltaId: (entry) => {
       return entry.row.deltaId

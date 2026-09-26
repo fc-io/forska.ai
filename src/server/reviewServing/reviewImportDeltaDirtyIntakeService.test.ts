@@ -168,7 +168,8 @@ test('import delta intake bounds source rows before route fanout', async () => {
   expect(deltaSelect).not.toContain('source_high_water_mark <=')
   expect(deltaSelect).toContain('delta.source_high_water_mark AS sourceHighWaterMark')
   expect(deltaSelect).not.toContain('CAST(delta.source_high_water_mark AS INTEGER)')
-  expect(deltaSelect).toContain('LEFT JOIN app.project_import_route')
+  expect(deltaSelect).toContain('FROM app.project_import_route route_link')
+  expect(deltaSelect).toContain('AND project.archived = FALSE')
   expect(stagedDirtyWorkRows).toHaveLength(18)
 })
 

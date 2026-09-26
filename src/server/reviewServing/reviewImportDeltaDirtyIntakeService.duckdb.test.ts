@@ -61,12 +61,26 @@ const createCountingDatabase = () => {
   return {counts, database: countingDatabase}
 }
 
-const insertRoute = async (input: {projectId?: string; projectIds?: readonly string[]; routeId: string}) => {
+const insertRoute = async (input: {
+  archivedProjectIds?: readonly string[]
+  projectId?: string
+  projectIds?: readonly string[]
+  routeId: string
+}) => {
   const projectIds = input.projectIds ?? [input.projectId ?? `project-${input.routeId}`]
+  const archivedProjectIds = input.archivedProjectIds ?? []
 
   await getDatabase().run(
     `INSERT INTO app.import_route (id, route, name) VALUES ('${input.routeId}', '${input.routeId}', '${input.routeId}')`,
   )
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, archived)
+    VALUES ${projectIds
+      .map((projectId) => {
+        return `('${projectId}', '${projectId}', 'model-intake', ${archivedProjectIds.includes(projectId)})`
+      })
+      .join(', ')}
+  `)
   await getDatabase().run(`
     INSERT INTO app.project_import_route (id, project_id, import_route_id)
     VALUES ${projectIds
@@ -154,6 +168,15 @@ beforeAll(async () => {
   await migrateDuckdb()
 
   database = getAppDatabaseService()
+
+  await getDatabase().run(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('connection-intake', 'sglang', 'SGLang', TRUE, 'none', 'https://worker.example.test')
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, variant, metadata_json)
+    VALUES ('model-intake', 'connection-intake', 'model', 'model', 'Model', 'manual', TRUE, 'thinking', '{}'::JSON)
+  `)
 })
 
 afterAll(async () => {
@@ -217,6 +240,112 @@ test('four-project import deltas commit one dirty-work batch per transaction wit
   })
   expect(counts.transactions).toBe(3)
   expect(counts.dirtyWorkBatches).toBe(counts.transactions)
+})
+
+test('import delta intake reconciles deltas without queueing dirty work for archived projects on the route', async () => {
+  const intake = await getIntake()
+  const sourcePartition = 'import-route:route-archived-projects'
+
+  await insertRoute({
+    archivedProjectIds: ['project-archived-a', 'project-archived-b'],
+    projectIds: ['project-active', 'project-archived-a', 'project-archived-b'],
+    routeId: 'route-archived-projects',
+  })
+  await insertAddedDeltas({
+    count: 20,
+    deltaPrefix: 'archived-projects',
+    firstWatermark: 7_001,
+    routeId: 'route-archived-projects',
+    sourcePartition,
+  })
+
+  const result = await intake(
+    {limit: 1_024, sourcePartition, startSourceHighWaterMark: 7_001},
+    getDatabase() as ReviewImportDeltaDirtyIntakeDatabase,
+  )
+
+  expect(result).toEqual({
+    dirtyWorkCount: 20 * importComponentCount,
+    maxSourceHighWaterMark: 7_020,
+    status: 'converted',
+  })
+  expect(await getReconciledCount('route-archived-projects')).toEqual({pending: 0, reconciled: 20})
+  expect(
+    await getDatabase().queryJson<{projectId: string; rows: number}>(`
+      SELECT project_id AS projectId, CAST(count(*) AS INTEGER) AS rows
+      FROM app.review_serving_dirty_work
+      WHERE source_partition = '${sourcePartition}'
+      GROUP BY ALL
+    `),
+  ).toEqual([{projectId: 'project-active', rows: 20 * importComponentCount}])
+})
+
+test('a rank-field delta followed by the same article being added in the window only queues the add', async () => {
+  const intake = await getIntake()
+  const sourcePartition = 'import-route:route-rank-fold'
+  const insertDelta = async (input: {articleId: string; changeKind: string; deltaId: string; watermark: number}) => {
+    await getDatabase().run(`
+      INSERT INTO app.import_run_article_delta (
+        delta_id, change_kind, source_table, source_row_id, source_operation, source_partition, source_high_water_mark,
+        idempotency_key, payload_version, import_route_id, article_id, source_record_key
+      ) VALUES (
+        '${input.deltaId}', '${input.changeKind}', 'app.article_import_route', 'row-${input.deltaId}', 'insert',
+        '${sourcePartition}', ${input.watermark}, 'key-${input.deltaId}', 1, 'route-rank-fold', '${input.articleId}',
+        'record-${input.articleId}'
+      )
+    `)
+  }
+
+  await insertRoute({projectIds: ['project-rank-fold'], routeId: 'route-rank-fold'})
+  await insertDelta({
+    articleId: 'article-folded',
+    changeKind: 'importRoute.article.rankFields.updated',
+    deltaId: 'rank-folded',
+    watermark: 9_001,
+  })
+  await insertDelta({
+    articleId: 'article-folded',
+    changeKind: 'importRoute.article.added',
+    deltaId: 'added-folded',
+    watermark: 9_002,
+  })
+  await insertDelta({
+    articleId: 'article-kept',
+    changeKind: 'importRoute.article.added',
+    deltaId: 'added-kept',
+    watermark: 9_003,
+  })
+  await insertDelta({
+    articleId: 'article-kept',
+    changeKind: 'importRoute.article.rankFields.updated',
+    deltaId: 'rank-kept',
+    watermark: 9_004,
+  })
+
+  const result = await intake(
+    {limit: 1_024, sourcePartition, startSourceHighWaterMark: 9_001},
+    getDatabase() as ReviewImportDeltaDirtyIntakeDatabase,
+  )
+
+  expect(result).toEqual({
+    dirtyWorkCount: 2 * importComponentCount + 4,
+    maxSourceHighWaterMark: 9_004,
+    status: 'converted',
+  })
+  expect(await getReconciledCount('route-rank-fold')).toEqual({pending: 0, reconciled: 4})
+  expect(
+    await getDatabase().queryJson<{articleId: string; dirtyKind: string; rows: number}>(`
+      SELECT article_id AS articleId, dirty_kind AS dirtyKind, CAST(count(*) AS INTEGER) AS rows
+      FROM app.review_serving_dirty_work
+      WHERE source_partition = '${sourcePartition}'
+      GROUP BY ALL
+      ORDER BY articleId, dirtyKind
+    `),
+  ).toEqual([
+    {articleId: 'article-folded', dirtyKind: 'importRoute.article.added', rows: importComponentCount},
+    {articleId: 'article-kept', dirtyKind: 'importRoute.article.added', rows: importComponentCount},
+    {articleId: 'article-kept', dirtyKind: 'importRoute.article.rankFields.updated', rows: 4},
+  ])
 })
 
 test('a spent intake deadline commits one bounded transaction and leaves the rest of the range for later', async () => {
