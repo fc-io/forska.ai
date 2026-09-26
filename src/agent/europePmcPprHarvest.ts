@@ -5,8 +5,13 @@ import {type} from 'arktype'
 import type {ArticleImportStoreRow} from '../server/services/articleImportStoreService.ts'
 import {withDataSourceImportPageRetry} from '../server/services/dataSourceImportRetry.ts'
 import type {DataSourceImportPageProgress} from '../server/services/dataSourceImportStateRepository.ts'
-import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
+import {
+  type EuropePmcFetchedPage,
+  type EuropePmcPageRequest,
+  fetchEuropePmcSearchJson,
+  walkEuropePmcCursorPages,
+} from './europePmcCursorWalk.ts'
 import {
   type DatabaseEntry as EuropePmcPprWorkflowDatabaseEntry,
   europePmcPprWorkflowStoreEntries,
@@ -75,6 +80,7 @@ const EuropePmcResponse = type({
 
 type HarvestOptions = {
   cursor?: string | null
+  dataSourceId?: string
   onCursorUpdate?: (cursor: string | null, progress?: DataSourceImportPageProgress) => Promise<void>
 }
 export type EuropePmcPprHarvestPage = {
@@ -92,7 +98,11 @@ export type EuropePmcPprHarvestPage = {
   importedCount: number
 }
 type EuropePmcPprHarvestPageCallback = (page: EuropePmcPprHarvestPage) => Promise<void> | void
-type EuropePmcPprHarvestPagesInput = InputData & {cursor?: string | null; onPage: EuropePmcPprHarvestPageCallback}
+type EuropePmcPprHarvestPagesInput = InputData & {
+  cursor?: string | null
+  dataSourceId?: string
+  onPage: EuropePmcPprHarvestPageCallback
+}
 
 const toIsoDate = (y?: number | string, m?: number | string, d?: number | string): string => {
   const toInt = (v: unknown): number | undefined => {
@@ -190,67 +200,10 @@ const buildQuery = (from: string, to: string): string => {
   return `SRC:PPR AND FIRST_PDATE:[${a} TO ${b}]`
 }
 
-const europePmcFetchTimeoutMs = 20_000
-const europePmcRetryDelays = [10_000, 60_000, 600_000, 1_200_000, 1_800_000, 3_600_000]
-
-const fetchWithTimeoutAndRetry = (url: URL, timeoutMs: number, retryDelays: number[]): Promise<Response> => {
-  const attempt = (i: number): Promise<Response> => {
-    const controller = new AbortController()
-    const timer = setTimeout(() => {
-      controller.abort()
-    }, timeoutMs)
-    console.log(`Fetching Europe PMC URL: ${url.toString()}`)
-    const p = fetch(url, {signal: controller.signal}).finally(() => {
-      clearTimeout(timer)
-    })
-    return p.then(
-      (res) => {
-        console.log(`Europe PMC response: ${res.status} ${res.statusText}`)
-        if (res.ok) return res
-
-        const delay = retryDelays[i]
-        if (delay === undefined) {
-          return Promise.reject(new Error(`Europe PMC HTTP ${res.status}`))
-        }
-
-        console.log(
-          `Request failed with status ${res.status}. Retrying in ${delay / 1000}s (attempt ${i + 1}/${retryDelays.length})`,
-        )
-        return sleep(delay).then(() => {
-          return attempt(i + 1)
-        })
-      },
-      (err) => {
-        const delay = retryDelays[i]
-        if (delay === undefined) {
-          return Promise.reject(err)
-        }
-
-        console.log(
-          `Request failed: ${String(err)}. Retrying in ${delay / 1000}s (attempt ${i + 1}/${retryDelays.length})`,
-        )
-        return sleep(delay).then(() => {
-          return attempt(i + 1)
-        })
-      },
-    )
-  }
-  return attempt(0)
-}
-
 const fetchEuropePmc = async (
-  query: string,
-  pageSize: number,
-  cursorMark?: string,
-): Promise<{items: (typeof EuropePmcItem.infer)[]; nextCursor?: string; hitCount: number; rawPage: unknown}> => {
-  const url = new URL('https://www.ebi.ac.uk/europepmc/webservices/rest/search')
-  url.searchParams.set('query', query)
-  url.searchParams.set('format', 'json')
-  url.searchParams.set('resultType', 'core')
-  url.searchParams.set('pageSize', String(pageSize))
-  if (cursorMark) url.searchParams.set('cursorMark', cursorMark)
-  const res = await fetchWithTimeoutAndRetry(url, europePmcFetchTimeoutMs, europePmcRetryDelays)
-  const json: unknown = await res.json()
+  request: EuropePmcPageRequest,
+): Promise<EuropePmcFetchedPage<typeof EuropePmcItem.infer>> => {
+  const json = await fetchEuropePmcSearchJson(request)
   const parsed = EuropePmcResponse(json)
   if (parsed instanceof type.errors) {
     console.error('Invalid response from Europe PMC. Raw JSON:', JSON.stringify(json, null, 2))
@@ -369,71 +322,47 @@ const toArticleImportStoreRow = (entry: EuropePmcPprWorkflowDatabaseEntry): Arti
   }
 }
 
-const getStartCursor = (cursor?: string | null) => {
-  const normalized = cursor?.trim() ?? ''
-  return normalized ? normalized : '*'
+const hasId = (it: typeof EuropePmcItem.infer) => {
+  const id = typeof it.id === 'number' || typeof it.id === 'string' ? String(it.id) : ''
+  return Boolean(id && id.trim())
 }
 
 export const fetchEuropePmcPprHarvestPages = async (
   input: EuropePmcPprHarvestPagesInput,
 ): Promise<{fetchedTotal: number; pageCount: number}> => {
-  const query = buildQuery(input.fromDate, input.toDate)
-  const pageSize = 1000
-  const maxResults = Number.POSITIVE_INFINITY
-  let cursorMark = getStartCursor(input.cursor)
-  let importedCount = 0
-  let fetchedCount = 0
-  let pageIndex = 0
+  return await walkEuropePmcCursorPages({
+    cursor: input.cursor,
+    dataSourceId: input.dataSourceId,
+    fetchPage: fetchEuropePmc,
+    fromDate: input.fromDate,
+    importRoute: input.importRoute,
+    isImportable: hasId,
+    onPage: async (page) => {
+      const workflowEntries = page.importableItems.map((it) => {
+        return toDatabaseEntry(it, input.importRoute)
+      })
+      const normalizedRecords = workflowEntries.map((entry) => {
+        return toArticleImportStoreRow(entry)
+      })
 
-  while (true) {
-    const isInitialRun = cursorMark === '*'
-    const baseImportedCount = isInitialRun ? 0 : importedCount
-    const baseFetchedCount = isInitialRun ? 0 : fetchedCount
-    const {items, nextCursor, hitCount, rawPage} = await fetchEuropePmc(query, pageSize, cursorMark)
-    const remaining = Math.max(0, maxResults - baseImportedCount)
-    const slice = items.slice(0, remaining)
-    const hasId = (it: typeof EuropePmcItem.infer) => {
-      const id = typeof it.id === 'number' || typeof it.id === 'string' ? String(it.id) : ''
-      return Boolean(id && id.trim())
-    }
-    const workflowEntries = slice.filter(hasId).map((it) => {
-      return toDatabaseEntry(it, input.importRoute)
-    })
-    const normalizedRecords = workflowEntries.map((entry) => {
-      return toArticleImportStoreRow(entry)
-    })
-    const newImportedCount = baseImportedCount + workflowEntries.length
-    const newFetchedCount = baseFetchedCount + items.length
-    const doneByLimit = newImportedCount >= maxResults
-    const doneByExhaustion = newImportedCount >= hitCount
-    const isTerminalPage = doneByLimit || !nextCursor || nextCursor === cursorMark || doneByExhaustion
-    const cursorAfter = isTerminalPage ? null : nextCursor
-
-    await input.onPage({
-      cursorBefore: cursorMark,
-      cursorAfter,
-      pageIndex,
-      rawPage,
-      rawItems: items,
-      workflowEntries,
-      normalizedRecords,
-      sourceRecordCount: normalizedRecords.length,
-      sourceRecordHash: getSourceRecordHash(rawPage),
-      hitCount,
-      fetchedCount: newFetchedCount,
-      importedCount: newImportedCount,
-    })
-
-    if (isTerminalPage) {
-      return {fetchedTotal: newFetchedCount, pageCount: pageIndex + 1}
-    }
-
-    await sleep(100)
-    cursorMark = nextCursor
-    importedCount = newImportedCount
-    fetchedCount = newFetchedCount
-    pageIndex += 1
-  }
+      await input.onPage({
+        cursorBefore: page.cursorBefore,
+        cursorAfter: page.cursorAfter,
+        pageIndex: page.pageIndex,
+        rawPage: page.rawPage,
+        rawItems: page.items,
+        workflowEntries,
+        normalizedRecords,
+        sourceRecordCount: normalizedRecords.length,
+        sourceRecordHash: getSourceRecordHash(page.rawPage),
+        hitCount: page.hitCount,
+        fetchedCount: page.fetchedCount,
+        importedCount: page.importedCount,
+      })
+    },
+    query: buildQuery(input.fromDate, input.toDate),
+    toDate: input.toDate,
+  })
 }
 
 export const europePmcPprHarvest = async (input: InputData & HarvestOptions): Promise<void> => {
@@ -443,6 +372,7 @@ export const europePmcPprHarvest = async (input: InputData & HarvestOptions): Pr
     toDate: input.toDate,
     importRoute: input.importRoute,
     cursor: input.cursor,
+    dataSourceId: input.dataSourceId,
     onPage: async (page) => {
       await withDataSourceImportPageRetry(`Europe PMC PPR page ${page.pageIndex + 1}`, async () => {
         if (page.workflowEntries.length > 0) {

@@ -14,6 +14,7 @@ const storedRowsRef: {current: StoredArticleRow[][]} = {current: []}
 const storeFailureRef: {current: Error | null} = {current: null}
 const storeFailureQueueRef: {current: Error[]} = {current: []}
 const importEventsRef: {current: string[]} = {current: []}
+const storeDelayMsRef: {current: number} = {current: 0}
 const originalFetch = globalThis.fetch
 
 const registerModuleMocks = () => {
@@ -34,6 +35,11 @@ const registerModuleMocks = () => {
         }
         if (storeFailureRef.current) {
           throw storeFailureRef.current
+        }
+        if (storeDelayMsRef.current > 0) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, storeDelayMsRef.current)
+          })
         }
         importEventsRef.current.push(`store:${rows.length}`)
         storedRowsRef.current.push(rows)
@@ -108,6 +114,7 @@ afterEach(() => {
   storeFailureRef.current = null
   storeFailureQueueRef.current = []
   importEventsRef.current = []
+  storeDelayMsRef.current = 0
   globalThis.fetch = originalFetch
   mock.restore()
 })
@@ -324,7 +331,7 @@ test('europe pmc harvests save each page cursor only after the page is stored', 
     importEventsRef.current = []
     await runCursorOrderHarvest(harvest)
 
-    expect(importEventsRef.current).toEqual(['store:1', 'cursor:cursor-1', 'store:1', 'cursor:null'])
+    expect(importEventsRef.current).toEqual(['store:1', 'cursor:v2:1:cursor-1', 'store:1', 'cursor:null'])
   }, Promise.resolve())
 })
 
@@ -369,8 +376,8 @@ test('europe pmc harvests report page counts, the hit count and the page key wit
     })
 
     expect(saves).toEqual([
-      {cursor: 'cursor-1', progress: {fetchedCount: 1, pageKey: '*', storedCount: 1, totalCount: 2}},
-      {cursor: null, progress: {fetchedCount: 1, pageKey: 'cursor-1', storedCount: 1, totalCount: 2}},
+      {cursor: 'v2:1:cursor-1', progress: {fetchedCount: 1, pageKey: '*', storedCount: 1, totalCount: 2}},
+      {cursor: null, progress: {fetchedCount: 1, pageKey: 'v2:1:cursor-1', storedCount: 1, totalCount: 2}},
     ])
   }, Promise.resolve())
 })
@@ -389,7 +396,13 @@ test('europe pmc harvests retry the same page after a transient store failure', 
 
     await runCursorOrderHarvest(harvest)
 
-    expect(importEventsRef.current).toEqual(['store-failed:1', 'store:1', 'cursor:cursor-1', 'store:1', 'cursor:null'])
+    expect(importEventsRef.current).toEqual([
+      'store-failed:1',
+      'store:1',
+      'cursor:v2:1:cursor-1',
+      'store:1',
+      'cursor:null',
+    ])
   }, Promise.resolve())
 })
 
@@ -419,9 +432,9 @@ test('europe pmc harvests store the page again when saving its cursor fails tran
 
     expect(importEventsRef.current).toEqual([
       'store:1',
-      'cursor-failed:cursor-1',
+      'cursor-failed:v2:1:cursor-1',
       'store:1',
-      'cursor:cursor-1',
+      'cursor:v2:1:cursor-1',
       'store:1',
       'cursor:null',
     ])
@@ -457,7 +470,105 @@ test('europe pmc harvests fail a page right away when its cursor save loses the 
       )
 
     expect(String(error)).toContain('Data source import lease was lost')
-    expect(importEventsRef.current).toEqual(['store:1', 'cursor-failed:cursor-1'])
+    expect(importEventsRef.current).toEqual(['store:1', 'cursor-failed:v2:1:cursor-1'])
+  }, Promise.resolve())
+})
+
+const getRequestedCursorParams = (url: string) => {
+  const params = new URL(url).searchParams
+
+  return {cursorMark: params.get('cursorMark'), sort: params.get('sort')}
+}
+
+const europePmcCursorCases = [
+  {
+    cursor: null,
+    requests: [
+      {cursorMark: '*', sort: 'FIRST_PDATE_D asc'},
+      {cursorMark: 'cursor-1', sort: 'FIRST_PDATE_D asc'},
+    ],
+    savedCursors: ['v2:1:cursor-1', null],
+  },
+  {
+    cursor: 'v2:5000:saved-mark',
+    requests: [
+      {cursorMark: 'saved-mark', sort: 'FIRST_PDATE_D asc'},
+      {cursorMark: 'cursor-1', sort: 'FIRST_PDATE_D asc'},
+    ],
+    savedCursors: ['v2:5001:cursor-1', null],
+  },
+  {
+    cursor: 'legacy-relevance-mark',
+    requests: [
+      {cursorMark: 'legacy-relevance-mark', sort: null},
+      {cursorMark: 'cursor-1', sort: null},
+    ],
+    savedCursors: ['cursor-1', null],
+  },
+]
+
+test('europe pmc harvests sort new walks by first publication date and resume legacy cursors unsorted', async () => {
+  const harvests = await getCursorOrderHarvests()
+
+  await harvests.reduce(async (previous, harvest) => {
+    await previous
+    await europePmcCursorCases.reduce(async (previousCase, cursorCase) => {
+      await previousCase
+      const {requestedUrls} = mockEuropePmcFetchPages(getTwoPageEuropePmcResponses(harvest.source))
+      const savedCursors: (string | null)[] = []
+
+      await harvest.harvest({
+        fromDate: '2024-03-01',
+        toDate: '2024-03-01',
+        importRoute: harvest.importRoute,
+        cursor: cursorCase.cursor,
+        onCursorUpdate: async (cursor) => {
+          savedCursors.push(cursor)
+        },
+      })
+
+      expect(requestedUrls.map(getRequestedCursorParams)).toEqual(cursorCase.requests)
+      expect(savedCursors).toEqual(cursorCase.savedCursors)
+    }, Promise.resolve())
+  }, Promise.resolve())
+})
+
+test('europe pmc harvests fetch the next page while the current page is stored and keep the cursor save order', async () => {
+  const harvests = await getCursorOrderHarvests()
+
+  await harvests.reduce(async (previous, harvest) => {
+    await previous
+    importEventsRef.current = []
+    storeDelayMsRef.current = 20
+    const pages = getTwoPageEuropePmcResponses(harvest.source)
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      importEventsRef.current.push(`fetch:${new URL(getFetchUrl(input)).searchParams.get('cursorMark')}`)
+      const page = pages.shift()
+      if (!page) {
+        throw new Error('Unexpected Europe PMC fetch')
+      }
+
+      return new Response(JSON.stringify(page), {status: 200, statusText: 'OK'})
+    }) as unknown as typeof fetch
+
+    await harvest.harvest({
+      fromDate: '2024-03-01',
+      toDate: '2024-03-01',
+      importRoute: harvest.importRoute,
+      cursor: null,
+      onCursorUpdate: async (cursor) => {
+        importEventsRef.current.push(`cursor:${cursor}`)
+      },
+    })
+
+    expect(importEventsRef.current).toEqual([
+      'fetch:*',
+      'fetch:cursor-1',
+      'store:1',
+      'cursor:v2:1:cursor-1',
+      'store:1',
+      'cursor:null',
+    ])
   }, Promise.resolve())
 })
 

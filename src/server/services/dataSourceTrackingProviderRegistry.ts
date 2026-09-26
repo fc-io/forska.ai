@@ -52,6 +52,7 @@ export type DataSourceTrackingFetchPage = {
 
 export type FetchDataSourceTrackingWindowPages = (input: {
   cursor?: string | null
+  dataSourceId?: string
   fromDate: string
   importRoute: string
   onPage: (page: DataSourceTrackingFetchPage) => Promise<void> | void

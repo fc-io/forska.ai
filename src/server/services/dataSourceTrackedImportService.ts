@@ -254,6 +254,7 @@ export const createDataSourceTrackedImportService = ({
       const fetchPages = fetchRange ? provider.fetchRangePages : provider.fetchWindowPages
       const fetchResult = await fetchPages({
         cursor: resumeCursor,
+        dataSourceId: dataSource.id,
         fromDate: formatUtcDay(windowStart),
         importRoute: route,
         onPage: async (page) => {
