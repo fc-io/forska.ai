@@ -4,6 +4,10 @@ type RouteResponse = {dataId: string | null; error: string | null; status: numbe
 
 type HarvestCall = {cursor: string | null; fromDate: string; importRoute: string; toDate: string}
 
+type StateCall =
+  | {dataSourceId: string; kind: 'failed'; message: string}
+  | {dataSourceId: string; kind: 'started'; startsFresh: boolean; trigger: string}
+
 type ImportLifecycleResult = {
   afterFailure: RouteResponse
   afterSuccess: RouteResponse
@@ -12,6 +16,7 @@ type ImportLifecycleResult = {
   first: RouteResponse
   harvestCalls: HarvestCall[]
   missing: RouteResponse
+  stateCalls: StateCall[]
   updateCalls: Array<{cursor: string | null; id: string; importedCount: number}>
   updateCallsWhileRunning: number
 }
@@ -22,6 +27,7 @@ type TrackedImportResult = {
   leaseConflict: RouteResponse
   leaseCallsWhileRunning: string[]
   started: RouteResponse
+  stateCalls: StateCall[]
   updateCalls: Array<{cursor: string | null; id: string; importedCount: number}>
 }
 
@@ -68,6 +74,7 @@ const getRouteHarnessScript = (params: {
       harvestCalls: [],
       harvests: [],
       leaseCalls: [],
+      stateCalls: [],
       updateCalls: [],
     }
     const record = {
@@ -111,6 +118,8 @@ const getRouteHarnessScript = (params: {
     }
     const trackingRepositoryModulePath = getModulePath('./src/server/services/dataSourceTrackingRepository.ts')
     const trackingRepositoryModule = await import(trackingRepositoryModulePath)
+    const importStateRepositoryModulePath = getModulePath('./src/server/services/dataSourceImportStateRepository.ts')
+    const importStateRepositoryModule = await import(importStateRepositoryModulePath)
     const originalConsoleError = console.error
 
     console.error = (message, ...args) => {
@@ -168,6 +177,38 @@ const getRouteHarnessScript = (params: {
             },
             renewSourceLease: async (input) => {
               return {leaseOwner: input.leaseOwner}
+            },
+          }
+        },
+      }
+    })
+
+    void mock.module(importStateRepositoryModulePath, () => {
+      return {
+        ...importStateRepositoryModule,
+        getDataSourceImportStateRepository: () => {
+          return {
+            listResumeCandidates: async () => {
+              return []
+            },
+            markRunFailed: async (input) => {
+              state.stateCalls.push({
+                dataSourceId: input.dataSourceId,
+                kind: 'failed',
+                message: input.error instanceof Error ? input.error.message : String(input.error),
+              })
+              return null
+            },
+            markRunStarted: async (input) => {
+              state.stateCalls.push({
+                dataSourceId: input.dataSourceId,
+                kind: 'started',
+                startsFresh: input.startsFresh,
+                trigger: input.trigger,
+              })
+            },
+            markRunStopped: async () => {
+              return undefined
             },
           }
         },
@@ -267,6 +308,7 @@ const importLifecycleSteps = `
     first,
     harvestCalls: state.harvestCalls,
     missing,
+    stateCalls: state.stateCalls,
     updateCalls: state.updateCalls,
     updateCallsWhileRunning,
   }))
@@ -289,6 +331,7 @@ const trackedImportSteps = `
     leaseConflict,
     leaseCallsWhileRunning,
     started,
+    stateCalls: state.stateCalls,
     updateCalls: state.updateCalls,
   }))
 `
@@ -322,6 +365,12 @@ test.each(harvestImportRoutes)(
     ])
     expect(result.missing.error).toBe('Data source not found')
     expect(result.missing.success).toBe(false)
+    expect(result.stateCalls).toEqual([
+      {dataSourceId: 'datasource-1', kind: 'started', startsFresh: false, trigger: 'manual'},
+      {dataSourceId: 'datasource-1', kind: 'started', startsFresh: false, trigger: 'manual'},
+      {dataSourceId: 'datasource-1', kind: 'failed', message: 'Europe PMC unavailable'},
+      {dataSourceId: 'datasource-1', kind: 'started', startsFresh: false, trigger: 'manual'},
+    ])
   },
   30_000,
 )
@@ -347,6 +396,9 @@ test.each(trackedHarvestImportRoutes)(
     expect(result.leaseCallsWhileRunning).toEqual(['claim', 'claim'])
     expect(result.leaseCalls).toEqual(['claim', 'claim', 'release'])
     expect(result.updateCalls).toEqual([{cursor: null, id: 'datasource-1', importedCount: 42}])
+    expect(result.stateCalls).toEqual([
+      {dataSourceId: 'datasource-1', kind: 'started', startsFresh: false, trigger: 'manual'},
+    ])
   },
   30_000,
 )

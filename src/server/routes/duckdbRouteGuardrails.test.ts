@@ -197,10 +197,12 @@ test('serverMain low-memory cron deferral splits operational judgment and heavy 
   expect(heavyRoutesText).toContain("await import('./cron/fullTextConversionJobs.ts')")
   expect(heavyRoutesText).toContain("await import('./cron/nvidiaSmi.ts')")
   expect(heavyRoutesText).not.toContain('dataSourceTrackingCron')
+  expect(heavyRoutesText).not.toContain('dataSourceImportResumeCron')
   expect(heavyRoutesText).not.toContain('judgmentsJobsOperationalCron')
 
   expect(operationalRoutesText).toContain("await import('./cron/judgmentsJobsOperationalCron.ts')")
   expect(operationalRoutesText).toContain("await import('./cron/dataSourceTrackingCron.ts')")
+  expect(operationalRoutesText).toContain("await import('./cron/dataSourceImportResumeCron.ts')")
   expect(operationalRoutesText).not.toContain('fullTextJobs')
   expect(operationalRoutesText).not.toContain('fullTextConversionJobs')
   expect(operationalRoutesText).not.toContain('nvidiaSmi')

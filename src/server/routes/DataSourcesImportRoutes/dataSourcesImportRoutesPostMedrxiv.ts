@@ -1,11 +1,18 @@
 import {format} from 'date-fns'
 
 import {startMedrxivHarvest} from '../../../agent/startMedrxivHarvest.ts'
+import {
+  type DataSourceImportTrigger,
+  isFreshDataSourceImportCursor,
+} from '../../services/dataSourceImportStateRepository.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
 import {createCursorUpdater} from './dataSourcesImportCursor.ts'
 import {startDataSourceImportInBackground} from './startDataSourceImportInBackground.ts'
 
-export const dataSourcesImportRoutesPostMedrxiv = async (body: {id: string}) => {
+export const dataSourcesImportRoutesPostMedrxiv = async (
+  body: {id: string},
+  options: {trigger?: DataSourceImportTrigger} = {},
+) => {
   const dataSourceQueryService = getDataSourceQueryService()
   const record = await dataSourceQueryService.getDataSourceById(body.id)
   if (!record) {
@@ -25,8 +32,10 @@ export const dataSourcesImportRoutesPostMedrxiv = async (body: {id: string}) => 
   await startDataSourceImportInBackground({
     dataSourceId: record.id,
     importRoute,
+    startsFresh: isFreshDataSourceImportCursor(record.cursor),
+    trigger: options.trigger ?? 'manual',
     runImport: async (markImportStarted) => {
-      markImportStarted()
+      await markImportStarted()
       const saveCursor = createCursorUpdater(record.id)
       await startMedrxivHarvest({
         fromDate,
