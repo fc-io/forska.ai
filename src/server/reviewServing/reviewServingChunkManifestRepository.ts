@@ -602,9 +602,45 @@ const getRebuildChunkClaimRequestWaitingSinceSql = (tableAlias: string) => {
   )`
 }
 
-const getRebuildChunkClaimOrderPrefixSql = (claimOrder: ReviewServingRebuildChunkClaimOrder, tableAlias: string) => {
-  return claimOrder === 'longestWaitingRequest'
-    ? `${getRebuildChunkClaimRequestWaitingSinceSql(tableAlias)} ASC,
+const getRebuildChunkClaimYieldsToUnservedProjectActivationSql = (input: {now: Date | string}, tableAlias: string) => {
+  return `CASE
+    WHEN EXISTS (
+      SELECT 1
+      FROM app.review_rebuild_request claimed_request
+      INNER JOIN app.review_rebuild_request activation
+        ON activation.project_id = claimed_request.project_id
+        AND activation.priority > claimed_request.priority
+      WHERE (claimed_request.request_id || '') = ${tableAlias}.request_id
+        AND activation.status IN ('admitted', 'running')
+        AND activation.admission_state = 'admitted'
+        AND (
+          activation.retry_after IS NULL
+          OR activation.retry_after <= ${getReviewServingChunkTimestampLiteral(input.now)}
+        )
+        AND activation.priority >= ${getSqlLiteral(stalledForegroundRebuildRequestPriority)}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.review_serving_snapshot_manifest active_snapshot
+          WHERE active_snapshot.project_id = activation.project_id
+            AND active_snapshot.review_config_hash IS NOT DISTINCT FROM json_extract_string(
+              activation.identity_json,
+              '$.reviewConfigHash'
+            )
+            AND active_snapshot.snapshot_status = 'active'
+        )
+    )
+    THEN 1
+    ELSE 0
+  END`
+}
+
+const getRebuildChunkClaimOrderPrefixSql = (
+  input: {claimOrder: ReviewServingRebuildChunkClaimOrder; now: Date | string},
+  tableAlias: string,
+) => {
+  return input.claimOrder === 'longestWaitingRequest'
+    ? `${getRebuildChunkClaimYieldsToUnservedProjectActivationSql(input, tableAlias)} ASC,
+        ${getRebuildChunkClaimRequestWaitingSinceSql(tableAlias)} ASC,
         ${tableAlias}.request_id ASC NULLS LAST,`
     : ''
 }
@@ -1819,7 +1855,7 @@ export const getNextClaimableReviewServingRebuildChunk = async (
       FROM app.review_rebuild_chunk_manifest AS candidate
       WHERE ${getReviewServingRebuildChunkClaimWhere(input, 'candidate')}
       ORDER BY
-        ${getRebuildChunkClaimOrderPrefixSql(input.claimOrder ?? 'priority', 'candidate')}
+        ${getRebuildChunkClaimOrderPrefixSql({claimOrder: input.claimOrder ?? 'priority', now: input.now}, 'candidate')}
         ${getRebuildChunkClaimLaneSql('candidate')} ASC,
         ${getRebuildChunkClaimRequestPrioritySql('candidate')} DESC NULLS LAST,
         CASE

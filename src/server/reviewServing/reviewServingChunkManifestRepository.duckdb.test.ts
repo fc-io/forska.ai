@@ -115,16 +115,22 @@ const clearRebuildState = async () => {
   await getDatabase().run('DELETE FROM app.review_serving_snapshot_manifest')
 }
 
-const insertSnapshot = async (input: {components: readonly string[]; projectId: string}) => {
+const insertSnapshot = async (input: {
+  components: readonly string[]
+  projectId: string
+  reviewConfigHash?: string
+  snapshotId?: string
+  snapshotStatus?: 'active' | 'candidate'
+}) => {
   await getDatabase().run(`
     INSERT INTO app.review_serving_snapshot_manifest (
       project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
       required_components_json, optional_components_json, source_watermarks_json, updated_at
     ) VALUES (
       '${input.projectId}',
-      'snapshot-${input.projectId}',
-      'candidate',
-      'review-config-claim-lane',
+      '${input.snapshotId ?? `snapshot-${input.projectId}`}',
+      '${input.snapshotStatus ?? 'candidate'}',
+      '${input.reviewConfigHash ?? 'review-config-claim-lane'}',
       '{}'::JSON,
       '{"optional":[],"required":[]}'::JSON,
       '${JSON.stringify(input.components)}'::JSON,
@@ -144,13 +150,14 @@ const insertRequest = async (input: {
 }) => {
   await getDatabase().run(`
     INSERT INTO app.review_rebuild_request (
-      request_id, project_id, reason, requested_components_json, priority, status, admission_state, admitted_at,
-      created_at, updated_at
+      request_id, project_id, reason, requested_components_json, identity_json, priority, status, admission_state,
+      admitted_at, created_at, updated_at
     ) VALUES (
       '${input.requestId}',
       '${input.projectId}',
       'claimLaneTest',
       '["${input.component}"]'::JSON,
+      '{"reviewConfigHash":"review-config-claim-lane"}'::JSON,
       ${input.priority},
       'admitted',
       'admitted',
@@ -350,6 +357,139 @@ test('rebuild chunk claims in DuckDB give every Nth claim to the least recently 
     'request-quiet-payload',
     ...busyClaims,
     'request-quiet-summary',
+  ])
+})
+
+test('longest-waiting rebuild chunk claims in DuckDB let an unserved project activate before its lower-priority requests', async () => {
+  const repository = await import('./reviewServingChunkManifestRepository.ts')
+  const claimLongestWaitingAndComplete = async (startedAt: string) => {
+    const next = await repository.getNextClaimableReviewServingRebuildChunk(
+      {claimOrder: 'longestWaitingRequest', now: '2026-09-23T12:30:00.000Z', releaseInactiveRequests: false},
+      getDatabase(),
+    )
+
+    await getDatabase().run(`
+      UPDATE app.review_rebuild_chunk_manifest
+      SET status = 'completed', started_at = TIMESTAMPTZ '${startedAt}', completed_at = TIMESTAMPTZ '${startedAt}'
+      WHERE chunk_id = '${next?.chunkId ?? ''}'
+    `)
+
+    return next?.requestId ?? null
+  }
+  const insertRequestChunk = async (input: {
+    chunkId: string
+    component: string
+    projectId: string
+    requestId: string
+    startedAt?: string
+  }) => {
+    await insertChunk({...input, status: input.startedAt === undefined ? 'pending' : 'completed'})
+  }
+
+  await clearRebuildState()
+  await insertProject('project-fresh')
+  await insertSnapshot({components: ['humanStatus', 'queue', 'selectedImport'], projectId: 'project-fresh'})
+  await insertSnapshot({
+    components: ['humanStatus', 'queue', 'selectedImport'],
+    projectId: 'project-fresh',
+    reviewConfigHash: 'review-config-before-edit',
+    snapshotId: 'snapshot-project-fresh-before-edit',
+    snapshotStatus: 'active',
+  })
+  await insertRequest({
+    admittedAt: '2026-09-23T08:00:00Z',
+    component: 'queue',
+    priority: 20_000,
+    projectId: 'project-fresh',
+    requestId: 'request-fresh-activation',
+  })
+  await insertRequestChunk({
+    chunkId: 'chunk-fresh-activation-human-status',
+    component: 'humanStatus',
+    projectId: 'project-fresh',
+    requestId: 'request-fresh-activation',
+    startedAt: '2026-09-23T11:50:00Z',
+  })
+  await insertRequestChunk({
+    chunkId: 'chunk-fresh-activation-queue',
+    component: 'queue',
+    projectId: 'project-fresh',
+    requestId: 'request-fresh-activation',
+  })
+  await insertRequest({
+    admittedAt: '2026-09-23T11:40:00Z',
+    component: 'selectedImport',
+    priority: 10_000,
+    projectId: 'project-fresh',
+    requestId: 'request-fresh-selected-import',
+  })
+  await insertRequestChunk({
+    chunkId: 'chunk-fresh-selected-import',
+    component: 'selectedImport',
+    projectId: 'project-fresh',
+    requestId: 'request-fresh-selected-import',
+  })
+  await insertProject('project-served')
+  await insertSnapshot({
+    components: ['display', 'llmStatus', 'selectedImport'],
+    projectId: 'project-served',
+    snapshotStatus: 'active',
+  })
+  await insertRequest({
+    admittedAt: '2026-09-23T08:00:00Z',
+    component: 'llmStatus',
+    priority: 10_000,
+    projectId: 'project-served',
+    requestId: 'request-served-rebuild',
+  })
+  await insertRequestChunk({
+    chunkId: 'chunk-served-rebuild-display',
+    component: 'display',
+    projectId: 'project-served',
+    requestId: 'request-served-rebuild',
+    startedAt: '2026-09-23T11:55:00Z',
+  })
+  await insertRequestChunk({
+    chunkId: 'chunk-served-rebuild-llm-status',
+    component: 'llmStatus',
+    projectId: 'project-served',
+    requestId: 'request-served-rebuild',
+  })
+  await insertRequest({
+    admittedAt: '2026-09-23T11:45:00Z',
+    component: 'selectedImport',
+    priority: 100,
+    projectId: 'project-served',
+    requestId: 'request-served-refresh',
+  })
+  await insertRequestChunk({
+    chunkId: 'chunk-served-refresh',
+    component: 'selectedImport',
+    projectId: 'project-served',
+    requestId: 'request-served-refresh',
+  })
+
+  const claimsBeforeActivation = [
+    await claimLongestWaitingAndComplete('2026-09-23T12:00:00Z'),
+    await claimLongestWaitingAndComplete('2026-09-23T12:01:00Z'),
+  ]
+
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_request SET status = 'completed' WHERE request_id = 'request-fresh-activation'
+  `)
+  await getDatabase().run(`
+    UPDATE app.review_serving_snapshot_manifest SET snapshot_status = 'active' WHERE snapshot_id = 'snapshot-project-fresh'
+  `)
+
+  expect([
+    ...claimsBeforeActivation,
+    await claimLongestWaitingAndComplete('2026-09-23T12:02:00Z'),
+    await claimLongestWaitingAndComplete('2026-09-23T12:03:00Z'),
+  ]).toEqual([
+    'request-served-refresh',
+    'request-fresh-activation',
+    'request-fresh-selected-import',
+    'request-served-rebuild',
   ])
 })
 
