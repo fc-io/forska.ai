@@ -1,6 +1,7 @@
 import {type} from 'arktype'
 import {XMLParser} from 'fast-xml-parser'
 
+import {withDataSourceImportPageRetry} from '../../server/services/dataSourceImportRetry.ts'
 import {sleep} from '../../utils/sleep.ts'
 import {arxivWorkflowGetQuery} from './arxivWorkflowGetQuery.ts'
 import {arxivEntry} from './arxivWorkflowStoreEntires.ts'
@@ -240,8 +241,10 @@ const arxivWorkflowHarvest = async (input: HarvestInput, resumptionToken?: strin
   const token = resumptionToken ?? getStartResumptionToken(input.cursor)
   const arxivQueryUrl = arxivWorkflowGetQuery(input, token)
   const result = await fetchRecords(arxivQueryUrl)
-  await arxivWorkflowStoreEntires(result.records, input.importRoute)
-  await input.onCursorUpdate?.(result.resumptionToken ?? null)
+  await withDataSourceImportPageRetry(`arXiv page ${token ?? 'start'}`, async () => {
+    await arxivWorkflowStoreEntires(result.records, input.importRoute)
+    await input.onCursorUpdate?.(result.resumptionToken ?? null)
+  })
 
   if (result.resumptionToken) {
     await sleep(5000)

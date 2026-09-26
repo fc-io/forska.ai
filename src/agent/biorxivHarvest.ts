@@ -1,5 +1,6 @@
 import {type} from 'arktype'
 
+import {withDataSourceImportPageRetry} from '../server/services/dataSourceImportRetry.ts'
 import {normalizeBiorxivIdentifier} from '../utils/articleIdentifierNormalization.ts'
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
@@ -159,8 +160,11 @@ const harvestPage = async (
 
   const records = await fetchBiorxivPage(input.fromDate, input.toDate, cursor, shouldThrottle)
   const nextCursor = records.length ? cursor + records.length : cursor
+  const pageLabel = `bioRxiv page at offset ${cursor}`
   if (!records.length) {
-    await saveCursor(nextCursor)
+    await withDataSourceImportPageRetry(pageLabel, async () => {
+      await saveCursor(nextCursor)
+    })
     return
   }
   const entries = records
@@ -174,10 +178,12 @@ const harvestPage = async (
       return Boolean(entry)
     })
 
-  if (entries.length > 0) {
-    await biorxivWorkflowStoreEntries(entries)
-  }
-  await saveCursor(nextCursor)
+  await withDataSourceImportPageRetry(pageLabel, async () => {
+    if (entries.length > 0) {
+      await biorxivWorkflowStoreEntries(entries)
+    }
+    await saveCursor(nextCursor)
+  })
 
   await harvestPage(input, nextCursor, true)
 }

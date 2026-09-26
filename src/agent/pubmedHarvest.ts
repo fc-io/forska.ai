@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto'
 import {type} from 'arktype'
 
 import type {ArticleImportStoreRow} from '../server/services/articleImportStoreService.ts'
+import {withDataSourceImportPageRetry} from '../server/services/dataSourceImportRetry.ts'
 import {normalizeDoiIdentifier} from '../utils/articleIdentifierNormalization.ts'
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
@@ -444,12 +445,14 @@ const pubmedHarvest = async (input: InputData & HarvestOptions): Promise<void> =
     importRoute: input.importRoute,
     cursor: input.cursor,
     onPage: async (page) => {
-      if (page.workflowEntries.length > 0) {
-        await pubmedWorkflowStoreEntries(page.workflowEntries)
-      }
-      if (input.onCursorUpdate) {
-        await input.onCursorUpdate(page.cursorAfter)
-      }
+      await withDataSourceImportPageRetry(`PubMed page ${page.pageIndex + 1}`, async () => {
+        if (page.workflowEntries.length > 0) {
+          await pubmedWorkflowStoreEntries(page.workflowEntries)
+        }
+        if (input.onCursorUpdate) {
+          await input.onCursorUpdate(page.cursorAfter)
+        }
+      })
     },
   })
   console.log(`Europe PMC harvest complete. Fetched ${fetchedTotal} articles.`)
