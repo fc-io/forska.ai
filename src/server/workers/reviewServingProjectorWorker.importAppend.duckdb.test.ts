@@ -544,3 +544,66 @@ test('candidate validation waits out serving rows whose status work is still que
     'required component llmStatus has 1 list-mode rows with NULL status despite enabled prompts',
   )
 })
+
+test('selectedImport patches snapshots that share a selected import once and still reaches each of them', async () => {
+  const [{wakeReviewServingProjectorService}, {getDefaultReviewServingProjectorRunners}] = await Promise.all([
+    import('../reviewServing/reviewServingProjectorService.ts'),
+    import('./reviewServingProjectorWorker.ts'),
+  ])
+  const baseInserts: string[] = []
+  const countBaseInserts = (statement: string) => {
+    if (statement.includes('INSERT INTO mart.review_article_serving_base_v4')) {
+      baseInserts.push(statement)
+    }
+  }
+  const countingDatabase = {
+    ...getDatabase(),
+    run: async (statement: string) => {
+      countBaseInserts(statement)
+      return getDatabase().run(statement)
+    },
+    transaction: async <T>(
+      operation: (tx: never) => Promise<T>,
+      workloadContext?: Parameters<ReturnType<typeof getAppDatabaseService>['transaction']>[1],
+    ) => {
+      return getDatabase().transaction(async (tx) => {
+        return operation({
+          ...tx,
+          run: async (statement: string) => {
+            countBaseInserts(statement)
+            return tx.run(statement)
+          },
+        } as never)
+      }, workloadContext)
+    },
+  }
+
+  await insertArticle({articleId: 'article-new-3', rank: 4})
+  await insertAddedDelta({articleId: 'article-new-3', sourceHighWaterMark: 5})
+
+  expect(await intakeDeltas({end: 5, start: 5})).toMatchObject({status: 'converted'})
+
+  await ['projectScope', 'selectedImport'].reduce<Promise<void>>(async (previous, component) => {
+    await previous
+    await wakeReviewServingProjectorService(
+      {
+        batchSize: 64,
+        componentOrder: [component as ReviewServingProjectionComponent],
+        maxRowsPerWake: 512,
+        maxWakeMs: 600_000,
+        wakeId: `wake-shared-selected-import-${component}`,
+      },
+      {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(countingDatabase as never)},
+    )
+  }, Promise.resolve())
+
+  expect(baseInserts).toHaveLength(1)
+  expect(
+    await getDatabase().queryJson<{snapshotId: string}>(`
+      SELECT snapshot_id AS snapshotId
+      FROM mart.review_article_serving_base_v4
+      WHERE project_id = '${projectId}' AND article_id = 'article-new-3'
+      ORDER BY snapshot_id
+    `),
+  ).toEqual([{snapshotId: 'snapshot-import-append-active'}, {snapshotId: 'snapshot-import-append-candidate'}])
+})

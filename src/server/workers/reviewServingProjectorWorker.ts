@@ -4793,6 +4793,18 @@ const runSnapshotProjectors = async <T>(
     : [...resultsWithoutAcknowledgement, await runSnapshot(finalSnapshot, true)]
 }
 
+const getSelectedImportPatchKey = (snapshot: ReviewServingSnapshotContext) => {
+  return `${requireSelectedImportSnapshotId(snapshot)}\t${requireSnapshotComponentIdentity(snapshot, 'projectScope')}`
+}
+
+const getSelectedImportPatchSnapshots = (snapshots: readonly ReviewServingSnapshotContext[]) => {
+  const keys = snapshots.map(getSelectedImportPatchKey)
+
+  return snapshots.filter((_snapshot, index) => {
+    return !keys.slice(index + 1).includes(keys[index] ?? '')
+  })
+}
+
 const getDeferredClaimIds = (
   claims: readonly ReviewServingDirtyWorkClaim[],
   remainingClaims: readonly ReviewServingDirtyWorkClaim[],
@@ -5392,21 +5404,24 @@ const getUngatedReviewServingProjectorRunners = (database: ReviewServingProjecto
         }
       }
 
-      const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
-        return projectReviewServingSelectedImportDirty(
-          {
-            acknowledgeClaims,
-            baseGeneration: manifest.baseGeneration,
-            claims: context.claims,
-            definitionVersion: manifest.definitionVersion,
-            projectId,
-            projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
-            projectionIdentity: manifest.projectionIdentity,
-            selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
-          },
-          database,
-        )
-      })
+      const results = await runSnapshotProjectors(
+        getSelectedImportPatchSnapshots(snapshots),
+        (snapshot, acknowledgeClaims) => {
+          return projectReviewServingSelectedImportDirty(
+            {
+              acknowledgeClaims,
+              baseGeneration: manifest.baseGeneration,
+              claims: context.claims,
+              definitionVersion: manifest.definitionVersion,
+              projectId,
+              projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              projectionIdentity: manifest.projectionIdentity,
+              selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
+            },
+            database,
+          )
+        },
+      )
 
       return {
         processedCount: results.reduce((total, result) => {
