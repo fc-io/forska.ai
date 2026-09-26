@@ -331,6 +331,73 @@ test('wake runs claimed component batches in dependency order under row budgets'
   ).toEqual(['humanStatus', 'queue'])
 })
 
+test('wake component passes revisit components that projected a full batch and settle the rest', async () => {
+  const order: ReviewServingProjectionComponent[] = []
+  const {claimedComponents, dependencies, releasedClaimIds} = createDependencyHarness({
+    humanStatus: [1, 2, 3].map((index) => {
+      return getClaim({component: 'humanStatus', dirtyWorkId: `human-${index}`})
+    }),
+    queue: [1, 2, 3, 4, 5].map((index) => {
+      return getClaim({component: 'queue', dirtyWorkId: `queue-${index}`})
+    }),
+    selectedImport: [1, 2, 3, 4].map((index) => {
+      return getClaim({component: 'selectedImport', dirtyWorkId: `selected-import-${index}`})
+    }),
+  })
+
+  dependencies.runners = {
+    humanStatus: async ({claims}) => {
+      order.push('humanStatus')
+
+      return {processedCount: claims.length}
+    },
+    queue: async ({claims}) => {
+      order.push('queue')
+
+      return {processedCount: claims.length}
+    },
+    selectedImport: async ({claims}) => {
+      order.push('selectedImport')
+
+      return {
+        processedCount: 0,
+        releasedClaimIds: claims.map((claim) => {
+          return claim.dirtyWorkId
+        }),
+      }
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {
+      batchSize: 2,
+      componentOrder: ['humanStatus', 'queue', 'selectedImport'],
+      componentPasses: 3,
+      maxRowsPerWake: 100,
+      maxWakeMs: 1_000,
+      wakeId: 'wake-passes',
+    },
+    dependencies,
+  )
+
+  expect(order).toEqual(['humanStatus', 'queue', 'selectedImport', 'humanStatus', 'queue', 'queue'])
+  expect(claimedComponents).toEqual(order)
+  expect(
+    result.runs.map((run) => {
+      return [run.component, run.claimCount]
+    }),
+  ).toEqual([
+    ['humanStatus', 2],
+    ['queue', 2],
+    ['selectedImport', 0],
+    ['humanStatus', 1],
+    ['queue', 2],
+    ['queue', 1],
+  ])
+  expect(releasedClaimIds).toEqual([])
+  expect(result.releasedClaimIds).toEqual(['selected-import-1', 'selected-import-2'])
+})
+
 test('wake retries a failing projector batch and avoids marking it failed after replay succeeds', async () => {
   const {dependencies, failedClaimIds} = createDependencyHarness({
     queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
