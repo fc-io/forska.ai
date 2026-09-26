@@ -58,6 +58,37 @@ test('project scope projector writes manifest and acknowledges scoped article wo
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain('DELETE FROM mart.project_scope_article')
+  expect(joined).toContain('INSERT INTO mart.project_scope_article')
+  expect(joined).toContain("scope.article_id IN ('article-1')")
+})
+
+test('project scope projector leaves scope rows alone for project-scoped claims', async () => {
+  const statements: string[] = []
+  const database: ReviewServingProjectScopeProjectorDatabase = {
+    queryJson: async <T>(_statement: string) => {
+      return [] as T[]
+    },
+    run: async (statement: string) => {
+      statements.push(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  await projectReviewServingProjectScopePatches(
+    {
+      baseGeneration: 5,
+      claims: [{...projectScopeClaim(), articleId: null, scopeId: 'project-1', scopeKind: 'project'}],
+      definitionVersion: 'project-scope-v4-test',
+      projectId: 'project-1',
+      projectionIdentity: 'projectScope:identity-1',
+    },
+    database,
+  )
+
+  expect(statements.join('\n')).not.toContain('mart.project_scope_article')
 })
 
 test('project scope no-ack snapshot passes do not publish shared manifests or watermarks', async () => {
