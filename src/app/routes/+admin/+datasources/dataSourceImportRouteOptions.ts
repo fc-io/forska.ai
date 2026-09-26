@@ -21,6 +21,10 @@ export const getBuiltInImportRouteValue = (importRoute: string | null | undefine
   return importRoute && builtInImportRoutes.has(importRoute) ? importRoute : ''
 }
 
+export const isBuiltInImportRoute = (importRoute: string | null | undefined) => {
+  return importRoute ? builtInImportRoutes.has(importRoute) : false
+}
+
 export const getCustomImportRouteValue = (importRoute: string | null | undefined) => {
   return importRoute && !builtInImportRoutes.has(importRoute) ? importRoute : ''
 }
