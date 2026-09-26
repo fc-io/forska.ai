@@ -292,6 +292,7 @@ const duckdbStartupPreflightLowMemorySkipLogKeys = new Set<string>()
 type DuckdbStartupIndexedTableRepairSpec = {
   duplicateKeySelectSql: string
   lowMemoryStartupPreflight?: boolean
+  matchByMutationTargetOnly?: boolean
   mutationProbeSql: string
   postRepairDependencySpecs?: DuckdbStartupSchemaRequirement[]
   postRepairSql?: string
@@ -300,7 +301,7 @@ type DuckdbStartupIndexedTableRepairSpec = {
   recreateSecondaryIndexes?: boolean
   repairDedupeOrderSql?: string
   repairPrimaryKeyColumns?: string[]
-  repairStrategy?: 'copy' | 'dedupe-latest' | 'empty-derived'
+  repairStrategy?: 'copy' | 'dedupe-latest' | 'empty-derived' | 'recreate-in-place'
   schemaRequirements?: DuckdbStartupSchemaRequirement[]
   schemaName: string
   skipStartupPreflightUntilMigration?: string
@@ -2608,6 +2609,84 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     skipGenericDeleteInsertProbe: true,
     tableName: 'review_article_filter_posting_serving_v4',
   },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT id
+        FROM app.article_import_route_source_record
+        GROUP BY id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    matchByMutationTargetOnly: true,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_article_import_route_source_record;
+      CREATE TEMP TABLE startup_probe_article_import_route_source_record AS
+      SELECT id
+      FROM app.article_import_route_source_record
+      ORDER BY updated_at DESC, id ASC
+      LIMIT 256;
+      BEGIN;
+      UPDATE app.article_import_route_source_record
+      SET source_article_created_at = source_article_created_at
+      WHERE id IN (
+        SELECT id
+        FROM startup_probe_article_import_route_source_record
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_article_import_route_source_record;
+    `,
+    repairStrategy: 'recreate-in-place',
+    schemaName: 'app',
+    schemaRequirements: [
+      {
+        columnNames: ['id', 'source_article_created_at', 'updated_at'],
+        schemaName: 'app',
+        tableName: 'article_import_route_source_record',
+      },
+    ],
+    tableName: 'article_import_route_source_record',
+  },
+  {
+    duplicateKeySelectSql: `
+      SELECT COUNT(*) AS duplicateCount
+      FROM (
+        SELECT id
+        FROM app.article_import_route
+        GROUP BY id
+        HAVING COUNT(*) > 1
+      )
+    `,
+    matchByMutationTargetOnly: true,
+    mutationProbeSql: `
+      DROP TABLE IF EXISTS startup_probe_article_import_route;
+      CREATE TEMP TABLE startup_probe_article_import_route AS
+      SELECT id
+      FROM app.article_import_route
+      ORDER BY updated_at DESC, id ASC
+      LIMIT 256;
+      BEGIN;
+      UPDATE app.article_import_route
+      SET source_article_created_at = source_article_created_at
+      WHERE id IN (
+        SELECT id
+        FROM startup_probe_article_import_route
+      );
+      COMMIT;
+      DROP TABLE IF EXISTS startup_probe_article_import_route;
+    `,
+    repairStrategy: 'recreate-in-place',
+    schemaName: 'app',
+    schemaRequirements: [
+      {
+        columnNames: ['id', 'source_article_created_at', 'updated_at'],
+        schemaName: 'app',
+        tableName: 'article_import_route',
+      },
+    ],
+    tableName: 'article_import_route',
+  },
 ] as const
 const enforcedForegroundDuckdbOperations = new Set<DuckdbWorkloadOperation>([
   'mainQuery',
@@ -3197,7 +3276,10 @@ const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
   lastMutatingTargetTable: string | null,
 ) => {
   const message = error.message
-  const matchedSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
+  const messageMatchableSpecs = duckdbStartupIndexedTableRepairSpecs.filter((spec) => {
+    return spec.matchByMutationTargetOnly !== true
+  })
+  const matchedSpec = messageMatchableSpecs.find((spec) => {
     return message.includes(`${spec.schemaName}.${spec.tableName}`)
   })
 
@@ -3205,7 +3287,7 @@ const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
     return [matchedSpec]
   }
 
-  const unqualifiedMessageSpec = duckdbStartupIndexedTableRepairSpecs.find((spec) => {
+  const unqualifiedMessageSpec = messageMatchableSpecs.find((spec) => {
     return message.includes(spec.tableName)
   })
 
@@ -3248,8 +3330,19 @@ const getDuckdbStartupRepairSpecsForFatalIndexedTableError = (
       }) === index
     )
   })
+  const indexedRepairSpecs = uniqueRepairSpecs.filter((repairSpec) => {
+    return !isDuckdbStartupRepairSpecMigrationGated(repairSpec)
+  })
+
+  if (indexedRepairSpecs.length > 0) {
+    return indexedRepairSpecs
+  }
 
   return uniqueRepairSpecs.length > 0 ? uniqueRepairSpecs : [fallbackSpec]
+}
+
+const isDuckdbStartupRepairSpecMigrationGated = (repairSpec: DuckdbStartupIndexedTableRepairSpec) => {
+  return typeof repairSpec.skipStartupPreflightUntilMigration === 'string'
 }
 
 const isDuckdbStartupRetryableError = (error: unknown) => {
@@ -3474,10 +3567,6 @@ const getDuckdbWalFileStatSnapshot = (databasePath: string) => {
   const exists = walStat?.isFile() === true
 
   return {exists, modifiedAtMs: exists ? walStat.mtimeMs : null, path: walPath, sizeBytes: exists ? walStat.size : null}
-}
-
-const hasDuckdbWal = (databasePath: string) => {
-  return getDuckdbWalFileStatSnapshot(databasePath).exists
 }
 
 const isDuckdbWalReplayFailure = (error: unknown) => {
@@ -3937,9 +4026,7 @@ const shouldRetryDuckdbStartupPreflightForActiveRepairMarker = (marker: DuckdbSt
 const shouldRecheckDuckdbStartupRepairMarkerForPendingMigration = (
   repairSpecs: DuckdbStartupIndexedTableRepairSpec[],
 ) => {
-  return repairSpecs.some((spec) => {
-    return typeof spec.skipStartupPreflightUntilMigration === 'string'
-  })
+  return repairSpecs.every(isDuckdbStartupRepairSpecMigrationGated)
 }
 
 const shouldDeferDuckdbStartupRepairToPendingMigration = (error: unknown) => {
@@ -4517,6 +4604,47 @@ const getDuckdbIndexedTableRepairScript = () => {
       return true
     }
 
+    const replaceTableWithRepairCopy = async (spec, createSql, sourceName, repairName) => {
+      const createRepairSql = stripInlinePrimaryKeyConstraints(
+        createSql.replace('CREATE TABLE ' + sourceName + '(', 'CREATE TABLE ' + repairName + '('),
+        spec.repairPrimaryKeyColumns,
+      )
+
+      if (createRepairSql === createSql) {
+        throw new Error('could not rewrite table DDL for ' + sourceName)
+      }
+
+      await connection.run('DROP TABLE IF EXISTS ' + repairName)
+      await connection.run(createRepairSql)
+      if (spec.repairStrategy !== 'empty-derived') {
+        await connection.run(await getRepairCopySql(spec, sourceName, repairName))
+      }
+      await connection.run('DROP TABLE ' + sourceName)
+      await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
+    }
+
+    const recreateTableInPlace = async (spec, createSql, repairTableName) => {
+      const sourceIdentifier = getQualifiedIdentifier(spec.schemaName, spec.tableName)
+      const repairIdentifier = getQualifiedIdentifier(spec.schemaName, repairTableName)
+
+      await connection.run('DROP TABLE IF EXISTS ' + repairIdentifier)
+      await connection.run('CREATE TABLE ' + repairIdentifier + ' AS SELECT * FROM ' + sourceIdentifier)
+      const copiedRowCount = await getTableRowCount(spec.schemaName, repairTableName)
+      await connection.run('DROP TABLE ' + sourceIdentifier)
+      await connection.run(createSql)
+      await connection.run('INSERT INTO ' + sourceIdentifier + ' BY NAME SELECT * FROM ' + repairIdentifier)
+      const recreatedRowCount = await getTableRowCount(spec.schemaName, spec.tableName)
+
+      if (recreatedRowCount !== copiedRowCount) {
+        throw new Error(
+          'recreated ' + getQualifiedName(spec.schemaName, spec.tableName)
+            + ' has ' + recreatedRowCount + ' rows but the repair copy had ' + copiedRowCount,
+        )
+      }
+
+      await connection.run('DROP TABLE ' + repairIdentifier)
+    }
+
     try {
       instance = await createInitializedDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath, options, expectedEngine: ${JSON.stringify(duckdbExpectedEngineIdentity)}})
       connection = await instance.connect()
@@ -4578,23 +4706,13 @@ const getDuckdbIndexedTableRepairScript = () => {
           const repairTableName = spec.tableName + '_startup_repair_' + repairId
           const sourceName = getQualifiedName(spec.schemaName, spec.tableName)
           const repairName = getQualifiedName(spec.schemaName, repairTableName)
-          let createRepairSql = createSql.replace(
-            'CREATE TABLE ' + sourceName + '(',
-            'CREATE TABLE ' + repairName + '(',
-          )
-          createRepairSql = stripInlinePrimaryKeyConstraints(createRepairSql, spec.repairPrimaryKeyColumns)
 
-          if (createRepairSql === createSql) {
-            throw new Error('could not rewrite table DDL for ' + sourceName)
+          if (spec.repairStrategy === 'recreate-in-place') {
+            await recreateTableInPlace(spec, createSql, repairTableName)
+          } else {
+            await replaceTableWithRepairCopy(spec, createSql, sourceName, repairName)
           }
 
-          await connection.run('DROP TABLE IF EXISTS ' + repairName)
-          await connection.run(createRepairSql)
-          if (spec.repairStrategy !== 'empty-derived') {
-            await connection.run(await getRepairCopySql(spec, sourceName, repairName))
-          }
-          await connection.run('DROP TABLE ' + sourceName)
-          await connection.run('ALTER TABLE ' + repairName + ' RENAME TO ' + spec.tableName)
           await connection.run(
             'DROP INDEX IF EXISTS '
               + quoteIdentifier(spec.schemaName)
@@ -4971,7 +5089,7 @@ const repairDuckdbStartupIndexedTables = async (
   const manifestPath = join(recoveryDirectory, `${recoveryPathPart}.recovery.json`)
   const repairSpecs = getDuckdbStartupIndexedTableRepairSpecs(error)
   const repairMarker = getDuckdbStartupPreflightRepairMarkerFromError(error)
-  const hadWalBeforeRepair = hasDuckdbWal(runtimeConfig.databasePath)
+  const hadWalBeforeRepair = hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
 
   await mkdir(recoveryDirectory, {recursive: true})
   let preservedDatabasePath: string | null
@@ -4981,7 +5099,7 @@ const repairDuckdbStartupIndexedTables = async (
     try {
       await waitForDuckdbStartupRepairFileLock(runtimeConfig)
     } catch (lockProbeError) {
-      if (!hasDuckdbWal(runtimeConfig.databasePath) && !isDuckdbWalReplayFailure(lockProbeError)) {
+      if (!hasNonEmptyDuckdbWal(runtimeConfig.databasePath) && !isDuckdbWalReplayFailure(lockProbeError)) {
         throw lockProbeError
       }
 
@@ -5172,7 +5290,7 @@ const repairDuckdbStartupIndexedTables = async (
       terminalArgs: [`attempt=${attempt + 1}`, `retry_ms=${retryDelayMs}`],
     })
     await sleepMs(retryDelayMs)
-    if (hasDuckdbWal(runtimeConfig.databasePath)) {
+    if (hasNonEmptyDuckdbWal(runtimeConfig.databasePath)) {
       preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
         databaseBackupPath,
         databasePath: runtimeConfig.databasePath,
@@ -5240,7 +5358,7 @@ const repairDuckdbStartupIndexedTables = async (
     try {
       await waitForDuckdbStartupRepairFileLock(runtimeConfig)
     } catch (lockProbeError) {
-      if (!hasDuckdbWal(runtimeConfig.databasePath) && !isDuckdbWalReplayFailure(lockProbeError)) {
+      if (!hasNonEmptyDuckdbWal(runtimeConfig.databasePath) && !isDuckdbWalReplayFailure(lockProbeError)) {
         throw lockProbeError
       }
 
@@ -6714,7 +6832,7 @@ const recordDuckdbMutatingStatementTarget = (duckdbConnection: DuckDBConnection,
 
   const repairSpec = getDuckdbStartupRepairSpecForTableName(targetTable)
 
-  if ((repairSpec?.repairPrimaryKeyColumns?.length ?? 0) > 0) {
+  if ((repairSpec?.repairPrimaryKeyColumns?.length ?? 0) > 0 || repairSpec?.matchByMutationTargetOnly === true) {
     duckdbServiceState.controlTransactionIndexedMutationTarget = targetTable
     if (!duckdbServiceState.controlTransactionIndexedMutationTargets.includes(targetTable)) {
       duckdbServiceState.controlTransactionIndexedMutationTargets.push(targetTable)

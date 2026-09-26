@@ -4477,6 +4477,473 @@ test('duckdb service keeps the repairable indexed target when a transaction fail
   }
 })
 
+const articleImportRouteFatalIndexDeleteMessage = [
+  'FATAL Error: Invalid Input Error: Failed to delete all rows from index. Only deleted 0 out of 1 rows.',
+  'Chunk: Chunk - [14 Columns]',
+  '- FLAT VARCHAR: 1 = [ 2ea62742-9ec1-4335-a47c-0af897c6b8b9]',
+  '- FLAT VARCHAR: 1 = [ 01d06ee2-4c82-45da-89bf-f99e5d921a85]',
+  '- FLAT VARCHAR: 1 = [ 78b9c51f-dadd-4e02-bf1b-b5673186d070]',
+  '- CONSTANT TIMESTAMP WITH TIME ZONE: 1 = [ NULL]',
+  '- CONSTANT TIMESTAMP WITH TIME ZONE: 1 = [ NULL]',
+  '- CONSTANT VARCHAR: 1 = [ NULL]',
+  '- CONSTANT VARCHAR: 1 = [ NULL]',
+  '- CONSTANT JSON: 1 = [ NULL]',
+  '- CONSTANT JSON: 1 = [ NULL]',
+  '- CONSTANT VARCHAR: 1 = [ NULL]',
+  '- CONSTANT VARCHAR: 1 = [ NULL]',
+  '- CONSTANT VARCHAR: 1 = [ NULL]',
+  '- CONSTANT JSON: 1 = [ NULL]',
+  '- FLAT TIMESTAMP WITH TIME ZONE: 1 = [ 2026-07-01 00:00:00+00]',
+].join('\n')
+
+const articleImportRouteSourceRecordUpsertStatement = `
+  INSERT INTO app.article_import_route_source_record (id, article_id, import_route_id, source_record_key, source_record_hash)
+  VALUES ('source-record-1', 'article-1', 'route-1', 'pmid:1', 'hash-1')
+  ON CONFLICT(import_route_id, source_record_key) DO UPDATE SET
+    article_id = excluded.article_id,
+    source_record_hash = excluded.source_record_hash,
+    updated_at = now()
+`
+const articleImportRouteUpsertStatement = `
+  INSERT INTO app.article_import_route (id, article_id, import_route_id, source_record_key, source_article_created_at)
+  VALUES ('route-link-1', 'article-1', 'route-1', 'pmid:1', TIMESTAMPTZ '2026-07-01T00:00:00Z')
+  ON CONFLICT(article_id, import_route_id) DO UPDATE SET
+    source_record_key = excluded.source_record_key,
+    source_article_created_at = excluded.source_article_created_at,
+    updated_at = now()
+`
+const importRunArticleDeltaInsertStatement = `
+  INSERT INTO app.import_run_article_delta (delta_id, change_kind, source_table, source_row_id)
+  VALUES ('delta-1', 'importRoute.article.added', 'app.article_import_route', 'route-link-1')
+`
+
+const articleImportFatalIndexMarkerCases = [
+  {
+    expectedRepairSpecs: [
+      {schemaName: 'app', tableName: 'article_import_route_source_record'},
+      {schemaName: 'app', tableName: 'article_import_route'},
+    ],
+    expectedTransactionTargets: ['app.article_import_route_source_record', 'app.article_import_route'],
+    name: 'targets article import route tables for an import store commit',
+    slug: 'import-store',
+    statements: [
+      articleImportRouteSourceRecordUpsertStatement,
+      articleImportRouteUpsertStatement,
+      importRunArticleDeltaInsertStatement,
+    ],
+  },
+  {
+    expectedRepairSpecs: [{schemaName: 'app', tableName: 'article_import_route'}],
+    expectedTransactionTargets: ['app.judgment_job', 'app.article_import_route'],
+    name: 'drops migration-gated targets next to an indexed article import route target',
+    slug: 'gated-and-indexed',
+    statements: [
+      "UPDATE app.judgment_job SET updated_at = current_timestamp WHERE id = 'job-1'",
+      articleImportRouteUpsertStatement,
+      importRunArticleDeltaInsertStatement,
+    ],
+  },
+  {
+    expectedRepairSpecs: [{schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'}],
+    expectedTransactionTargets: [],
+    name: 'keeps the chunk-manifest fallback when no mutated table has a repair spec',
+    slug: 'fallback',
+    statements: [importRunArticleDeltaInsertStatement],
+  },
+]
+
+for (const markerCase of articleImportFatalIndexMarkerCases) {
+  test(`duckdb service fatal index-delete marker ${markerCase.name}`, () => {
+    const dataRoot = join(tmpdir(), `f1-duckdb-service-article-import-${markerCase.slug}-marker-${Date.now()}`)
+    const duckdbPath = join(dataRoot, 'test.duckdb')
+    const activeRepairSpecPath = join(`${duckdbPath}.startup-recovery`, 'startup-preflight-active-table.json')
+
+    mkdirSync(dataRoot, {recursive: true})
+    writeFileSync(duckdbPath, 'database')
+
+    const result = globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
+          const {existsSync, readFileSync} = await import('node:fs')
+          const {mock} = await import('bun:test')
+
+          const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+          const fatalIndexDeleteMessage = ${JSON.stringify(articleImportRouteFatalIndexDeleteMessage)}
+          const statements = ${JSON.stringify(markerCase.statements)}
+          const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+          ${directDuckdbStartupChildProcessMockSource}
+
+          let createCount = 0
+
+          void mock.module(serverRuntimeRoleModulePath, () => {
+            return {
+              canCurrentServerOwnDuckdb: () => true,
+              ensureCurrentDuckdbOwnerLease: async () => {},
+              registerDuckdbOwnerDemotionHandler: () => {},
+              releaseCurrentDuckdbOwnerLease: async () => {},
+            }
+          })
+
+          void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+            createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+          }))
+          void mock.module('@duckdb/node-api', () => {
+            class MockConnection {
+              constructor(instanceId) {
+                this.instanceId = instanceId
+              }
+
+              async run(statement) {
+                if (this.instanceId === 1 && /^COMMIT\\b/i.test(statement.trim())) {
+                  throw new Error(fatalIndexDeleteMessage)
+                }
+
+                if (this.instanceId === 1 && /^ROLLBACK\\b/i.test(statement.trim())) {
+                  throw new Error(
+                    'FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again.\\nOriginal error: "'
+                      + fatalIndexDeleteMessage.replace('FATAL Error: ', '')
+                      + '"',
+                  )
+                }
+              }
+
+              async runAndReadAll() {
+                return {
+                  getRowObjectsJson() {
+                    return []
+                  },
+                }
+              }
+              interrupt() {}
+              closeSync() {}
+            }
+
+            class MockInstance {
+              static async create() {
+                createCount += 1
+                return new MockInstance(createCount)
+              }
+
+              constructor(instanceId) {
+                this.instanceId = instanceId
+              }
+
+              async connect() {
+                return new MockConnection(this.instanceId)
+              }
+
+              closeSync() {}
+            }
+
+            return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
+          })
+
+          const duckdbService = await import('./src/server/utils/duckdbService.ts?article-import-fatal-index-marker-test=' + Date.now())
+          await duckdbService.runDuckdbTransaction(
+            async (tx) => {
+              for (const statement of statements) {
+                await tx.run(statement)
+              }
+            },
+            {
+              allowsTempSpill: true,
+              fallbackIntent: 'reject',
+              routeOrJobKey: 'import.storeArticles',
+              timeoutMs: 120_000,
+              workloadClass: 'background.importStore',
+            },
+          )
+
+          const marker = existsSync(activeRepairSpecPath) ? JSON.parse(readFileSync(activeRepairSpecPath, 'utf8')) : null
+          console.log(JSON.stringify({marker}))
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          API_SERVER_PORT: '3999',
+          DUCKDB_MEMORY_LIMIT: '20GB',
+          DUCKDB_PATH: duckdbPath,
+          DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+          FORSKA_DUCKDB_STARTUP_WAL_PREFLIGHT: 'false',
+          RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+          RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+          SERVER_ROLE: 'maintenance-worker',
+          SERVER_DUCKDB_OWNER_URL: '',
+          VITE_PORT: '3000',
+        },
+      },
+    )
+
+    try {
+      if (result.exitCode !== 0) {
+        throw new Error(
+          result.stderr.toString()
+            || result.stdout.toString()
+            || 'DuckDB article import fatal index marker subprocess failed',
+        )
+      }
+
+      const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+
+      expect(parsed.marker).toMatchObject({
+        diagnostic: {
+          activeWorkloadRouteOrJobKey: 'import.storeArticles',
+          failedMutatingTargetTable: null,
+          lastMutatingTargetTable: 'app.import_run_article_delta',
+          transactionIndexedMutationTargets: markerCase.expectedTransactionTargets,
+        },
+        phase: 'runtime-fatal-index-delete',
+        reason: 'index-delete',
+        schemaName: markerCase.expectedRepairSpecs[0]?.schemaName,
+        tableName: markerCase.expectedRepairSpecs[0]?.tableName,
+      })
+      expect(parsed.marker?.repairSpecs).toEqual(markerCase.expectedRepairSpecs)
+    } finally {
+      removePathIfExists(dataRoot)
+    }
+  })
+}
+
+test('duckdb fatal index-delete repair target does not match article import route specs by message text', () => {
+  const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
+  const targetMatcherSource = source.slice(
+    source.indexOf('const getDuckdbStartupRepairSpecsForFatalIndexedTableError'),
+    source.indexOf('const isDuckdbStartupRetryableError'),
+  )
+
+  expect(targetMatcherSource).toContain('spec.matchByMutationTargetOnly !== true')
+  expect(targetMatcherSource.indexOf('const messageMatchableSpecs')).toBeLessThan(
+    targetMatcherSource.indexOf('const matchedSpec'),
+  )
+})
+
+test('duckdb service startup repair recreates article import route tables in place when the fatal left an empty WAL', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-article-import-route-repair-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+  const recoveryDirectory = `${duckdbPath}.startup-recovery`
+  const activeRepairSpecPath = join(recoveryDirectory, 'startup-preflight-active-table.json')
+
+  mkdirSync(recoveryDirectory, {recursive: true})
+  writeFileSync(
+    activeRepairSpecPath,
+    JSON.stringify({
+      phase: 'runtime-fatal-index-delete',
+      reason: 'index-delete',
+      repairSpecs: [
+        {schemaName: 'app', tableName: 'article_import_route'},
+        {schemaName: 'app', tableName: 'review_rebuild_chunk_manifest'},
+      ],
+      schemaName: 'app',
+      tableName: 'article_import_route',
+    }),
+  )
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {existsSync, readdirSync, readFileSync, statSync, writeFileSync} = await import('node:fs')
+        const {join} = await import('node:path')
+        const {mock} = await import('bun:test')
+        const {DuckDBInstance} = await import('@duckdb/node-api')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const recoveryDirectory = ${JSON.stringify(recoveryDirectory)}
+        const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        const instance = await DuckDBInstance.create(duckdbPath, {
+          checkpoint_threshold: '64MiB',
+          memory_limit: '2GB',
+          preserve_insertion_order: 'false',
+          threads: '1',
+        })
+        const connection = await instance.connect()
+        await connection.run(\`
+          CREATE SCHEMA app;
+          CREATE TABLE app_schema_migration(
+            name VARCHAR PRIMARY KEY,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          INSERT INTO app_schema_migration(name)
+          VALUES ('0231_rebuildReviewRebuildChunkManifestWithoutIndexes.sql');
+          CREATE TABLE app.article(id VARCHAR PRIMARY KEY, title VARCHAR NOT NULL);
+          CREATE TABLE app.import_route(id VARCHAR PRIMARY KEY);
+          CREATE TABLE app.article_import_route(
+            id VARCHAR PRIMARY KEY,
+            article_id VARCHAR NOT NULL REFERENCES app.article(id),
+            import_route_id VARCHAR NOT NULL REFERENCES app.import_route(id),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+            source_record_key VARCHAR,
+            raw_payload JSON,
+            source_article_created_at TIMESTAMPTZ,
+            UNIQUE(article_id, import_route_id)
+          );
+          CREATE INDEX idx_app_article_import_route_article_id
+          ON app.article_import_route(article_id, import_route_id);
+          CREATE INDEX idx_app_article_import_route_source_article_created_at
+          ON app.article_import_route(import_route_id, source_article_created_at);
+          INSERT INTO app.article VALUES ('article-1', 'Article 1'), ('article-2', 'Article 2'), ('article-3', 'Article 3');
+          INSERT INTO app.import_route VALUES ('route-1');
+          INSERT INTO app.article_import_route (id, article_id, import_route_id, source_record_key, raw_payload, source_article_created_at)
+          VALUES
+            ('link-1', 'article-1', 'route-1', 'pmid:1', '{"pmid":"1"}', TIMESTAMPTZ '2026-07-01T00:00:00Z'),
+            ('link-2', 'article-2', 'route-1', 'pmid:2', '{"pmid":"2"}', TIMESTAMPTZ '2026-07-02T00:00:00Z');
+          CHECKPOINT;
+        \`)
+        connection.closeSync()
+        instance.closeSync()
+        writeFileSync(duckdbPath + '.wal', '')
+        const walSizeBeforeStartup = statSync(duckdbPath + '.wal').size
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?article-import-route-repair=' + Date.now())
+        const tableRows = await duckdbService.runDuckdbJsonQuery(
+          "SELECT sql FROM duckdb_tables() WHERE schema_name = 'app' AND table_name LIKE 'article_import_route%' ORDER BY table_name",
+        )
+        const indexRows = await duckdbService.runDuckdbJsonQuery(
+          "SELECT index_name AS indexName FROM duckdb_indexes() WHERE schema_name = 'app' AND table_name = 'article_import_route' ORDER BY index_name",
+        )
+        const rows = await duckdbService.runDuckdbJsonQuery(
+          'SELECT id, article_id AS articleId, CAST(raw_payload AS VARCHAR) AS rawPayload FROM app.article_import_route ORDER BY id',
+        )
+        await duckdbService.runDuckdbTransaction(async (tx) => {
+          await tx.run(\`
+            INSERT INTO app.article_import_route (id, article_id, import_route_id, source_record_key, source_article_created_at)
+            VALUES ('link-1-retry', 'article-1', 'route-1', 'pmid:1b', TIMESTAMPTZ '2026-07-03T00:00:00Z')
+            ON CONFLICT(article_id, import_route_id) DO UPDATE SET
+              source_record_key = excluded.source_record_key,
+              source_article_created_at = excluded.source_article_created_at,
+              updated_at = now()
+          \`)
+        })
+        const upsertedRows = await duckdbService.runDuckdbJsonQuery(
+          "SELECT id, source_record_key AS sourceRecordKey FROM app.article_import_route WHERE article_id = 'article-1'",
+        )
+        let missingParentError = null
+        try {
+          await duckdbService.runDuckdbStatement(
+            "INSERT INTO app.article_import_route (id, article_id, import_route_id) VALUES ('link-x', 'article-missing', 'route-1')",
+          )
+        } catch (error) {
+          missingParentError = error instanceof Error ? error.message : String(error)
+        }
+        let referencedParentDeleteError = null
+        try {
+          await duckdbService.runDuckdbStatement("DELETE FROM app.article WHERE id = 'article-2'")
+        } catch (error) {
+          referencedParentDeleteError = error instanceof Error ? error.message : String(error)
+        }
+        await duckdbService.runDuckdbStatement("DELETE FROM app.article WHERE id = 'article-3'")
+        await duckdbService.closeDuckdbService()
+
+        const manifests = readdirSync(recoveryDirectory)
+          .filter((fileName) => fileName.endsWith('.recovery.json'))
+          .map((fileName) => JSON.parse(readFileSync(join(recoveryDirectory, fileName), 'utf8')))
+
+        console.log(JSON.stringify({
+          indexNames: indexRows.map((row) => row.indexName),
+          manifests: manifests.map((manifest) => {
+            return {
+              recovery: manifest.recovery,
+              repairStrategies: manifest.repairStrategies,
+              repairedTables: manifest.repairedTables,
+            }
+          }),
+          markerExists: existsSync(activeRepairSpecPath),
+          missingParentError,
+          referencedParentDeleteError,
+          rows,
+          tableSql: tableRows.map((row) => String(row.sql ?? '')),
+          upsertedRows,
+          walSizeBeforeStartup,
+        }))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'DuckDB article import route repair subprocess failed',
+      )
+    }
+
+    const parsed = parseJsonSubprocessStdout<{
+      indexNames: string[]
+      manifests: Array<{recovery: string; repairStrategies: Record<string, string>; repairedTables: string[]}>
+      markerExists: boolean
+      missingParentError: string | null
+      referencedParentDeleteError: string | null
+      rows: Array<{articleId: string; id: string; rawPayload: string}>
+      tableSql: string[]
+      upsertedRows: Array<{id: string; sourceRecordKey: string}>
+      walSizeBeforeStartup: number
+    }>(result.stdout.toString())
+
+    expect(parsed.walSizeBeforeStartup).toBe(0)
+    expect(parsed.markerExists).toBe(false)
+    expect(parsed.manifests).toEqual([
+      {
+        recovery: 'indexed-table-rebuild',
+        repairStrategies: {
+          'app.article_import_route': 'recreate-in-place',
+          'app.review_rebuild_chunk_manifest': 'dedupe-latest',
+        },
+        repairedTables: ['app.article_import_route', 'app.review_rebuild_chunk_manifest'],
+      },
+    ])
+    expect(parsed.tableSql).toHaveLength(1)
+    expect(parsed.tableSql[0]).toMatch(/^CREATE TABLE app\.article_import_route\(/)
+    expect(parsed.tableSql[0]).toMatch(/\bid VARCHAR PRIMARY KEY\b/)
+    expect(parsed.tableSql[0]).toContain('FOREIGN KEY (article_id) REFERENCES app.article(id)')
+    expect(parsed.tableSql[0]).toContain('FOREIGN KEY (import_route_id) REFERENCES app.import_route(id)')
+    expect(parsed.tableSql[0]).toContain('UNIQUE(article_id, import_route_id)')
+    expect(parsed.indexNames).toEqual([
+      'idx_app_article_import_route_article_id',
+      'idx_app_article_import_route_source_article_created_at',
+    ])
+    expect(parsed.rows).toEqual([
+      {articleId: 'article-1', id: 'link-1', rawPayload: '{"pmid":"1"}'},
+      {articleId: 'article-2', id: 'link-2', rawPayload: '{"pmid":"2"}'},
+    ])
+    expect(parsed.upsertedRows).toEqual([{id: 'link-1', sourceRecordKey: 'pmid:1b'}])
+    expect(parsed.missingParentError).toContain('foreign key')
+    expect(parsed.referencedParentDeleteError).toContain('foreign key')
+  } finally {
+    removePathIfExists(dataRoot)
+  }
+})
+
 test('duckdb service keeps query-returning mutation target when rollback also fails', () => {
   const dataRoot = join(tmpdir(), `f1-duckdb-service-returning-rollback-fatal-index-marker-${Date.now()}`)
   const duckdbPath = join(dataRoot, 'test.duckdb')
