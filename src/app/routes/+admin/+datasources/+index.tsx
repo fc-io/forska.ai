@@ -311,6 +311,7 @@ const AdminDataSources = () => {
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           <div>
                             <div class="font-medium text-gray-900">{entry.title}</div>
+                            <div class="font-mono text-xs text-gray-500 select-all">{entry.id}</div>
                             <Show when={entry.description}>
                               <div class="text-sm text-gray-500">{entry.description}</div>
                             </Show>
