@@ -721,6 +721,16 @@ const selectedImportServingColumns = [
   'article_created_at',
 ].join(', ')
 
+const getArticleOutsideProjectScopePredicate = (alias: string) => {
+  return `NOT EXISTS (
+          SELECT 1
+          FROM mart.project_scope_article scope
+          WHERE scope.project_id = ${alias}.project_id
+            AND scope.article_id = ${alias}.article_id
+            AND (scope.in_curated_scope OR scope.in_route_scope)
+        )`
+}
+
 const getRefreshSelectedImportServingArticleRangeStatements = (
   input: ProjectReviewServingSelectedImportArticleRangeInput,
 ) => {
@@ -808,7 +818,8 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
               getSqlLiteral(input.servingProjectionIdentity),
             )}
             AND snapshot.snapshot_status IN ('candidate', 'active')
-        )`,
+        )
+        AND ${getArticleOutsideProjectScopePredicate('serving')}`,
     `DELETE FROM mart.review_article_serving_list_mode_state_v4 state
       WHERE state.project_id = ${getSqlLiteral(input.projectId)}
         AND state.article_id >= ${getSqlLiteral(input.chunkStartArticleId)}
@@ -825,7 +836,17 @@ const getRefreshSelectedImportServingArticleRangeStatements = (
               getSqlLiteral(input.servingProjectionIdentity),
             )}
             AND snapshot.snapshot_status IN ('candidate', 'active')
-        )`,
+        )
+        AND ${getArticleOutsideProjectScopePredicate('state')}`,
+    `UPDATE mart.review_article_serving_base_v4 serving
+     SET patch_watermark = rebuild.patch_watermark
+     FROM review_selected_import_serving_rebuild_v4 rebuild
+     WHERE serving.project_id = rebuild.project_id
+       AND serving.review_config_hash = rebuild.review_config_hash
+       AND serving.snapshot_id = rebuild.snapshot_id
+       AND serving.article_id = rebuild.article_id
+       AND serving.base_generation = rebuild.base_generation
+       AND serving.patch_watermark < rebuild.patch_watermark`,
     `INSERT INTO mart.review_article_serving_base_v4 (${selectedImportServingColumns})
      SELECT ${selectedImportServingColumns}
      FROM review_selected_import_serving_rebuild_v4

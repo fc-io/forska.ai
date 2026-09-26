@@ -249,6 +249,189 @@ const getCascadeSnapshotStates = async () => {
   `)
 }
 
+const sharedImportProjectId = 'project-shared-import'
+const sharedImportSnapshotId = 'selected-import-shared'
+const sharedImportComponents = ['projectScope', 'selectedImport', 'display', 'llmStatus', 'humanStatus'] as const
+const sharedImportSnapshotIds = ['snapshot-shared-import-active', 'snapshot-shared-import-bootstrap'] as const
+
+type SharedImportServingRow = {
+  articleId: string
+  conflictFlag: boolean
+  duplicateFlag: boolean
+  hasLlmListMode: boolean
+  humanStatus: string | null
+  llmHasJudgment: boolean
+  llmPatchWatermark: number
+  llmStatus: string | null
+  patchWatermark: number
+  snapshotId: string
+}
+
+const getRefreshedSharedImportServingRow = (
+  input: Omit<SharedImportServingRow, 'hasLlmListMode' | 'llmPatchWatermark' | 'patchWatermark'>,
+): SharedImportServingRow => {
+  return {...input, hasLlmListMode: true, llmPatchWatermark: 7, patchWatermark: 7}
+}
+
+const getSharedImportIdentity = (component: ReviewServingProjectionComponent) => {
+  return `${component}:${sharedImportProjectId}`
+}
+
+const insertSharedImportSnapshot = async (input: {snapshotId: string; status: string}) => {
+  const componentState = {
+    optional: [],
+    required: sharedImportComponents.map((component) => {
+      return {
+        baseGeneration: '0',
+        component,
+        patchWatermark: '0',
+        projectionIdentity: getSharedImportIdentity(component),
+        requirement: 'required',
+      }
+    }),
+  }
+
+  await getDatabase().run(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
+      required_components_json, optional_components_json, source_watermarks_json, selected_import_snapshot_id
+    ) VALUES (
+      '${sharedImportProjectId}',
+      '${input.snapshotId}',
+      '${input.status}',
+      '${reviewConfigHash}',
+      '{}'::JSON,
+      '${JSON.stringify(componentState)}'::JSON,
+      '${JSON.stringify(sharedImportComponents)}'::JSON,
+      '[]'::JSON,
+      '{}'::JSON,
+      '${sharedImportSnapshotId}'
+    )
+  `)
+}
+
+const insertSharedImportServingRows = async (snapshotId: string) => {
+  await getDatabase().run(`
+    INSERT INTO mart.review_article_serving_base_v4 (
+      project_id, review_config_hash, snapshot_id, base_generation, patch_watermark, article_id, article_created_at,
+      sort_key, activity_sort_at
+    )
+    SELECT
+      '${sharedImportProjectId}', '${reviewConfigHash}', '${snapshotId}', 0, 3, article_id,
+      TIMESTAMPTZ '2026-09-01T00:00:00Z', TIMESTAMPTZ '2026-09-01T00:00:00Z', TIMESTAMPTZ '2026-09-01T00:00:00Z'
+    FROM (VALUES ('article-a'), ('article-b'), ('article-gone')) article(article_id)
+  `)
+  await getDatabase().run(`
+    INSERT INTO mart.review_article_serving_list_mode_state_v4 (
+      project_id, review_config_hash, snapshot_id, article_id, has_llm_list_mode, has_human_list_mode,
+      has_both_list_mode, has_unassessed_list_mode, llm_patch_watermark, human_patch_watermark, both_patch_watermark,
+      unassessed_patch_watermark, duplicate_flag, conflict_flag, llm_status, human_status, llm_has_judgment
+    )
+    SELECT
+      '${sharedImportProjectId}', '${reviewConfigHash}', '${snapshotId}', article_id, TRUE, TRUE, TRUE, TRUE, 3, 3, 3, 3,
+      duplicate_flag, conflict_flag, llm_status, human_status, llm_has_judgment
+    FROM (
+      VALUES
+        ('article-a', TRUE, FALSE, 'answered', 'unanswered', TRUE),
+        ('article-b', FALSE, TRUE, 'unanswered', 'answered', FALSE),
+        ('article-gone', FALSE, FALSE, 'answered', 'answered', TRUE)
+    ) article(article_id, duplicate_flag, conflict_flag, llm_status, human_status, llm_has_judgment)
+  `)
+}
+
+const insertSharedImportSource = async () => {
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${sharedImportProjectId}', '${sharedImportProjectId}', 'model-queue', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await getDatabase().run(`
+    INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at)
+    SELECT '${sharedImportProjectId}', article_id, TRUE, FALSE, TIMESTAMPTZ '2026-09-01T00:00:00Z'
+    FROM (VALUES ('article-a'), ('article-b'), ('article-new')) article(article_id)
+  `)
+  await getDatabase().run(
+    "INSERT INTO app.import_route (id, route) VALUES ('import-route-shared', '/api/datasources/import/pubmed')",
+  )
+  await getDatabase().run(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('project-import-route-shared', '${sharedImportProjectId}', 'import-route-shared')
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_import_article_hot_field (
+      import_route_id, article_id, source_record_key, selected_rank_key, selected_rank_numeric, tombstone
+    )
+    SELECT 'import-route-shared', article_id, concat('source-', article_id), concat('rank-', article_id), rank, FALSE
+    FROM (VALUES ('article-a', 1), ('article-b', 2), ('article-new', 3)) article(article_id, rank)
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_selected_import_snapshot (
+      selected_import_snapshot_id, project_id, project_scope_identity, source_delta_high_water, status
+    ) VALUES (
+      '${sharedImportSnapshotId}', '${sharedImportProjectId}', '${getSharedImportIdentity('projectScope')}', 7,
+      'completed'
+    )
+  `)
+}
+
+const insertRunningSelectedImportDirtyChunk = async (leaseOwner: string) => {
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_request (
+      request_id, project_id, reason, requested_components_json, priority, status, admission_state
+    ) VALUES (
+      'rebuild:shared-import-dirty', '${sharedImportProjectId}', 'selectedImportDirtyWork', '["selectedImport"]'::JSON,
+      10000, 'admitted', 'admitted'
+    )
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_chunk_manifest (
+      chunk_id, request_id, project_id, snapshot_id, projection_component, projection_identity, input_digest,
+      input_watermark, chunk_start_key, chunk_end_key, output_base_generation, status, lease_owner, lease_expires_at,
+      started_at, admission_state
+    ) VALUES (
+      'chunk:shared-import-dirty',
+      'rebuild:shared-import-dirty',
+      '${sharedImportProjectId}',
+      NULL,
+      'selectedImport',
+      '${getSharedImportIdentity('selectedImport')}',
+      'selectedImport:dirty',
+      7,
+      'article-a',
+      'article-z',
+      0,
+      'running',
+      '${leaseOwner}',
+      current_timestamp + INTERVAL 10 MINUTE,
+      current_timestamp,
+      'admitted'
+    )
+  `)
+}
+
+const getSharedImportServingRows = async () => {
+  return getDatabase().queryJson<SharedImportServingRow>(`
+    SELECT
+      COALESCE(base.snapshot_id, state.snapshot_id) AS snapshotId,
+      COALESCE(base.article_id, state.article_id) AS articleId,
+      CAST(base.patch_watermark AS INTEGER) AS patchWatermark,
+      state.has_llm_list_mode AS hasLlmListMode,
+      CAST(state.llm_patch_watermark AS INTEGER) AS llmPatchWatermark,
+      state.duplicate_flag AS duplicateFlag,
+      state.conflict_flag AS conflictFlag,
+      state.llm_status AS llmStatus,
+      state.human_status AS humanStatus,
+      state.llm_has_judgment AS llmHasJudgment
+    FROM mart.review_article_serving_base_v4 base
+    FULL OUTER JOIN mart.review_article_serving_list_mode_state_v4 state
+      ON state.project_id = base.project_id
+      AND state.review_config_hash = base.review_config_hash
+      AND state.snapshot_id = base.snapshot_id
+      AND state.article_id = base.article_id
+    WHERE COALESCE(base.project_id, state.project_id) = '${sharedImportProjectId}'
+    ORDER BY COALESCE(base.snapshot_id, state.snapshot_id), COALESCE(base.article_id, state.article_id)
+  `)
+}
+
 const getFinalizationCycleDependencies = (): ReviewServingProjectorWorkerDependencies => {
   const unexpectedChunkWork = async (): Promise<never> => {
     throw new Error('finalization cycle must not claim rebuild chunks')
@@ -503,4 +686,63 @@ test('a finished rebuild leaves a candidate another rebuild is still building to
     {lastError: null, snapshotId: 'snapshot-cascade-building', status: 'candidate'},
     {lastError: missingHumanStatus, snapshotId: 'snapshot-cascade-orphan', status: 'failed'},
   ])
+})
+
+test('a selectedImport dirty-work chunk refreshes shared serving rows without clearing other components columns', async () => {
+  const {runReviewServingProjectorWorkerClaimedRebuildChunk} = await import('./reviewServingProjectorWorker.ts')
+  const {getReviewServingRebuildChunkManifest} =
+    await import('../reviewServing/reviewServingChunkManifestRepository.ts')
+  const leaseOwner = 'worker-shared-import'
+
+  await insertSharedImportSource()
+  await insertSharedImportSnapshot({snapshotId: 'snapshot-shared-import-active', status: 'active'})
+  await insertSharedImportSnapshot({snapshotId: 'snapshot-shared-import-bootstrap', status: 'candidate'})
+  await sharedImportSnapshotIds.reduce<Promise<void>>(async (previous, snapshotId) => {
+    await previous
+    await insertSharedImportServingRows(snapshotId)
+  }, Promise.resolve())
+  await insertRunningSelectedImportDirtyChunk(leaseOwner)
+
+  const chunk = await getReviewServingRebuildChunkManifest({chunkId: 'chunk:shared-import-dirty'}, getDatabase())
+
+  if (chunk === null) {
+    throw new Error('selectedImport dirty-work chunk was not inserted')
+  }
+
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk({chunk, leaseOwner}, getDatabase() as never)
+
+  expect(result).toEqual({status: 'completed'})
+  expect(await getSharedImportServingRows()).toEqual(
+    sharedImportSnapshotIds.flatMap((snapshotId) => {
+      return [
+        getRefreshedSharedImportServingRow({
+          articleId: 'article-a',
+          conflictFlag: false,
+          duplicateFlag: true,
+          humanStatus: 'unanswered',
+          llmHasJudgment: true,
+          llmStatus: 'answered',
+          snapshotId,
+        }),
+        getRefreshedSharedImportServingRow({
+          articleId: 'article-b',
+          conflictFlag: true,
+          duplicateFlag: false,
+          humanStatus: 'answered',
+          llmHasJudgment: false,
+          llmStatus: 'unanswered',
+          snapshotId,
+        }),
+        getRefreshedSharedImportServingRow({
+          articleId: 'article-new',
+          conflictFlag: false,
+          duplicateFlag: false,
+          humanStatus: null,
+          llmHasJudgment: false,
+          llmStatus: null,
+          snapshotId,
+        }),
+      ]
+    }),
+  )
 })
