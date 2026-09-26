@@ -100,7 +100,10 @@ import {
   promoteReviewServingProjectorSnapshot,
   writeReviewServingProjectorComponent,
 } from '../reviewServing/reviewServingProjectorWriter.ts'
-import {projectReviewServingProjectScopePatches} from '../reviewServing/reviewServingProjectScopeProjector.ts'
+import {
+  getProjectScopeArticleRowsStatement,
+  projectReviewServingProjectScopePatches,
+} from '../reviewServing/reviewServingProjectScopeProjector.ts'
 import {
   deferReviewServingQueueCandidatePatchesToPendingRebuild,
   getReviewServingQueueClaimsOutsideArticles,
@@ -2880,75 +2883,14 @@ const writeProjectScopeRebuildChunkRows = async (
   input: {chunk: ReviewServingRebuildChunkManifest},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  const projectId = requireRebuildChunkProjectId(input.chunk)
-
-  await database.run(`
-    DELETE FROM mart.project_scope_article scope
-    WHERE scope.project_id = ${getSqlLiteral(projectId)}
-      AND ${getChunkArticleRangePredicate({alias: 'scope', chunk: input.chunk})};
-    INSERT INTO mart.project_scope_article (
-      project_id,
-      article_id,
-      in_curated_scope,
-      in_route_scope,
-      article_title,
-      article_created_at,
-      article_updated_at
-    )
-    WITH route_scope AS (
-      SELECT
-        project_import_route.project_id,
-        article_import_route.article_id,
-        TRUE AS in_route_scope,
-        FALSE AS in_curated_scope
-      FROM app.project_import_route project_import_route
-      INNER JOIN app.article_import_route article_import_route
-        ON article_import_route.import_route_id = project_import_route.import_route_id
-      WHERE project_import_route.project_id = ${getSqlLiteral(projectId)}
-        AND ${getChunkArticleRangePredicate({alias: 'article_import_route', chunk: input.chunk})}
-    ),
-    curated_scope AS (
-      SELECT
-        project_article.project_id,
-        project_article.article_id,
-        FALSE AS in_route_scope,
-        TRUE AS in_curated_scope
-      FROM app.project_article project_article
-      WHERE project_article.project_id = ${getSqlLiteral(projectId)}
-        AND ${getChunkArticleRangePredicate({alias: 'project_article', chunk: input.chunk})}
-    ),
-    combined_scope AS (
-      SELECT * FROM route_scope
-      UNION ALL
-      SELECT * FROM curated_scope
-    ),
-    aggregated_scope AS (
-      SELECT
-        project_id,
-        article_id,
-        COALESCE(BOOL_OR(in_curated_scope), FALSE) AS in_curated_scope,
-        COALESCE(BOOL_OR(in_route_scope), FALSE) AS in_route_scope
-      FROM combined_scope
-      GROUP BY project_id, article_id
-    )
-    SELECT
-      aggregated_scope.project_id,
-      aggregated_scope.article_id,
-      aggregated_scope.in_curated_scope,
-      aggregated_scope.in_route_scope,
-      article.article_title,
-      article.article_created_at,
-      article.article_updated_at
-    FROM aggregated_scope
-    INNER JOIN app.project project
-      ON project.id = aggregated_scope.project_id
-      AND project.archived = FALSE
-    INNER JOIN app.article article ON article.id = aggregated_scope.article_id
-    WHERE aggregated_scope.project_id = ${getSqlLiteral(projectId)}
-      AND ${getChunkArticleRangePredicate({alias: 'aggregated_scope', chunk: input.chunk})}
-      AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
-      AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
-  `)
+  await database.run(
+    getProjectScopeArticleRowsStatement({
+      getArticlePredicate: (alias) => {
+        return getChunkArticleRangePredicate({alias, chunk: input.chunk})
+      },
+      projectId: requireRebuildChunkProjectId(input.chunk),
+    }),
+  )
 }
 
 const runProjectScopeRebuildChunk = async (
