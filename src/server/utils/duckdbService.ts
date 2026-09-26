@@ -1083,7 +1083,15 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
       COMMIT;
       DROP TABLE IF EXISTS startup_probe_review_selected_import_snapshot;
     `,
+    postRepairSql: `
+      ALTER TABLE app.review_selected_import_snapshot
+      ALTER COLUMN selected_import_snapshot_id SET NOT NULL;
+    `,
+    recreateRepairPrimaryKeyIndex: false,
+    recreateSecondaryIndexes: false,
+    repairPrimaryKeyColumns: ['selected_import_snapshot_id'],
     schemaName: 'app',
+    skipStartupPreflightUntilMigration: '0243_rebuildReviewSelectedImportSnapshotWithoutIndexes.sql',
     tableName: 'review_selected_import_snapshot',
   },
   {
