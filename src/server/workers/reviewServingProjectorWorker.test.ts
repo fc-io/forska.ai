@@ -559,6 +559,8 @@ const getIncrementalPayloadRouteRows = (statement: string) => {
 
 const runJobDrivenDirtyWorkCycle = async (input: {
   backlog?: Partial<Record<JobDrivenTestComponent, number>>
+  backlogWakeComponentPasses?: number
+  backlogWakeMinMs?: number
   chunkIdle?: boolean
   componentRotationOffset: number
   lastAdmittedWakeAtMs?: number
@@ -664,6 +666,8 @@ const runJobDrivenDirtyWorkCycle = async (input: {
 
   const result = await runReviewServingProjectorWorkerOnce(
     {
+      backlogWakeComponentPasses: input.backlogWakeComponentPasses,
+      backlogWakeMinMs: input.backlogWakeMinMs,
       componentRotationOffset: input.componentRotationOffset,
       lastAdmittedWakeAtMs: input.lastAdmittedWakeAtMs,
       maxRowsPerWake: input.maxRowsPerWake,
@@ -845,6 +849,38 @@ test('job-driven extra batches stop before the wake deadline minus the backlog r
   ])
   expect(cycle.harness.runChunkInputs).toEqual([])
   expect(cycle.result.projector.status).toBe('completed')
+})
+
+test('a configured minimum backlog wake budget and component passes keep the backlog wake running after the chunk batch', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: {llmStatus: 6, queue: 6},
+    backlogWakeComponentPasses: 3,
+    backlogWakeMinMs: 2_500,
+    componentRotationOffset: 0,
+    llmStatusBatchMs: 100,
+    maxRowsPerWake: 2,
+    maxWakeMs: 5_000,
+    pendingComponents: [],
+  })
+  const backlogWakeInput = cycle.harness.wakeInputs.at(-1)
+
+  expect(cycle.harness.runChunkInputs).toHaveLength(1)
+  expect(backlogWakeInput).toMatchObject({componentPasses: 3, maxWakeMs: 2_500})
+  expect(cycle.result.projector.status).toBe('completed')
+})
+
+test('backlog wakes keep the cycle deadline and a single pass when no backlog budget is configured', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: {llmStatus: 6, queue: 6},
+    componentRotationOffset: 0,
+    llmStatusBatchMs: 100,
+    maxRowsPerWake: 2,
+    maxWakeMs: 5_000,
+    pendingComponents: [],
+  })
+
+  expect(cycle.harness.wakeInputs.at(-1)).not.toHaveProperty('componentPasses')
+  expect(cycle.result.projector.status).toBe('blocked')
 })
 
 test('job-driven extra batches stay within the wake row budget', async () => {

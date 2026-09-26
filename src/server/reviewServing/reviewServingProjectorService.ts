@@ -150,6 +150,7 @@ export type IntakeReviewServingProjectorDirtyWorkResult =
 export type WakeReviewServingProjectorServiceInput = {
   batchSize: number
   componentOrder?: readonly ReviewServingProjectionComponent[]
+  componentPasses?: number
   componentRotationOffset?: number
   maxActiveImportCount?: number
   maxPendingDirtyWorkCount?: number
@@ -199,6 +200,7 @@ type WakeReviewServingProjectorState = {
   promotions: PromoteReviewServingProjectorSnapshotResult[]
   releasedClaimIds: string[]
   runs: ReviewServingProjectorComponentRun[]
+  settledComponents: ReviewServingProjectionComponent[]
 }
 
 const defaultComponentOrder: readonly ReviewServingProjectionComponent[] = [
@@ -229,6 +231,32 @@ const getRotatedComponentOrder = (
       : ((normalizedOffset % componentOrder.length) + componentOrder.length) % componentOrder.length
 
   return [...componentOrder.slice(startIndex), ...componentOrder.slice(0, startIndex)]
+}
+
+const getComponentVisits = (
+  componentOrder: readonly ReviewServingProjectionComponent[],
+  componentPasses: number | undefined,
+) => {
+  const passes =
+    componentPasses !== undefined && Number.isFinite(componentPasses) ? Math.max(1, Math.trunc(componentPasses)) : 1
+
+  return Array.from({length: passes}, () => {
+    return componentOrder
+  }).flat()
+}
+
+const getSettledComponentsAfterVisit = (input: {
+  component: ReviewServingProjectionComponent
+  limit: number
+  next: WakeReviewServingProjectorState
+  previous: WakeReviewServingProjectorState
+}) => {
+  const visitRuns = input.next.runs.slice(input.previous.runs.length)
+  const projectedFullBatch = visitRuns.some((run) => {
+    return run.component === input.component && run.claimCount >= input.limit
+  })
+
+  return projectedFullBatch ? input.next.settledComponents : [...input.next.settledComponents, input.component]
 }
 
 const getDiagnosticCause = (error: unknown) => {
@@ -889,51 +917,173 @@ export const wakeReviewServingProjectorService = async (
     }
   }
 
-  const wakeState = await componentOrder.reduce<Promise<WakeReviewServingProjectorState>>(
-    async (previousState, component) => {
-      const state = await previousState
-      const runner = dependencies.runners[component]
-      const remainingRows = budget.maxRowsPerWake - state.processedRows
-      const elapsedMs = nowMs() - startedAt
-      const blocked = await shouldBlockWake(input, dependencies)
+  const visitComponent = async (
+    state: WakeReviewServingProjectorState,
+    component: ReviewServingProjectionComponent,
+  ): Promise<WakeReviewServingProjectorState> => {
+    const runner = dependencies.runners[component]
+    const remainingRows = budget.maxRowsPerWake - state.processedRows
+    const elapsedMs = nowMs() - startedAt
+    const blocked = await shouldBlockWake(input, dependencies)
 
-      if (runner === undefined || remainingRows <= 0 || elapsedMs >= input.maxWakeMs || blocked) {
-        return state
-      }
+    if (runner === undefined || remainingRows <= 0 || elapsedMs >= input.maxWakeMs || blocked) {
+      return state
+    }
 
-      const claims = await claimDirtyWork(
-        {limit: Math.min(budget.batchSize, remainingRows), projectionComponent: component},
-        database,
+    const claims = await claimDirtyWork(
+      {limit: Math.min(budget.batchSize, remainingRows), projectionComponent: component},
+      database,
+    )
+    const claimIds = getDirtyWorkIds(claims)
+    const exhaustedAfterClaim = nowMs() - startedAt >= input.maxWakeMs || (await shouldBlockWake(input, dependencies))
+
+    if (claims.length === 0) {
+      return state
+    }
+
+    if (exhaustedAfterClaim) {
+      await releaseDirtyWork(claimIds, database)
+
+      return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
+    }
+
+    const articleDirtyWorkRoute = await getArticleDirtyWorkRoute({claims, component, database})
+    const chunkedDirtyWorkProjectIds =
+      articleDirtyWorkRoute === 'incremental' ? [] : getChunkedDirtyWorkProjectIds(component, claims)
+
+    if (chunkedDirtyWorkProjectIds.length > 0) {
+      const rebuildResult = await Effect.runPromise(
+        Effect.either(
+          Effect.forEach(
+            chunkedDirtyWorkProjectIds,
+            (projectId) => {
+              return requestRebuild(
+                {
+                  components: [component],
+                  priority: getChunkedDirtyWorkRebuildPriority(component),
+                  projectId,
+                  reason: getChunkedDirtyWorkRebuildReason(component),
+                  reuseBlockedRequestWithinMs: blockedRebuildRequestReuseMs,
+                },
+                database,
+              )
+            },
+            {concurrency: 1},
+          ),
+        ),
       )
-      const claimIds = getDirtyWorkIds(claims)
-      const exhaustedAfterClaim = nowMs() - startedAt >= input.maxWakeMs || (await shouldBlockWake(input, dependencies))
 
-      if (claims.length === 0) {
-        return state
+      if (rebuildResult._tag === 'Left') {
+        const rebuildDiagnostic = getDiagnostic(rebuildResult.left)
+        await failDirtyWork(claimIds, database)
+        logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: rebuildDiagnostic})
+
+        return {
+          ...state,
+          failures: [
+            ...state.failures,
+            {attempts: 1, claimIds, component, diagnostic: rebuildDiagnostic, status: 'failed' as const},
+          ],
+          processedRows: state.processedRows + claims.length,
+        }
       }
 
-      if (exhaustedAfterClaim) {
+      const blockedRebuildRequests = getBlockedRebuildRequests(rebuildResult.right)
+
+      if (blockedRebuildRequests.length > 0) {
+        return parkDirtyWorkClaimsBlockedByRebuild({
+          blockDirtyWorkForRebuild,
+          claims,
+          component,
+          database,
+          diagnostic: getBlockedRebuildRequestDiagnostic(blockedRebuildRequests),
+          state,
+        })
+      }
+
+      if (articleDirtyWorkRoute === 'bootstrap') {
+        return settleBootstrapRoutedArticleDirtyWork({
+          blockDirtyWorkForRebuild,
+          claims,
+          completeDirtyWork,
+          component,
+          database,
+          requests: rebuildResult.right,
+          state,
+        })
+      }
+
+      if (!areClaimsCoveredByRebuildRequests(claims, rebuildResult.right)) {
         await releaseDirtyWork(claimIds, database)
 
         return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
       }
 
-      const articleDirtyWorkRoute = await getArticleDirtyWorkRoute({claims, component, database})
-      const chunkedDirtyWorkProjectIds =
-        articleDirtyWorkRoute === 'incremental' ? [] : getChunkedDirtyWorkProjectIds(component, claims)
+      await completeDirtyWork(claims, database)
 
-      if (chunkedDirtyWorkProjectIds.length > 0) {
+      return {
+        ...state,
+        processedRows: state.processedRows + claims.length,
+        runs: [
+          ...state.runs,
+          {attempts: 1, claimCount: claims.length, component, processedCount: 0, status: 'completed' as const},
+        ],
+      }
+    }
+
+    try {
+      await ensureClaimManifests(claims, database)
+      const result = await runProjectorWithRetry({
+        claims,
+        component,
+        maxRetries: budget.maxRetries,
+        runner,
+        wakeId: input.wakeId,
+      })
+      const promotions = await (result.candidateSnapshots ?? []).reduce<
+        Promise<PromoteReviewServingProjectorSnapshotResult[]>
+      >(async (previousPromotions, candidateSnapshot) => {
+        const promotions = await previousPromotions
+        const promotion = await promoteSnapshot(candidateSnapshot, database)
+
+        return [...promotions, promotion]
+      }, Promise.resolve([]))
+      const processedCount = result.processedCount ?? claims.length
+      const runnerReleasedClaimIds = result.releasedClaimIds ?? []
+
+      return {
+        ...state,
+        processedRows: state.processedRows + claims.length,
+        promotions: [...state.promotions, ...promotions],
+        releasedClaimIds: [...state.releasedClaimIds, ...runnerReleasedClaimIds],
+        runs: [
+          ...state.runs,
+          {
+            attempts: result.attempts,
+            claimCount: claims.length - runnerReleasedClaimIds.length,
+            component,
+            processedCount,
+            status: 'completed' as const,
+          },
+        ],
+      }
+    } catch (error) {
+      const diagnostic = getDiagnostic(error)
+      const missingSnapshotProjectIds = isMissingSnapshotDiagnostic(diagnostic) ? getClaimProjectIds(claims) : []
+
+      if (missingSnapshotProjectIds.length > 0) {
         const rebuildResult = await Effect.runPromise(
           Effect.either(
             Effect.forEach(
-              chunkedDirtyWorkProjectIds,
+              missingSnapshotProjectIds,
               (projectId) => {
                 return requestRebuild(
                   {
-                    components: [component],
-                    priority: getChunkedDirtyWorkRebuildPriority(component),
+                    components: getMissingSnapshotRepairComponents(component),
+                    pageFirstOnly: true,
+                    priority: getMissingSnapshotRepairPriority(component),
                     projectId,
-                    reason: getChunkedDirtyWorkRebuildReason(component),
+                    reason: 'missingReviewServingSnapshot',
                     reuseBlockedRequestWithinMs: blockedRebuildRequestReuseMs,
                   },
                   database,
@@ -953,7 +1103,13 @@ export const wakeReviewServingProjectorService = async (
             ...state,
             failures: [
               ...state.failures,
-              {attempts: 1, claimIds, component, diagnostic: rebuildDiagnostic, status: 'failed' as const},
+              {
+                attempts: budget.maxRetries + 1,
+                claimIds,
+                component,
+                diagnostic: rebuildDiagnostic,
+                status: 'failed' as const,
+              },
             ],
             processedRows: state.processedRows + claims.length,
           }
@@ -972,150 +1128,38 @@ export const wakeReviewServingProjectorService = async (
           })
         }
 
-        if (articleDirtyWorkRoute === 'bootstrap') {
-          return settleBootstrapRoutedArticleDirtyWork({
-            blockDirtyWorkForRebuild,
-            claims,
-            completeDirtyWork,
-            component,
-            database,
-            requests: rebuildResult.right,
-            state,
-          })
-        }
+        await blockDirtyWorkForRebuild(claimIds, database)
 
-        if (!areClaimsCoveredByRebuildRequests(claims, rebuildResult.right)) {
-          await releaseDirtyWork(claimIds, database)
-
-          return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
-        }
-
-        await completeDirtyWork(claims, database)
-
-        return {
-          ...state,
-          processedRows: state.processedRows + claims.length,
-          runs: [
-            ...state.runs,
-            {attempts: 1, claimCount: claims.length, component, processedCount: 0, status: 'completed' as const},
-          ],
-        }
+        return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
       }
 
-      try {
-        await ensureClaimManifests(claims, database)
-        const result = await runProjectorWithRetry({
-          claims,
-          component,
-          maxRetries: budget.maxRetries,
-          runner,
-          wakeId: input.wakeId,
-        })
-        const promotions = await (result.candidateSnapshots ?? []).reduce<
-          Promise<PromoteReviewServingProjectorSnapshotResult[]>
-        >(async (previousPromotions, candidateSnapshot) => {
-          const promotions = await previousPromotions
-          const promotion = await promoteSnapshot(candidateSnapshot, database)
+      await failDirtyWork(claimIds, database)
+      logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic})
 
-          return [...promotions, promotion]
-        }, Promise.resolve([]))
-        const processedCount = result.processedCount ?? claims.length
-        const runnerReleasedClaimIds = result.releasedClaimIds ?? []
-
-        return {
-          ...state,
-          processedRows: state.processedRows + claims.length,
-          promotions: [...state.promotions, ...promotions],
-          releasedClaimIds: [...state.releasedClaimIds, ...runnerReleasedClaimIds],
-          runs: [
-            ...state.runs,
-            {
-              attempts: result.attempts,
-              claimCount: claims.length - runnerReleasedClaimIds.length,
-              component,
-              processedCount,
-              status: 'completed' as const,
-            },
-          ],
-        }
-      } catch (error) {
-        const diagnostic = getDiagnostic(error)
-        const missingSnapshotProjectIds = isMissingSnapshotDiagnostic(diagnostic) ? getClaimProjectIds(claims) : []
-
-        if (missingSnapshotProjectIds.length > 0) {
-          const rebuildResult = await Effect.runPromise(
-            Effect.either(
-              Effect.forEach(
-                missingSnapshotProjectIds,
-                (projectId) => {
-                  return requestRebuild(
-                    {
-                      components: getMissingSnapshotRepairComponents(component),
-                      pageFirstOnly: true,
-                      priority: getMissingSnapshotRepairPriority(component),
-                      projectId,
-                      reason: 'missingReviewServingSnapshot',
-                      reuseBlockedRequestWithinMs: blockedRebuildRequestReuseMs,
-                    },
-                    database,
-                  )
-                },
-                {concurrency: 1},
-              ),
-            ),
-          )
-
-          if (rebuildResult._tag === 'Left') {
-            const rebuildDiagnostic = getDiagnostic(rebuildResult.left)
-            await failDirtyWork(claimIds, database)
-            logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: rebuildDiagnostic})
-
-            return {
-              ...state,
-              failures: [
-                ...state.failures,
-                {
-                  attempts: budget.maxRetries + 1,
-                  claimIds,
-                  component,
-                  diagnostic: rebuildDiagnostic,
-                  status: 'failed' as const,
-                },
-              ],
-              processedRows: state.processedRows + claims.length,
-            }
-          }
-
-          const blockedRebuildRequests = getBlockedRebuildRequests(rebuildResult.right)
-
-          if (blockedRebuildRequests.length > 0) {
-            return parkDirtyWorkClaimsBlockedByRebuild({
-              blockDirtyWorkForRebuild,
-              claims,
-              component,
-              database,
-              diagnostic: getBlockedRebuildRequestDiagnostic(blockedRebuildRequests),
-              state,
-            })
-          }
-
-          await blockDirtyWorkForRebuild(claimIds, database)
-
-          return {...state, releasedClaimIds: [...state.releasedClaimIds, ...claimIds]}
-        }
-
-        await failDirtyWork(claimIds, database)
-        logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic})
-
-        return {
-          ...state,
-          failures: [
-            ...state.failures,
-            {attempts: budget.maxRetries + 1, claimIds, component, diagnostic, status: 'failed' as const},
-          ],
-          processedRows: state.processedRows + claims.length,
-        }
+      return {
+        ...state,
+        failures: [
+          ...state.failures,
+          {attempts: budget.maxRetries + 1, claimIds, component, diagnostic, status: 'failed' as const},
+        ],
+        processedRows: state.processedRows + claims.length,
       }
+    }
+  }
+  const wakeState = await getComponentVisits(componentOrder, input.componentPasses).reduce<
+    Promise<WakeReviewServingProjectorState>
+  >(
+    async (previousState, component) => {
+      const state = await previousState
+      const limit = Math.min(budget.batchSize, budget.maxRowsPerWake - state.processedRows)
+
+      if (state.settledComponents.includes(component)) {
+        return state
+      }
+
+      const next = await visitComponent(state, component)
+
+      return {...next, settledComponents: getSettledComponentsAfterVisit({component, limit, next, previous: state})}
     },
     Promise.resolve({
       blockedRebuilds: [],
@@ -1124,6 +1168,7 @@ export const wakeReviewServingProjectorService = async (
       promotions: [],
       releasedClaimIds: [],
       runs: [],
+      settledComponents: [],
     }),
   )
 

@@ -11,6 +11,8 @@ import {pauseReviewServingProjector} from './reviewServingProjectorPause.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ReviewServingProjectorWorkerHeartbeatOptions = {
+  backlogWakeComponentPasses?: number
+  backlogWakeMinMs?: number
   batchSize?: number
   maxCompletedRebuildChunksPerRun?: number | null
   maxRowsPerWake?: number
@@ -23,6 +25,12 @@ type ReviewServingProjectorWorkerHeartbeatOptions = {
   restartDelayMs?: number
   searchRebuildChunkBatchSize?: number
   wakeStarvationMs?: number
+}
+
+const getOptionalIntegerEnv = (name: string) => {
+  const value = Number.parseInt(process.env[name] ?? '', 10)
+
+  return Number.isFinite(value) && value > 0 ? value : undefined
 }
 
 const reviewServingProjectorWorkerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
@@ -282,8 +290,15 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         options.searchRebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE,
       wakeStarvationMs: options.wakeStarvationMs ?? env.FORSKA_REVIEW_SERVING_WAKE_STARVATION_MS,
       maxCompletedRebuildChunksPerRun: getReviewServingProjectorWorkerMaxCompletedChunksPerRun(options),
-      batchSize: options.batchSize ?? null,
-      maxRowsPerWake: options.maxRowsPerWake ?? null,
+      backlogWakeComponentPasses:
+        options.backlogWakeComponentPasses
+        ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES')
+        ?? null,
+      backlogWakeMinMs:
+        options.backlogWakeMinMs ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS') ?? null,
+      batchSize: options.batchSize ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE') ?? null,
+      maxRowsPerWake:
+        options.maxRowsPerWake ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_MAX_ROWS_PER_WAKE') ?? null,
       maxWakeMs: options.maxWakeMs ?? null,
       maxRunMs: getReviewServingProjectorWorkerMaxRunMs(options),
       startCount: 1,
@@ -367,9 +382,18 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       searchRebuildChunkBatchSize:
         options.searchRebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE ?? undefined,
       wakeStarvationMs: options.wakeStarvationMs ?? env.FORSKA_REVIEW_SERVING_WAKE_STARVATION_MS ?? undefined,
-      batchSize: options.batchSize,
+      backlogWakeComponentPasses:
+        options.backlogWakeComponentPasses
+        ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES')
+        ?? undefined,
+      backlogWakeMinMs:
+        options.backlogWakeMinMs ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS') ?? undefined,
+      batchSize: options.batchSize ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE') ?? undefined,
       maxCompletedRebuildChunksPerRun,
-      maxRowsPerWake: options.maxRowsPerWake,
+      maxRowsPerWake:
+        options.maxRowsPerWake
+        ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_MAX_ROWS_PER_WAKE')
+        ?? undefined,
       maxWakeMs: options.maxWakeMs,
       signal: loopController.signal,
     })
