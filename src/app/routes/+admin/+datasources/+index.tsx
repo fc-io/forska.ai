@@ -6,6 +6,13 @@ import {createSignal, For, Show} from 'solid-js'
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient.ts'
 import {getApiErrorMessage} from '../../../../services/utils/handleApiResponse.ts'
+import {
+  type DataSourceImportStatusView,
+  getDataSourcesRefetchInterval,
+  getImportActionLabel,
+  normalizeDataSourceImportStatus,
+} from './-importStatus.ts'
+import {DataSourceImportStatusDetails} from './-importStatusDetails.tsx'
 import {isBuiltInImportRoute} from './dataSourceImportRouteOptions.ts'
 
 type StructuredFileConfig = {
@@ -34,6 +41,7 @@ type DataSourceListItem = {
   covidencePackageConfig: CovidencePackageConfig | null
   id: string
   immutable: boolean
+  importStatus: DataSourceImportStatusView | null
   title: string
   description: string | null
   createdAt: string
@@ -70,6 +78,7 @@ const fetchDataSources = async (): Promise<DataSourceListItem[]> => {
       covidencePackageConfig: entry.covidencePackageConfig ?? null,
       id: entry.id,
       immutable: entry.immutable ?? false,
+      importStatus: normalizeDataSourceImportStatus(entry.importStatus),
       title: entry.title,
       description: entry.description ?? null,
       createdAt: String(entry.createdAt),
@@ -173,14 +182,16 @@ const startDataSourceImport = async (entry: DataSourceListItem, refetch: () => P
   throw new Error(`Unknown import route: ${entry.importRoute}`)
 }
 
-const AdminDataSources = () => {
+export const AdminDataSources = () => {
   const queryClient = useQueryClient()
 
   const dataSourcesQuery = useQuery(() => {
     return {
       queryKey: ['datasources'],
       queryFn: fetchDataSources,
-      refetchInterval: 30 * 1000,
+      refetchInterval: (query: {state: {data?: DataSourceListItem[]}}) => {
+        return getDataSourcesRefetchInterval(query.state.data)
+      },
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
     }
@@ -335,6 +346,7 @@ const AdminDataSources = () => {
                               <span class="font-medium text-gray-700">Last Import:</span>{' '}
                               {formatImportTimestamp(entry.lastImportAt)}
                             </div>
+                            <DataSourceImportStatusDetails importStatus={entry.importStatus} />
                             <div class="text-sm text-gray-500">
                               <span class="font-medium text-gray-700">Date From:</span>{' '}
                               {entry.dateFrom
@@ -420,7 +432,9 @@ const AdminDataSources = () => {
                                 }}
                                 class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 disabled:opacity-50"
                               >
-                                {pendingImportId() === entry.id ? 'Starting...' : 'New Import'}
+                                {pendingImportId() === entry.id
+                                  ? 'Starting...'
+                                  : getImportActionLabel(entry.importStatus)}
                               </button>
                             </Show>
                             <Show when={entry.reimportable}>

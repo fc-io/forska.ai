@@ -1,13 +1,17 @@
 import {type} from 'arktype'
 
 import {withDataSourceImportPageRetry} from '../server/services/dataSourceImportRetry.ts'
+import type {DataSourceImportPageProgress} from '../server/services/dataSourceImportStateRepository.ts'
 import {normalizeBiorxivIdentifier} from '../utils/articleIdentifierNormalization.ts'
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {biorxivWorkflowStoreEntries} from './biorxivWorkflowStoreEntries.ts'
 
 const BiorxivResponse = type({'collection?': 'unknown[]', 'messages?': 'unknown'})
-type HarvestOptions = {cursor?: string | null; onCursorUpdate?: (cursor: string | null) => Promise<void>}
+type HarvestOptions = {
+  cursor?: string | null
+  onCursorUpdate?: (cursor: string | null, progress?: DataSourceImportPageProgress) => Promise<void>
+}
 const biorxivTimeoutMs = 20_000
 const biorxivRetryDelays = [
   10_000, // 10 seconds
@@ -153,9 +157,9 @@ const harvestPage = async (
   cursor: number,
   shouldThrottle: boolean,
 ): Promise<void> => {
-  const saveCursor = async (value: number) => {
+  const saveCursor = async (value: number, progress: DataSourceImportPageProgress) => {
     const cursorString = String(value)
-    await input.onCursorUpdate?.(cursorString)
+    await input.onCursorUpdate?.(cursorString, progress)
   }
 
   const records = await fetchBiorxivPage(input.fromDate, input.toDate, cursor, shouldThrottle)
@@ -163,7 +167,7 @@ const harvestPage = async (
   const pageLabel = `bioRxiv page at offset ${cursor}`
   if (!records.length) {
     await withDataSourceImportPageRetry(pageLabel, async () => {
-      await saveCursor(nextCursor)
+      await saveCursor(nextCursor, {fetchedCount: 0, pageKey: String(cursor), storedCount: 0, totalCount: null})
     })
     return
   }
@@ -182,7 +186,12 @@ const harvestPage = async (
     if (entries.length > 0) {
       await biorxivWorkflowStoreEntries(entries)
     }
-    await saveCursor(nextCursor)
+    await saveCursor(nextCursor, {
+      fetchedCount: records.length,
+      pageKey: String(cursor),
+      storedCount: entries.length,
+      totalCount: null,
+    })
   })
 
   await harvestPage(input, nextCursor, true)

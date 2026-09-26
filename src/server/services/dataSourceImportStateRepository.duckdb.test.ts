@@ -416,3 +416,128 @@ test('after a restart the resumer resumes a running import once through the in-p
 
   expect(isDataSourceImportRunningInProcess('source-restart')).toBe(false)
 })
+
+type ProgressRow = {
+  fetchedCount: number
+  progressFromStart: boolean
+  runStartFetchedCount: number
+  runStartStoredCount: number
+  storedCount: number
+  totalCount: number | null
+}
+
+const getProgressRow = async (dataSourceId: string) => {
+  const [row] = await getDatabase().queryJson<ProgressRow>(`
+    SELECT
+      fetched_count::DOUBLE AS fetchedCount,
+      stored_count::DOUBLE AS storedCount,
+      total_count::DOUBLE AS totalCount,
+      run_start_fetched_count::DOUBLE AS runStartFetchedCount,
+      run_start_stored_count::DOUBLE AS runStartStoredCount,
+      progress_from_start AS progressFromStart
+    FROM app.data_source_import_state
+    WHERE data_source_id = '${dataSourceId}'
+  `)
+
+  return row ?? null
+}
+
+test('progress adds up across a resume, a retried page counts once, and a fresh start resets it', async () => {
+  const {repository} = await loadModules()
+  const {createDataSourceCursorUpdater} = await import('./dataSourceQueryService.ts')
+  const startRun = async (input: {startsFresh: boolean; trigger: 'auto_resume' | 'manual'}) => {
+    await repository.markRunStarted({dataSourceId: 'source-progress', importRoute, now: baseTime, ...input})
+  }
+
+  await insertDataSource({id: 'source-progress'})
+  await startRun({startsFresh: true, trigger: 'manual'})
+  const firstRun = createDataSourceCursorUpdater('source-progress')
+
+  await firstRun('cursor-1', {fetchedCount: 1000, pageKey: '*', storedCount: 998, totalCount: 5000})
+  await firstRun('cursor-2', {fetchedCount: 1000, pageKey: 'cursor-1', storedCount: 1000, totalCount: 5000})
+  await firstRun('cursor-2', {fetchedCount: 1000, pageKey: 'cursor-1', storedCount: 1000, totalCount: 5000})
+
+  expect(await getProgressRow('source-progress')).toEqual({
+    fetchedCount: 2000,
+    progressFromStart: true,
+    runStartFetchedCount: 0,
+    runStartStoredCount: 0,
+    storedCount: 1998,
+    totalCount: 5000,
+  })
+
+  await startRun({startsFresh: false, trigger: 'auto_resume'})
+  const resumedRun = createDataSourceCursorUpdater('source-progress')
+
+  await resumedRun('cursor-3', {fetchedCount: 1000, pageKey: 'cursor-2', storedCount: 1000, totalCount: 5000})
+
+  expect(await getProgressRow('source-progress')).toEqual({
+    fetchedCount: 3000,
+    progressFromStart: true,
+    runStartFetchedCount: 2000,
+    runStartStoredCount: 1998,
+    storedCount: 2998,
+    totalCount: 5000,
+  })
+  expect(await getCursor('source-progress')).toBe('cursor-3')
+
+  await startRun({startsFresh: true, trigger: 'manual'})
+
+  expect(await getProgressRow('source-progress')).toEqual({
+    fetchedCount: 0,
+    progressFromStart: true,
+    runStartFetchedCount: 0,
+    runStartStoredCount: 0,
+    storedCount: 0,
+    totalCount: null,
+  })
+})
+
+test('a resume without an earlier state row counts from zero and is marked as not from the start', async () => {
+  const {repository} = await loadModules()
+  const {createDataSourceCursorUpdater} = await import('./dataSourceQueryService.ts')
+
+  await insertDataSource({cursor: 'legacy-cursor', id: 'source-legacy'})
+  await repository.markRunStarted({
+    dataSourceId: 'source-legacy',
+    importRoute,
+    now: baseTime,
+    startsFresh: false,
+    trigger: 'manual',
+  })
+  await createDataSourceCursorUpdater('source-legacy')('cursor-next', {
+    fetchedCount: 1000,
+    pageKey: 'legacy-cursor',
+    storedCount: 1000,
+    totalCount: 588062,
+  })
+
+  expect(await getProgressRow('source-legacy')).toEqual({
+    fetchedCount: 1000,
+    progressFromStart: false,
+    runStartFetchedCount: 0,
+    runStartStoredCount: 0,
+    storedCount: 1000,
+    totalCount: 588062,
+  })
+})
+
+test('an offset harvest keeps its counts when the last empty page saves the same cursor again', async () => {
+  const {repository} = await loadModules()
+  const {createDataSourceCursorUpdater} = await import('./dataSourceQueryService.ts')
+
+  await insertDataSource({id: 'source-offset'})
+  await repository.markRunStarted({
+    dataSourceId: 'source-offset',
+    importRoute: '/api/datasources/import/medrxiv',
+    now: baseTime,
+    startsFresh: true,
+    trigger: 'manual',
+  })
+  const saveCursor = createDataSourceCursorUpdater('source-offset')
+
+  await saveCursor('100', {fetchedCount: 100, pageKey: '0', storedCount: 100, totalCount: null})
+  await saveCursor('100', {fetchedCount: 0, pageKey: '100', storedCount: 0, totalCount: null})
+
+  expect(await getProgressRow('source-offset')).toMatchObject({fetchedCount: 100, storedCount: 100, totalCount: null})
+})

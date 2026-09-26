@@ -15,6 +15,7 @@ import {getDataSourceTrackingSpoolRepository} from '../services/dataSourceTracki
 import {getStructuredFileImportConfig} from '../services/structuredFileImportService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {getDataSourceImportStatesById, getDataSourceImportStatus} from './DataSourcesRoutes/dataSourceImportStatus.ts'
 
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
 type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
@@ -737,7 +738,24 @@ export const dataSourcesRoutes = new Elysia()
     `,
       getDataSourcesWorkloadContext({operation: 'listActive'}),
     )
-    return {data: await normalizeDataSourceRows(getAppDatabaseService(), rows)}
+    const [normalizedRows, importStatesById] = await Promise.all([
+      normalizeDataSourceRows(getAppDatabaseService(), rows),
+      getDataSourceImportStatesById(
+        getAppDatabaseService(),
+        getDataSourcesWorkloadContext({operation: 'importStates'}),
+      ),
+    ])
+    const importStatusById = new Map(
+      rows.map((row) => {
+        return [row.id, getDataSourceImportStatus(row, importStatesById.get(row.id))]
+      }),
+    )
+
+    return {
+      data: normalizedRows.map((row) => {
+        return {...row, importStatus: importStatusById.get(row.id) ?? null}
+      }),
+    }
   })
   .get('/api/datasources/archived', async () => {
     const rows = await getAppDatabaseService().queryJson<{

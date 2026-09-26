@@ -2,13 +2,17 @@ import {type} from 'arktype'
 import {XMLParser} from 'fast-xml-parser'
 
 import {withDataSourceImportPageRetry} from '../../server/services/dataSourceImportRetry.ts'
+import type {DataSourceImportPageProgress} from '../../server/services/dataSourceImportStateRepository.ts'
 import {sleep} from '../../utils/sleep.ts'
 import {arxivWorkflowGetQuery} from './arxivWorkflowGetQuery.ts'
 import {arxivEntry} from './arxivWorkflowStoreEntires.ts'
 import {arxivWorkflowStoreEntires} from './arxivWorkflowStoreEntires.ts'
 
 export type InputData = {fromDate: string; toDate: string; importRoute: string}
-type HarvestOptions = {cursor?: string | null; onCursorUpdate?: (cursor: string | null) => Promise<void>}
+type HarvestOptions = {
+  cursor?: string | null
+  onCursorUpdate?: (cursor: string | null, progress?: DataSourceImportPageProgress) => Promise<void>
+}
 type HarvestInput = InputData & HarvestOptions
 
 const fxp = new XMLParser({
@@ -243,7 +247,12 @@ const arxivWorkflowHarvest = async (input: HarvestInput, resumptionToken?: strin
   const result = await fetchRecords(arxivQueryUrl)
   await withDataSourceImportPageRetry(`arXiv page ${token ?? 'start'}`, async () => {
     await arxivWorkflowStoreEntires(result.records, input.importRoute)
-    await input.onCursorUpdate?.(result.resumptionToken ?? null)
+    await input.onCursorUpdate?.(result.resumptionToken ?? null, {
+      fetchedCount: result.records.length,
+      pageKey: token ?? '',
+      storedCount: result.records.length,
+      totalCount: null,
+    })
   })
 
   if (result.resumptionToken) {
