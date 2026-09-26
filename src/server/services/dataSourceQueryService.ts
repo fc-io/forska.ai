@@ -2,6 +2,8 @@ import type {DataSourceRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getTimestampLiteral} from './appQueryHelpers.ts'
 import {
+  type DataSourceImportPageProgress,
+  type DataSourceImportRunProgress,
   getDataSourceImportCompletedSql,
   getDataSourceImportPageSavedSql,
   getDataSourceImportStateWorkloadContext,
@@ -111,7 +113,11 @@ const countArticlesLinkedToImportRoute = async (params: {
   return Number(row?.value ?? 0)
 }
 
-export const updateDataSourceCursor = async (id: string, cursor: string | null) => {
+export const updateDataSourceCursor = async (
+  id: string,
+  cursor: string | null,
+  progress: DataSourceImportRunProgress | null = null,
+) => {
   const updatedAt = new Date()
 
   await getAppDatabaseService().transaction(async (tx) => {
@@ -127,7 +133,7 @@ export const updateDataSourceCursor = async (id: string, cursor: string | null) 
       throw new Error('Data source not found')
     }
 
-    await tx.run(getDataSourceImportPageSavedSql({dataSourceId: id, now: updatedAt}))
+    await tx.run(getDataSourceImportPageSavedSql({dataSourceId: id, now: updatedAt, progress}))
   }, getDataSourceImportStateWorkloadContext('saveCursor'))
 }
 
@@ -188,9 +194,34 @@ const updateDataSourceAfterImport = async (params: {
   return getDataSourceValue(row)
 }
 
+const getNextRunProgress = (
+  current: DataSourceImportRunProgress,
+  page: DataSourceImportPageProgress,
+): DataSourceImportRunProgress => {
+  return {
+    runFetchedCount: current.runFetchedCount + page.fetchedCount,
+    runStoredCount: current.runStoredCount + page.storedCount,
+    totalCount: page.totalCount ?? current.totalCount,
+  }
+}
+
 export const createDataSourceCursorUpdater = (id: string) => {
-  return async (cursor: string | null) => {
-    await updateDataSourceCursor(id, cursor)
+  const emptyRunProgress: DataSourceImportRunProgress = {runFetchedCount: 0, runStoredCount: 0, totalCount: null}
+  const saved: {
+    beforeLastPage: DataSourceImportRunProgress
+    current: DataSourceImportRunProgress
+    lastPageKey: string | null
+  } = {beforeLastPage: emptyRunProgress, current: emptyRunProgress, lastPageKey: null}
+
+  return async (cursor: string | null, pageProgress?: DataSourceImportPageProgress) => {
+    const isSamePageAgain = pageProgress !== undefined && pageProgress.pageKey === saved.lastPageKey
+    const baseProgress = isSamePageAgain ? saved.beforeLastPage : saved.current
+    const nextProgress = pageProgress ? getNextRunProgress(baseProgress, pageProgress) : null
+
+    await updateDataSourceCursor(id, cursor, nextProgress)
+    saved.beforeLastPage = baseProgress
+    saved.current = nextProgress ?? baseProgress
+    saved.lastPageKey = pageProgress?.pageKey ?? null
   }
 }
 

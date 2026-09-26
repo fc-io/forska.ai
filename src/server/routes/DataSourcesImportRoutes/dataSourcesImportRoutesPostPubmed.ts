@@ -2,6 +2,7 @@ import {format} from 'date-fns'
 
 import {pubmedHarvest} from '../../../agent/pubmedHarvest.ts'
 import {
+  type DataSourceImportPageProgress,
   type DataSourceImportTrigger,
   isFreshDataSourceImportCursor,
 } from '../../services/dataSourceImportStateRepository.ts'
@@ -40,9 +41,9 @@ export const dataSourcesImportRoutesPostPubmed = async (
       return await withDataSourceImportTrackingLease(record, async ({assertLeaseOwned}) => {
         await markImportStarted()
         const saveCursor = createCursorUpdater(record.id)
-        const saveCursorWithLease = async (cursor: string | null) => {
+        const saveCursorWithLease = async (cursor: string | null, progress?: DataSourceImportPageProgress) => {
           await assertLeaseOwned()
-          await saveCursor(cursor)
+          await saveCursor(cursor, progress)
           await assertLeaseOwned()
         }
 

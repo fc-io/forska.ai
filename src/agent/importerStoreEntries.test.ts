@@ -350,6 +350,31 @@ test('europe pmc harvests keep the previous cursor when storing a page fails', a
   }, Promise.resolve())
 })
 
+test('europe pmc harvests report page counts, the hit count and the page key with each cursor save', async () => {
+  const harvests = await getCursorOrderHarvests()
+
+  await harvests.reduce(async (previous, harvest) => {
+    await previous
+    mockEuropePmcFetchPages(getTwoPageEuropePmcResponses(harvest.source))
+    const saves: unknown[] = []
+
+    await harvest.harvest({
+      fromDate: '2024-03-01',
+      toDate: '2024-03-01',
+      importRoute: harvest.importRoute,
+      cursor: null,
+      onCursorUpdate: async (cursor, progress) => {
+        saves.push({cursor, progress})
+      },
+    })
+
+    expect(saves).toEqual([
+      {cursor: 'cursor-1', progress: {fetchedCount: 1, pageKey: '*', storedCount: 1, totalCount: 2}},
+      {cursor: null, progress: {fetchedCount: 1, pageKey: 'cursor-1', storedCount: 1, totalCount: 2}},
+    ])
+  }, Promise.resolve())
+})
+
 test('europe pmc harvests retry the same page after a transient store failure', async () => {
   const harvests = await getCursorOrderHarvests()
 

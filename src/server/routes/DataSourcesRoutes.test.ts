@@ -63,7 +63,27 @@ type DataSourceResponseEntry = {
   updatedAt: string
 }
 
-type DataSourceListResponse = {data: DataSourceResponseEntry[]}
+type DataSourceImportStatusResponse = {
+  completedAt: string | null
+  consecutiveFailureCount: number
+  failedAt: string | null
+  fetchedCount: number
+  lastError: string | null
+  lastProgressAt: string | null
+  nextRetryAt: string | null
+  progressFromStart: boolean
+  runStartedAt: string | null
+  runStartFetchedCount: number
+  runTrigger: string | null
+  startedAt: string | null
+  status: 'completed' | 'failed' | 'interrupted' | 'running'
+  storedCount: number
+  totalCount: number | null
+}
+
+type DataSourceListResponse = {
+  data: Array<DataSourceResponseEntry & {importStatus: DataSourceImportStatusResponse | null}>
+}
 type DataSourceDetailResponse = {data: DataSourceResponseEntry}
 type MockQueryRow = {
   archived: boolean
@@ -197,6 +217,7 @@ const routeHarnessState: {
   changeRows: Array<Record<string, unknown>>
   covidenceProjectLinks: Array<{importRoute: string; projectId: string}>
   covidencePromptLinks: Array<{importRoute: string; promptId: string}>
+  importStateRows: Array<Record<string, unknown>>
   queryStatements: string[]
   reconciliationWorkRows: Array<Record<string, unknown>>
   rejectedSpoolWindows: Array<{dataSourceId: string; error: string}>
@@ -207,6 +228,7 @@ const routeHarnessState: {
   changeRows: [],
   covidenceProjectLinks: [],
   covidencePromptLinks: [],
+  importStateRows: [],
   queryStatements: [],
   reconciliationWorkRows: [],
   rejectedSpoolWindows: [],
@@ -244,25 +266,27 @@ const getMockTrackingStateRow = () => {
 const queryJson = async (statement: string) => {
   routeHarnessState.queryStatements.push(statement)
 
-  return statement.includes('INSERT INTO app.data_source_tracking_state')
-    || (statement.includes('UPDATE app.data_source_tracking_state') && statement.includes('RETURNING'))
-    ? [getMockTrackingStateRow()]
-    : statement.includes('INNER JOIN app.project_prompt')
-      ? routeHarnessState.covidencePromptLinks
-      : statement.includes('FROM app.project_import_route')
-        ? routeHarnessState.covidenceProjectLinks
-        : statement.includes('FROM app.data_source data_source')
-          ? [routeHarnessState.row]
-          : statement.includes('FROM app.data_source_reconciliation_work')
-            ? routeHarnessState.reconciliationWorkRows
-            : statement.includes('FROM app.data_source_article_change_log')
-              ? routeHarnessState.changeRows
-              : statement.includes('INSERT INTO app.data_source')
-                ? [routeHarnessState.row]
-                : statement.includes(`WHERE data_source.id = '${routeHarnessState.row.id}'`)
-                    || statement.includes(`WHERE id = '${routeHarnessState.row.id}'`)
+  return statement.includes('FROM app.data_source_import_state')
+    ? routeHarnessState.importStateRows
+    : statement.includes('INSERT INTO app.data_source_tracking_state')
+        || (statement.includes('UPDATE app.data_source_tracking_state') && statement.includes('RETURNING'))
+      ? [getMockTrackingStateRow()]
+      : statement.includes('INNER JOIN app.project_prompt')
+        ? routeHarnessState.covidencePromptLinks
+        : statement.includes('FROM app.project_import_route')
+          ? routeHarnessState.covidenceProjectLinks
+          : statement.includes('FROM app.data_source data_source')
+            ? [routeHarnessState.row]
+            : statement.includes('FROM app.data_source_reconciliation_work')
+              ? routeHarnessState.reconciliationWorkRows
+              : statement.includes('FROM app.data_source_article_change_log')
+                ? routeHarnessState.changeRows
+                : statement.includes('INSERT INTO app.data_source')
                   ? [routeHarnessState.row]
-                  : [routeHarnessState.row]
+                  : statement.includes(`WHERE data_source.id = '${routeHarnessState.row.id}'`)
+                      || statement.includes(`WHERE id = '${routeHarnessState.row.id}'`)
+                    ? [routeHarnessState.row]
+                    : [routeHarnessState.row]
 }
 
 const run = async (statement: string) => {
@@ -288,6 +312,7 @@ const runDataSourcesRoute = async (params: {
   changeRows?: Array<Record<string, unknown>>
   covidenceProjectLinks?: Array<{importRoute: string; projectId: string}>
   covidencePromptLinks?: Array<{importRoute: string; promptId: string}>
+  importStateRows?: Array<Record<string, unknown>>
   reconciliationWorkRows?: Array<Record<string, unknown>>
   requestInit?: RequestInit
   row: MockQueryRow
@@ -295,6 +320,7 @@ const runDataSourcesRoute = async (params: {
 }) => {
   routeHarnessState.covidenceProjectLinks = params.covidenceProjectLinks ?? []
   routeHarnessState.covidencePromptLinks = params.covidencePromptLinks ?? []
+  routeHarnessState.importStateRows = params.importStateRows ?? []
   routeHarnessState.reconciliationWorkRows = params.reconciliationWorkRows ?? []
   routeHarnessState.changeRows = params.changeRows ?? []
   routeHarnessState.row = params.row
@@ -415,10 +441,120 @@ test('datasource list responses omit raw cursor while including structured file 
         trackingState: null,
         trackingSupported: false,
         updatedAt: '2026-01-02T00:00:00.000Z',
+        importStatus: null,
       },
     ],
   })
   expect(Object.hasOwn(parsed.body.data[0] as object, 'cursor')).toBe(false)
+})
+
+const pubmedImportRow: MockQueryRow = {
+  archived: false,
+  createdAt: '2026-09-01T00:00:00.000Z',
+  cursor: 'AoJ4dXZ0M2Y2YjM=',
+  dateFrom: '2026-05-01T00:00:00.000Z',
+  dateTo: '2026-09-01T00:00:00.000Z',
+  description: 'MED 2026',
+  id: 'datasource-pubmed',
+  importRoute: '/api/datasources/import/pubmed',
+  itemsAfterLastImport: 0,
+  lastImportAt: '2026-09-02T00:00:00.000Z',
+  title: 'MED | 2026 2',
+  updatedAt: '2026-09-26T10:00:00.000Z',
+}
+
+const getListedImportStatus = async (params: {importStateRows?: Array<Record<string, unknown>>; row: MockQueryRow}) => {
+  const parsed = (await runDataSourcesRoute({
+    importStateRows: params.importStateRows,
+    row: params.row,
+    url: 'http://localhost/api/datasources',
+  })) as {body: DataSourceListResponse; status: number}
+
+  expect(parsed.status).toBe(200)
+  expect(Object.hasOwn(parsed.body.data[0] as object, 'cursor')).toBe(false)
+
+  return parsed.body.data[0]?.importStatus
+}
+
+test('datasource list shows a harvest with a saved cursor and no import state as interrupted', async () => {
+  const importStatus = await getListedImportStatus({row: pubmedImportRow})
+
+  expect(importStatus?.status).toBe('interrupted')
+  expect(importStatus?.storedCount).toBe(0)
+  expect(importStatus?.totalCount).toBeNull()
+})
+
+test('datasource list shows no import status for a harvest without a cursor or state', async () => {
+  expect(await getListedImportStatus({row: {...pubmedImportRow, cursor: null}})).toBeNull()
+  expect(await getListedImportStatus({row: {...pubmedImportRow, cursor: '*'}})).toBeNull()
+})
+
+test('datasource list returns the recorded running import with its progress', async () => {
+  const importStatus = await getListedImportStatus({
+    importStateRows: [
+      {
+        completedAt: null,
+        consecutiveFailureCount: 0,
+        dataSourceId: 'datasource-pubmed',
+        failedAt: null,
+        fetchedCount: '120000',
+        lastError: null,
+        lastProgressAt: '2026-09-26T11:00:00.000Z',
+        nextRetryAt: null,
+        progressFromStart: true,
+        runStartedAt: '2026-09-26T10:00:00.000Z',
+        runStartFetchedCount: '60000',
+        runTrigger: 'auto_resume',
+        startedAt: '2026-09-26T08:00:00.000Z',
+        status: 'running',
+        storedCount: '119990',
+        totalCount: '588062',
+      },
+    ],
+    row: pubmedImportRow,
+  })
+
+  expect(importStatus).toEqual({
+    completedAt: null,
+    consecutiveFailureCount: 0,
+    failedAt: null,
+    fetchedCount: 120000,
+    lastError: null,
+    lastProgressAt: '2026-09-26T11:00:00.000Z',
+    nextRetryAt: null,
+    progressFromStart: true,
+    runStartedAt: '2026-09-26T10:00:00.000Z',
+    runStartFetchedCount: 60000,
+    runTrigger: 'auto_resume',
+    startedAt: '2026-09-26T08:00:00.000Z',
+    status: 'running',
+    storedCount: 119990,
+    totalCount: 588062,
+  })
+})
+
+test('datasource list returns a failed import with its error even when the cursor is kept', async () => {
+  const importStatus = await getListedImportStatus({
+    importStateRows: [
+      {
+        dataSourceId: 'datasource-pubmed',
+        consecutiveFailureCount: 5,
+        failedAt: '2026-09-26T11:30:00.000Z',
+        fetchedCount: 1000,
+        lastError: 'DuckDB workload budget exceeded for import.storeArticles',
+        nextRetryAt: null,
+        progressFromStart: false,
+        status: 'failed',
+        storedCount: 1000,
+        totalCount: null,
+      },
+    ],
+    row: pubmedImportRow,
+  })
+
+  expect(importStatus?.status).toBe('failed')
+  expect(importStatus?.lastError).toBe('DuckDB workload budget exceeded for import.storeArticles')
+  expect(importStatus?.consecutiveFailureCount).toBe(5)
 })
 
 test('datasource detail responses omit raw cursor while including structured file config', async () => {

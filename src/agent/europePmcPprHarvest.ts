@@ -4,6 +4,7 @@ import {type} from 'arktype'
 
 import type {ArticleImportStoreRow} from '../server/services/articleImportStoreService.ts'
 import {withDataSourceImportPageRetry} from '../server/services/dataSourceImportRetry.ts'
+import type {DataSourceImportPageProgress} from '../server/services/dataSourceImportStateRepository.ts'
 import {sleep} from '../utils/sleep.ts'
 import type {InputData} from './arxivWorkflow/arxivWorkflowHarvest.ts'
 import {
@@ -72,7 +73,10 @@ const EuropePmcResponse = type({
   'request?': EuropePmcRequest,
 })
 
-type HarvestOptions = {cursor?: string | null; onCursorUpdate?: (cursor: string | null) => Promise<void>}
+type HarvestOptions = {
+  cursor?: string | null
+  onCursorUpdate?: (cursor: string | null, progress?: DataSourceImportPageProgress) => Promise<void>
+}
 export type EuropePmcPprHarvestPage = {
   cursorBefore: string
   cursorAfter: string | null
@@ -445,7 +449,12 @@ export const europePmcPprHarvest = async (input: InputData & HarvestOptions): Pr
           await europePmcPprWorkflowStoreEntries(page.workflowEntries)
         }
         if (input.onCursorUpdate) {
-          await input.onCursorUpdate(page.cursorAfter)
+          await input.onCursorUpdate(page.cursorAfter, {
+            fetchedCount: page.rawItems.length,
+            pageKey: page.cursorBefore,
+            storedCount: page.workflowEntries.length,
+            totalCount: page.hitCount,
+          })
         }
       })
     },

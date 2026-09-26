@@ -2,6 +2,7 @@ import {format} from 'date-fns'
 
 import {europePmcPprHarvest} from '../../../agent/europePmcPprHarvest.ts'
 import {
+  type DataSourceImportPageProgress,
   type DataSourceImportTrigger,
   isFreshDataSourceImportCursor,
 } from '../../services/dataSourceImportStateRepository.ts'
@@ -39,9 +40,9 @@ export const dataSourcesImportRoutesPostEuropePmcPpr = async (
       return await withDataSourceImportTrackingLease(record, async ({assertLeaseOwned}) => {
         await markImportStarted()
         const saveCursor = createCursorUpdater(record.id)
-        const saveCursorWithLease = async (cursor: string | null) => {
+        const saveCursorWithLease = async (cursor: string | null, progress?: DataSourceImportPageProgress) => {
           await assertLeaseOwned()
-          await saveCursor(cursor)
+          await saveCursor(cursor, progress)
           await assertLeaseOwned()
         }
 

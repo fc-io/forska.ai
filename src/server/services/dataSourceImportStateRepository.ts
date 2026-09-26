@@ -16,6 +16,13 @@ export type DataSourceImportFailureResult = {
   nextRetryAt: Date | null
   transient: boolean
 }
+export type DataSourceImportPageProgress = {
+  fetchedCount: number
+  pageKey: string
+  storedCount: number
+  totalCount: number | null
+}
+export type DataSourceImportRunProgress = {runFetchedCount: number; runStoredCount: number; totalCount: number | null}
 
 type DataSourceImportStateRunner = Pick<DuckdbTransactionRunner, 'queryJson' | 'run'>
 type DataSourceImportStateDatabase = {
@@ -91,6 +98,12 @@ export const getDataSourceImportRunStartedSql = (input: {
       consecutive_failure_count,
       last_error,
       next_retry_at,
+      total_count,
+      fetched_count,
+      stored_count,
+      run_start_fetched_count,
+      run_start_stored_count,
+      progress_from_start,
       updated_at
     ) VALUES (
       '${escapeSqlString(input.dataSourceId)}',
@@ -105,6 +118,12 @@ export const getDataSourceImportRunStartedSql = (input: {
       0,
       NULL,
       NULL,
+      NULL,
+      0,
+      0,
+      0,
+      0,
+      ${input.startsFresh ? 'TRUE' : 'FALSE'},
       ${now}
     )
     ON CONFLICT (data_source_id) DO UPDATE SET
@@ -119,16 +138,34 @@ export const getDataSourceImportRunStartedSql = (input: {
       consecutive_failure_count = ${failureCountSqlByTrigger[input.trigger]},
       last_error = ${isManual ? 'NULL' : 'last_error'},
       next_retry_at = NULL,
+      total_count = ${input.startsFresh ? 'NULL' : 'total_count'},
+      fetched_count = ${input.startsFresh ? '0' : 'fetched_count'},
+      stored_count = ${input.startsFresh ? '0' : 'stored_count'},
+      run_start_fetched_count = ${input.startsFresh ? '0' : 'fetched_count'},
+      run_start_stored_count = ${input.startsFresh ? '0' : 'stored_count'},
+      progress_from_start = ${input.startsFresh ? 'TRUE' : 'progress_from_start'},
       updated_at = EXCLUDED.updated_at
   `
 }
 
-export const getDataSourceImportPageSavedSql = (input: {dataSourceId: string; now: Date}) => {
+const getRunProgressSetSql = (progress: DataSourceImportRunProgress) => {
+  return `
+        fetched_count = run_start_fetched_count + ${Math.max(0, Math.trunc(progress.runFetchedCount))},
+        stored_count = run_start_stored_count + ${Math.max(0, Math.trunc(progress.runStoredCount))},
+        total_count = ${progress.totalCount === null ? 'total_count' : Math.max(0, Math.trunc(progress.totalCount))},`
+}
+
+export const getDataSourceImportPageSavedSql = (input: {
+  dataSourceId: string
+  now: Date
+  progress?: DataSourceImportRunProgress | null
+}) => {
   const now = getTimestampLiteral(input.now)
 
   return `
     UPDATE app.data_source_import_state
-    SET last_progress_at = ${now},
+    SET ${input.progress ? getRunProgressSetSql(input.progress) : ''}
+        last_progress_at = ${now},
         consecutive_failure_count = 0,
         updated_at = ${now}
     WHERE data_source_id = '${escapeSqlString(input.dataSourceId)}'
