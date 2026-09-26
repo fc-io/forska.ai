@@ -40,6 +40,16 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     ],
     path: 'scripts/duckdbCheckpoint.ts',
   },
+  'db:duck:rebuild-secondary-indexes': {
+    description: 'maintenance secondary index rebuild',
+    mustContain: [
+      'withDuckdbMaintenanceAccess',
+      "getMaintenanceDuckdbWorkloadContext('duckdbRebuildSecondaryIndexes')",
+      'FROM duckdb_indexes()',
+      "maintenance('checkpoint', workloadContext)",
+    ],
+    path: 'scripts/duckdbRebuildSecondaryIndexes.ts',
+  },
   'db:duck:legacy-inspect-dirty-refresh-risk': {
     commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'legacy diagnostic maintenance read',

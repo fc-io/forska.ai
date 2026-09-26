@@ -159,8 +159,8 @@ const harvestPage = async (
 
   const records = await fetchBiorxivPage(input.fromDate, input.toDate, cursor, shouldThrottle)
   const nextCursor = records.length ? cursor + records.length : cursor
-  await saveCursor(nextCursor)
   if (!records.length) {
+    await saveCursor(nextCursor)
     return
   }
   const entries = records
@@ -177,6 +177,7 @@ const harvestPage = async (
   if (entries.length > 0) {
     await biorxivWorkflowStoreEntries(entries)
   }
+  await saveCursor(nextCursor)
 
   await harvestPage(input, nextCursor, true)
 }

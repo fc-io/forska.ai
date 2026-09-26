@@ -11,6 +11,8 @@ const sleepModulePath = new URL('../utils/sleep.ts', import.meta.url).href
 type StoredArticleRow = Record<string, unknown>
 
 const storedRowsRef: {current: StoredArticleRow[][]} = {current: []}
+const storeFailureRef: {current: Error | null} = {current: null}
+const importEventsRef: {current: string[]} = {current: []}
 const originalFetch = globalThis.fetch
 
 const registerModuleMocks = () => {
@@ -24,6 +26,10 @@ const registerModuleMocks = () => {
         workloadClass: 'background.importStore',
       },
       storeImportedArticles: async (rows: StoredArticleRow[]) => {
+        if (storeFailureRef.current) {
+          throw storeFailureRef.current
+        }
+        importEventsRef.current.push(`store:${rows.length}`)
         storedRowsRef.current.push(rows)
       },
     }
@@ -93,6 +99,8 @@ const mockEuropePmcFetchPages = (pages: unknown[]) => {
 
 afterEach(() => {
   storedRowsRef.current = []
+  storeFailureRef.current = null
+  importEventsRef.current = []
   globalThis.fetch = originalFetch
   mock.restore()
 })
@@ -254,6 +262,85 @@ test('pubmed harvest preserves legacy cursor update and workflow store path', as
     pubmedId: '2001',
     importRoute: '/api/datasources/import/pubmed',
   })
+})
+
+const getTwoPageEuropePmcResponses = (source: 'MED' | 'PPR') => {
+  return [1, 2].map((pageNumber) => {
+    return {
+      hitCount: 2,
+      ...(pageNumber === 1 ? {nextCursorMark: 'cursor-1'} : {}),
+      resultList: {
+        result: [
+          {
+            id: `${source}300${pageNumber}`,
+            source,
+            ...(source === 'MED' ? {pmid: `300${pageNumber}`} : {doi: `10.1101/2024.03.0${pageNumber}.123456`}),
+            title: `Page ${pageNumber}`,
+            firstPublicationDate: '2024-03-01',
+          },
+        ],
+      },
+    }
+  })
+}
+
+const getCursorOrderHarvests = async () => {
+  const {pubmedHarvest} = await loadAgentModule<typeof import('./pubmedHarvest.ts')>('./pubmedHarvest.ts')
+  const {europePmcPprHarvest} =
+    await loadAgentModule<typeof import('./europePmcPprHarvest.ts')>('./europePmcPprHarvest.ts')
+
+  return [
+    {harvest: pubmedHarvest, importRoute: '/api/datasources/import/pubmed', source: 'MED' as const},
+    {harvest: europePmcPprHarvest, importRoute: '/api/datasources/import/europe-pmc-ppr', source: 'PPR' as const},
+  ]
+}
+
+const runCursorOrderHarvest = async (input: Awaited<ReturnType<typeof getCursorOrderHarvests>>[number]) => {
+  mockEuropePmcFetchPages(getTwoPageEuropePmcResponses(input.source))
+
+  return await input.harvest({
+    fromDate: '2024-03-01',
+    toDate: '2024-03-01',
+    importRoute: input.importRoute,
+    cursor: null,
+    onCursorUpdate: async (cursor) => {
+      importEventsRef.current.push(`cursor:${cursor}`)
+    },
+  })
+}
+
+test('europe pmc harvests save each page cursor only after the page is stored', async () => {
+  const harvests = await getCursorOrderHarvests()
+
+  await harvests.reduce(async (previous, harvest) => {
+    await previous
+    importEventsRef.current = []
+    await runCursorOrderHarvest(harvest)
+
+    expect(importEventsRef.current).toEqual(['store:1', 'cursor:cursor-1', 'store:1', 'cursor:null'])
+  }, Promise.resolve())
+})
+
+test('europe pmc harvests keep the previous cursor when storing a page fails', async () => {
+  const harvests = await getCursorOrderHarvests()
+
+  storeFailureRef.current = new Error('store failed')
+  await harvests.reduce(async (previous, harvest) => {
+    await previous
+    importEventsRef.current = []
+
+    const error = await runCursorOrderHarvest(harvest).then(
+      () => {
+        return null
+      },
+      (caught: unknown) => {
+        return caught
+      },
+    )
+
+    expect(String(error)).toContain('store failed')
+    expect(importEventsRef.current).toEqual([])
+  }, Promise.resolve())
 })
 
 test('pubmed workflow store entries pass DOI into storeImportedArticles', async () => {
