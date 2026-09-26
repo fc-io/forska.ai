@@ -3271,6 +3271,12 @@ const migrationGatedRepairMarkerCases = [
     tableName: 'comparison_project_conflict_resolution',
   },
   {name: '0231 chunk-manifest', schemaName: 'app', slug: 'chunk-manifest', tableName: 'review_rebuild_chunk_manifest'},
+  {
+    name: '0243 selected-import-snapshot',
+    schemaName: 'app',
+    slug: 'selected-import-snapshot',
+    tableName: 'review_selected_import_snapshot',
+  },
 ]
 
 for (const markerCase of migrationGatedRepairMarkerCases) {
@@ -6603,6 +6609,15 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
       return spec.schemaName === 'app' && spec.tableName === 'review_selected_article_import_v4'
     })
     expect(selectedImportProbe).toBeUndefined()
+    const selectedImportSnapshotProbe = parsed.firstPreflightSpecs.find((spec) => {
+      return spec.schemaName === 'app' && spec.tableName === 'review_selected_import_snapshot'
+    })
+    expect(selectedImportSnapshotProbe?.repairPrimaryKeyColumns).toEqual(['selected_import_snapshot_id'])
+    expect(selectedImportSnapshotProbe?.recreateRepairPrimaryKeyIndex).toBe(false)
+    expect(selectedImportSnapshotProbe?.recreateSecondaryIndexes).toBe(false)
+    expect(selectedImportSnapshotProbe?.skipStartupPreflightUntilMigration).toBe(
+      '0243_rebuildReviewSelectedImportSnapshotWithoutIndexes.sql',
+    )
     const selectedImportCurrentProbe = parsed.firstPreflightSpecs.find((spec) => {
       return spec.schemaName === 'mart' && spec.tableName === 'review_selected_article_import_current_v4'
     })
