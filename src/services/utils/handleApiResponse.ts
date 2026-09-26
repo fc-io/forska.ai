@@ -25,7 +25,7 @@ const getUsefulMessage = (message: string | undefined): string | undefined => {
   return trimmed && trimmed !== '[object Object]' ? trimmed : undefined
 }
 
-const getApiErrorMessage = (error: unknown, fallback: string): string => {
+export const getApiErrorMessage = (error: unknown, fallback: string): string => {
   const nested = getNestedErrorValue(error)
   const message = getUsefulMessage(getErrorWithMessage(error)?.message)
   const serialized = getSerializedError(error)

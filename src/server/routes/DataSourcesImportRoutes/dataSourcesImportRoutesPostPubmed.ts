@@ -4,6 +4,7 @@ import {pubmedHarvest} from '../../../agent/pubmedHarvest.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
 import {withDataSourceImportTrackingLease} from './dataSourceImportTrackingLease.ts'
 import {createCursorUpdater} from './dataSourcesImportCursor.ts'
+import {startDataSourceImportInBackground} from './startDataSourceImportInBackground.ts'
 
 export const dataSourcesImportRoutesPostPubmed = async (body: {id: string}) => {
   const dataSourceQueryService = getDataSourceQueryService()
@@ -23,32 +24,39 @@ export const dataSourcesImportRoutesPostPubmed = async (body: {id: string}) => {
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostPubmed – To date is good to have')
   }
-  const updatedDataSource = await withDataSourceImportTrackingLease(record, async ({assertLeaseOwned}) => {
-    const saveCursor = createCursorUpdater(record.id)
-    const saveCursorWithLease = async (cursor: string | null) => {
-      await assertLeaseOwned()
-      await saveCursor(cursor)
-      await assertLeaseOwned()
-    }
+  await startDataSourceImportInBackground({
+    dataSourceId: record.id,
+    importRoute,
+    runImport: async (markImportStarted) => {
+      return await withDataSourceImportTrackingLease(record, async ({assertLeaseOwned}) => {
+        markImportStarted()
+        const saveCursor = createCursorUpdater(record.id)
+        const saveCursorWithLease = async (cursor: string | null) => {
+          await assertLeaseOwned()
+          await saveCursor(cursor)
+          await assertLeaseOwned()
+        }
 
-    await assertLeaseOwned()
-    await pubmedHarvest({
-      fromDate,
-      toDate,
-      importRoute,
-      cursor: record.cursor ?? null,
-      onCursorUpdate: saveCursorWithLease,
-    })
-    await assertLeaseOwned()
-    const importedCount = await dataSourceQueryService.countArticlesLinkedToImportRoute({
-      route: importRoute,
-      dateFrom: record.dateFrom,
-      dateTo: record.dateTo,
-    })
-    await assertLeaseOwned()
+        await assertLeaseOwned()
+        await pubmedHarvest({
+          fromDate,
+          toDate,
+          importRoute,
+          cursor: record.cursor ?? null,
+          onCursorUpdate: saveCursorWithLease,
+        })
+        await assertLeaseOwned()
+        const importedCount = await dataSourceQueryService.countArticlesLinkedToImportRoute({
+          route: importRoute,
+          dateFrom: record.dateFrom,
+          dateTo: record.dateTo,
+        })
+        await assertLeaseOwned()
 
-    return await dataSourceQueryService.updateDataSourceAfterImport({id: record.id, importedCount, cursor: null})
+        return await dataSourceQueryService.updateDataSourceAfterImport({id: record.id, importedCount, cursor: null})
+      })
+    },
   })
 
-  return {success: true, data: updatedDataSource}
+  return {success: true, data: record}
 }

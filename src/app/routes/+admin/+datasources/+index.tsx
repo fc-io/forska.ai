@@ -5,6 +5,8 @@ import {createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient.ts'
+import {getApiErrorMessage} from '../../../../services/utils/handleApiResponse.ts'
+import {isBuiltInImportRoute} from './dataSourceImportRouteOptions.ts'
 
 type StructuredFileConfig = {
   assetPath: string
@@ -105,10 +107,16 @@ const postImportAndRefetch = async (
 
   if (response.error || !response.data?.success) {
     console.error('Failed to start import', response.error)
-    throw new Error('Failed to start import')
+    throw new Error(getApiErrorMessage(response.error, 'Failed to start import'))
   }
 
   await refetch()
+}
+
+const alertIfImportStartedInBackground = (entry: DataSourceListItem) => {
+  if (isBuiltInImportRoute(entry.importRoute)) {
+    alert('Import started. It runs in the background; Last Import updates when it finishes.')
+  }
 }
 
 const getImportRequest = (request: Promise<unknown>) => {
@@ -180,6 +188,7 @@ const AdminDataSources = () => {
 
   const [searchTerm, setSearchTerm] = createSignal('')
   const [pendingArchiveId, setPendingArchiveId] = createSignal<string | null>(null)
+  const [pendingImportId, setPendingImportId] = createSignal<string | null>(null)
 
   const dataSources = () => {
     return dataSourcesQuery.data ?? []
@@ -392,17 +401,26 @@ const AdminDataSources = () => {
                             <Show when={entry.importRoute && !entry.reimportable && !isImmutableDataSource(entry)}>
                               <button
                                 type="button"
+                                disabled={pendingImportId() === entry.id}
                                 onClick={() => {
+                                  setPendingImportId(entry.id)
                                   void startDataSourceImport(entry, () => {
                                     return dataSourcesQuery.refetch()
-                                  }).catch((error) => {
-                                    console.error('Failed to start import', error)
-                                    alert(error instanceof Error ? error.message : 'Failed to start import')
-                                  })
+                                  }).then(
+                                    () => {
+                                      setPendingImportId(null)
+                                      alertIfImportStartedInBackground(entry)
+                                    },
+                                    (error) => {
+                                      console.error('Failed to start import', error)
+                                      setPendingImportId(null)
+                                      alert(error instanceof Error ? error.message : 'Failed to start import')
+                                    },
+                                  )
                                 }}
-                                class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                                class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 disabled:opacity-50"
                               >
-                                New Import
+                                {pendingImportId() === entry.id ? 'Starting...' : 'New Import'}
                               </button>
                             </Show>
                             <Show when={entry.reimportable}>

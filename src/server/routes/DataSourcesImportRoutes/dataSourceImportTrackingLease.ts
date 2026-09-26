@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto'
 
 import type {DataSourceRecord} from '../../../db/schemaTypes.ts'
 import {createDataSourceTrackingRepository} from '../../services/dataSourceTrackingRepository.ts'
+import {HttpError} from '../../utils/httpError.ts'
 
 type DataSourceTrackingRepository = ReturnType<typeof createDataSourceTrackingRepository>
 
@@ -57,7 +58,7 @@ export const withDataSourceImportTrackingLease = async <T>(
   })
 
   if (!claim) {
-    throw new Error('Data source tracking import is already running')
+    throw new HttpError(409, 'Data source tracking import is already running')
   }
 
   const timer = setInterval(() => {
