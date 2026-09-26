@@ -1,6 +1,11 @@
 import {expect, test} from 'bun:test'
 
-import {getReviewServingDeltaIntakeGroups, runReviewServingDeltaIntakeGroups} from './reviewServingDeltaIntakeGroups.ts'
+import {
+  getReviewServingDeltaIntakeGroups,
+  reviewServingDeltaIntakeMaxDirtyWorkPerTransaction,
+  runReviewServingDeltaIntakeGroups,
+} from './reviewServingDeltaIntakeGroups.ts'
+import {reviewServingDirtyWorkBatchChunkSize} from './reviewServingDirtyWorkService.ts'
 
 type Entry = {deltaId: string; dirtyWorkCount: number}
 
@@ -38,6 +43,61 @@ test('delta intake groups pack ordered deltas up to the dirty-work bound and nev
     ),
   ).toEqual([['a', 'b'], ['c', 'c'], ['d', 'e'], ['f'], ['g']])
   expect(getGroupIds([], 10)).toEqual([])
+})
+
+test('delta intake groups start a new group when the whole next delta does not fit', () => {
+  expect(
+    getGroupIds(
+      [
+        {deltaId: 'a', dirtyWorkCount: 4},
+        {deltaId: 'b', dirtyWorkCount: 3},
+        {deltaId: 'b', dirtyWorkCount: 3},
+        {deltaId: 'b', dirtyWorkCount: 3},
+        {deltaId: 'c', dirtyWorkCount: 1},
+      ],
+      10,
+    ),
+  ).toEqual([['a'], ['b', 'b', 'b', 'c']])
+  expect(
+    getGroupIds(
+      [
+        {deltaId: 'a', dirtyWorkCount: 6},
+        {deltaId: 'b', dirtyWorkCount: 4},
+      ],
+      10,
+    ),
+  ).toEqual([['a', 'b']])
+})
+
+test('delta intake groups never exceed the default bound for four-project import deltas', () => {
+  const entries = Array.from({length: 500}, (_value, deltaIndex) => {
+    return Array.from({length: 4}, () => {
+      return {deltaId: `delta-${deltaIndex}`, dirtyWorkCount: 9}
+    })
+  }).flat()
+  const groups = getReviewServingDeltaIntakeGroups({
+    entries,
+    getDeltaId: (entry) => {
+      return entry.deltaId
+    },
+    getDirtyWorkCount: (entry) => {
+      return entry.dirtyWorkCount
+    },
+  })
+  const groupSizes = groups.map((group) => {
+    return group.reduce((total, entry) => {
+      return total + entry.dirtyWorkCount
+    }, 0)
+  })
+
+  expect(reviewServingDeltaIntakeMaxDirtyWorkPerTransaction).toBe(reviewServingDirtyWorkBatchChunkSize)
+  expect(Math.max(...groupSizes)).toBe(Math.floor(reviewServingDirtyWorkBatchChunkSize / 36) * 36)
+  expect(
+    groupSizes.reduce((total, size) => {
+      return total + size
+    }, 0),
+  ).toBe(500 * 36)
+  expect(groups.flat()).toEqual(entries)
 })
 
 test('delta intake groups run in order and stop at the deadline after at least one group', async () => {

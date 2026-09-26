@@ -27,15 +27,29 @@ export type ReviewImportDeltaDirtyIntakeDatabase = {
 
 export type IntakeReviewImportDeltaDirtyWorkParams = {
   deadlineAtMs?: number | null
-  endSourceHighWaterMark: number
   limit: number
   sourcePartition: string
   startSourceHighWaterMark: number
 }
 
+type ReviewImportDeltaDirtyIntakeConvertedResult = {
+  dirtyWorkCount: number
+  maxSourceHighWaterMark: number | null
+  status: 'converted'
+}
+type ReviewImportDeltaDirtyIntakeFailedResult = {deltaId: string; reason: string; status: 'failed'}
+
 export type ReviewImportDeltaDirtyIntakeResult =
-  | {dirtyWorkCount: number; maxSourceHighWaterMark: number | null; status: 'converted'}
-  | {deltaId: string; reason: string; status: 'failed'}
+  | ReviewImportDeltaDirtyIntakeConvertedResult
+  | ReviewImportDeltaDirtyIntakeFailedResult
+
+type ReviewImportDeltaWindowCursor = {deltaId: string; sourceHighWaterMark: number}
+
+type ReviewImportDeltaWindowResult = ReviewImportDeltaDirtyIntakeConvertedResult & {
+  committedAllGroups: boolean
+  cursor: ReviewImportDeltaWindowCursor | null
+  windowFull: boolean
+}
 
 type ReviewImportDeltaRow = {
   articleId: string | null
@@ -199,11 +213,22 @@ const getValidatedReviewImportDelta = (row: ReviewImportDeltaRow) => {
   }
 }
 
+const getReviewImportDeltaWindowLimit = (params: IntakeReviewImportDeltaDirtyWorkParams) => {
+  return Math.max(0, Math.floor(params.limit))
+}
+
+const getReviewImportDeltaCursorPredicate = (cursor: ReviewImportDeltaWindowCursor | null) => {
+  return cursor === null
+    ? ''
+    : `AND (source_high_water_mark > ${cursor.sourceHighWaterMark} OR delta_id > ${getSqlLiteral(cursor.deltaId)})`
+}
+
 const getReviewImportDeltaRows = async (
   database: ReviewImportDeltaDirtyIntakeDatabase,
   params: IntakeReviewImportDeltaDirtyWorkParams,
+  cursor: ReviewImportDeltaWindowCursor | null,
 ) => {
-  const limit = Math.max(0, Math.floor(params.limit))
+  const limit = getReviewImportDeltaWindowLimit(params)
 
   return limit === 0
     ? []
@@ -221,8 +246,9 @@ const getReviewImportDeltaRows = async (
             tombstone
           FROM app.import_run_article_delta
           WHERE source_partition = ${getSqlLiteral(params.sourcePartition)}
-            AND source_high_water_mark >= ${params.startSourceHighWaterMark}
-            AND source_high_water_mark <= ${params.endSourceHighWaterMark}
+            AND source_high_water_mark >= ${cursor?.sourceHighWaterMark ?? params.startSourceHighWaterMark}
+            ${getReviewImportDeltaCursorPredicate(cursor)}
+            AND reconciled_at IS NULL
           ORDER BY source_high_water_mark ASC, delta_id ASC
           LIMIT ${limit}
         )
@@ -303,11 +329,10 @@ const commitReviewImportDeltaIntakeGroup = (
   entries: readonly ReviewImportDeltaIntakeEntry[],
   database: ReviewImportDeltaDirtyIntakeDatabase,
 ) => {
+  const inputs = getReviewImportDeltaDirtyWorkInputs(getCommittableReviewImportDeltas(entries))
+
   return database.transaction(async (tx) => {
-    const upserts = await upsertReviewServingDirtyWorkBatch(
-      getReviewImportDeltaDirtyWorkInputs(getCommittableReviewImportDeltas(entries)),
-      tx,
-    )
+    const upserts = await upsertReviewServingDirtyWorkBatch(inputs, tx)
 
     await markReviewImportDeltasReconciled(
       tx,
@@ -322,11 +347,32 @@ const commitReviewImportDeltaIntakeGroup = (
   })
 }
 
-export const intakeReviewImportDeltasToDirtyWork = async (
+const getReviewImportDeltaWindowCursor = (
+  entries: readonly ReviewImportDeltaIntakeEntry[],
+  cursor: ReviewImportDeltaWindowCursor | null,
+) => {
+  const lastRow = entries.at(-1)?.row
+  const sourceHighWaterMark = getIntegerValue(lastRow?.sourceHighWaterMark)
+
+  return lastRow === undefined || sourceHighWaterMark === null
+    ? cursor
+    : {deltaId: lastRow.deltaId, sourceHighWaterMark}
+}
+
+const getReviewImportDeltaWindowDeltaCount = (rows: readonly ReviewImportDeltaRow[]) => {
+  return new Set(
+    rows.map((row) => {
+      return row.deltaId
+    }),
+  ).size
+}
+
+const intakeReviewImportDeltaWindow = async (
   params: IntakeReviewImportDeltaDirtyWorkParams,
-  database: ReviewImportDeltaDirtyIntakeDatabase = getAppDatabaseService() as ReviewImportDeltaDirtyIntakeDatabase,
-): Promise<ReviewImportDeltaDirtyIntakeResult> => {
-  const rows = await getReviewImportDeltaRows(database, params)
+  database: ReviewImportDeltaDirtyIntakeDatabase,
+  cursor: ReviewImportDeltaWindowCursor | null,
+): Promise<ReviewImportDeltaDirtyIntakeFailedResult | ReviewImportDeltaWindowResult> => {
+  const rows = await getReviewImportDeltaRows(database, params, cursor)
   const validated = rows.map(getValidatedReviewImportDelta)
   const invalid = validated.find(isInvalidReviewImportDelta)
 
@@ -354,12 +400,62 @@ export const intakeReviewImportDeltasToDirtyWork = async (
       return commitReviewImportDeltaIntakeGroup(group, database)
     },
   })
+  const committedEntries = groups.slice(0, intake.committedGroupCount).flat()
 
   return {
+    committedAllGroups: intake.committedGroupCount === groups.length,
+    cursor: getReviewImportDeltaWindowCursor(committedEntries, cursor),
     dirtyWorkCount: intake.dirtyWorkCount,
-    maxSourceHighWaterMark:
-      getCommittableReviewImportDeltas(groups.slice(0, intake.committedGroupCount).flat()).at(-1)?.sourceHighWaterMark
-      ?? null,
+    maxSourceHighWaterMark: getCommittableReviewImportDeltas(committedEntries).at(-1)?.sourceHighWaterMark ?? null,
     status: 'converted',
+    windowFull: getReviewImportDeltaWindowDeltaCount(rows) >= getReviewImportDeltaWindowLimit(params),
   }
+}
+
+const shouldIntakeNextReviewImportDeltaWindow = (
+  params: IntakeReviewImportDeltaDirtyWorkParams,
+  window: ReviewImportDeltaWindowResult,
+) => {
+  return (
+    window.windowFull
+    && window.committedAllGroups
+    && params.deadlineAtMs !== null
+    && params.deadlineAtMs !== undefined
+    && Date.now() < params.deadlineAtMs
+  )
+}
+
+const intakeRemainingReviewImportDeltaWindows = async (
+  params: IntakeReviewImportDeltaDirtyWorkParams,
+  database: ReviewImportDeltaDirtyIntakeDatabase,
+  progress: ReviewImportDeltaDirtyIntakeConvertedResult & {cursor: ReviewImportDeltaWindowCursor | null},
+): Promise<ReviewImportDeltaDirtyIntakeResult> => {
+  const window = await intakeReviewImportDeltaWindow(params, database, progress.cursor)
+
+  if (window.status === 'failed') {
+    return window
+  }
+
+  const next = {
+    cursor: window.cursor,
+    dirtyWorkCount: progress.dirtyWorkCount + window.dirtyWorkCount,
+    maxSourceHighWaterMark: window.maxSourceHighWaterMark ?? progress.maxSourceHighWaterMark,
+    status: 'converted' as const,
+  }
+
+  return shouldIntakeNextReviewImportDeltaWindow(params, window)
+    ? intakeRemainingReviewImportDeltaWindows(params, database, next)
+    : {dirtyWorkCount: next.dirtyWorkCount, maxSourceHighWaterMark: next.maxSourceHighWaterMark, status: 'converted'}
+}
+
+export const intakeReviewImportDeltasToDirtyWork = async (
+  params: IntakeReviewImportDeltaDirtyWorkParams,
+  database: ReviewImportDeltaDirtyIntakeDatabase = getAppDatabaseService() as ReviewImportDeltaDirtyIntakeDatabase,
+): Promise<ReviewImportDeltaDirtyIntakeResult> => {
+  return intakeRemainingReviewImportDeltaWindows(params, database, {
+    cursor: null,
+    dirtyWorkCount: 0,
+    maxSourceHighWaterMark: null,
+    status: 'converted',
+  })
 }

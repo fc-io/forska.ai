@@ -1,6 +1,9 @@
-export const reviewServingDeltaIntakeMaxDirtyWorkPerTransaction = 500
+import {reviewServingDirtyWorkBatchChunkSize} from './reviewServingDirtyWorkService.ts'
 
-type DeltaIntakeGroupState<T> = {groupDirtyWorkCount: number; groups: T[][]; lastDeltaId: string | null}
+export const reviewServingDeltaIntakeMaxDirtyWorkPerTransaction = reviewServingDirtyWorkBatchChunkSize
+
+type DeltaIntakeRun<T> = {deltaId: string; dirtyWorkCount: number; entries: T[]}
+type DeltaIntakeGroupState<T> = {groupDirtyWorkCount: number; groups: T[][]}
 
 type RunReviewServingDeltaIntakeGroupsInput<T> = {
   deadlineAtMs?: number | null
@@ -11,36 +14,47 @@ type RunReviewServingDeltaIntakeGroupsInput<T> = {
 
 type ReviewServingDeltaIntakeGroupsResult = {committedGroupCount: number; dirtyWorkCount: number}
 
-export const getReviewServingDeltaIntakeGroups = <T>(input: {
+type GetReviewServingDeltaIntakeGroupsInput<T> = {
   entries: readonly T[]
   getDeltaId: (entry: T) => string
   getDirtyWorkCount: (entry: T) => number
   maxDirtyWorkPerGroup?: number
-}) => {
+}
+
+const getDeltaIntakeRuns = <T>(input: GetReviewServingDeltaIntakeGroupsInput<T>) => {
+  return input.entries.reduce<DeltaIntakeRun<T>[]>((runs, entry) => {
+    const deltaId = input.getDeltaId(entry)
+    const currentRun = runs.at(-1)
+    const run = currentRun?.deltaId === deltaId ? currentRun : {deltaId, dirtyWorkCount: 0, entries: []}
+
+    run.dirtyWorkCount += input.getDirtyWorkCount(entry)
+    run.entries.push(entry)
+
+    return run === currentRun ? runs : [...runs, run]
+  }, [])
+}
+
+export const getReviewServingDeltaIntakeGroups = <T>(input: GetReviewServingDeltaIntakeGroupsInput<T>) => {
   const maxDirtyWorkPerGroup = Math.max(
     1,
     Math.floor(input.maxDirtyWorkPerGroup ?? reviewServingDeltaIntakeMaxDirtyWorkPerTransaction),
   )
 
-  return input.entries.reduce<DeltaIntakeGroupState<T>>(
-    (state, entry) => {
-      const deltaId = input.getDeltaId(entry)
-      const dirtyWorkCount = input.getDirtyWorkCount(entry)
+  return getDeltaIntakeRuns(input).reduce<DeltaIntakeGroupState<T>>(
+    (state, run) => {
       const currentGroup = state.groups.at(-1)
       const joinsCurrentGroup =
-        currentGroup !== undefined
-        && (deltaId === state.lastDeltaId || state.groupDirtyWorkCount + dirtyWorkCount <= maxDirtyWorkPerGroup)
+        currentGroup !== undefined && state.groupDirtyWorkCount + run.dirtyWorkCount <= maxDirtyWorkPerGroup
       const targetGroup = joinsCurrentGroup ? currentGroup : []
 
-      targetGroup.push(entry)
+      targetGroup.push(...run.entries)
 
       return {
-        groupDirtyWorkCount: (joinsCurrentGroup ? state.groupDirtyWorkCount : 0) + dirtyWorkCount,
+        groupDirtyWorkCount: (joinsCurrentGroup ? state.groupDirtyWorkCount : 0) + run.dirtyWorkCount,
         groups: joinsCurrentGroup ? state.groups : [...state.groups, targetGroup],
-        lastDeltaId: deltaId,
       }
     },
-    {groupDirtyWorkCount: 0, groups: [], lastDeltaId: null},
+    {groupDirtyWorkCount: 0, groups: []},
   ).groups
 }
 

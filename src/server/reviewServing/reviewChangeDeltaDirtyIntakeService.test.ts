@@ -5,6 +5,7 @@ import {
   type ReviewChangeDeltaDirtyIntakeDatabase,
 } from './reviewChangeDeltaDirtyIntakeService.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
+import {reviewServingDeltaIntakeMaxDirtyWorkPerTransaction} from './reviewServingDeltaIntakeGroups.ts'
 
 type ProjectionKey = {projectionComponent?: string; projectionIdentity?: string}
 
@@ -69,48 +70,106 @@ const createReviewChangeDelta = (input: Record<string, unknown>) => {
   }
 }
 
-const getTopLevelValueTuples = (valuesSql: string): string[] => {
-  const state = [...valuesSql].reduce<{current: string; depth: number; inQuote: boolean; tuples: string[]}>(
-    (current, character) => {
-      if (character === "'") {
-        return {...current, current: current.current + character, inQuote: !current.inQuote}
-      }
-
-      if (current.inQuote) {
-        return {...current, current: current.current + character}
-      }
-
-      if (character === '(') {
-        return {...current, current: current.current + character, depth: current.depth + 1}
-      }
-
-      if (character === ')') {
-        const depth = current.depth - 1
-        const tuple = current.current + character
-
-        return depth === 0
-          ? {...current, current: '', depth, tuples: [...current.tuples, tuple]}
-          : {...current, current: tuple, depth}
-      }
-
-      return current.depth > 0 ? {...current, current: current.current + character} : current
-    },
-    {current: '', depth: 0, inQuote: false, tuples: []},
-  )
-
-  return state.tuples
+type StagedDirtyWorkRow = {
+  article_id: string | null
+  dirty_kind: string
+  dirty_range_end: string | null
+  dirty_range_start: string | null
+  dirty_work_id: string
+  first_source_high_water_mark: number
+  latest_delta_id: string | null
+  latest_source_high_water_mark: number
+  project_id: string | null
+  projection_component: string
+  projection_identity: string
+  projection_key: string
+  scope_id: string
+  scope_kind: string
+  source_partition: string
 }
 
-// Batched dirty-work inserts write many rows per statement; record one statement per row so the
-// assertions below keep inspecting individual dirty-work rows.
-const getDirtyWorkInsertStatements = (statement: string): string[] => {
-  const valuesIndex = statement.indexOf('VALUES')
+const getStagedDirtyWorkRows = (statement: string) => {
+  const [rows = [], projections = [], scopes = []] = [...statement.matchAll(/'([^']*(?:''[^']*)*)'/gu)]
+    .map((match) => {
+      return match[1]?.replaceAll("''", "'") ?? ''
+    })
+    .filter((literal) => {
+      return literal.startsWith('[[') && literal !== '[["VARCHAR"]]'
+    })
+    .map((literal) => {
+      return JSON.parse(literal) as (string | null)[][]
+    })
+  const projectionsByIndex = new Map(
+    projections.map((projection) => {
+      return [projection[0], projection] as const
+    }),
+  )
+  const scopesByIndex = new Map(
+    scopes.map((scope) => {
+      return [scope[0], scope] as const
+    }),
+  )
 
-  return valuesIndex === -1
-    ? [statement]
-    : getTopLevelValueTuples(statement.slice(valuesIndex + 'VALUES'.length)).map((tuple) => {
-        return `${statement.slice(0, valuesIndex)}VALUES ${tuple}`
+  return rows.map((row): StagedDirtyWorkRow => {
+    const projection = projectionsByIndex.get(row[3] ?? null) ?? []
+    const scope = scopesByIndex.get(row[4] ?? null) ?? []
+
+    return {
+      article_id: scope[4] ?? null,
+      dirty_kind: scope[5] ?? '',
+      dirty_range_end: scope[11] ?? null,
+      dirty_range_start: scope[10] ?? null,
+      dirty_work_id: row[1] ?? '',
+      first_source_high_water_mark: Number(scope[7]),
+      latest_delta_id: scope[9] ?? null,
+      latest_source_high_water_mark: Number(scope[8]),
+      project_id: scope[1] ?? null,
+      projection_component: projection[1] ?? '',
+      projection_identity: projection[2] ?? '',
+      projection_key: projection[3] ?? '',
+      scope_id: scope[3] ?? '',
+      scope_kind: scope[2] ?? '',
+      source_partition: scope[6] ?? '',
+    }
+  })
+}
+
+const stagedDirtyWorkInsertColumns: (keyof StagedDirtyWorkRow)[] = [
+  'dirty_work_id',
+  'project_id',
+  'scope_kind',
+  'scope_id',
+  'article_id',
+  'projection_key',
+  'projection_component',
+  'projection_identity',
+  'dirty_kind',
+  'source_partition',
+  'first_source_high_water_mark',
+  'latest_source_high_water_mark',
+  'latest_delta_id',
+  'dirty_range_start',
+  'dirty_range_end',
+]
+
+const getStagedSqlValue = (value: number | string | null | undefined) => {
+  return value === null || value === undefined
+    ? 'NULL'
+    : typeof value === 'number'
+      ? String(value)
+      : `'${value.replaceAll("'", "''")}'`
+}
+
+// Batched dirty-work upserts stage their rows as JSON literals; record one insert statement per staged row so
+// the assertions below keep inspecting individual dirty-work rows.
+const getDirtyWorkInsertStatements = (statement: string): string[] => {
+  return getStagedDirtyWorkRows(statement).map((row) => {
+    return `INSERT INTO app.review_serving_dirty_work (${stagedDirtyWorkInsertColumns.join(', ')}) VALUES (${stagedDirtyWorkInsertColumns
+      .map((column) => {
+        return getStagedSqlValue(row[column])
       })
+      .join(', ')})`
+  })
 }
 
 const createFakeIntakeDatabase = (
@@ -137,7 +196,7 @@ const createFakeIntakeDatabase = (
     return [] as T[]
   }
   const run = async (statement: string) => {
-    if (statement.includes('INSERT INTO app.review_serving_dirty_work (')) {
+    if (statement.includes('INSERT INTO temp_review_serving_dirty_work_batch_')) {
       getDirtyWorkInsertStatements(statement).forEach((rowStatement) => {
         statements.push(rowStatement)
         dirtyWorkIds.add(getDirtyWorkId(rowStatement))
@@ -145,7 +204,9 @@ const createFakeIntakeDatabase = (
       return
     }
 
-    statements.push(statement)
+    if (!statement.includes('INSERT INTO app.review_serving_dirty_work (')) {
+      statements.push(statement)
+    }
   }
   const database: ReviewChangeDeltaDirtyIntakeDatabase = {
     queryJson,
@@ -500,12 +561,14 @@ test('delta intake converts search tokenizer upgrades into project-scoped search
 })
 
 test('delta intake commits bounded groups and stops at a spent deadline after the first one', async () => {
-  const deltas = Array.from({length: 120}, (_value, index) => {
+  const deltasPerGroup = Math.floor(reviewServingDeltaIntakeMaxDirtyWorkPerTransaction / 5)
+  const deltaCount = deltasPerGroup + 20
+  const deltas = Array.from({length: deltaCount}, (_value, index) => {
     const articleId = `article-${index}`
 
     return createReviewChangeDelta({
       articleId,
-      deltaId: `delta-${String(index).padStart(3, '0')}`,
+      deltaId: `delta-${String(index).padStart(4, '0')}`,
       judgmentId: `judgment-${index}`,
       modelId: 'model-1',
       payloadJson: {
@@ -526,8 +589,8 @@ test('delta intake commits bounded groups and stops at a spent deadline after th
     })
   })
   const params = {
-    endSourceHighWaterMark: 120,
-    limit: 512,
+    endSourceHighWaterMark: deltaCount,
+    limit: deltaCount,
     sourcePartition: 'reviewChange:project-1',
     startSourceHighWaterMark: 1,
   }
@@ -542,10 +605,18 @@ test('delta intake commits bounded groups and stops at a spent deadline after th
     })
   }
 
-  expect(stopped).toEqual({dirtyWorkCount: 500, maxSourceHighWaterMark: 100, status: 'converted'})
+  expect(stopped).toEqual({
+    dirtyWorkCount: deltasPerGroup * 5,
+    maxSourceHighWaterMark: deltasPerGroup,
+    status: 'converted',
+  })
   expect(getReconciledStatements(bounded.statements)).toHaveLength(1)
-  expect(getReconciledStatements(bounded.statements)[0]).toContain("'delta-099'")
-  expect(getReconciledStatements(bounded.statements)[0]).not.toContain("'delta-100'")
-  expect(completed).toEqual({dirtyWorkCount: 600, maxSourceHighWaterMark: 120, status: 'converted'})
+  expect(getReconciledStatements(bounded.statements)[0]).toContain(
+    `'delta-${String(deltasPerGroup - 1).padStart(4, '0')}'`,
+  )
+  expect(getReconciledStatements(bounded.statements)[0]).not.toContain(
+    `'delta-${String(deltasPerGroup).padStart(4, '0')}'`,
+  )
+  expect(completed).toEqual({dirtyWorkCount: deltaCount * 5, maxSourceHighWaterMark: deltaCount, status: 'converted'})
   expect(getReconciledStatements(unbounded.statements)).toHaveLength(2)
 })

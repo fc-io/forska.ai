@@ -31,7 +31,7 @@ const getIntake = async () => {
 }
 
 const createCountingDatabase = () => {
-  const counts = {statements: 0, transactions: 0}
+  const counts = {dirtyWorkBatches: 0, statements: 0, transactions: 0}
   const countStatements = (tx: ReviewServingDirtyWorkTransaction): ReviewServingDirtyWorkTransaction => {
     return {
       queryJson: <T>(statement: string) => {
@@ -41,6 +41,7 @@ const createCountingDatabase = () => {
       },
       run: (statement: string) => {
         counts.statements += 1
+        counts.dirtyWorkBatches += statement.includes('INSERT INTO temp_review_serving_dirty_work_batch_') ? 1 : 0
 
         return tx.run(statement)
       },
@@ -60,13 +61,19 @@ const createCountingDatabase = () => {
   return {counts, database: countingDatabase}
 }
 
-const insertRoute = async (input: {projectId: string; routeId: string}) => {
+const insertRoute = async (input: {projectId?: string; projectIds?: readonly string[]; routeId: string}) => {
+  const projectIds = input.projectIds ?? [input.projectId ?? `project-${input.routeId}`]
+
   await getDatabase().run(
     `INSERT INTO app.import_route (id, route, name) VALUES ('${input.routeId}', '${input.routeId}', '${input.routeId}')`,
   )
   await getDatabase().run(`
     INSERT INTO app.project_import_route (id, project_id, import_route_id)
-    VALUES ('${input.projectId}:${input.routeId}', '${input.projectId}', '${input.routeId}')
+    VALUES ${projectIds
+      .map((projectId) => {
+        return `('${projectId}:${input.routeId}', '${projectId}', '${input.routeId}')`
+      })
+      .join(', ')}
   `)
 }
 
@@ -76,6 +83,7 @@ const insertAddedDeltas = async (input: {
   firstArticle?: number
   firstWatermark: number
   routeId: string
+  sourcePartition?: string
 }) => {
   await getDatabase().run(`
     INSERT INTO app.import_run_article_delta (
@@ -88,7 +96,7 @@ const insertAddedDeltas = async (input: {
       'app.article_import_route',
       '${input.deltaPrefix}-row-' || i::VARCHAR,
       'insert',
-      'importRoute:${input.routeId}',
+      '${input.sourcePartition ?? `importRoute:${input.routeId}`}',
       ${input.firstWatermark} + i,
       '${input.deltaPrefix}-key-' || i::VARCHAR,
       1,
@@ -161,12 +169,7 @@ test('import delta intake writes dirty work in bounded set-based transactions in
   await insertAddedDeltas({count: 120, deltaPrefix: 'bounded', firstWatermark: 1, routeId: 'route-bounded'})
 
   const result = await intake(
-    {
-      endSourceHighWaterMark: 120,
-      limit: 512,
-      sourcePartition: 'importRoute:route-bounded',
-      startSourceHighWaterMark: 1,
-    },
+    {limit: 512, sourcePartition: 'importRoute:route-bounded', startSourceHighWaterMark: 1},
     countingDatabase,
   )
 
@@ -177,44 +180,132 @@ test('import delta intake writes dirty work in bounded set-based transactions in
     dirtyWork: 120 * importComponentCount,
     mismatched: 0,
   })
+  expect(counts.transactions).toBe(1)
+  expect(counts.dirtyWorkBatches).toBe(1)
+  expect(counts.statements).toBeLessThan(20)
+})
+
+test('four-project import deltas commit one dirty-work batch per transaction without a spill chunk', async () => {
+  const intake = await getIntake()
+  const {counts, database: countingDatabase} = createCountingDatabase()
+  const sourcePartition = 'import-route:route-four-projects'
+
+  await insertRoute({
+    projectIds: ['project-four-a', 'project-four-b', 'project-four-c', 'project-four-d'],
+    routeId: 'route-four-projects',
+  })
+  await insertAddedDeltas({
+    count: 300,
+    deltaPrefix: 'four-projects',
+    firstWatermark: 5_001,
+    routeId: 'route-four-projects',
+    sourcePartition,
+  })
+
+  const result = await intake({limit: 1_024, sourcePartition, startSourceHighWaterMark: 5_001}, countingDatabase)
+
+  expect(result).toEqual({
+    dirtyWorkCount: 300 * 4 * importComponentCount,
+    maxSourceHighWaterMark: 5_300,
+    status: 'converted',
+  })
+  expect(await getReconciledCount('route-four-projects')).toEqual({pending: 0, reconciled: 300})
+  expect(await getDirtyWorkCounts(sourcePartition)).toEqual({
+    claimStates: 300 * 4 * importComponentCount,
+    dirtyWork: 300 * 4 * importComponentCount,
+    mismatched: 0,
+  })
   expect(counts.transactions).toBe(3)
-  expect(counts.statements).toBeLessThan(40)
+  expect(counts.dirtyWorkBatches).toBe(counts.transactions)
 })
 
 test('a spent intake deadline commits one bounded transaction and leaves the rest of the range for later', async () => {
   const intake = await getIntake()
-  const params = {
-    endSourceHighWaterMark: 1_120,
-    limit: 512,
-    sourcePartition: 'importRoute:route-deadline',
-    startSourceHighWaterMark: 1_001,
-  }
+  const sourcePartition = 'import-route:route-deadline'
+  const params = {limit: 512, sourcePartition, startSourceHighWaterMark: 1_001}
+  const deltasPerGroup = Math.floor(4_096 / (4 * importComponentCount))
 
-  await insertRoute({projectId: 'project-deadline', routeId: 'route-deadline'})
-  await insertAddedDeltas({count: 120, deltaPrefix: 'deadline', firstWatermark: 1_001, routeId: 'route-deadline'})
+  await insertRoute({
+    projectIds: ['project-deadline-a', 'project-deadline-b', 'project-deadline-c', 'project-deadline-d'],
+    routeId: 'route-deadline',
+  })
+  await insertAddedDeltas({
+    count: 150,
+    deltaPrefix: 'deadline',
+    firstWatermark: 1_001,
+    routeId: 'route-deadline',
+    sourcePartition,
+  })
 
   const first = await intake({...params, deadlineAtMs: 0}, getDatabase() as ReviewImportDeltaDirtyIntakeDatabase)
 
-  expect(first).toEqual({dirtyWorkCount: 55 * importComponentCount, maxSourceHighWaterMark: 1_055, status: 'converted'})
-  expect(await getReconciledCount('route-deadline')).toEqual({pending: 65, reconciled: 55})
-  expect(await getDirtyWorkCounts('importRoute:route-deadline')).toEqual({
-    claimStates: 55 * importComponentCount,
-    dirtyWork: 55 * importComponentCount,
+  expect(first).toEqual({
+    dirtyWorkCount: deltasPerGroup * 4 * importComponentCount,
+    maxSourceHighWaterMark: 1_000 + deltasPerGroup,
+    status: 'converted',
+  })
+  expect(await getReconciledCount('route-deadline')).toEqual({
+    pending: 150 - deltasPerGroup,
+    reconciled: deltasPerGroup,
+  })
+  expect(await getDirtyWorkCounts(sourcePartition)).toEqual({
+    claimStates: deltasPerGroup * 4 * importComponentCount,
+    dirtyWork: deltasPerGroup * 4 * importComponentCount,
     mismatched: 0,
   })
 
-  const rest = await intake(
-    {...params, startSourceHighWaterMark: 1_056},
-    getDatabase() as ReviewImportDeltaDirtyIntakeDatabase,
+  const rest = await intake(params, getDatabase() as ReviewImportDeltaDirtyIntakeDatabase)
+
+  expect(rest).toEqual({
+    dirtyWorkCount: (150 - deltasPerGroup) * 4 * importComponentCount,
+    maxSourceHighWaterMark: 1_150,
+    status: 'converted',
+  })
+  expect(await getReconciledCount('route-deadline')).toEqual({pending: 0, reconciled: 150})
+  expect(await getDirtyWorkCounts(sourcePartition)).toEqual({
+    claimStates: 150 * 4 * importComponentCount,
+    dirtyWork: 150 * 4 * importComponentCount,
+    mismatched: 0,
+  })
+})
+
+test('import delta intake keeps reading windows after the sampled start until the budget or backlog ends', async () => {
+  const intake = await getIntake()
+  const {counts, database: countingDatabase} = createCountingDatabase()
+  const sourcePartition = 'import-route:route-windows'
+
+  await insertRoute({projectId: 'project-windows', routeId: 'route-windows'})
+  await insertAddedDeltas({
+    count: 50,
+    deltaPrefix: 'windows',
+    firstWatermark: 7_001,
+    routeId: 'route-windows',
+    sourcePartition,
+  })
+  await getDatabase().run(`
+    UPDATE app.import_run_article_delta SET reconciled_at = current_timestamp
+    WHERE import_route_id = 'route-windows' AND source_high_water_mark BETWEEN 7_011 AND 7_020
+  `)
+
+  const result = await intake(
+    {deadlineAtMs: Date.now() + 60_000, limit: 8, sourcePartition, startSourceHighWaterMark: 7_001},
+    countingDatabase,
   )
+  const [dirtyWorkForReconciledRange] = await getDatabase().queryJson<{count: number}>(`
+    SELECT CAST(count(*) AS INTEGER) AS count
+    FROM app.review_serving_dirty_work
+    WHERE source_partition = '${sourcePartition}'
+      AND latest_source_high_water_mark BETWEEN 7_011 AND 7_020
+  `)
 
-  expect(rest).toEqual({dirtyWorkCount: 65 * importComponentCount, maxSourceHighWaterMark: 1_120, status: 'converted'})
-  expect(await getReconciledCount('route-deadline')).toEqual({pending: 0, reconciled: 120})
-  expect(await getDirtyWorkCounts('importRoute:route-deadline')).toEqual({
-    claimStates: 120 * importComponentCount,
-    dirtyWork: 120 * importComponentCount,
-    mismatched: 0,
+  expect(result).toEqual({
+    dirtyWorkCount: 40 * importComponentCount,
+    maxSourceHighWaterMark: 7_050,
+    status: 'converted',
   })
+  expect(await getReconciledCount('route-windows')).toEqual({pending: 0, reconciled: 50})
+  expect(dirtyWorkForReconciledRange).toEqual({count: 0})
+  expect(counts.transactions).toBe(5)
 })
 
 test('a later import delta reopens completed dirty work and its claim state like the per-row upsert did', async () => {
@@ -224,7 +315,7 @@ test('a later import delta reopens completed dirty work and its claim state like
   await insertRoute({projectId: 'project-reopen', routeId: 'route-reopen'})
   await insertAddedDeltas({count: 2, deltaPrefix: 'reopen-a', firstWatermark: 2_001, routeId: 'route-reopen'})
   await intake(
-    {endSourceHighWaterMark: 2_002, limit: 512, sourcePartition, startSourceHighWaterMark: 2_001},
+    {limit: 512, sourcePartition, startSourceHighWaterMark: 2_001},
     getDatabase() as ReviewImportDeltaDirtyIntakeDatabase,
   )
   await getDatabase().run(`
@@ -238,7 +329,7 @@ test('a later import delta reopens completed dirty work and its claim state like
   await insertAddedDeltas({count: 1, deltaPrefix: 'reopen-b', firstWatermark: 2_010, routeId: 'route-reopen'})
 
   const result = await intake(
-    {endSourceHighWaterMark: 2_010, limit: 512, sourcePartition, startSourceHighWaterMark: 2_010},
+    {limit: 512, sourcePartition, startSourceHighWaterMark: 2_010},
     getDatabase() as ReviewImportDeltaDirtyIntakeDatabase,
   )
   const rows = await getDatabase().queryJson<{
