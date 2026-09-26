@@ -545,7 +545,7 @@ test('project review details reads the article, judgments, assessments, and huma
   const body = (await response.json()) as {
     article: {articleTitle: string; id: string}
     detailSource: string
-    humanAnswersByPrompt: Record<string, Array<{answer: string}>>
+    humanAnswersByPrompt: Record<string, Array<{answer: string; userName: string}>>
     humanAssessmentsByUser: Array<{judgments: Array<{answer: string; comment: string; id: string}>}>
     judgments: Array<{assessments: Array<{assessmentComment: string; id: string}>; explanation: string; id: string}>
     repairRequested: boolean
