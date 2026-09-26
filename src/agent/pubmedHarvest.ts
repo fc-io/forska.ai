@@ -444,11 +444,11 @@ const pubmedHarvest = async (input: InputData & HarvestOptions): Promise<void> =
     importRoute: input.importRoute,
     cursor: input.cursor,
     onPage: async (page) => {
-      if (input.onCursorUpdate) {
-        await input.onCursorUpdate(page.cursorAfter)
-      }
       if (page.workflowEntries.length > 0) {
         await pubmedWorkflowStoreEntries(page.workflowEntries)
+      }
+      if (input.onCursorUpdate) {
+        await input.onCursorUpdate(page.cursorAfter)
       }
     },
   })

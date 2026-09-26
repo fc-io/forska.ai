@@ -63,6 +63,7 @@
     "db:judgment-job:sqlite-import": "bun scripts/runJudgmentJobSqliteSingleJobImport.ts",
     "db:judgment-job:repair": "bun scripts/runJudgmentJobRepair.ts",
     "db:duck:checkpoint": "bun scripts/duckdbCheckpoint.ts",
+    "db:duck:rebuild-secondary-indexes": "bun scripts/duckdbRebuildSecondaryIndexes.ts",
     "db:query:snapshot": "bun scripts/dbQuerySnapshot.ts",
     "db:duck:legacy-inspect-dirty-refresh-risk": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/inspectDirtyRefreshRisk.ts",
     "db:duck:inspect-review-serving-rebuild-timings": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/inspectReviewServingRebuildTimings.ts",

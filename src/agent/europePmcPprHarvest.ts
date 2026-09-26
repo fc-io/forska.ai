@@ -439,11 +439,11 @@ export const europePmcPprHarvest = async (input: InputData & HarvestOptions): Pr
     importRoute: input.importRoute,
     cursor: input.cursor,
     onPage: async (page) => {
-      if (input.onCursorUpdate) {
-        await input.onCursorUpdate(page.cursorAfter)
-      }
       if (page.workflowEntries.length > 0) {
         await europePmcPprWorkflowStoreEntries(page.workflowEntries)
+      }
+      if (input.onCursorUpdate) {
+        await input.onCursorUpdate(page.cursorAfter)
       }
     },
   })
