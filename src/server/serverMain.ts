@@ -274,6 +274,7 @@ const operationalJudgmentCronRoutes = shouldMountOperationalJudgmentCrons
   ? new Elysia()
       .use((await import('./cron/judgmentsJobsOperationalCron.ts')).judgmentsJobsOperationalCron)
       .use((await import('./cron/dataSourceTrackingCron.ts')).dataSourceTrackingCron)
+      .use((await import('./cron/dataSourceImportResumeCron.ts')).dataSourceImportResumeCron)
   : new Elysia()
 const judgmentImportCronRoutes = shouldMountImportOnlyJudgmentCrons
   ? new Elysia().use((await import('./cron/judgmentsJobsImportCron.ts')).judgmentsJobsImportCron)

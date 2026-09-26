@@ -1,6 +1,11 @@
 import type {DataSourceRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getTimestampLiteral} from './appQueryHelpers.ts'
+import {
+  getDataSourceImportCompletedSql,
+  getDataSourceImportPageSavedSql,
+  getDataSourceImportStateWorkloadContext,
+} from './dataSourceImportStateRepository.ts'
 
 type DataSourceRow = {
   id: string
@@ -108,17 +113,22 @@ const countArticlesLinkedToImportRoute = async (params: {
 
 export const updateDataSourceCursor = async (id: string, cursor: string | null) => {
   const updatedAt = new Date()
-  const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
-    UPDATE app.data_source
-    SET cursor = ${cursor === null ? 'NULL' : `'${escapeSqlString(cursor)}'`},
-        updated_at = ${getTimestampLiteral(updatedAt)}
-    WHERE id = '${escapeSqlString(id)}'
-    RETURNING id
-  `)
 
-  if (!row) {
-    throw new Error('Data source not found')
-  }
+  await getAppDatabaseService().transaction(async (tx) => {
+    const [row] = await tx.queryJson<{id: string}>(`
+      UPDATE app.data_source
+      SET cursor = ${cursor === null ? 'cursor' : `'${escapeSqlString(cursor)}'`},
+          updated_at = ${getTimestampLiteral(updatedAt)}
+      WHERE id = '${escapeSqlString(id)}'
+      RETURNING id
+    `)
+
+    if (!row) {
+      throw new Error('Data source not found')
+    }
+
+    await tx.run(getDataSourceImportPageSavedSql({dataSourceId: id, now: updatedAt}))
+  }, getDataSourceImportStateWorkloadContext('saveCursor'))
 }
 
 const updateDataSourceAfterImport = async (params: {
@@ -141,26 +151,35 @@ const updateDataSourceAfterImport = async (params: {
   ].filter((part): part is string => {
     return part !== null
   })
-  const [row] = await getAppDatabaseService().queryJson<DataSourceRow>(`
-    UPDATE app.data_source
-    SET ${setParts.join(', ')}
-    WHERE id = '${escapeSqlString(params.id)}'
-    RETURNING
-      id,
-      title,
-      description,
-      last_import_at AS lastImportAt,
-      items_after_last_import AS itemsAfterLastImport,
-      import_route AS importRoute,
-      cursor,
-      date_from AS dateFrom,
-      date_to AS dateTo,
-      tracking_enabled AS trackingEnabled,
-      TO_JSON(tracking_reconcile_schedule_months) AS trackingReconcileScheduleMonths,
-      archived,
-      created_at AS createdAt,
-      updated_at AS updatedAt
-  `)
+  const clearsImportCursor = Object.hasOwn(params, 'cursor') && !params.cursor
+  const row = await getAppDatabaseService().transaction(async (tx) => {
+    const [updatedRow] = await tx.queryJson<DataSourceRow>(`
+      UPDATE app.data_source
+      SET ${setParts.join(', ')}
+      WHERE id = '${escapeSqlString(params.id)}'
+      RETURNING
+        id,
+        title,
+        description,
+        last_import_at AS lastImportAt,
+        items_after_last_import AS itemsAfterLastImport,
+        import_route AS importRoute,
+        cursor,
+        date_from AS dateFrom,
+        date_to AS dateTo,
+        tracking_enabled AS trackingEnabled,
+        TO_JSON(tracking_reconcile_schedule_months) AS trackingReconcileScheduleMonths,
+        archived,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+    `)
+
+    if (updatedRow && clearsImportCursor) {
+      await tx.run(getDataSourceImportCompletedSql({dataSourceId: params.id, now: updatedAt}))
+    }
+
+    return updatedRow
+  }, getDataSourceImportStateWorkloadContext('completeImport'))
 
   if (!row) {
     throw new Error('Data source not found')
