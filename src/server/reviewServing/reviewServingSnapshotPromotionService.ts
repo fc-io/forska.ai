@@ -340,6 +340,32 @@ const getEnabledPromptCountSql = (projectId: string) => {
   )`
 }
 
+const llmStatusMaterializationComponents = [
+  'projectScope',
+  'selectedImport',
+  'llmStatus',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+const queueMaterializationComponents = [
+  'projectScope',
+  'selectedImport',
+  'llmStatus',
+  'queue',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+const getUnfinishedArticleDirtyWorkCte = (input: {
+  components: readonly ReviewServingProjectionComponent[]
+  projectId: string
+}) => {
+  return `unfinished_article AS (
+      SELECT DISTINCT dirty_work.article_id
+      FROM app.review_serving_dirty_work dirty_work
+      WHERE dirty_work.project_id = ${getSqlLiteral(input.projectId)}
+        AND dirty_work.article_id IS NOT NULL
+        AND dirty_work.projection_component IN (${input.components.map(getSqlLiteral).join(', ')})
+        AND dirty_work.status IN ('pending', 'running', 'blocked_by_rebuild')
+    )`
+}
+
 const getLlmStatusMaterializationValidationError = async (
   candidate: ReviewServingSnapshotManifest,
   database: ReviewServingSnapshotPromotionDatabase,
@@ -351,15 +377,22 @@ const getLlmStatusMaterializationValidationError = async (
   const [row] = await database.queryJson<ReviewServingSnapshotMaterializationValidationRow>(`
     WITH enabled_prompt_count(prompt_count) AS (
       SELECT ${getEnabledPromptCountSql(candidate.projectId)}
-    )
+    ),
+    ${getUnfinishedArticleDirtyWorkCte({
+      components: llmStatusMaterializationComponents,
+      projectId: candidate.projectId,
+    })}
     SELECT
       COUNT(*) FILTER (
         WHERE prompt_count > 0
           AND (state.has_llm_list_mode OR state.has_both_list_mode OR state.has_unassessed_list_mode)
           AND state.llm_status IS NULL
+          AND unfinished_article.article_id IS NULL
       ) AS nullLlmStatusRowCount
     FROM mart.review_article_serving_list_mode_state_v4 state
     CROSS JOIN enabled_prompt_count
+    LEFT JOIN unfinished_article
+      ON unfinished_article.article_id = state.article_id
     WHERE state.project_id = ${getSqlLiteral(candidate.projectId)}
       AND state.review_config_hash IS NOT DISTINCT FROM ${getSqlLiteral(candidate.reviewConfigHash)}
       AND state.snapshot_id = ${getSqlLiteral(candidate.snapshotId)}
@@ -383,16 +416,20 @@ const getQueueMaterializationValidationError = async (
   const [row] = await database.queryJson<ReviewServingSnapshotMaterializationValidationRow>(`
     WITH enabled_prompt_count(prompt_count) AS (
       SELECT ${getEnabledPromptCountSql(candidate.projectId)}
-    )
+    ),
+    ${getUnfinishedArticleDirtyWorkCte({components: queueMaterializationComponents, projectId: candidate.projectId})}
     SELECT
       COUNT(DISTINCT state.article_id) FILTER (
         WHERE prompt_count > 0
           AND state.has_unassessed_list_mode
           AND state.llm_status = 'unanswered'
           AND queue.article_id IS NULL
+          AND unfinished_article.article_id IS NULL
       ) AS missingQueueArticleCount
     FROM mart.review_article_serving_list_mode_state_v4 state
     CROSS JOIN enabled_prompt_count
+    LEFT JOIN unfinished_article
+      ON unfinished_article.article_id = state.article_id
     LEFT JOIN mart.review_unassessed_queue_article_rank_serving_v4 queue
       ON queue.project_id = state.project_id
       AND queue.review_config_hash IS NOT DISTINCT FROM state.review_config_hash

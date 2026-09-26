@@ -4806,6 +4806,56 @@ const getDeferredClaimIds = (
     })
 }
 
+const projectScopeUpstreamComponents = ['projectScope'] as const satisfies readonly ReviewServingProjectionComponent[]
+const servingRowUpstreamComponents = [
+  'projectScope',
+  'selectedImport',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+type ReviewServingProjectorRunnerContext = Parameters<ReviewServingProjectorRunner>[0]
+type ReviewServingProjectorRunnerResult = Awaited<ReturnType<ReviewServingProjectorRunner>>
+
+const getClaimsAfterUpstream = async (
+  input: {
+    context: ReviewServingProjectorRunnerContext
+    upstreamComponents: readonly ReviewServingProjectionComponent[]
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const projectId = getClaimProjectId(input.context.claims)
+  const awaitingUpstreamClaimIds =
+    projectId === null
+      ? new Set<string>()
+      : await getReviewServingDirtyWorkClaimIdsAwaitingUpstream(
+          {claims: input.context.claims, projectId, upstreamComponents: input.upstreamComponents},
+          database,
+        )
+  const claims = input.context.claims.filter((claim) => {
+    return !awaitingUpstreamClaimIds.has(claim.dirtyWorkId)
+  })
+  const releasedClaimIds = getDeferredClaimIds(input.context.claims, claims)
+
+  await releaseReviewServingDirtyWorkClaims(releasedClaimIds, database)
+
+  return {claims, releasedClaimIds}
+}
+
+const runAfterUpstream = async (
+  input: {
+    context: ReviewServingProjectorRunnerContext
+    run: (context: ReviewServingProjectorRunnerContext) => Promise<ReviewServingProjectorRunnerResult>
+    upstreamComponents: readonly ReviewServingProjectionComponent[]
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+): Promise<ReviewServingProjectorRunnerResult> => {
+  const {claims, releasedClaimIds} = await getClaimsAfterUpstream(input, database)
+  const result = claims.length === 0 ? {processedCount: 0} : await input.run({...input.context, claims})
+
+  return releasedClaimIds.length === 0
+    ? result
+    : {...result, releasedClaimIds: [...releasedClaimIds, ...(result.releasedClaimIds ?? [])]}
+}
+
 const getNonAcknowledgingSnapshotComponentStates = (
   snapshots: readonly ReviewServingSnapshotContext[],
   component: ReviewServingProjectionComponent,
@@ -4992,11 +5042,9 @@ const runSummaryLedgerPatches = async (
   }
 }
 
-export const getDefaultReviewServingProjectorRunners = (
-  database: ReviewServingProjectorWorkerDatabase,
-): ReviewServingProjectorServiceDependencies['runners'] => {
+const getUngatedReviewServingProjectorRunners = (database: ReviewServingProjectorWorkerDatabase) => {
   return {
-    display: async (context) => {
+    display: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
       const snapshots = await requireSnapshotContexts(
         {
@@ -5041,7 +5089,7 @@ export const getDefaultReviewServingProjectorRunners = (
         }, 0),
       }
     },
-    humanStatus: async (context) => {
+    humanStatus: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
       const result = await projectReviewServingHumanStatusPatches(
         {
@@ -5057,7 +5105,7 @@ export const getDefaultReviewServingProjectorRunners = (
 
       return {processedCount: result.patchRowCount}
     },
-    judgmentInputContent: async (context) => {
+    judgmentInputContent: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
       const patchWatermark = Math.max(
         0,
@@ -5119,7 +5167,7 @@ export const getDefaultReviewServingProjectorRunners = (
 
       return {processedCount: context.claims.length}
     },
-    llmStatus: async (context) => {
+    llmStatus: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
       const result = await projectReviewServingLlmStatusPatches(
         {
@@ -5135,7 +5183,7 @@ export const getDefaultReviewServingProjectorRunners = (
 
       return {processedCount: result.patchRowCount}
     },
-    payload: async (context) => {
+    payload: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
       const currentSettings = await getCurrentProjectReviewSnapshotSettings(projectId, database)
       const payloadSnapshots = snapshots.filter((snapshot) => {
@@ -5194,7 +5242,7 @@ export const getDefaultReviewServingProjectorRunners = (
         releasedClaimIds,
       }
     },
-    posting: async (context) => {
+    posting: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
       const claims = await deferReviewServingPostingClaimsAwaitingInputs(
         {claims: context.claims, projectId, projectionIdentity: manifest.projectionIdentity},
@@ -5233,7 +5281,7 @@ export const getDefaultReviewServingProjectorRunners = (
         releasedClaimIds,
       }
     },
-    projectScope: async (context) => {
+    projectScope: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId} = await getDefaultClaimManifestInput(context, database)
       await projectReviewServingProjectScopePatches(
         {
@@ -5248,7 +5296,7 @@ export const getDefaultReviewServingProjectorRunners = (
 
       return {processedCount: context.claims.length}
     },
-    queue: async (context) => {
+    queue: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
       const articlesAwaitingRebuild = await deferReviewServingQueueCandidatePatchesToPendingRebuild(
         {candidates: getNonAcknowledgingSnapshotComponentStates(snapshots, 'queue'), claims: context.claims, projectId},
@@ -5284,7 +5332,7 @@ export const getDefaultReviewServingProjectorRunners = (
         }, 0),
       }
     },
-    search: async (context) => {
+    search: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
       const results = await runSnapshotProjectors(snapshots, (snapshot, acknowledgeClaims) => {
         return projectReviewServingTitleSearchRows(
@@ -5310,7 +5358,7 @@ export const getDefaultReviewServingProjectorRunners = (
         }, 0),
       }
     },
-    selectedImport: async (context) => {
+    selectedImport: async (context: ReviewServingProjectorRunnerContext) => {
       const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
       const baseResults = await Promise.all(
         snapshots.map((snapshot) => {
@@ -5366,9 +5414,51 @@ export const getDefaultReviewServingProjectorRunners = (
         }, 0),
       }
     },
-    summary: async (context) => {
+    summary: async (context: ReviewServingProjectorRunnerContext) => {
       return runSummaryLedgerPatches(context, database)
     },
+  }
+}
+
+const getUpstreamGatedRunner = (
+  input: {
+    runner: (context: ReviewServingProjectorRunnerContext) => Promise<ReviewServingProjectorRunnerResult>
+    upstreamComponents: readonly ReviewServingProjectionComponent[]
+  },
+  database: ReviewServingProjectorWorkerDatabase,
+): ReviewServingProjectorRunner => {
+  return (context) => {
+    return runAfterUpstream({context, run: input.runner, upstreamComponents: input.upstreamComponents}, database)
+  }
+}
+
+export const getDefaultReviewServingProjectorRunners = (
+  database: ReviewServingProjectorWorkerDatabase,
+): ReviewServingProjectorServiceDependencies['runners'] => {
+  const runners = getUngatedReviewServingProjectorRunners(database)
+
+  return {
+    ...runners,
+    humanStatus: getUpstreamGatedRunner(
+      {runner: runners.humanStatus, upstreamComponents: servingRowUpstreamComponents},
+      database,
+    ),
+    llmStatus: getUpstreamGatedRunner(
+      {runner: runners.llmStatus, upstreamComponents: servingRowUpstreamComponents},
+      database,
+    ),
+    payload: getUpstreamGatedRunner(
+      {runner: runners.payload, upstreamComponents: servingRowUpstreamComponents},
+      database,
+    ),
+    queue: getUpstreamGatedRunner(
+      {runner: runners.queue, upstreamComponents: projectScopeUpstreamComponents},
+      database,
+    ),
+    selectedImport: getUpstreamGatedRunner(
+      {runner: runners.selectedImport, upstreamComponents: projectScopeUpstreamComponents},
+      database,
+    ),
   }
 }
 
