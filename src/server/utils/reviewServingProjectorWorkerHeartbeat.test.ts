@@ -496,14 +496,14 @@ test('review serving projector worker heartbeat uses the production backlog defa
     llmStatus: 1_024,
     projectScope: 1_024,
     queue: 1_024,
-    selectedImport: 512,
+    selectedImport: 1_024,
   }
 
   expect(getHeartbeatBacklogLoopOptions({DUCKDB_MEMORY_LIMIT: '16GB'})).toEqual([
     {
       backlogWakeAlternateClaimOrder: true,
       backlogWakeComponentPasses: 6,
-      backlogWakeMinMs: 4_000,
+      backlogWakeMinMs: 8_000,
       batchSize: 256,
       componentBatchSizes: productionComponentBatchSizes,
       maxRowsPerWake: 8_192,
