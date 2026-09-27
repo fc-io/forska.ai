@@ -569,6 +569,7 @@ const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
 // batch, and keep each batch transaction to a few seconds.
 const foregroundHumanStatusRebuildChunkBatchSize = 64
 const foregroundLlmStatusRebuildChunkBatchSize = 64
+const foregroundQueueRebuildChunkBatchSize = 8
 const foregroundStatusRebuildDrainBatchBudget = 16
 const foregroundStatusReviewServingProjectorWorkerProgressYieldMs = 100
 const lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs = 25
@@ -589,6 +590,7 @@ const foregroundBatchableStatusRebuildComponents = new Set<ReviewServingProjecti
 const foregroundBatchableRangeRebuildComponents = new Set<ReviewServingProjectionComponent>([
   'payload',
   'posting',
+  'queue',
   'search',
   'selectedImport',
   'summary',
@@ -7965,8 +7967,14 @@ const getForegroundRebuildChunkBatchSize = (
     return estimatedRows !== null && estimatedRows <= 10_000 ? 8 : 2
   }
 
+  // Queue chunks run one per transaction when their size is unknown or above the split limit. Split queue chunks are
+  // ~0.2 s of work each, so one per worker cycle left queue rebuilds paced by the ~5 s cycle instead of by queue work.
   if (chunk.projectionComponent === 'queue') {
-    return 1
+    const estimatedRows = getArticleRangeRebuildChunkEstimatedRows(chunk)
+
+    return estimatedRows !== null && estimatedRows <= highFanoutArticleRangeRebuildChunkPresplitRowLimit
+      ? foregroundQueueRebuildChunkBatchSize
+      : 1
   }
 
   if (chunk.projectionComponent === 'search') {
@@ -8057,10 +8065,6 @@ const getReviewServingProjectorWorkerRebuildChunkPreclaimLimit = (input: {
       : Number.POSITIVE_INFINITY
 
   if (firstClaimedChunk?.projectionComponent === 'selectedImport') {
-    return Math.min(1, remainingCompletedChunkRunBudget)
-  }
-
-  if (firstClaimedChunk?.projectionComponent === 'queue') {
     return Math.min(1, remainingCompletedChunkRunBudget)
   }
 
