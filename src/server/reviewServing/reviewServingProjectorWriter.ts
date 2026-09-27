@@ -18,6 +18,7 @@ import {
   type ReviewServingDirtyWorkInput,
   upsertReviewServingDirtyWork,
 } from './reviewServingDirtyWorkService.ts'
+import {getReviewServingJsonRowsSql, inferReviewServingJsonRowColumnType} from './reviewServingJsonRowSource.ts'
 import {
   createCandidateReviewServingSnapshotManifest,
   failSupersededCandidateReviewServingSnapshotManifests,
@@ -134,7 +135,9 @@ export type WriteReviewServingTitleSearchRebuildRangesInput = {
   ranges: readonly WriteReviewServingTitleSearchRebuildRowsInput[]
 }
 
-const projectorRecordBatchSize = 250
+// Records travel as one JSON row source per batch, so a batch costs one target scan rather than a
+// VALUES parse per row; larger batches amortize the UPDATE ... FROM and NOT EXISTS scans.
+const projectorRecordBatchSize = 2048
 const reviewServingProjectorRecordBatchSizeByTable = new Map<string, number>()
 const reviewServingProjectorDeleteScopedInsertOnlyTables = new Set<string>([
   'mart.review_article_count_serving_v4',
@@ -395,15 +398,23 @@ const writeReviewServingProjectorRecordBatch = async (
       return `(${existingAlias}.${column} || '') = (${incomingAlias}.${column} || '')`
     })
     .join('\n        AND ')
-  const valuesSql = records
-    .map((record) => {
-      return columns
-        .map((column) => {
-          return getSqlRecordValue(record.values[column] ?? null)
-        })
-        .join(',\n      ')
-    })
-    .join('\n    ),\n    (')
+  const incomingRowsSql = getReviewServingJsonRowsSql({
+    columns: columns.map((column) => {
+      return {
+        name: column,
+        type: inferReviewServingJsonRowColumnType(
+          records.map((record) => {
+            return record.values[column] ?? null
+          }),
+        ),
+      }
+    }),
+    rows: records.map((record) => {
+      return columns.map((column) => {
+        return record.values[column] ?? null
+      })
+    }),
+  })
 
   if (options.scanGuardedInsertMissing) {
     await tx.run(`
@@ -412,10 +423,8 @@ const writeReviewServingProjectorRecordBatch = async (
     )
     SELECT ${columns.join(', ')}
     FROM (
-      VALUES (
-      ${valuesSql}
-    )
-    ) AS ${incomingAlias}(${columns.join(', ')})
+      ${incomingRowsSql}
+    ) AS ${incomingAlias}
     WHERE NOT EXISTS (
       SELECT 1
       FROM ${table} ${existingAlias}
@@ -444,10 +453,8 @@ const writeReviewServingProjectorRecordBatch = async (
     SET
       ${updateAssignments.join(',\n      ')}
     FROM (
-      VALUES (
-      ${valuesSql}
-    )
-    ) AS ${incomingAlias}(${columns.join(', ')})
+      ${incomingRowsSql}
+    ) AS ${incomingAlias}
     WHERE ${scanPredicate}
   `)
     }
@@ -458,10 +465,8 @@ const writeReviewServingProjectorRecordBatch = async (
     )
     SELECT ${columns.join(', ')}
     FROM (
-      VALUES (
-      ${valuesSql}
-    )
-    ) AS ${incomingAlias}(${columns.join(', ')})
+      ${incomingRowsSql}
+    ) AS ${incomingAlias}
     WHERE NOT EXISTS (
       SELECT 1
       FROM ${table} ${existingAlias}
@@ -474,9 +479,11 @@ const writeReviewServingProjectorRecordBatch = async (
   await tx.run(`
     INSERT INTO ${table} (
       ${columns.join(',\n      ')}
-    ) VALUES (
-      ${valuesSql}
     )
+    SELECT ${columns.join(', ')}
+    FROM (
+      ${incomingRowsSql}
+    ) AS ${incomingAlias}
   `)
 }
 

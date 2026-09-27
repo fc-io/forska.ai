@@ -1,6 +1,7 @@
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import {decodeReviewServingJsonRows} from '../test/decodeReviewServingJsonRows.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   checkReviewServingSelectedImportDirtyBudget,
@@ -221,7 +222,11 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).toContain(
     'selectedImportDirty:project-1:projectScope:identity-1:selected-import-snapshot-1:article-1:9',
   )
-  expect(joined).toContain("'selected-import-dirty'")
+  expect(
+    decodeReviewServingJsonRows(joined).map((row) => {
+      return row.source_partition
+    }),
+  ).toContain('selected-import-dirty')
   expect(joined).toContain('UPDATE mart.review_selected_article_import_current_v4 published')
   expect(joined).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
   expect(joined).toContain('FROM mart.review_selected_article_import_staging_v4 staged')
@@ -247,7 +252,8 @@ test('selected-import dirty routine updates only claimed articles', async () => 
     }),
   )
   expect(joined).toContain('source_record_key')
-  expect(joined).toContain('changed_raw(article_id, import_route_id, selected_rank_key')
+  expect(joined).toContain('changed_raw AS (')
+  expect(joined).toContain('AS "selected_rank_key"')
   expect(joined).toContain('PARTITION BY raw.article_id')
   expect(joined).toContain('serving_template_raw AS')
   expect(joined).toContain('serving_template AS')
@@ -482,8 +488,11 @@ test('selected-import scope tombstones stage and publish current tombstone rows'
   expect(stagingInsertStatement).toContain(
     'selectedImportDirty:project-1:projectScope:identity-1:selected-import-snapshot-1:article-1:9',
   )
-  expect(stagingInsertStatement).toContain('NULL')
-  expect(stagingInsertStatement).toContain('TRUE')
+  expect(
+    decodeReviewServingJsonRows(stagingInsertStatement ?? '').map((row) => {
+      return [row.import_route_id, row.tombstone]
+    }),
+  ).toContainEqual([null, 'true'])
   expect(joined).toContain('UPDATE mart.review_selected_article_import_current_v4 published')
   expect(joined).toContain('INSERT INTO mart.review_selected_article_import_current_v4')
   expect(joined).toContain('winner.tombstone')

@@ -2,6 +2,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
@@ -308,22 +309,28 @@ const getFallbackTemplateCte = (input: {projectId: string; templates: readonly S
            FROM (VALUES ${values}) AS fallback(review_config_hash, snapshot_id, base_generation)`
 }
 
-const selectedImportChangedColumns = [
-  'article_id',
-  'import_route_id',
-  'selected_rank_key',
-  'publication_year',
-  'article_title',
-  'journal_title',
-  'external_id',
-  'selected_source_url',
-  'tombstone',
-  'scope_tombstone',
-].join(', ')
+const selectedImportChangedRowColumns = [
+  {name: 'article_id', type: 'VARCHAR'},
+  {name: 'import_route_id', type: 'VARCHAR'},
+  {name: 'selected_rank_key', type: 'VARCHAR'},
+  {name: 'publication_year', type: 'INTEGER'},
+  {name: 'article_title', type: 'VARCHAR'},
+  {name: 'journal_title', type: 'VARCHAR'},
+  {name: 'external_id', type: 'VARCHAR'},
+  {name: 'selected_source_url', type: 'VARCHAR'},
+  {name: 'tombstone', type: 'BOOLEAN'},
+  {name: 'scope_tombstone', type: 'BOOLEAN'},
+] as const
 
-const getSelectedImportChangedRowsCte = (values: string) => {
-  return `changed_raw(${selectedImportChangedColumns}) AS (
-           SELECT * FROM (VALUES ${values})
+const selectedImportChangedColumns = selectedImportChangedRowColumns
+  .map((column) => {
+    return column.name
+  })
+  .join(', ')
+
+const getSelectedImportChangedRowsCte = (changedRowsSql: string) => {
+  return `changed_raw AS (
+           ${changedRowsSql}
          ), changed AS (
            SELECT
              ${selectedImportChangedColumns}
@@ -551,12 +558,24 @@ const getApplySelectedImportServingStatements = (input: {
   rows: readonly SelectedImportDirtyRow[]
   templates: readonly SelectedImportServingTemplateRow[]
 }) => {
-  const values = input.rows
-    .map((row) => {
-      return `(${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.tombstone ? null : row.importRouteId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedRankKey)}, ${getSqlLiteral(row.tombstone ? null : row.publicationYear)}, ${getSqlLiteral(row.tombstone ? null : row.articleTitle)}, ${getSqlLiteral(row.tombstone ? null : row.journalTitle)}, ${getSqlLiteral(row.tombstone ? null : row.externalId)}, ${getSqlLiteral(row.tombstone ? null : row.selectedSourceUrl)}, ${getSqlLiteral(row.tombstone)}, ${getSqlLiteral(row.scopeTombstone)})`
-    })
-    .join(', ')
-  const changedCte = getSelectedImportChangedRowsCte(values)
+  const changedRowsSql = getReviewServingJsonRowsSql({
+    columns: selectedImportChangedRowColumns,
+    rows: input.rows.map((row) => {
+      return [
+        row.articleId,
+        row.tombstone ? null : row.importRouteId,
+        row.tombstone ? null : row.selectedRankKey,
+        row.tombstone ? null : row.publicationYear,
+        row.tombstone ? null : row.articleTitle,
+        row.tombstone ? null : row.journalTitle,
+        row.tombstone ? null : row.externalId,
+        row.tombstone ? null : row.selectedSourceUrl,
+        row.tombstone,
+        row.scopeTombstone,
+      ]
+    }),
+  })
+  const changedCte = getSelectedImportChangedRowsCte(changedRowsSql)
   const servingTemplateCte = getSelectedImportServingTemplateCte(input)
 
   const hasScopeTombstone = input.rows.some((row) => {
@@ -612,7 +631,7 @@ const getApplySelectedImportServingStatements = (input: {
       ]
     : []
 
-  return values.length === 0
+  return input.rows.length === 0
     ? []
     : [
         ...tombstoneStatements,

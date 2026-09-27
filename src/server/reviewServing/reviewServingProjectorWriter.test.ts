@@ -924,8 +924,8 @@ test('projector writer batches same-shape record replacements into update and in
   expect(updateStatements).toHaveLength(1)
   expect(updateStatements[0]).not.toContain('ON CONFLICT')
   expect(updateStatements[0]).not.toContain('DO UPDATE SET')
-  expect(insertStatements[0]).toContain("'llm'")
-  expect(insertStatements[0]).toContain("'human'")
+  expect(insertStatements[0]).toContain('"llm"')
+  expect(insertStatements[0]).toContain('"human"')
   expect(insertStatements[0]).toContain('WHERE NOT EXISTS')
   expect(insertStatements[0]).not.toContain('ON CONFLICT')
   expect(insertStatements[0]).not.toContain('DO UPDATE SET')
@@ -991,7 +991,7 @@ test('projector writer collapses duplicate primary-key records before a DuckDB c
   })
 
   expect(insertStatement).toBeDefined()
-  expect(insertStatement?.match(/'llm'/gu)).toHaveLength(1)
+  expect(insertStatement?.match(/"llm"/gu)).toHaveLength(1)
   expect(insertStatement).toContain('2')
 })
 
@@ -1126,7 +1126,7 @@ test('projector writer uses insert-only judgment detail replacement rows after s
   expect(insertStatement).toBeDefined()
   expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE SET')
-  expect(insertStatement?.match(/'article-1'/gu)).toHaveLength(1)
+  expect(insertStatement?.match(/"article-1"/gu)).toHaveLength(1)
   expect(insertStatement).toContain('judgment-new')
   expect(insertStatement).not.toContain('judgment-old')
 })
@@ -1187,8 +1187,8 @@ test('projector writer uses insert-only filter facet replacement rows after scop
   expect(insertStatement).toBeDefined()
   expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE SET')
-  expect(insertStatement).toContain("'review.prompt.answer'")
-  expect(insertStatement).toContain("'yes'")
+  expect(insertStatement).toContain('"review.prompt.answer"')
+  expect(insertStatement).toContain('"yes"')
 })
 
 test('projector writer uses scan-guarded insert-missing for summary filter options without scoped deletes', async () => {
@@ -1242,7 +1242,7 @@ test('projector writer uses scan-guarded insert-missing for summary filter optio
   expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE SET')
   expect(insertStatement).toContain('WHERE NOT EXISTS')
-  expect(insertStatement).toContain("'review:promptAnswer:prompt-1:yes'")
+  expect(insertStatement).toContain('"review:promptAnswer:prompt-1:yes"')
 })
 
 test('projector writer uses insert-only rows for delete-scoped summary filter options', async () => {
@@ -1307,7 +1307,7 @@ test('projector writer uses insert-only rows for delete-scoped summary filter op
   expect(insertStatements).toHaveLength(1)
   expect(insertStatements[0]).not.toContain('WHERE NOT EXISTS')
   expect(insertStatements[0]).not.toContain('DO UPDATE SET')
-  expect(insertStatements[0]).toContain("'review:promptAnswer:prompt-1:yes'")
+  expect(insertStatements[0]).toContain('"review:promptAnswer:prompt-1:yes"')
 })
 
 test('only the projector writer boundary writes V4 mart rows and promotes active snapshots', () => {

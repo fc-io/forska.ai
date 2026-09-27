@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {decodeReviewServingJsonRows} from '../test/decodeReviewServingJsonRows.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingQueuePatches,
@@ -403,7 +404,12 @@ test('project-scoped queue dirty work runs bounded article chunks before acknowl
     return statement.includes('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
   })
   const acknowledgements = statements.filter((statement) => {
-    return statement.includes('INSERT INTO app.review_serving_dirty_work_ack') && statement.includes("'dirty-work-1'")
+    return (
+      statement.includes('INSERT INTO app.review_serving_dirty_work_ack (')
+      && decodeReviewServingJsonRows(statement).some((row) => {
+        return row.dirty_work_id === 'dirty-work-1'
+      })
+    )
   })
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 2})
