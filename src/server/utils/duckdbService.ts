@@ -273,6 +273,8 @@ const duckdbWalReplayRecoveryErrorFragments = [
 const duckdbAbortedTransactionErrorFragments = ['Current transaction is aborted']
 const duckdbRestartRequiredErrorFragments = [
   'database has been invalidated because of a previous fatal error',
+  'has been invalidated because checkpointing failed',
+  'Detach and reattach',
   'Failed to rollback transaction. Cannot continue operation.',
   'must be restarted prior to being used again',
 ]
