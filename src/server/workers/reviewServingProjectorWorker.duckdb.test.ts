@@ -746,3 +746,83 @@ test('a selectedImport dirty-work chunk refreshes shared serving rows without cl
     }),
   )
 })
+
+test('a superseded rebuild request closes its leftover chunks and is never readmitted', async () => {
+  const {runReviewServingProjectorWorkerOnce} = await import('./reviewServingProjectorWorker.ts')
+  const supersededProjectId = 'project-superseded'
+  const insertRequest = async (input: {createdAt: string; requestId: string}) => {
+    await getDatabase().run(`
+      INSERT INTO app.review_rebuild_request (
+        request_id, project_id, reason, requested_components_json, priority, status, admission_state, created_at
+      ) VALUES (
+        '${input.requestId}', '${supersededProjectId}', 'selectedImportDirtyWork', '["selectedImport"]'::JSON, 10000,
+        'admitted', 'admitted', TIMESTAMPTZ '${input.createdAt}'
+      )
+    `)
+  }
+  const insertChunk = async (input: {chunkId: string; requestId: string}) => {
+    await getDatabase().run(`
+      INSERT INTO app.review_rebuild_chunk_manifest (
+        chunk_id, request_id, project_id, projection_component, projection_identity, chunk_start_key, chunk_end_key,
+        output_base_generation, status, admission_state
+      ) VALUES (
+        '${input.chunkId}', '${input.requestId}', '${supersededProjectId}', 'selectedImport',
+        'selectedImport:${supersededProjectId}', 'article-00', 'article-99', 0, 'pending', 'admitted'
+      )
+    `)
+  }
+  const runCycle = () => {
+    return runReviewServingProjectorWorkerOnce(
+      {rebuildProjectId: supersededProjectId, workerId: 'worker-superseded'},
+      getFinalizationCycleDependencies(),
+    )
+  }
+  const getStates = async () => {
+    return {
+      chunks: await getDatabase().queryJson<{chunkId: string; lastError: string | null; status: string}>(`
+        SELECT chunk_id AS chunkId, status, last_error AS lastError
+        FROM app.review_rebuild_chunk_manifest
+        WHERE project_id = '${supersededProjectId}'
+        ORDER BY chunk_id
+      `),
+      requests: await getDatabase().queryJson<{requestId: string; status: string}>(`
+        SELECT request_id AS requestId, status
+        FROM app.review_rebuild_request
+        WHERE project_id = '${supersededProjectId}'
+        ORDER BY request_id
+      `),
+    }
+  }
+  const supersededError = 'superseded by newer foreground rebuild request'
+
+  await insertRequest({createdAt: '2026-09-17T10:00:00Z', requestId: 'rebuild:superseded-old'})
+  await insertChunk({chunkId: 'chunk-superseded-old-1', requestId: 'rebuild:superseded-old'})
+  await insertChunk({chunkId: 'chunk-superseded-old-2', requestId: 'rebuild:superseded-old'})
+  await insertRequest({createdAt: '2026-09-25T10:00:00Z', requestId: 'rebuild:superseded-new'})
+  await insertChunk({chunkId: 'chunk-superseded-new', requestId: 'rebuild:superseded-new'})
+
+  await runCycle()
+
+  expect(await getStates()).toEqual({
+    chunks: [
+      {chunkId: 'chunk-superseded-new', lastError: null, status: 'pending'},
+      {chunkId: 'chunk-superseded-old-1', lastError: supersededError, status: 'failed'},
+      {chunkId: 'chunk-superseded-old-2', lastError: supersededError, status: 'failed'},
+    ],
+    requests: [
+      {requestId: 'rebuild:superseded-new', status: 'admitted'},
+      {requestId: 'rebuild:superseded-old', status: 'failed'},
+    ],
+  })
+
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_chunk_manifest SET status = 'completed' WHERE chunk_id = 'chunk-superseded-new';
+    UPDATE app.review_rebuild_request SET status = 'completed' WHERE request_id = 'rebuild:superseded-new';
+  `)
+  await runCycle()
+
+  expect((await getStates()).requests).toEqual([
+    {requestId: 'rebuild:superseded-new', status: 'completed'},
+    {requestId: 'rebuild:superseded-old', status: 'failed'},
+  ])
+})
