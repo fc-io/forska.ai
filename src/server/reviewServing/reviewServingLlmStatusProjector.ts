@@ -205,6 +205,24 @@ const hasArticleScopeClaim = (claims: readonly ReviewServingDirtyWorkClaim[]) =>
   })
 }
 
+const getClaimRangeCteSql = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return `claim_range(source_partition, first_source_high_water_mark, latest_source_high_water_mark) AS (
+    SELECT * FROM (VALUES ${claims
+      .map((claim) => {
+        return `(${getSqlLiteral(claim.sourcePartition)}, ${claim.firstSourceHighWaterMark}, ${claim.latestSourceHighWaterMark})`
+      })
+      .join(', ')})
+  )`
+}
+
+const claimRangePredicateSql = `EXISTS (
+            SELECT 1
+            FROM claim_range
+            WHERE claim_range.source_partition = delta.source_partition
+              AND delta.source_high_water_mark >= claim_range.first_source_high_water_mark
+              AND delta.source_high_water_mark <= claim_range.latest_source_high_water_mark
+          )`
+
 const getValuesCte = (columnName: string, values: readonly string[]) => {
   return values.length === 0
     ? ''
@@ -353,14 +371,11 @@ const getJudgmentDeltaRows = async (
   database: ReviewServingLlmStatusProjectorDatabase,
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
-  const claimPredicates = input.claims.map((claim) => {
-    return `(delta.source_partition = ${getSqlLiteral(claim.sourcePartition)} AND delta.source_high_water_mark >= ${claim.firstSourceHighWaterMark} AND delta.source_high_water_mark <= ${claim.latestSourceHighWaterMark})`
-  })
 
-  return claimPredicates.length === 0 || articleIds.length === 0
+  return input.claims.length === 0 || articleIds.length === 0
     ? []
     : database.queryJson<LlmStatusSourceRow>(`
-        WITH ${getValuesCte('article_id', articleIds)}
+        WITH ${getValuesCte('article_id', articleIds)}, ${getClaimRangeCteSql(input.claims)}
         SELECT
           delta.article_id AS articleId,
           delta.prompt_id AS promptId,
@@ -427,7 +442,7 @@ const getJudgmentDeltaRows = async (
           )
         WHERE delta.project_id = ${getSqlLiteral(input.projectId)}
           AND delta.change_kind IN ('judgment.llm.created', 'judgment.llm.updated', 'judgment.llm.deleted')
-          AND (${claimPredicates.join(' OR ')})
+          AND ${claimRangePredicateSql}
         ORDER BY delta.source_high_water_mark ASC, delta.delta_id ASC
       `)
 }

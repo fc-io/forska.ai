@@ -54,6 +54,10 @@ export const defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds = 60 * 
 const reviewServingDirtyWorkLaneWindowLimit = 2_048
 const reviewServingDirtyWorkCoverageCompletionLimit = 2_048
 
+const getLaneWindowLimit = (limit: number) => {
+  return Math.max(reviewServingDirtyWorkLaneWindowLimit, limit * 2)
+}
+
 export type RequeueReviewServingDirtyWorkBlockedByRebuildParams = {
   limit: number
   minBlockedSeconds?: number
@@ -1003,19 +1007,32 @@ const maintainReviewServingDirtyWorkClaimStates = async (
   `)
 }
 
-const getDirtyWorkClaimStatePredicate = (
-  claims: readonly Pick<DirtyWorkClaimStateRow, 'dirtyWorkId' | 'storageRowId'>[],
-) => {
-  const predicates = claims.map((claim) => {
-    return claim.storageRowId === null || claim.storageRowId === undefined
-      ? `dirty_work_id = ${getSqlLiteral(claim.dirtyWorkId)}`
-      : `(
-          (rowid = ${getStorageRowIdSql(claim.storageRowId)} AND dirty_work_id = ${getSqlLiteral(claim.dirtyWorkId)})
-          OR dirty_work_id = ${getSqlLiteral(claim.dirtyWorkId)}
-        )`
-  })
+const getDirtyWorkClaimStatePredicate = (claims: readonly Pick<DirtyWorkClaimStateRow, 'dirtyWorkId'>[]) => {
+  const dirtyWorkIds = [
+    ...new Set(
+      claims.map((claim) => {
+        return claim.dirtyWorkId
+      }),
+    ),
+  ]
 
-  return predicates.length === 0 ? 'FALSE' : `(${predicates.join(' OR ')})`
+  return dirtyWorkIds.length === 0 ? 'FALSE' : `dirty_work_id IN (${getDirtyWorkIdListSql(dirtyWorkIds)})`
+}
+
+const getDirtyWorkClaimWatermarkKey = (
+  claim: Pick<ReviewServingDirtyWorkClaim, 'dirtyWorkId' | 'latestSourceHighWaterMark'>,
+) => {
+  return `${claim.dirtyWorkId}@${Math.trunc(Number(claim.latestSourceHighWaterMark))}`
+}
+
+const getDirtyWorkClaimWatermarkPredicate = (
+  claims: readonly Pick<ReviewServingDirtyWorkClaim, 'dirtyWorkId' | 'latestSourceHighWaterMark'>[],
+) => {
+  return `dirty_work_id || '@' || CAST(latest_source_high_water_mark AS VARCHAR) IN (${claims
+    .map((claim) => {
+      return getSqlLiteral(getDirtyWorkClaimWatermarkKey(claim))
+    })
+    .join(', ')})`
 }
 
 const isClaimCoveredByHighWaterAckCoverage = (
@@ -1814,7 +1831,7 @@ export const claimReviewServingDirtyWork = async (
       WHERE state.project_id = ${getSqlLiteral(targetProject.targetProjectId)}
         AND ${getEligibleDirtyWorkClaimStatePredicate(params, claimNowSql, 'state')}
       ORDER BY state.updated_at ASC, state.latest_source_high_water_mark ASC, state.dirty_work_id ASC
-      LIMIT ${reviewServingDirtyWorkLaneWindowLimit}
+      LIMIT ${getLaneWindowLimit(limit)}
     `)
 
     const selectedClaimStateRows = getClaimableDirtyWorkClaimStateRows(params, claimStateRows, limit)
@@ -2130,12 +2147,7 @@ const completeReviewServingDirtyWorkClaimsInTransaction = async (
       SET status = 'completed', lifecycle_reason = 'projected', updated_at = current_timestamp
       WHERE ${getDirtyWorkUpdatePredicate(uniqueClaims)}
         AND status = 'running'
-        AND (${uniqueClaims
-          .map((claim) => {
-            return `(dirty_work_id = ${getSqlLiteral(claim.dirtyWorkId)}
-              AND latest_source_high_water_mark = ${getSqlLiteral(claim.latestSourceHighWaterMark)})`
-          })
-          .join(' OR ')})
+        AND ${getDirtyWorkClaimWatermarkPredicate(uniqueClaims)}
     `)
     const currentRows = await database.queryJson<DirtyWorkRow>(`
       ${getDirtyWorkSelect()}

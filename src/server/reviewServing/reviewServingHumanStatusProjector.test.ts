@@ -415,3 +415,28 @@ test('human range rebuild batches write one SQL-native serving replacement state
   expect(joined).toContain('human_status = article_status.human_status')
   expect(joined).toContain("BOOL_OR(NULLIF(TRIM(COALESCE(judgment_human_summary.answer, '')), '') IS NOT NULL)")
 })
+test('human judgment delta lookup matches claim watermark ranges through one claim range table for any batch size', async () => {
+  const {database, statements} = createHumanStatusDatabase()
+  const claims = Array.from({length: 1_500}, (_, index) => {
+    return humanClaim({
+      articleId: `article-${index}`,
+      dirtyWorkId: `dirty-work-${index}`,
+      firstSourceHighWaterMark: index + 1,
+      latestSourceHighWaterMark: index + 2,
+      sourcePartition: 'import-route:route-1',
+    })
+  })
+
+  await projectReviewServingHumanStatusPatches(projectInput(claims), database)
+
+  const selectStatement =
+    statements.find((statement) => {
+      return statement.includes('FROM app.review_change_delta delta')
+    }) ?? ''
+
+  expect(selectStatement).toContain(
+    'claim_range(source_partition, first_source_high_water_mark, latest_source_high_water_mark)',
+  )
+  expect(selectStatement).toContain("('import-route:route-1', 1500, 1501)")
+  expect(selectStatement).not.toContain('OR (delta.source_partition')
+})

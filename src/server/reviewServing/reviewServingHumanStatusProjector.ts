@@ -191,6 +191,24 @@ const shouldRebuildProjectHumanStatus = (claims: readonly ReviewServingDirtyWork
   })
 }
 
+const getClaimRangeCteSql = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return `claim_range(source_partition, first_source_high_water_mark, latest_source_high_water_mark) AS (
+    SELECT * FROM (VALUES ${claims
+      .map((claim) => {
+        return `(${getSqlLiteral(claim.sourcePartition)}, ${claim.firstSourceHighWaterMark}, ${claim.latestSourceHighWaterMark})`
+      })
+      .join(', ')})
+  )`
+}
+
+const claimRangePredicateSql = `EXISTS (
+            SELECT 1
+            FROM claim_range
+            WHERE claim_range.source_partition = delta.source_partition
+              AND delta.source_high_water_mark >= claim_range.first_source_high_water_mark
+              AND delta.source_high_water_mark <= claim_range.latest_source_high_water_mark
+          )`
+
 const getValuesCte = (columnName: string, values: readonly string[]) => {
   return values.length === 0
     ? ''
@@ -316,14 +334,11 @@ const getJudgmentDeltaRows = async (
   promptConfigRows: readonly ProjectPromptConfigRow[],
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
-  const claimPredicates = input.claims.map((claim) => {
-    return `(delta.source_partition = ${getSqlLiteral(claim.sourcePartition)} AND delta.source_high_water_mark >= ${claim.firstSourceHighWaterMark} AND delta.source_high_water_mark <= ${claim.latestSourceHighWaterMark})`
-  })
   const rows =
-    claimPredicates.length === 0 || articleIds.length === 0
+    input.claims.length === 0 || articleIds.length === 0
       ? []
       : await database.queryJson<HumanStatusSourceRow>(`
-          WITH ${getValuesCte('article_id', articleIds)}
+          WITH ${getValuesCte('article_id', articleIds)}, ${getClaimRangeCteSql(input.claims)}
           SELECT
             delta.article_id AS articleId,
             delta.prompt_id AS promptId,
@@ -367,7 +382,7 @@ const getJudgmentDeltaRows = async (
             AND delta.prompt_id IS NULL
           WHERE delta.project_id = ${getSqlLiteral(input.projectId)}
             AND delta.change_kind = 'judgment.human.updated'
-            AND (${claimPredicates.join(' OR ')})
+            AND ${claimRangePredicateSql}
           ORDER BY delta.source_high_water_mark ASC, delta.delta_id ASC
         `)
 
