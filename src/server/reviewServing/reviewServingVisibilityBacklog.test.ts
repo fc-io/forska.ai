@@ -5,6 +5,7 @@ import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts
 import {
   getReviewServingVisibilityBacklogPendingTotal,
   getReviewServingVisibilityBacklogProjects,
+  getReviewServingVisibilityBacklogSql,
   reportReviewServingVisibilityBacklog,
   resetReviewServingVisibilityBacklogReportForTests,
 } from './reviewServingVisibilityBacklog.ts'
@@ -113,6 +114,13 @@ test('visibility backlog reports pending and newly projected visibility work per
   } finally {
     close()
   }
+})
+
+test('visibility backlog SQL still parses after the DuckDB service collapses its whitespace', () => {
+  const sql = getReviewServingVisibilityBacklogSql({since: new Date('2026-09-27T08:00:00Z')})
+
+  expect(sql).not.toContain('--')
+  expect(sql.replace(/\s+/gu, ' ')).toContain('GROUP BY ALL')
 })
 
 test('visibility backlog reports at most once a minute and counts projections since the previous report', async () => {

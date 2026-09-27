@@ -42,6 +42,9 @@ const getTimestampSql = (value: Date) => {
   return `TIMESTAMPTZ ${getSqlLiteral(value.toISOString())}`
 }
 
+// Archived and delete-pending projects are never claimed, so their leftover rows are not a backlog the worker can
+// drain; counting them kept the pressure wake on permanently. Keep SQL comments out of this statement: the DuckDB
+// service collapses whitespace, so a `--` comment would swallow the rest of the query.
 export const getReviewServingVisibilityBacklogSql = (input: {since: Date}) => {
   return `
     SELECT
@@ -56,8 +59,6 @@ export const getReviewServingVisibilityBacklogSql = (input: {since: Date}) => {
     FROM app.review_serving_dirty_work_claim_state state
     WHERE state.projection_component IN (${visibilityReviewServingProjectionComponents.map(getSqlLiteral).join(', ')})
       AND (state.status <> 'completed' OR state.updated_at >= ${getTimestampSql(input.since)})
-      -- Archived and delete-pending projects are never claimed, so their leftover rows are not a backlog the
-      -- worker can drain; counting them kept the pressure wake on permanently.
       AND ${getReviewServingDirtyWorkActiveProjectPredicate('state.project_id')}
     GROUP BY ALL
   `
