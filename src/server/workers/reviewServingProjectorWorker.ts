@@ -89,6 +89,7 @@ import {
   getSnapshotComponentProjectionIdentityPredicate,
 } from '../reviewServing/reviewServingProjectorDomain.ts'
 import {
+  getVisibilityFirstReviewServingComponentOrder,
   type ReviewServingProjectorRunner,
   type ReviewServingProjectorServiceDependencies,
   type ReviewServingProjectorWakeBlockedReason,
@@ -10490,7 +10491,10 @@ const runNormalReviewServingProjectorWorkerCycleWork = async (
       : await runReviewServingProjectorWorkerCyclePhase('wakeProjectors', () => {
           return runBacklogWake(context, {
             componentOrder: shouldDrainNextForegroundActivationChunk
-              ? foregroundActivationDirtyWorkComponents
+              ? getVisibilityFirstReviewServingComponentOrder(
+                  getNonNegativeInteger(options.componentRotationOffset, 0),
+                  foregroundActivationDirtyWorkComponents,
+                )
               : undefined,
           })
         })
