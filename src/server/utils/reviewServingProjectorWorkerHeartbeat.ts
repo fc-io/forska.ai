@@ -43,6 +43,10 @@ const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const highRssRestartGraceBytes = gibibyte
 const defaultReviewServingProjectorWorkerSoftRssRatio = 0.85
+const defaultReviewServingProjectorWorkerBacklogWakeMinMs = 4_000
+const defaultReviewServingProjectorWorkerBacklogWakePasses = 6
+const defaultReviewServingProjectorWorkerDirtyWorkBatchSize = 256
+const defaultReviewServingProjectorWorkerDirtyWorkMaxRowsPerWake = 4_096
 let foregroundWorkRecycleDeferStartedAtMs: number | null = null
 let foregroundWorkRecycleDeferCount = 0
 
@@ -76,6 +80,33 @@ const getReviewServingProjectorWorkerMaxCompletedChunksPerRun = (
   return options.maxCompletedRebuildChunksPerRun === undefined
     ? getLowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun()
     : options.maxCompletedRebuildChunksPerRun
+}
+
+const getProductionBacklogDefault = (value: number) => {
+  return getLowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun() === null ? value : undefined
+}
+
+export const getReviewServingProjectorWorkerBacklogOptions = (
+  options: ReviewServingProjectorWorkerHeartbeatOptions,
+) => {
+  return {
+    backlogWakeComponentPasses:
+      options.backlogWakeComponentPasses
+      ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES')
+      ?? getProductionBacklogDefault(defaultReviewServingProjectorWorkerBacklogWakePasses),
+    backlogWakeMinMs:
+      options.backlogWakeMinMs
+      ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS')
+      ?? getProductionBacklogDefault(defaultReviewServingProjectorWorkerBacklogWakeMinMs),
+    batchSize:
+      options.batchSize
+      ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE')
+      ?? getProductionBacklogDefault(defaultReviewServingProjectorWorkerDirtyWorkBatchSize),
+    maxRowsPerWake:
+      options.maxRowsPerWake
+      ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_MAX_ROWS_PER_WAKE')
+      ?? getProductionBacklogDefault(defaultReviewServingProjectorWorkerDirtyWorkMaxRowsPerWake),
+  }
 }
 
 const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
@@ -269,6 +300,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
   let lastCleanupAtMs: number | null = Date.now()
   let lastAdmittedWakeAtMs: number | null = Date.now()
   let componentRotationOffset = 0
+  const backlogOptions = getReviewServingProjectorWorkerBacklogOptions(options)
 
   reviewServingProjectorWorkerLogger.log(
     'review-serving-projector-worker:loop-start',
@@ -290,15 +322,7 @@ export const startReviewServingProjectorWorkerHeartbeat = (
         options.searchRebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE,
       wakeStarvationMs: options.wakeStarvationMs ?? env.FORSKA_REVIEW_SERVING_WAKE_STARVATION_MS,
       maxCompletedRebuildChunksPerRun: getReviewServingProjectorWorkerMaxCompletedChunksPerRun(options),
-      backlogWakeComponentPasses:
-        options.backlogWakeComponentPasses
-        ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES')
-        ?? null,
-      backlogWakeMinMs:
-        options.backlogWakeMinMs ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS') ?? null,
-      batchSize: options.batchSize ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE') ?? null,
-      maxRowsPerWake:
-        options.maxRowsPerWake ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_MAX_ROWS_PER_WAKE') ?? null,
+      ...backlogOptions,
       maxWakeMs: options.maxWakeMs ?? null,
       maxRunMs: getReviewServingProjectorWorkerMaxRunMs(options),
       startCount: 1,
@@ -382,18 +406,8 @@ export const startReviewServingProjectorWorkerHeartbeat = (
       searchRebuildChunkBatchSize:
         options.searchRebuildChunkBatchSize ?? env.FORSKA_REVIEW_SERVING_SEARCH_REBUILD_CHUNK_BATCH_SIZE ?? undefined,
       wakeStarvationMs: options.wakeStarvationMs ?? env.FORSKA_REVIEW_SERVING_WAKE_STARVATION_MS ?? undefined,
-      backlogWakeComponentPasses:
-        options.backlogWakeComponentPasses
-        ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES')
-        ?? undefined,
-      backlogWakeMinMs:
-        options.backlogWakeMinMs ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS') ?? undefined,
-      batchSize: options.batchSize ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE') ?? undefined,
+      ...backlogOptions,
       maxCompletedRebuildChunksPerRun,
-      maxRowsPerWake:
-        options.maxRowsPerWake
-        ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_MAX_ROWS_PER_WAKE')
-        ?? undefined,
       maxWakeMs: options.maxWakeMs,
       signal: loopController.signal,
     })
