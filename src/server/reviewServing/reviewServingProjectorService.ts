@@ -12,6 +12,7 @@ import {
   failReviewServingDirtyWorkClaims,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
+  type ReviewServingDirtyWorkClaimOrder,
   type ReviewServingDirtyWorkDatabase,
   upsertReviewServingDirtyWork,
 } from './reviewServingDirtyWorkService.ts'
@@ -148,7 +149,9 @@ export type IntakeReviewServingProjectorDirtyWorkResult =
   | {dirtyWorkCount: number; status: 'queued'}
 
 export type WakeReviewServingProjectorServiceInput = {
+  alternateClaimOrder?: boolean
   batchSize: number
+  claimOrderOffset?: number
   componentBatchSizes?: Partial<Record<ReviewServingProjectionComponent, number>>
   componentOrder?: readonly ReviewServingProjectionComponent[]
   componentPasses?: number
@@ -201,7 +204,12 @@ type WakeReviewServingProjectorState = {
   promotions: PromoteReviewServingProjectorSnapshotResult[]
   releasedClaimIds: string[]
   runs: ReviewServingProjectorComponentRun[]
-  settledComponents: ReviewServingProjectionComponent[]
+  settledVisits: string[]
+}
+
+type ReviewServingProjectorComponentVisit = {
+  claimOrder?: ReviewServingDirtyWorkClaimOrder
+  component: ReviewServingProjectionComponent
 }
 
 export const visibilityReviewServingProjectionComponents: readonly ReviewServingProjectionComponent[] = [
@@ -243,30 +251,52 @@ export const getVisibilityFirstReviewServingComponentOrder = (rotationOffset: nu
   ]
 }
 
+const getPassClaimOrder = (
+  input: Pick<WakeReviewServingProjectorServiceInput, 'alternateClaimOrder' | 'claimOrderOffset'>,
+  pass: number,
+): ReviewServingDirtyWorkClaimOrder | undefined => {
+  const firstPass =
+    input.claimOrderOffset !== undefined && Number.isFinite(input.claimOrderOffset)
+      ? Math.trunc(input.claimOrderOffset)
+      : 0
+
+  return input.alternateClaimOrder === true ? (Math.abs(pass + firstPass) % 2 === 0 ? 'oldest' : 'newest') : undefined
+}
+
 const getComponentVisits = (
   componentOrder: readonly ReviewServingProjectionComponent[],
-  componentPasses: number | undefined,
-) => {
+  input: Pick<WakeReviewServingProjectorServiceInput, 'alternateClaimOrder' | 'claimOrderOffset' | 'componentPasses'>,
+): ReviewServingProjectorComponentVisit[] => {
   const passes =
-    componentPasses !== undefined && Number.isFinite(componentPasses) ? Math.max(1, Math.trunc(componentPasses)) : 1
+    input.componentPasses !== undefined && Number.isFinite(input.componentPasses)
+      ? Math.max(1, Math.trunc(input.componentPasses))
+      : 1
 
-  return Array.from({length: passes}, () => {
-    return componentOrder
+  return Array.from({length: passes}, (_, pass) => {
+    const claimOrder = getPassClaimOrder(input, pass)
+
+    return componentOrder.map((component) => {
+      return claimOrder === undefined ? {component} : {claimOrder, component}
+    })
   }).flat()
 }
 
-const getSettledComponentsAfterVisit = (input: {
-  component: ReviewServingProjectionComponent
+const getVisitKey = (visit: ReviewServingProjectorComponentVisit) => {
+  return `${visit.component}:${visit.claimOrder ?? 'oldest'}`
+}
+
+const getSettledVisitsAfterVisit = (input: {
   limit: number
   next: WakeReviewServingProjectorState
   previous: WakeReviewServingProjectorState
+  visit: ReviewServingProjectorComponentVisit
 }) => {
   const visitRuns = input.next.runs.slice(input.previous.runs.length)
   const projectedFullBatch = visitRuns.some((run) => {
-    return run.component === input.component && run.claimCount >= input.limit
+    return run.component === input.visit.component && run.claimCount >= input.limit
   })
 
-  return projectedFullBatch ? input.next.settledComponents : [...input.next.settledComponents, input.component]
+  return projectedFullBatch ? input.next.settledVisits : [...input.next.settledVisits, getVisitKey(input.visit)]
 }
 
 const getDiagnosticCause = (error: unknown) => {
@@ -940,8 +970,9 @@ export const wakeReviewServingProjectorService = async (
 
   const visitComponent = async (
     state: WakeReviewServingProjectorState,
-    component: ReviewServingProjectionComponent,
+    visit: ReviewServingProjectorComponentVisit,
   ): Promise<WakeReviewServingProjectorState> => {
+    const {component} = visit
     const runner = dependencies.runners[component]
     const remainingRows = budget.maxRowsPerWake - state.processedRows
     const elapsedMs = nowMs() - startedAt
@@ -952,7 +983,11 @@ export const wakeReviewServingProjectorService = async (
     }
 
     const claims = await claimDirtyWork(
-      {limit: Math.min(getComponentBatchSize(budget, component), remainingRows), projectionComponent: component},
+      {
+        ...(visit.claimOrder === undefined ? {} : {claimOrder: visit.claimOrder}),
+        limit: Math.min(getComponentBatchSize(budget, component), remainingRows),
+        projectionComponent: component,
+      },
       database,
     )
     const claimIds = getDirtyWorkIds(claims)
@@ -1167,20 +1202,21 @@ export const wakeReviewServingProjectorService = async (
       }
     }
   }
-  const wakeState = await getComponentVisits(componentOrder, input.componentPasses).reduce<
-    Promise<WakeReviewServingProjectorState>
-  >(
-    async (previousState, component) => {
+  const wakeState = await getComponentVisits(componentOrder, input).reduce<Promise<WakeReviewServingProjectorState>>(
+    async (previousState, visit) => {
       const state = await previousState
-      const limit = Math.min(getComponentBatchSize(budget, component), budget.maxRowsPerWake - state.processedRows)
+      const limit = Math.min(
+        getComponentBatchSize(budget, visit.component),
+        budget.maxRowsPerWake - state.processedRows,
+      )
 
-      if (state.settledComponents.includes(component)) {
+      if (state.settledVisits.includes(getVisitKey(visit))) {
         return state
       }
 
-      const next = await visitComponent(state, component)
+      const next = await visitComponent(state, visit)
 
-      return {...next, settledComponents: getSettledComponentsAfterVisit({component, limit, next, previous: state})}
+      return {...next, settledVisits: getSettledVisitsAfterVisit({limit, next, previous: state, visit})}
     },
     Promise.resolve({
       blockedRebuilds: [],
@@ -1189,7 +1225,7 @@ export const wakeReviewServingProjectorService = async (
       promotions: [],
       releasedClaimIds: [],
       runs: [],
-      settledComponents: [],
+      settledVisits: [],
     }),
   )
 

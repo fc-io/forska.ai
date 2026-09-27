@@ -607,3 +607,211 @@ test('selectedImport patches snapshots that share a selected import once and sti
     `),
   ).toEqual([{snapshotId: 'snapshot-import-append-active'}, {snapshotId: 'snapshot-import-append-candidate'}])
 })
+
+const getImportAppendServingState = async (articleIds: readonly string[]) => {
+  const rows = await getServingRows()
+
+  return rows.filter((row) => {
+    return articleIds.includes(row.articleId)
+  })
+}
+
+const isVisibleWithStatusAndQueue = (row: ServingRow) => {
+  return row.inScope && row.hasBaseRow && row.llmStatus === 'unanswered' && row.queueKind === 'unassessed'
+}
+
+const getPendingVisibilityDirtyWorkCount = async (articleIds: readonly string[]) => {
+  const [row] = await getDatabase().queryJson<{count: number}>(`
+    SELECT CAST(count(*) AS INTEGER) AS count
+    FROM app.review_serving_dirty_work
+    WHERE project_id = '${projectId}'
+      AND article_id IN (${articleIds
+        .map((articleId) => {
+          return `'${articleId}'`
+        })
+        .join(', ')})
+      AND projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue')
+      AND status <> 'completed'
+  `)
+
+  return row?.count ?? 0
+}
+
+const wakeVisibilityBacklog = async (input: {
+  alternateClaimOrder: boolean
+  claimOrderOffset: number
+  wakeId: string
+}) => {
+  const [
+    {visibilityReviewServingProjectionComponents, wakeReviewServingProjectorService},
+    {getDefaultReviewServingProjectorRunners},
+  ] = await Promise.all([
+    import('../reviewServing/reviewServingProjectorService.ts'),
+    import('./reviewServingProjectorWorker.ts'),
+  ])
+
+  return wakeReviewServingProjectorService(
+    {
+      alternateClaimOrder: input.alternateClaimOrder,
+      batchSize: 4,
+      claimOrderOffset: input.claimOrderOffset,
+      componentOrder: visibilityReviewServingProjectionComponents,
+      componentPasses: 2,
+      maxRowsPerWake: 512,
+      maxWakeMs: 600_000,
+      wakeId: input.wakeId,
+    },
+    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase() as never)},
+  )
+}
+
+const oldBacklogArticleIds = Array.from({length: 40}, (_, index) => {
+  return `article-backlog-${String(index).padStart(2, '0')}`
+})
+const newImportArticleIds = ['article-fresh-1', 'article-fresh-2', 'article-fresh-3']
+
+test('a small new import becomes visible behind a large older backlog once the backlog wake alternates claim order', async () => {
+  await oldBacklogArticleIds.reduce<Promise<void>>(async (previous, articleId, index) => {
+    await previous
+    await insertArticle({articleId, rank: 100 + index})
+    await insertAddedDelta({articleId, sourceHighWaterMark: 10 + index})
+  }, Promise.resolve())
+
+  expect(await intakeDeltas({end: 49, start: 10})).toMatchObject({status: 'converted'})
+
+  await newImportArticleIds.reduce<Promise<void>>(async (previous, articleId, index) => {
+    await previous
+    await insertArticle({articleId, rank: 200 + index})
+    await insertAddedDelta({articleId, sourceHighWaterMark: 100 + index})
+  }, Promise.resolve())
+
+  expect(await intakeDeltas({end: 102, start: 100})).toMatchObject({status: 'converted'})
+
+  const strictWakes = [
+    await wakeVisibilityBacklog({alternateClaimOrder: false, claimOrderOffset: 0, wakeId: 'wake-strict-1'}),
+    await wakeVisibilityBacklog({alternateClaimOrder: false, claimOrderOffset: 1, wakeId: 'wake-strict-2'}),
+  ]
+
+  expect(
+    strictWakes.flatMap((result) => {
+      return result.failures
+    }),
+  ).toEqual([])
+  expect((await getImportAppendServingState(newImportArticleIds)).some(isVisibleWithStatusAndQueue)).toBe(false)
+  expect(await getPendingVisibilityDirtyWorkCount(newImportArticleIds)).toBe(15)
+
+  const alternatingWake = await wakeVisibilityBacklog({
+    alternateClaimOrder: true,
+    claimOrderOffset: 1,
+    wakeId: 'wake-alternating-1',
+  })
+
+  expect(alternatingWake.failures).toEqual([])
+  expect((await getImportAppendServingState(newImportArticleIds)).every(isVisibleWithStatusAndQueue)).toBe(true)
+  expect(await getPendingVisibilityDirtyWorkCount(newImportArticleIds)).toBe(0)
+  expect(await getPendingVisibilityDirtyWorkCount(oldBacklogArticleIds)).toBeGreaterThan(0)
+})
+
+test('promotion only completes import-route dirty work for components the candidate rebuilt, not for reused ones', async () => {
+  const [{getReviewServingSnapshotManifest}, {getPromotedReviewServingSnapshotDirtyWorkCoverages}] = await Promise.all([
+    import('../reviewServing/reviewServingManifestRepository.ts'),
+    import('../reviewServing/reviewServingSnapshotPromotionService.ts'),
+  ])
+  const candidateSnapshotId = 'snapshot-import-append-candidate'
+  const getCandidateImportRouteCoverages = async () => {
+    const candidate = await getReviewServingSnapshotManifest(
+      {componentStateMode: 'raw', projectId, snapshotId: candidateSnapshotId},
+      getDatabase(),
+    )
+
+    if (candidate === null) {
+      throw new Error('candidate snapshot manifest is missing')
+    }
+
+    const coverages = await getPromotedReviewServingSnapshotDirtyWorkCoverages(candidate, getDatabase())
+
+    return coverages
+      .filter((coverage) => {
+        return coverage.sourcePartition.startsWith('import-route')
+      })
+      .map((coverage) => {
+        return coverage.projectionComponent
+      })
+      .toSorted()
+  }
+
+  await getDatabase().run(`
+    UPDATE app.review_serving_snapshot_manifest
+    SET source_watermarks_json = '${JSON.stringify({[sourcePartition]: 1_000})}'::JSON
+    WHERE project_id = '${projectId}' AND snapshot_id = '${candidateSnapshotId}'
+  `)
+
+  expect(await getCandidateImportRouteCoverages()).toEqual([])
+
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_chunk_manifest (
+      chunk_id, project_id, projection_component, projection_identity, chunk_start_key, chunk_end_key, status,
+      snapshot_id, started_at, completed_at
+    ) VALUES (
+      'chunk-import-append-project-scope', '${projectId}', 'projectScope', '${await getIdentity('projectScope')}',
+      'article-a', 'article-z', 'completed', '${candidateSnapshotId}', current_timestamp, current_timestamp
+    )
+  `)
+
+  expect(await getCandidateImportRouteCoverages()).toEqual(['projectScope'])
+})
+
+test('newest-first claims still leave status and queue work for an article until its scope and selected import are projected', async () => {
+  const [{wakeReviewServingProjectorService}, {getDefaultReviewServingProjectorRunners}] = await Promise.all([
+    import('../reviewServing/reviewServingProjectorService.ts'),
+    import('./reviewServingProjectorWorker.ts'),
+  ])
+  const gatedArticleIds = ['article-gated-1', 'article-gated-2']
+
+  await gatedArticleIds.reduce<Promise<void>>(async (previous, articleId, index) => {
+    await previous
+    await insertArticle({articleId, rank: 300 + index})
+    await insertAddedDelta({articleId, sourceHighWaterMark: 300 + index})
+  }, Promise.resolve())
+
+  expect(await intakeDeltas({end: 301, start: 300})).toMatchObject({status: 'converted'})
+
+  const result = await wakeReviewServingProjectorService(
+    {
+      alternateClaimOrder: true,
+      batchSize: 4,
+      claimOrderOffset: 1,
+      componentOrder: adversarialComponentOrder,
+      maxRowsPerWake: 512,
+      maxWakeMs: 600_000,
+      wakeId: 'wake-newest-first-gates',
+    },
+    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase() as never)},
+  )
+  const statusRows = await getDatabase().queryJson<{projectionComponent: string; status: string}>(`
+    SELECT projection_component AS projectionComponent, status
+    FROM app.review_serving_dirty_work
+    WHERE project_id = '${projectId}'
+      AND article_id IN ('article-gated-1', 'article-gated-2')
+      AND projection_component IN ('llmStatus', 'humanStatus', 'queue', 'selectedImport')
+    GROUP BY ALL
+    ORDER BY ALL
+  `)
+
+  expect(result.failures).toEqual([])
+  expect(result.releasedClaimIds.length).toBeGreaterThanOrEqual(8)
+  expect(statusRows).toEqual([
+    {projectionComponent: 'humanStatus', status: 'pending'},
+    {projectionComponent: 'llmStatus', status: 'pending'},
+    {projectionComponent: 'queue', status: 'pending'},
+    {projectionComponent: 'selectedImport', status: 'pending'},
+  ])
+  expect(
+    (await getImportAppendServingState(gatedArticleIds)).map((row) => {
+      return [row.articleId, row.inScope, row.hasBaseRow, row.llmStatus, row.queueKind]
+    }),
+  ).toEqual([
+    ['article-gated-1', true, false, null, null],
+    ['article-gated-2', true, false, null, null],
+  ])
+})

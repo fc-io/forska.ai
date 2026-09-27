@@ -41,7 +41,10 @@ export type ReviewServingDirtyWorkInput = {
   scope: ReviewServingDirtyWorkScope
 }
 
+export type ReviewServingDirtyWorkClaimOrder = 'newest' | 'oldest'
+
 export type ClaimReviewServingDirtyWorkParams = {
+  claimOrder?: ReviewServingDirtyWorkClaimOrder
   limit: number
   maxWakeCount?: number
   now?: Date
@@ -54,8 +57,14 @@ export const defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds = 60 * 
 const reviewServingDirtyWorkLaneWindowLimit = 2_048
 const reviewServingDirtyWorkCoverageCompletionLimit = 2_048
 
+const newestFirstDirtyWorkSourceKey = 'import-route'
+
 const getLaneWindowLimit = (limit: number) => {
   return Math.max(reviewServingDirtyWorkLaneWindowLimit, limit * 2)
+}
+
+export const isReviewServingDirtyWorkNewestFirstSourcePartition = (sourcePartition: string) => {
+  return sourcePartition.split(':')[0] === newestFirstDirtyWorkSourceKey
 }
 
 export type RequeueReviewServingDirtyWorkBlockedByRebuildParams = {
@@ -398,11 +407,25 @@ const compareDirtyWorkClaimStateRows = (left: DirtyWorkClaimStateRow, right: Dir
   )
 }
 
+const compareNewestDirtyWorkClaimStateRows = (left: DirtyWorkClaimStateRow, right: DirtyWorkClaimStateRow) => {
+  return (
+    Number(right.latestSourceHighWaterMark) - Number(left.latestSourceHighWaterMark)
+    || getDirtyWorkClaimStateUpdatedAtMs(right) - getDirtyWorkClaimStateUpdatedAtMs(left)
+    || right.dirtyWorkId.localeCompare(left.dirtyWorkId)
+  )
+}
+
+const getClaimStateRowComparator = (claimOrder: ReviewServingDirtyWorkClaimOrder) => {
+  return claimOrder === 'newest' ? compareNewestDirtyWorkClaimStateRows : compareDirtyWorkClaimStateRows
+}
+
 const getClaimableDirtyWorkClaimStateRows = (
   params: ClaimReviewServingDirtyWorkParams,
-  claimStateRows: readonly DirtyWorkClaimStateRow[],
+  window: {claimOrder: ReviewServingDirtyWorkClaimOrder; rows: readonly DirtyWorkClaimStateRow[]},
   limit: number,
 ) => {
+  const claimStateRows = window.rows
+  const compareRows = getClaimStateRowComparator(window.claimOrder)
   const eligibleRows = claimStateRows.filter((row) => {
     return (
       row.projectionComponent === params.projectionComponent
@@ -410,9 +433,9 @@ const getClaimableDirtyWorkClaimStateRows = (
       && isDirtyWorkClaimStateEligible(params, row)
     )
   })
-  const [oldest] = [...eligibleRows].sort(compareDirtyWorkClaimStateRows)
+  const [first] = [...eligibleRows].sort(compareRows)
 
-  if (oldest === undefined) {
+  if (first === undefined) {
     return []
   }
 
@@ -421,10 +444,10 @@ const getClaimableDirtyWorkClaimStateRows = (
   return eligibleRows
     .filter((candidate) => {
       return (
-        candidate.projectId === oldest.projectId
-        && candidate.projectionComponent === oldest.projectionComponent
-        && candidate.projectionIdentity === oldest.projectionIdentity
-        && candidate.sourcePartition === oldest.sourcePartition
+        candidate.projectId === first.projectId
+        && candidate.projectionComponent === first.projectionComponent
+        && candidate.projectionIdentity === first.projectionIdentity
+        && candidate.sourcePartition === first.sourcePartition
         && !claimStateRows.some((blocker) => {
           return (
             blocker.projectId === candidate.projectId
@@ -438,7 +461,7 @@ const getClaimableDirtyWorkClaimStateRows = (
         })
       )
     })
-    .sort(compareDirtyWorkClaimStateRows)
+    .sort(compareRows)
     .slice(0, limit)
 }
 
@@ -1769,6 +1792,78 @@ const reconcileUnclaimedDirtyWorkClaimStates = async (
   `)
 }
 
+const claimStateWindowColumnsSql = `
+        state.dirty_work_id AS dirtyWorkId,
+        state.storage_row_id AS storageRowId,
+        state.project_id AS projectId,
+        state.projection_component AS projectionComponent,
+        state.projection_identity AS projectionIdentity,
+        state.source_partition AS sourcePartition,
+        state.status,
+        state.latest_source_high_water_mark AS latestSourceHighWaterMark,
+        state.dirty_range_start AS dirtyRangeStart,
+        state.dirty_range_end AS dirtyRangeEnd,
+        state.updated_at AS updatedAt`
+
+type ClaimStateWindowInput = {
+  claimNowSql: string
+  limit: number
+  params: ClaimReviewServingDirtyWorkParams
+  projectId: string
+}
+
+const getOldestClaimStateWindowSql = (input: ClaimStateWindowInput) => {
+  return `
+      SELECT${claimStateWindowColumnsSql}
+      FROM app.review_serving_dirty_work_claim_state state
+      WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+        AND ${getEligibleDirtyWorkClaimStatePredicate(input.params, input.claimNowSql, 'state')}
+      ORDER BY state.updated_at ASC, state.latest_source_high_water_mark ASC, state.dirty_work_id ASC
+      LIMIT ${getLaneWindowLimit(input.limit)}
+    `
+}
+
+const getNewestClaimStateWindowSql = (input: ClaimStateWindowInput) => {
+  return `
+      WITH newest_lane AS (
+        SELECT lane.projection_identity, lane.source_partition
+        FROM app.review_serving_dirty_work_claim_state lane
+        WHERE lane.project_id = ${getSqlLiteral(input.projectId)}
+          AND ${getEligibleDirtyWorkClaimStatePredicate(input.params, input.claimNowSql, 'lane')}
+          AND split_part(lane.source_partition, ':', 1) = ${getSqlLiteral(newestFirstDirtyWorkSourceKey)}
+        ORDER BY lane.updated_at DESC, lane.latest_source_high_water_mark DESC, lane.dirty_work_id DESC
+        LIMIT 1
+      )
+      SELECT${claimStateWindowColumnsSql}
+      FROM app.review_serving_dirty_work_claim_state state
+      INNER JOIN newest_lane
+        ON newest_lane.projection_identity = state.projection_identity
+        AND newest_lane.source_partition = state.source_partition
+      WHERE state.project_id = ${getSqlLiteral(input.projectId)}
+        AND ${getEligibleDirtyWorkClaimStatePredicate(input.params, input.claimNowSql, 'state')}
+      ORDER BY state.latest_source_high_water_mark DESC, state.updated_at DESC, state.dirty_work_id DESC
+      LIMIT ${getLaneWindowLimit(input.limit)}
+    `
+}
+
+const getOldestClaimStateWindow = async (input: ClaimStateWindowInput, database: ReviewServingDirtyWorkTransaction) => {
+  return {
+    claimOrder: 'oldest' as const,
+    rows: await database.queryJson<DirtyWorkClaimStateRow>(getOldestClaimStateWindowSql(input)),
+  }
+}
+
+const getClaimStateWindow = async (input: ClaimStateWindowInput, database: ReviewServingDirtyWorkTransaction) => {
+  const newestRows =
+    input.params.claimOrder === 'newest'
+      ? await database.queryJson<DirtyWorkClaimStateRow>(getNewestClaimStateWindowSql(input))
+      : []
+
+  return newestRows.length > 0
+    ? {claimOrder: 'newest' as const, rows: newestRows}
+    : getOldestClaimStateWindow(input, database)
+}
+
 export const claimReviewServingDirtyWork = async (
   params: ClaimReviewServingDirtyWorkParams,
   database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,
@@ -1814,27 +1909,11 @@ export const claimReviewServingDirtyWork = async (
       return []
     }
 
-    const claimStateRows = await tx.queryJson<DirtyWorkClaimStateRow>(`
-      SELECT
-        state.dirty_work_id AS dirtyWorkId,
-        state.storage_row_id AS storageRowId,
-        state.project_id AS projectId,
-        state.projection_component AS projectionComponent,
-        state.projection_identity AS projectionIdentity,
-        state.source_partition AS sourcePartition,
-        state.status,
-        state.latest_source_high_water_mark AS latestSourceHighWaterMark,
-        state.dirty_range_start AS dirtyRangeStart,
-        state.dirty_range_end AS dirtyRangeEnd,
-        state.updated_at AS updatedAt
-      FROM app.review_serving_dirty_work_claim_state state
-      WHERE state.project_id = ${getSqlLiteral(targetProject.targetProjectId)}
-        AND ${getEligibleDirtyWorkClaimStatePredicate(params, claimNowSql, 'state')}
-      ORDER BY state.updated_at ASC, state.latest_source_high_water_mark ASC, state.dirty_work_id ASC
-      LIMIT ${getLaneWindowLimit(limit)}
-    `)
-
-    const selectedClaimStateRows = getClaimableDirtyWorkClaimStateRows(params, claimStateRows, limit)
+    const claimStateWindow = await getClaimStateWindow(
+      {claimNowSql, limit, params, projectId: targetProject.targetProjectId},
+      tx,
+    )
+    const selectedClaimStateRows = getClaimableDirtyWorkClaimStateRows(params, claimStateWindow, limit)
 
     if (selectedClaimStateRows.length === 0) {
       return []

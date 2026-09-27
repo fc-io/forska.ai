@@ -17,6 +17,7 @@ import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoo
 type ReviewServingProjectorComponentBatchSizes = Partial<Record<ReviewServingProjectionComponent, number>>
 
 type ReviewServingProjectorWorkerHeartbeatOptions = {
+  backlogWakeAlternateClaimOrder?: boolean
   backlogWakeComponentPasses?: number
   backlogWakeMinMs?: number
   batchSize?: number
@@ -137,6 +138,9 @@ export const getReviewServingProjectorWorkerBacklogOptions = (
   options: ReviewServingProjectorWorkerHeartbeatOptions,
 ) => {
   return {
+    backlogWakeAlternateClaimOrder:
+      options.backlogWakeAlternateClaimOrder
+      ?? process.env.FORSKA_REVIEW_SERVING_BACKLOG_WAKE_ALTERNATE_CLAIM_ORDER?.trim() !== 'false',
     backlogWakeComponentPasses:
       options.backlogWakeComponentPasses
       ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES')

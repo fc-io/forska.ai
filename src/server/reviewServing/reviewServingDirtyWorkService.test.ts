@@ -1625,6 +1625,142 @@ test('claims pending work from one projection identity per batch', async () => {
   expect(claims[0]?.projectionIdentity).toBe('display:identity-1')
 })
 
+const getImportRouteScope = (articleId: string, sourceHighWaterMark: number, importRouteId = 'route-1') => {
+  const scope = getReviewServingDirtyWorkScopeForChange({
+    changeKind: 'importRoute.article.added',
+    sourceHighWaterMark,
+    sourcePartition: `import-route:${importRouteId}`,
+    values: {
+      articleId,
+      importRouteId,
+      importSourceRecordKey: `record:${articleId}`,
+      projectId: 'project-1',
+      sourceHighWaterMark,
+    },
+  })
+
+  if (scope === null) {
+    throw new Error('expected an import route dirty work scope')
+  }
+
+  return scope
+}
+
+const insertImportRouteProjectScopeWork = async (
+  database: ReviewServingDirtyWorkDatabase,
+  input: {articleCount: number; firstSourceHighWaterMark: number; importRouteId?: string},
+) => {
+  await upsertReviewServingDirtyWorkBatch(
+    Array.from({length: input.articleCount}, (_, index) => {
+      const sourceHighWaterMark = input.firstSourceHighWaterMark + index
+
+      return {
+        latestDeltaId: `delta-${input.importRouteId ?? 'route-1'}-${sourceHighWaterMark}`,
+        projectionComponent: 'projectScope' as const,
+        projectionIdentity: 'projectScope:identity-1',
+        scope: getImportRouteScope(
+          `article-${input.importRouteId ?? 'route-1'}-${sourceHighWaterMark}`,
+          sourceHighWaterMark,
+          input.importRouteId,
+        ),
+      }
+    }),
+    database,
+  )
+}
+
+const getClaimWatermarks = (claims: readonly {latestSourceHighWaterMark: number}[]) => {
+  return claims
+    .map((claim) => {
+      return claim.latestSourceHighWaterMark
+    })
+    .toSorted((left, right) => {
+      return left - right
+    })
+}
+
+test('newest claims take the highest import-route watermarks while oldest claims keep draining from the bottom in DuckDB', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    await insertImportRouteProjectScopeWork(database, {articleCount: 10, firstSourceHighWaterMark: 1})
+
+    const newest = await claimReviewServingDirtyWork(
+      {claimOrder: 'newest', limit: 3, projectionComponent: 'projectScope'},
+      database,
+    )
+    const oldest = await claimReviewServingDirtyWork({limit: 3, projectionComponent: 'projectScope'}, database)
+    const nextNewest = await claimReviewServingDirtyWork(
+      {claimOrder: 'newest', limit: 3, projectionComponent: 'projectScope'},
+      database,
+    )
+
+    expect(getClaimWatermarks(newest)).toEqual([8, 9, 10])
+    expect(getClaimWatermarks(oldest)).toEqual([1, 2, 3])
+    expect(getClaimWatermarks(nextNewest)).toEqual([5, 6, 7])
+
+    await releaseReviewServingDirtyWorkClaims(
+      newest.map((claim) => {
+        return claim.dirtyWorkId
+      }),
+      database,
+    )
+
+    expect(
+      getClaimWatermarks(
+        await claimReviewServingDirtyWork(
+          {claimOrder: 'newest', limit: 3, projectionComponent: 'projectScope'},
+          database,
+        ),
+      ),
+    ).toEqual([8, 9, 10])
+    expect(
+      getClaimWatermarks(await claimReviewServingDirtyWork({limit: 10, projectionComponent: 'projectScope'}, database)),
+    ).toEqual([4])
+  } finally {
+    close()
+  }
+})
+
+test('newest claims pick the import-route lane with the latest activity and fall back to the oldest lane without import-route work in DuckDB', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    await insertImportRouteProjectScopeWork(database, {articleCount: 3, firstSourceHighWaterMark: 100})
+    await insertImportRouteProjectScopeWork(database, {
+      articleCount: 3,
+      firstSourceHighWaterMark: 1,
+      importRouteId: 'route-2',
+    })
+
+    const newest = await claimReviewServingDirtyWork(
+      {claimOrder: 'newest', limit: 10, projectionComponent: 'projectScope'},
+      database,
+    )
+
+    expect(
+      newest.map((claim) => {
+        return claim.sourcePartition
+      }),
+    ).toEqual(['import-route:route-2', 'import-route:route-2', 'import-route:route-2'])
+
+    await upsertDisplayWork(database, getBaseScope(1, '1', '1'), 'delta-display-1')
+
+    const display = await claimReviewServingDirtyWork(
+      {claimOrder: 'newest', limit: 10, projectionComponent: 'display'},
+      database,
+    )
+
+    expect(
+      display.map((claim) => {
+        return [claim.projectionComponent, claim.sourcePartition]
+      }),
+    ).toEqual([['display', 'article:display']])
+  } finally {
+    close()
+  }
+})
+
 test('claim query selects the target project in SQL before an ordered project window', async () => {
   const {database, statements} = createFakeDirtyWorkDatabase()
 

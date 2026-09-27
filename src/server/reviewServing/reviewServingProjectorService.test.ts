@@ -518,6 +518,93 @@ test('wake caps a component batch size by the rows left in the wake budget', asy
   ])
 })
 
+const wakeWithClaimOrders = async (input: {
+  alternateClaimOrder?: boolean
+  claimOrderOffset?: number
+  newestClaims: number
+  oldestClaims: number
+}) => {
+  const claimParams: Array<{claimOrder?: string; component: ReviewServingProjectionComponent}> = []
+  const {dependencies} = createDependencyHarness({})
+  const claimCounts: Record<string, number> = {newest: 0, oldest: 0}
+
+  dependencies.claimDirtyWork = async (params) => {
+    const claimOrder = params.claimOrder ?? 'oldest'
+    const available = claimOrder === 'newest' ? input.newestClaims : input.oldestClaims
+    const count = Math.max(0, Math.min(params.limit, available - (claimCounts[claimOrder] ?? 0)))
+
+    claimParams.push(
+      params.claimOrder === undefined
+        ? {component: params.projectionComponent}
+        : {claimOrder: params.claimOrder, component: params.projectionComponent},
+    )
+    claimCounts[claimOrder] = (claimCounts[claimOrder] ?? 0) + count
+
+    return Array.from({length: count}, (_, index) => {
+      return getClaim({
+        component: params.projectionComponent,
+        dirtyWorkId: `${claimOrder}-${claimParams.length}-${index}`,
+      })
+    })
+  }
+  dependencies.runners = {
+    queue: async ({claims}) => {
+      return {processedCount: claims.length}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {
+      alternateClaimOrder: input.alternateClaimOrder,
+      batchSize: 2,
+      claimOrderOffset: input.claimOrderOffset,
+      componentOrder: ['queue'],
+      componentPasses: 5,
+      maxRowsPerWake: 100,
+      maxWakeMs: 1_000,
+      wakeId: 'wake-claim-orders',
+    },
+    dependencies,
+  )
+
+  return {claimParams, result}
+}
+
+test('wake alternates oldest-first and newest-first claims per pass and settles each direction on its own', async () => {
+  const alternating = await wakeWithClaimOrders({alternateClaimOrder: true, newestClaims: 10, oldestClaims: 10})
+  const newestFirst = await wakeWithClaimOrders({
+    alternateClaimOrder: true,
+    claimOrderOffset: 1,
+    newestClaims: 10,
+    oldestClaims: 1,
+  })
+  const strictOldest = await wakeWithClaimOrders({newestClaims: 10, oldestClaims: 10})
+
+  expect(alternating.claimParams).toEqual([
+    {claimOrder: 'oldest', component: 'queue'},
+    {claimOrder: 'newest', component: 'queue'},
+    {claimOrder: 'oldest', component: 'queue'},
+    {claimOrder: 'newest', component: 'queue'},
+    {claimOrder: 'oldest', component: 'queue'},
+  ])
+  expect(newestFirst.claimParams).toEqual([
+    {claimOrder: 'newest', component: 'queue'},
+    {claimOrder: 'oldest', component: 'queue'},
+    {claimOrder: 'newest', component: 'queue'},
+    {claimOrder: 'newest', component: 'queue'},
+  ])
+  expect(
+    newestFirst.result.runs.map((run) => {
+      return run.claimCount
+    }),
+  ).toEqual([2, 1, 2, 2])
+  expect(strictOldest.claimParams).toEqual(
+    Array.from({length: 5}, () => {
+      return {component: 'queue'}
+    }),
+  )
+})
+
 test('wake retries a failing projector batch and avoids marking it failed after replay succeeds', async () => {
   const {dependencies, failedClaimIds} = createDependencyHarness({
     queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],
