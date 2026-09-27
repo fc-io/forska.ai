@@ -167,6 +167,16 @@ const directDuckdbStartupChildProcessMockSource = `
   })
 `
 
+const mockDuckdbStartupRepairChildReportSource = `
+  const {writeFileSync: writeMockDuckdbStartupRepairChildReportSync} = await import('node:fs')
+  const writeMockDuckdbStartupRepairChildReport = (command) => {
+    writeMockDuckdbStartupRepairChildReportSync(
+      JSON.parse(String(command[10])),
+      JSON.stringify({checkpointed: true, repairCommitted: true, rebuiltSecondaryIndexNames: [], rebuiltTables: []}),
+    )
+  }
+`
+
 test('duckdb snapshots checkpoint before copying without copy-from-database', () => {
   const source = readFileSync('src/server/utils/duckdbService.ts', 'utf8')
   const copySnapshotSource = source.slice(
@@ -1885,18 +1895,24 @@ test('duckdb service does not immediately reprobe marker-only indexed-table repa
       '-e',
       `
         const {Buffer} = await import('node:buffer')
-        const {existsSync, readdirSync} = await import('node:fs')
+        const {existsSync, readdirSync, readFileSync} = await import('node:fs')
+        const {join} = await import('node:path')
         const {mock} = await import('bun:test')
 
         const activeRepairSpecPath = ${JSON.stringify(activeRepairSpecPath)}
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
         const recoveryDirectory = ${JSON.stringify(recoveryDirectory)}
         const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
         ${directDuckdbStartupChildProcessMockSource}
+        ${mockDuckdbStartupRepairChildReportSource}
 
         let createCount = 0
         let preflightCount = 0
         const preflightSpecsHistory = []
+        const cloneProbeTargets = []
         let repairCount = 0
+        const repairRungsHistory = []
+        const repairTargets = []
         const originalSpawnSync = globalThis.Bun.spawnSync
 
         globalThis.Bun.spawnSync = ((command, options) => {
@@ -1915,6 +1931,19 @@ test('duckdb service does not immediately reprobe marker-only indexed-table repa
 
           if (options?.env?.FORSKA_DUCKDB_STARTUP_INDEX_REPAIR_CHILD === 'true') {
             repairCount += 1
+            repairTargets.push(JSON.parse(String(command[3])))
+            repairRungsHistory.push(JSON.parse(String(command[9])))
+            writeMockDuckdbStartupRepairChildReport(command)
+            return {
+              exitCode: 0,
+              signalCode: null,
+              stdout: Buffer.from(''),
+              stderr: Buffer.from(''),
+            }
+          }
+
+          if (options?.env?.FORSKA_DUCKDB_STARTUP_REPAIR_PROBE_CHILD === 'true') {
+            cloneProbeTargets.push(JSON.parse(String(command[3])))
             return {
               exitCode: 0,
               signalCode: null,
@@ -1986,13 +2015,27 @@ test('duckdb service does not immediately reprobe marker-only indexed-table repa
 
         const duckdbService = await import('./src/server/utils/duckdbService.ts?marker-only-repair-test=' + Date.now())
         const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        const repairManifest = readdirSync(recoveryDirectory)
+          .filter((fileName) => fileName.endsWith('.recovery.json'))
+          .map((fileName) => JSON.parse(readFileSync(join(recoveryDirectory, fileName), 'utf8')))[0] ?? null
         console.log(JSON.stringify({
           activeMarkerExists: existsSync(activeRepairSpecPath),
+          cloneProbeTargets,
           createCount,
+          databaseContent: readFileSync(duckdbPath, 'utf8'),
           preflightCount,
           preflightSpecsHistory,
           recoveryFiles: readdirSync(recoveryDirectory),
           repairCount,
+          repairManifest: {
+            recovery: repairManifest?.recovery,
+            repairEvidence: repairManifest?.repairEvidence,
+            repairRungs: repairManifest?.repairRungs,
+            repairWorkPath: repairManifest?.repairWorkPath,
+          },
+          repairRungsHistory,
+          repairTargets,
+          repairWorkExists: existsSync(duckdbPath + '.repair-work.duckdb'),
           rows,
         }))
         await duckdbService.closeDuckdbService()
@@ -2022,12 +2065,38 @@ test('duckdb service does not immediately reprobe marker-only indexed-table repa
       )
     }
 
-    const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
+    const parsed = parseJsonSubprocessStdout<
+      DuckdbReloadSubprocessResult & {
+        cloneProbeTargets: string[]
+        databaseContent: string
+        repairManifest: {
+          recovery?: string
+          repairEvidence?: string
+          repairRungs?: Record<string, string>
+          repairWorkPath?: string
+        }
+        repairRungsHistory: Array<Record<string, string>>
+        repairTargets: string[]
+        repairWorkExists: boolean
+      }
+    >(result.stdout.toString())
+    const repairWorkPath = `${duckdbPath}.repair-work.duckdb`
 
     expect(parsed.preflightCount).toBe(0)
     expect(parsed.preflightSpecsHistory).toEqual([])
     expect(parsed.activeMarkerExists).toBe(false)
     expect(parsed.repairCount).toBe(1)
+    expect(parsed.repairTargets).toEqual([repairWorkPath])
+    expect(parsed.cloneProbeTargets).toEqual([repairWorkPath, repairWorkPath])
+    expect(parsed.repairRungsHistory).toEqual([{'app.review_rebuild_request': 'table-rebuild'}])
+    expect(parsed.repairManifest).toEqual({
+      recovery: 'indexed-table-rebuild',
+      repairEvidence: 'marker',
+      repairRungs: {'app.review_rebuild_request': 'table-rebuild'},
+      repairWorkPath,
+    })
+    expect(parsed.repairWorkExists).toBe(false)
+    expect(parsed.databaseContent).toBe('database')
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
     expect(
@@ -2079,6 +2148,7 @@ test('duckdb service checkpoints pending WAL before marker-only indexed-table re
         const walPath = ${JSON.stringify(walPath)}
         const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
         ${directDuckdbStartupChildProcessMockSource}
+        ${mockDuckdbStartupRepairChildReportSource}
 
         let checkpointCount = 0
         let createCount = 0
@@ -2118,6 +2188,7 @@ test('duckdb service checkpoints pending WAL before marker-only indexed-table re
 
           if (options?.env?.FORSKA_DUCKDB_STARTUP_INDEX_REPAIR_CHILD === 'true') {
             repairCount += 1
+            writeMockDuckdbStartupRepairChildReport(command)
             return {
               exitCode: 0,
               signalCode: null,
@@ -2235,7 +2306,7 @@ test('duckdb service checkpoints pending WAL before marker-only indexed-table re
     expect(parsed.checkpointCount).toBe(1)
     expect(parsed.activeMarkerExists).toBe(false)
     expect(parsed.repairCount).toBe(1)
-    expect(parsed.repairLockProbeCount).toBe(1)
+    expect(parsed.repairLockProbeCount).toBe(2)
     expect(parsed.createCount).toBe(1)
     expect(parsed.walExists).toBe(false)
     expect(parsed.rows).toEqual([{value: 1}])
@@ -6295,6 +6366,7 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
         const duckdbPath = ${JSON.stringify(duckdbPath)}
         const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
         ${directDuckdbStartupChildProcessMockSource}
+        ${mockDuckdbStartupRepairChildReportSource}
 
         let createCount = 0
         let preflightCount = 0
@@ -6341,6 +6413,7 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
             repairScript = script
             repairOptions = JSON.parse(String(command[4] ?? '{}'))
             repairSpecs = JSON.parse(String(command[5] ?? '[]'))
+            writeMockDuckdbStartupRepairChildReport(command)
 
             return {
               exitCode: 0,
@@ -6484,7 +6557,7 @@ test('duckdb service retries transient startup indexed-table repair locks', asyn
     const parsed = parseJsonSubprocessStdout<DuckdbReloadSubprocessResult>(result.stdout.toString())
 
     expect(parsed.preflightCount).toBe(2)
-    expect(parsed.repairLockProbeCount).toBe(2)
+    expect(parsed.repairLockProbeCount).toBe(3)
     expect(parsed.repairCount).toBe(1)
     expect(parsed.createCount).toBe(1)
     expect(parsed.rows).toEqual([{value: 1}])
