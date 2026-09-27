@@ -170,6 +170,34 @@ test('snapshot hydration avoids bulky raw payloads for no-image fulltext claims'
   expect(snapshotSql).not.toContain('TO_JSON(a.full_text_assets)')
 })
 
+test('snapshot hydration reads only the resolved articles instead of hash-joining the whole article table', async () => {
+  let snapshotSql = ''
+
+  await createTransientJudgmentExecutionSnapshotsForClaims(
+    [
+      {
+        articleId: 'requested-external-id',
+        claimId: 'claim-1',
+        claimedBy: 'server-1',
+        jobId: 'job-1',
+        promptId: 'prompt-1',
+        queueRecordId: 'queue-1',
+        useFulltext: false,
+        useFulltextNoImages: false,
+      },
+    ],
+    {
+      queryJson: async (statement) => {
+        snapshotSql = statement
+        return []
+      },
+    },
+  )
+
+  expect(snapshotSql).toContain('WHERE article.id IN (SELECT canonical_article_id FROM snapshot_article_resolution)')
+  expect(snapshotSql).not.toContain('LEFT JOIN app.article a ON')
+})
+
 test('snapshot article resolution prefers project-scoped imports over legacy ids', () => {
   const result = runScript<{articleId: string; articleTitle: string; selectedExternalArticleId: string}>(`
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')

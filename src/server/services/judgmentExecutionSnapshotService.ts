@@ -504,7 +504,11 @@ const getSnapshotRows = async (
     LEFT JOIN app.project_prompt pp ON pp.project_id = p.id AND pp.prompt_id = pr.id
     LEFT JOIN snapshot_article_resolution article_resolution
       ON article_resolution.request_order = snapshot_request.request_order
-    LEFT JOIN app.article a ON a.id = article_resolution.canonical_article_id
+    LEFT JOIN (
+      SELECT article.*
+      FROM app.article article
+      WHERE article.id IN (SELECT canonical_article_id FROM snapshot_article_resolution)
+    ) a ON a.id = article_resolution.canonical_article_id
     LEFT JOIN selected_scoped_article_import scoped_import
       ON scoped_import.request_order = snapshot_request.request_order
     ORDER BY snapshot_request.request_order ASC
