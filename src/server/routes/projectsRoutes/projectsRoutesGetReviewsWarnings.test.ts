@@ -2055,6 +2055,59 @@ test('reviews warnings keep readable serving failed when a quarantine barrier bl
   expect(body.data.indexing.status).toBe('failed')
 })
 
+test('reviews warnings diagnostics report the visibility backlog per visibility component', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-v4-visibility-backlog-warning'
+  const snapshotId = 'snapshot-v4-visibility-backlog-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
+  await insertActiveReviewServingManifest({includeSearchState: false, optionalComponents: [], projectId, snapshotId})
+  await insertReviewArticleServingBaseRow({
+    articleId: `article-${projectId}`,
+    projectId,
+    reviewConfigHash: getFixtureReviewConfigHash(projectId),
+    snapshotId,
+  })
+  await runDatabase(`
+    INSERT INTO app.review_serving_dirty_work (
+      dirty_work_id, project_id, scope_kind, scope_id, article_id, dirty_kind, source_partition,
+      first_source_high_water_mark, latest_source_high_water_mark, projection_component, projection_identity, status,
+      lifecycle_reason, updated_at
+    ) VALUES
+      ('dirty-scope-1-${projectId}', '${projectId}', 'article', 'a-1', 'a-1', 'importRoute.article.added',
+        'import-route:route-1', 1, 1, 'projectScope', 'projectScope:identity', 'pending', NULL, current_timestamp),
+      ('dirty-scope-2-${projectId}', '${projectId}', 'article', 'a-2', 'a-2', 'importRoute.article.added',
+        'import-route:route-1', 2, 2, 'projectScope', 'projectScope:identity', 'pending', NULL, current_timestamp),
+      ('dirty-selected-1-${projectId}', '${projectId}', 'article', 'a-0', 'a-0', 'importRoute.article.added',
+        'import-route:route-1', 1, 1, 'selectedImport', 'selectedImport:identity', 'completed', 'projected',
+        current_timestamp),
+      ('dirty-summary-1-${projectId}', '${projectId}', 'article', 'a-1', 'a-1', 'importRoute.article.added',
+        'import-route:route-1', 1, 1, 'summary', 'summary:identity', 'pending', NULL, current_timestamp)
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.serving.diagnostics.dirtyWork).toMatchObject({
+    visibilityBacklog: {
+      components: [
+        {component: 'projectScope', pendingCount: 2, projectedRecentCount: 0},
+        {component: 'selectedImport', pendingCount: 0, projectedRecentCount: 1},
+        {component: 'llmStatus', pendingCount: 0, projectedRecentCount: 0},
+        {component: 'humanStatus', pendingCount: 0, projectedRecentCount: 0},
+        {component: 'queue', pendingCount: 0, projectedRecentCount: 0},
+      ],
+      madeVisibleRecentCount: 1,
+      recentWindowMinutes: 10,
+    },
+  })
+})
+
 test('reviews warnings preserve quarantined V4 barriers when server mutation work is disabled', async () => {
   const projectId = 'project-v4-outbox-barrier-mutations-disabled-warning'
 

@@ -142,6 +142,7 @@ import {
   projectReviewServingTitleSearchRebuildRows,
   projectReviewServingTitleSearchRows,
 } from '../reviewServing/reviewServingTitleSearchProjector.ts'
+import {reportReviewServingVisibilityBacklog} from '../reviewServing/reviewServingVisibilityBacklog.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
@@ -256,6 +257,7 @@ type ReviewServingProjectorWorkerDependencies = {
   nowMs?: () => number
   projectorServiceDependencies?: Omit<ReviewServingProjectorServiceDependencies, 'database' | 'nowMs'>
   rebuildChunkService?: ReviewServingProjectorWorkerRebuildChunkService
+  reportVisibilityBacklog?: typeof reportReviewServingVisibilityBacklog
   collectGarbageAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void> | void
   recycleDuckdbAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void>
   recycleDuckdbAfterFatalRebuildChunkError?: (input: {
@@ -5606,6 +5608,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   },
   recycleDuckdbAfterCompletedRebuildChunk: closeDuckdbAfterCompletedRebuildChunk,
   recycleDuckdbAfterFatalRebuildChunkError: closeDuckdbAfterFatalRebuildChunkError,
+  reportVisibilityBacklog: reportReviewServingVisibilityBacklog,
   sleep,
   wakeProjectors: wakeReviewServingProjectorService,
 }
@@ -10503,6 +10506,28 @@ const runNormalReviewServingProjectorWorkerCycleWork = async (
   }
 }
 
+const reportReviewServingProjectorWorkerVisibilityBacklog = async (input: {
+  database: ReviewServingProjectorWorkerDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  const report = input.dependencies.reportVisibilityBacklog
+
+  if (report === undefined) {
+    return
+  }
+
+  await runReviewServingProjectorWorkerCyclePhase('reportVisibilityBacklog', () => {
+    return report({database: input.database, nowMs: getWorkerNowMs(input.dependencies, input.options)})
+  }).catch((error: unknown) => {
+    reviewServingProjectorWorkerCycleLogger.warn(
+      'review-serving-projector-worker:visibility-backlog-failed',
+      '[reviewServingProjectorWorker] visibility backlog report failed',
+      {errorMessage: error instanceof Error ? error.message : String(error)},
+    )
+  })
+}
+
 export const runReviewServingProjectorWorkerCycle = async (
   options: ReviewServingProjectorWorkerCycleOptions = {},
   dependencies: ReviewServingProjectorWorkerDependencies = defaultReviewServingProjectorWorkerDependencies,
@@ -10615,6 +10640,7 @@ export const runReviewServingProjectorWorkerCycle = async (
   const {cleanup, deltaIntake} = work
   const chunk = work.finalizedChunkBatch.chunk
   const projector = combineReviewServingProjectorWakeResults(jobDrivenProjector, work.backlogProjector)
+  await reportReviewServingProjectorWorkerVisibilityBacklog({database, dependencies, options})
   const nextCleanupAtMs =
     cleanup.status === 'completed' ? getWorkerNowMs(dependencies, options) : (options.lastCleanupAtMs ?? null)
   const nextAdmittedWakeAtMs =

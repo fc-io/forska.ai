@@ -405,7 +405,19 @@ test('review serving diagnostics omit detail lists and their scans unless detail
     pendingCount: 3,
     runningCount: 2,
     updatedAt: '2026-06-18T10:01:00.000Z',
+    visibilityBacklog: {
+      components: (['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue'] as const).map(
+        (component) => {
+          return {component, pendingCount: 0, projectedRecentCount: 0}
+        },
+      ),
+      madeVisibleRecentCount: 0,
+      recentWindowMinutes: 10,
+    },
   })
+  expect(statement).toContain('AS visibilityBacklogJson')
+  expect(statement).toContain('dirty_work.visibilityBacklogJson AS dirtyWorkVisibilityBacklogJson')
+  expect(statement).toContain("- INTERVAL '10 minutes'")
   expect(diagnostics.quarantine).toEqual({
     quarantinedCursorCount: 1,
     quarantinedOutboxCount: 1,

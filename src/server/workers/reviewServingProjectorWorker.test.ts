@@ -366,6 +366,29 @@ test('worker calls projector orchestration with bounded wake budgets and reviewP
   })
 })
 
+test('worker reports the visibility backlog once per admitted cycle and keeps the cycle result when the report fails', async () => {
+  const reports: Array<{nowMs: number}> = []
+  const reportingHarness = createWorkerHarness({nowMs: 5_000, wakeStatus: 'completed'})
+  const failingHarness = createWorkerHarness({wakeStatus: 'completed'})
+
+  reportingHarness.dependencies.reportVisibilityBacklog = async ({database, nowMs}) => {
+    reports.push({nowMs})
+    await database.queryJson('SELECT 1')
+
+    return []
+  }
+  failingHarness.dependencies.reportVisibilityBacklog = async () => {
+    throw new Error('visibility backlog query failed')
+  }
+
+  const reported = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, reportingHarness.dependencies)
+  const failed = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, failingHarness.dependencies)
+
+  expect(reports).toEqual([{nowMs: 5_000}])
+  expect(reported.status).toBe('completed')
+  expect(failed.status).toBe('completed')
+})
+
 test('worker records project id in completed rebuild chunk process activity', async () => {
   resetProcessActivityStateForTests()
   const harness = createWorkerHarness({wakeStatus: 'completed'})

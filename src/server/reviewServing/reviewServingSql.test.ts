@@ -47,6 +47,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingSummaryLedger.ts'),
   join(reviewServingSourceRoot, 'reviewServingHumanAssessmentCompletedCount.ts'),
   join(reviewServingSourceRoot, 'reviewServingV4RebuildRequestService.ts'),
+  join(reviewServingSourceRoot, 'reviewServingVisibilityBacklog.ts'),
 ])
 const reviewServingMaintenanceAdmissionFiles = [
   'judgmentJobReviewServingVisibilityService.ts',
