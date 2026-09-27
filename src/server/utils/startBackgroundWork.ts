@@ -24,6 +24,7 @@ import {
   shouldCurrentServerRunMaintenanceLoops,
   startServerRuntimeRoleMonitor,
 } from './serverRuntimeRole.ts'
+import {registerServerShutdownHandler} from './serverShutdownState.ts'
 import {startRequestAttemptCloseoutBackfillScheduler} from './startRequestAttemptCloseoutBackfillScheduler.ts'
 
 let maintenanceBackgroundWorkStops: Array<() => void> | null = null
@@ -399,6 +400,9 @@ export const startBackgroundWork = () => {
     startMaintenanceBackgroundWork()
   })
   registerDuckdbOwnerDemotionHandler(() => {
+    stopMaintenanceBackgroundWork()
+  })
+  registerServerShutdownHandler(() => {
     stopMaintenanceBackgroundWork()
   })
   startMaintenanceBackgroundWork()
