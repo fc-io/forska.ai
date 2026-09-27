@@ -6050,6 +6050,12 @@ const getErrorText = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
 }
 
+// A request superseded by a newer one with the same reason and components is finished for good: the newer request
+// rebuilds the same components from later source state. Its leftover chunks are closed when it is superseded, and
+// it is never readmitted; otherwise every superseded request of a project came back at once as soon as the project
+// had no active request (465 selectedImport requests with 235k pending chunks on one project).
+const supersededForegroundRebuildRequestError = 'superseded by newer foreground rebuild request'
+
 const readmitRetryableFailedRebuildRequests = async (input: {
   database: ReviewServingChunkManifestRepositoryDatabase
   projectId?: string | null
@@ -6068,6 +6074,7 @@ const readmitRetryableFailedRebuildRequests = async (input: {
       updated_at = current_timestamp
     WHERE request.status = 'failed'
       AND request.admission_state = 'admitted'
+      AND COALESCE(request.last_error, '') <> ${getSqlLiteral(supersededForegroundRebuildRequestError)}
       ${projectCondition}
       AND EXISTS (
         SELECT 1
@@ -6131,7 +6138,7 @@ const failInconsistentAndSupersededForegroundRebuildRequests = async (input: {
       failed_at = COALESCE(request.failed_at, current_timestamp),
       lease_owner = NULL,
       lease_expires_at = NULL,
-      last_error = COALESCE(request.last_error, 'superseded by newer foreground rebuild request'),
+      last_error = COALESCE(request.last_error, ${getSqlLiteral(supersededForegroundRebuildRequestError)}),
       updated_at = current_timestamp
     WHERE request.status IN ('admitted', 'running')
       AND request.admission_state = 'admitted'
@@ -6170,6 +6177,25 @@ const failInconsistentAndSupersededForegroundRebuildRequests = async (input: {
             WHERE newer_blocked_chunk.request_id = newer_request.request_id
               AND newer_blocked_chunk.status IN ('blocked_over_budget', 'quarantined')
           )
+      )
+  `)
+
+  await input.database.run(`
+    UPDATE app.review_rebuild_chunk_manifest AS chunk
+    SET
+      status = 'failed',
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      last_error = ${getSqlLiteral(supersededForegroundRebuildRequestError)},
+      updated_at = current_timestamp
+    WHERE chunk.status IN ('pending', 'failed')
+      AND COALESCE(chunk.last_error, '') <> ${getSqlLiteral(supersededForegroundRebuildRequestError)}
+      AND chunk.request_id IN (
+        SELECT request.request_id
+        FROM app.review_rebuild_request AS request
+        WHERE request.status = 'failed'
+          AND request.last_error = ${getSqlLiteral(supersededForegroundRebuildRequestError)}
+          ${projectCondition}
       )
   `)
 }
