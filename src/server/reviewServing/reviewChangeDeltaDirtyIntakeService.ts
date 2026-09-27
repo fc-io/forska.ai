@@ -13,6 +13,7 @@ import {
   getReviewServingInvalidationRuleOrNull,
   type ReviewServingInvalidationRule,
 } from './reviewServingInvalidationRegistry.ts'
+import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
 import {
   getReviewServingDirtyWorkScopeForChange,
   type ReviewServingDirtyWorkScope,
@@ -195,16 +196,47 @@ const isInvalidReviewChangeDelta = (
   return 'reason' in delta
 }
 
-const getArticleProjectIds = async (row: ReviewChangeDeltaRow, database: ReviewChangeDeltaDirtyIntakeDatabase) => {
-  return !shouldExpandArticleDeltaToProjects(row)
-    ? []
-    : database.queryJson<{projectId: string}>(`
-        SELECT DISTINCT project_id AS projectId
-        FROM mart.project_scope_article
-        WHERE article_id = ${getSqlLiteral(row.articleId)}
-          AND (in_curated_scope OR in_route_scope)
-        ORDER BY project_id ASC
-      `)
+// One scope lookup per intake batch: a query per article delta scanned mart.project_scope_article each time
+// (13-32 ms apiece), which held a shared article partition to under a thousand deltas a minute. The batch lookup
+// costs about the same as a single one.
+const getArticleProjectIdsByArticleId = async (
+  rows: readonly ReviewChangeDeltaRow[],
+  database: Pick<ReviewChangeDeltaDirtyIntakeDatabase, 'queryJson'>,
+) => {
+  const articleIds = [
+    ...new Set(
+      rows.filter(shouldExpandArticleDeltaToProjects).map((row) => {
+        return row.articleId as string
+      }),
+    ),
+  ]
+
+  if (articleIds.length === 0) {
+    return new Map<string, string[]>()
+  }
+
+  const projectRows = await database.queryJson<{articleId: string; projectId: string}>(`
+    SELECT DISTINCT scope.article_id AS articleId, scope.project_id AS projectId
+    FROM mart.project_scope_article scope
+    WHERE scope.article_id IN (
+        SELECT article.article_id
+        FROM (${getReviewServingJsonRowsSql({
+          columns: [{name: 'article_id', type: 'VARCHAR'}],
+          rows: articleIds.map((articleId) => {
+            return [articleId]
+          }),
+        })}) AS article
+      )
+      AND (scope.in_curated_scope OR scope.in_route_scope)
+    ORDER BY articleId ASC, projectId ASC
+  `)
+
+  return projectRows.reduce((projectIdsByArticleId, row) => {
+    return projectIdsByArticleId.set(row.articleId, [
+      ...(projectIdsByArticleId.get(row.articleId) ?? []),
+      row.projectId,
+    ])
+  }, new Map<string, string[]>())
 }
 
 const getValidatedReviewChangeDelta = (
@@ -270,15 +302,14 @@ const getValidatedReviewChangeDelta = (
   }
 }
 
-const getValidatedReviewChangeDeltas = async (
-  row: ReviewChangeDeltaRow,
-  database: ReviewChangeDeltaDirtyIntakeDatabase,
-) => {
-  const projectRows = await getArticleProjectIds(row, database)
+const getValidatedReviewChangeDeltas = (row: ReviewChangeDeltaRow, projectIdsByArticleId: Map<string, string[]>) => {
+  const projectIds = shouldExpandArticleDeltaToProjects(row)
+    ? (projectIdsByArticleId.get(row.articleId as string) ?? [])
+    : []
 
-  if (projectRows.length > 0) {
-    return projectRows.map((projectRow) => {
-      return getValidatedReviewChangeDelta(row, {projectId: projectRow.projectId})
+  if (projectIds.length > 0) {
+    return projectIds.map((projectId) => {
+      return getValidatedReviewChangeDelta(row, {projectId})
     })
   }
 
@@ -287,6 +318,17 @@ const getValidatedReviewChangeDeltas = async (
   return shouldExpandArticleDeltaToProjects(row) && !('reason' in validated)
     ? [{...validated, projections: []}]
     : [validated]
+}
+
+const getValidatedReviewChangeDeltaRows = async (
+  rows: readonly ReviewChangeDeltaRow[],
+  database: Pick<ReviewChangeDeltaDirtyIntakeDatabase, 'queryJson'>,
+) => {
+  const projectIdsByArticleId = await getArticleProjectIdsByArticleId(rows, database)
+
+  return rows.flatMap((row) => {
+    return getValidatedReviewChangeDeltas(row, projectIdsByArticleId)
+  })
 }
 
 const getReviewChangeDeltaRows = async (
@@ -379,13 +421,7 @@ export const intakeReviewChangeDeltaRangeToDirtyWork = async (
   database: Pick<ReviewChangeDeltaDirtyIntakeDatabase, 'queryJson' | 'run'>,
 ): Promise<ReviewChangeDeltaDirtyIntakeResult> => {
   const rows = await getReviewChangeDeltaRows(database as ReviewChangeDeltaDirtyIntakeDatabase, params)
-  const validated = (
-    await Promise.all(
-      rows.map((row) => {
-        return getValidatedReviewChangeDeltas(row, database as ReviewChangeDeltaDirtyIntakeDatabase)
-      }),
-    )
-  ).flat()
+  const validated = await getValidatedReviewChangeDeltaRows(rows, database)
   const invalid = validated.find(isInvalidReviewChangeDelta)
 
   if (invalid !== undefined) {
@@ -400,13 +436,7 @@ export const intakeReviewChangeDeltasToDirtyWork = async (
   database: ReviewChangeDeltaDirtyIntakeDatabase = getAppDatabaseService() as ReviewChangeDeltaDirtyIntakeDatabase,
 ): Promise<ReviewChangeDeltaDirtyIntakeResult> => {
   const rows = await getReviewChangeDeltaRows(database, params)
-  const validated = (
-    await Promise.all(
-      rows.map((row) => {
-        return getValidatedReviewChangeDeltas(row, database)
-      }),
-    )
-  ).flat()
+  const validated = await getValidatedReviewChangeDeltaRows(rows, database)
   const invalid = validated.find(isInvalidReviewChangeDelta)
 
   if (invalid !== undefined) {

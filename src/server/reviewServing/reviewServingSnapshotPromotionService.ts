@@ -80,7 +80,7 @@ const getRequiredComponentState = (
 }
 
 const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, readonly string[]> = {
-  display: ['reviewChange', 'review-change'],
+  display: ['reviewChange', 'review-change', 'article'],
   humanStatus: [
     'reviewChange',
     'review-change',
@@ -89,17 +89,34 @@ const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, rea
     'projectScope',
     'project-scope',
   ],
-  judgmentInputContent: ['reviewChange', 'review-change'],
+  judgmentInputContent: ['reviewChange', 'review-change', 'article'],
   llmStatus: [
     'reviewChange',
     'review-change',
+    'article',
     'importRunArticle',
     'import-run-article',
     'projectScope',
     'project-scope',
   ],
-  payload: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
-  posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  payload: [
+    'reviewChange',
+    'review-change',
+    'article',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
+  posting: [
+    'reviewChange',
+    'review-change',
+    'article',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
   projectScope: [
     'reviewChange',
     'review-change',
@@ -108,8 +125,24 @@ const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, rea
     'projectScope',
     'project-scope',
   ],
-  queue: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
-  search: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  queue: [
+    'reviewChange',
+    'review-change',
+    'article',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
+  search: [
+    'reviewChange',
+    'review-change',
+    'article',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
   selectedImport: [
     'reviewChange',
     'review-change',
@@ -118,7 +151,15 @@ const componentSourceWatermarkKeys: Record<ReviewServingProjectionComponent, rea
     'projectScope',
     'project-scope',
   ],
-  summary: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  summary: [
+    'reviewChange',
+    'review-change',
+    'article',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
 }
 
 const getNumericObjectValue = (sourceWatermarks: ReviewServingIdentityValue, key: string) => {

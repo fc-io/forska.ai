@@ -409,7 +409,12 @@ test('delta intake expands article-only changes to affected projects', async () 
         sourceHighWaterMark: 11,
       }),
     ],
-    {articleProjectRows: [{projectId: 'project-1'}, {projectId: 'project-2'}]},
+    {
+      articleProjectRows: [
+        {articleId: 'article-1', projectId: 'project-1'},
+        {articleId: 'article-1', projectId: 'project-2'},
+      ],
+    },
   )
 
   const result = await intakeReviewChangeDeltasToDirtyWork(

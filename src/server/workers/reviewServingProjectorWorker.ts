@@ -9950,7 +9950,7 @@ const runReviewServingProjectorWorkerCleanup = async ({
   return {dirtyWorkRetentionCleanup, retentionCleanups, retentionScopes, staleCandidateCleanup, status: 'completed'}
 }
 
-const getDeltaIntakePartitions = async (
+const getDeltaIntakePartitionSample = async (
   database: ReviewServingProjectorWorkerDatabase,
   tableName: string,
   limit: number,
@@ -9985,12 +9985,23 @@ const getDeltaIntakePartitions = async (
     return rows
   }, new Map())
 
-  return [...partitionRows.values()].sort((left, right) => {
-    return (
-      left.startSourceHighWaterMark - right.startSourceHighWaterMark
-      || left.sourcePartition.localeCompare(right.sourcePartition)
-    )
-  })
+  return {
+    partitions: [...partitionRows.values()].sort((left, right) => {
+      return (
+        left.startSourceHighWaterMark - right.startSourceHighWaterMark
+        || left.sourcePartition.localeCompare(right.sourcePartition)
+      )
+    }),
+    sampleFull: sampleRows.length >= limit,
+  }
+}
+
+const getDeltaIntakePartitions = async (
+  database: ReviewServingProjectorWorkerDatabase,
+  tableName: string,
+  limit: number,
+) => {
+  return (await getDeltaIntakePartitionSample(database, tableName, limit)).partitions
 }
 
 const getPendingJobDrivenDirtyWorkComponentSql = (
@@ -10105,6 +10116,51 @@ const getDeltaIntakeTableBudgetMs = (input: {
     : input.budgetMs
 }
 
+// Article changes share one partition, so a single intake call converts at most `limit` of its deltas. While the
+// partition sample comes back full there is more to convert: keep taking passes over a fresh sample until the
+// review-change budget runs out. The pass cap bounds the loop when a test clock does not advance.
+const reviewChangeDeltaIntakeMaxPasses = 8
+
+const runReviewChangeDeltaIntakePasses = async (input: {
+  database: ReviewServingProjectorWorkerDatabase
+  deadlineAtMs: number
+  dependencies: ReviewServingProjectorWorkerDependencies
+  limit: number
+  sample: Awaited<ReturnType<typeof getDeltaIntakePartitionSample>>
+}) => {
+  const runPass = async (
+    sample: Awaited<ReturnType<typeof getDeltaIntakePartitionSample>>,
+    previousResult: ReviewServingProjectorWorkerDeltaIntakeResult,
+    pass: number,
+  ): Promise<ReviewServingProjectorWorkerDeltaIntakeResult> => {
+    const result = await runDeltaIntakePartitions({
+      database: input.database,
+      deadlineAtMs: input.deadlineAtMs,
+      dependencies: input.dependencies,
+      intake: input.dependencies.intakeReviewChangeDeltas ?? intakeReviewChangeDeltasToDirtyWork,
+      limit: input.limit,
+      partitions: sample.partitions,
+      previousResult,
+    })
+
+    if (
+      result.status === 'failed'
+      || !sample.sampleFull
+      || result.convertedPartitions === previousResult.convertedPartitions
+      || pass + 1 >= reviewChangeDeltaIntakeMaxPasses
+      || (input.dependencies.nowMs?.() ?? Date.now()) >= input.deadlineAtMs
+    ) {
+      return result
+    }
+
+    const nextSample = await getDeltaIntakePartitionSample(input.database, 'app.review_change_delta', input.limit)
+
+    return nextSample.partitions.length === 0 ? result : runPass(nextSample, result, pass + 1)
+  }
+
+  return runPass(input.sample, getIdleReviewServingProjectorWorkerDeltaIntakeResult(), 0)
+}
+
 const runReviewServingProjectorWorkerDeltaIntake = async ({
   database,
   dependencies,
@@ -10124,17 +10180,16 @@ const runReviewServingProjectorWorkerDeltaIntake = async ({
     options.deltaIntakeBudgetMs,
     defaultReviewServingProjectorWorkerDeltaIntakeBudgetMs,
   )
-  const reviewChangePartitions = await getDeltaIntakePartitions(database, 'app.review_change_delta', limit)
+  const reviewChangeSample = await getDeltaIntakePartitionSample(database, 'app.review_change_delta', limit)
+  const reviewChangePartitions = reviewChangeSample.partitions
   const importPartitions = await getDeltaIntakePartitions(database, 'app.import_run_article_delta', limit)
   const tableBudgetMs = getDeltaIntakeTableBudgetMs({budgetMs, importPartitions, reviewChangePartitions})
-  const reviewChangeResult = await runDeltaIntakePartitions({
+  const reviewChangeResult = await runReviewChangeDeltaIntakePasses({
     database,
     deadlineAtMs: startedAtMs + tableBudgetMs,
     dependencies,
-    intake: dependencies.intakeReviewChangeDeltas ?? intakeReviewChangeDeltasToDirtyWork,
     limit,
-    partitions: reviewChangePartitions,
-    previousResult: getIdleReviewServingProjectorWorkerDeltaIntakeResult(),
+    sample: reviewChangeSample,
   })
 
   return runDeltaIntakePartitions({

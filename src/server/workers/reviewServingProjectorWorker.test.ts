@@ -5846,6 +5846,43 @@ test('worker runs delta intake before waking projectors', async () => {
   expect(harness.wakeInputs).toHaveLength(1)
 })
 
+test('worker delta intake keeps converting a shared partition while its sample comes back full', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const reviewSamples = [
+    [
+      {sourceHighWaterMark: 1, sourcePartition: 'article:all'},
+      {sourceHighWaterMark: 2, sourcePartition: 'article:all'},
+    ],
+    [
+      {sourceHighWaterMark: 3, sourcePartition: 'article:all'},
+      {sourceHighWaterMark: 4, sourcePartition: 'article:all'},
+    ],
+    [{sourceHighWaterMark: 5, sourcePartition: 'article:all'}],
+  ]
+  const intakeRanges: Array<[number, number]> = []
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    return (statement.includes('FROM app.review_change_delta') ? (reviewSamples.shift() ?? []) : []) as T[]
+  }
+  harness.dependencies.intakeReviewChangeDeltas = async (params: DeltaIntakeParams) => {
+    intakeRanges.push([params.startSourceHighWaterMark, params.endSourceHighWaterMark])
+
+    return {dirtyWorkCount: 1, maxSourceHighWaterMark: params.endSourceHighWaterMark, status: 'converted'}
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {maxRowsPerWake: 2, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  expect(intakeRanges).toEqual([
+    [1, 2],
+    [3, 4],
+    [5, 5],
+  ])
+  expect(result.deltaIntake).toEqual({convertedPartitions: 3, dirtyWorkCount: 3, status: 'completed'})
+})
+
 const runDeltaIntakeBudgetCycle = async (input: {
   importPartitions: readonly string[]
   importStepMs: number

@@ -8,6 +8,12 @@ import {
   type ReviewServingSourceOperation,
 } from './reviewServingDeltaLedger.ts'
 
+// All article changes share one source partition, like import-route deltas share one per route. A partition per
+// article made every dirty-work lane and every delta-intake call a single row (one article per claim, one intake
+// transaction per article) and grew the per-partition cursors, watermarks and manifest keys without bound.
+// Projectors rebuild an article from its current source rows, so the shared counter only has to order changes.
+export const articleReviewServingSourcePartition = 'article:all'
+
 export type ArticleReviewServingFieldName =
   | 'articleAuthors'
   | 'articleCreatedAt'
@@ -126,7 +132,7 @@ const getArticleReviewServingDeltaInputs = (input: ArticleReviewServingDeltaInpu
       payloadVersion: 1,
       sourceMutationKey: `${input.sourceMutationKey}|${plan.changeKind}`,
       sourceOperation: input.sourceOperation,
-      sourcePartition: input.sourcePartition ?? `article:${input.articleId}`,
+      sourcePartition: input.sourcePartition ?? articleReviewServingSourcePartition,
       sourceRowId: input.sourceRowId ?? input.articleId,
       sourceTable: input.sourceTable ?? 'app.article',
       sourceUpdatedAt: input.sourceUpdatedAt,

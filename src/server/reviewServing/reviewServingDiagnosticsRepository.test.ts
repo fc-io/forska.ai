@@ -339,9 +339,12 @@ test('review serving diagnostics summarize snapshot search dirty work chunks and
   expect(statements.join('\n')).toContain("manifest.status IN ('active', 'candidate')")
   expect(statements.join('\n')).toContain('snapshot.source_watermarks_json')
   expect(statements.join('\n')).toContain('manifest.input_watermarks_json')
-  expect(statements.join('\n')).toContain("source_watermark.key IN ('reviewChange', 'review-change')")
+  expect(statements.join('\n')).toContain("source_watermark.key IN ('reviewChange', 'review-change', 'article')")
   expect(statements.join('\n')).toContain(
     "source_watermark.key IN ('reviewChange', 'review-change', 'importRunArticle'",
+  )
+  expect(statements.join('\n')).toContain(
+    "source_watermark.key IN ('reviewChange', 'review-change', 'article', 'importRunArticle'",
   )
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work')
   expect(statements.join('\n')).toContain('app.review_serving_dirty_work_claim_state')

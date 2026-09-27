@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import {
   appendArticleReviewServingDeltas,
   appendArticleReviewServingDeltasForIds,
+  articleReviewServingSourcePartition,
 } from './articleReviewServingDeltaService.ts'
 import {
   getReviewServingDeltaIdempotencyKey,
@@ -81,6 +82,29 @@ test('article title updates emit display search and judgment-input deltas in one
   expect(bulkRows).toContain('changedSearchableFieldNames')
   expect(bulkRows).toContain('affectedContentFlags')
   expect(bulkRows).toContain('useTitle')
+})
+
+test('changes to different articles share one source partition and counter', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendArticleReviewServingDeltas(tx, {
+    articleId: 'article-1',
+    changedFields: ['articleTitle'],
+    sourceMutationKey: 'source:title-change-1',
+    sourceOperation: 'update',
+  })
+  await appendArticleReviewServingDeltas(tx, {
+    articleId: 'article-2',
+    changedFields: ['articleTitle'],
+    sourceMutationKey: 'source:title-change-2',
+    sourceOperation: 'update',
+  })
+
+  const joined = statements.join('\n')
+
+  expect(joined).toContain(`'${articleReviewServingSourcePartition}'`)
+  expect(joined).not.toContain("'article:article-1'")
+  expect(joined).not.toContain("'article:article-2'")
 })
 
 test('display search and judgment-input content identities advance independently by changed field', async () => {

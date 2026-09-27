@@ -150,8 +150,11 @@ export const getReviewServingProjectorWatermarkId = (
   }).slice(0, 32)}`
 }
 
+// Article changes share one high-volume counter (articleReviewServingSourcePartition), so they keep their own
+// `article` key instead of folding into `reviewChange`: mixed into that aggregate they would make every component
+// that never processes article changes (humanStatus, selectedImport, projectScope) look permanently behind, and
+// would let the large article counter falsely cover small-counter review-change partitions.
 const sourcePartitionAliases: Record<string, string> = {
-  article: 'reviewChange',
   'import-run-article': 'importRunArticle',
   importRoute: 'importRunArticle',
   humanJudgment: 'reviewChange',

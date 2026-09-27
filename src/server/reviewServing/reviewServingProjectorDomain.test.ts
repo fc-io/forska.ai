@@ -112,9 +112,9 @@ test('source partition watermarks stay bounded for large imported-project partit
     }),
   )
 
-  expect(Object.keys(watermarks)).toHaveLength(partitionCount + 2)
+  expect(Object.keys(watermarks)).toHaveLength(partitionCount + 1)
   expect(watermarks.article).toBe(partitionCount)
-  expect(watermarks.reviewChange).toBe(partitionCount)
+  expect(watermarks.reviewChange).toBeUndefined()
   expect(watermarks['article:article-0']).toBe(1)
   expect(watermarks[`article:article-${partitionCount - 1}`]).toBe(partitionCount)
 })

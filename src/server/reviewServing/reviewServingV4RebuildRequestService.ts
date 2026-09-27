@@ -341,7 +341,7 @@ const promptScaledComponentFanOut = {
   summary: 0,
 } satisfies Record<ReviewServingProjectionComponent, number>
 const bootstrapReuseSourceWatermarkKeys = {
-  display: ['reviewChange', 'review-change'],
+  display: ['reviewChange', 'review-change', 'article'],
   humanStatus: [
     'reviewChange',
     'review-change',
@@ -350,10 +350,11 @@ const bootstrapReuseSourceWatermarkKeys = {
     'projectScope',
     'project-scope',
   ],
-  judgmentInputContent: ['reviewChange', 'review-change'],
+  judgmentInputContent: ['reviewChange', 'review-change', 'article'],
   llmStatus: [
     'reviewChange',
     'review-change',
+    'article',
     'importRunArticle',
     'import-run-article',
     'projectScope',
@@ -362,13 +363,22 @@ const bootstrapReuseSourceWatermarkKeys = {
   payload: [
     'reviewChange',
     'review-change',
+    'article',
     'importRunArticle',
     'import-run-article',
     'projectScope',
     'project-scope',
     'judgmentSqliteOutboxImport',
   ],
-  posting: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  posting: [
+    'reviewChange',
+    'review-change',
+    'article',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
   projectScope: [
     'reviewChange',
     'review-change',
@@ -380,13 +390,22 @@ const bootstrapReuseSourceWatermarkKeys = {
   queue: [
     'reviewChange',
     'review-change',
+    'article',
     'importRunArticle',
     'import-run-article',
     'projectScope',
     'project-scope',
     'judgmentSqliteOutboxImport',
   ],
-  search: ['reviewChange', 'review-change', 'importRunArticle', 'import-run-article', 'projectScope', 'project-scope'],
+  search: [
+    'reviewChange',
+    'review-change',
+    'article',
+    'importRunArticle',
+    'import-run-article',
+    'projectScope',
+    'project-scope',
+  ],
   selectedImport: [
     'reviewChange',
     'review-change',
@@ -398,6 +417,7 @@ const bootstrapReuseSourceWatermarkKeys = {
   summary: [
     'reviewChange',
     'review-change',
+    'article',
     'importRunArticle',
     'import-run-article',
     'projectScope',
