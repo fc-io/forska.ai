@@ -32,13 +32,15 @@ import {
   readJsonProcessLockState,
   readProcessLockForAcquisition,
 } from './processLockAcquisition.ts'
+import {getLiveProcessTreeDependencies, isProcessAlive, stopProcessTree} from './processTree.ts'
+import {getDevServerWatchStackShutdownTimeoutMs, getServerStackShutdownTimeouts} from './serverStackShutdown.ts'
 
 const watchedPaths = ['src', 'package.json', 'tsconfig.json']
 const restartDelayMs = 150
 const restartGatePollIntervalMs = 1_000
 const restartGateTimeoutMs = 90_000
-const stackShutdownTimeoutMs = 20_000
-const forcedKillTimeoutMs = 5_000
+const stackShutdownTimeoutMs = getDevServerWatchStackShutdownTimeoutMs(process.env)
+const forcedKillTimeoutMs = getServerStackShutdownTimeouts(process.env).forcedKillTimeoutMs
 const healthProbeTimeoutMs = 1_500
 const parentMonitorIntervalMs = 1_000
 const devWatcherLockHeartbeatIntervalMs = 1_000
@@ -155,32 +157,10 @@ const isMissingFileError = (error: unknown) => {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
 }
 
-const isProcessAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
 const waitFor = async (ms: number) => {
   await new Promise((resolve) => {
     setTimeout(resolve, ms)
   })
-}
-
-const waitForProcessExit = async (pid: number, deadlineMs = Date.now() + stackShutdownTimeoutMs): Promise<boolean> => {
-  if (!isProcessAlive(pid)) {
-    return true
-  }
-
-  if (Date.now() >= deadlineMs) {
-    return false
-  }
-
-  await waitFor(250)
-  return waitForProcessExit(pid, deadlineMs)
 }
 
 const getStackLockReleaseTimeoutMessage = (currentLock: ServerStackLockMetadata) => {
@@ -510,23 +490,12 @@ const stopExternalProcess = async ({pid, processName}: {pid: number; processName
     return
   }
 
-  process.kill(pid, 'SIGTERM')
-
-  if (await waitForProcessExit(pid)) {
-    return
-  }
-
-  log(`${processName} pid=${pid} did not exit after SIGTERM; sending SIGKILL`)
-
-  if (isProcessAlive(pid)) {
-    process.kill(pid, 'SIGKILL')
-  }
-
-  if (await waitForProcessExit(pid, Date.now() + forcedKillTimeoutMs)) {
-    return
-  }
-
-  throw new Error(`Timed out waiting for ${processName} pid=${pid} to exit`)
+  await stopProcessTree(getLiveProcessTreeDependencies(log), {
+    forcedKillTimeoutMs,
+    pid,
+    processName: `${processName} pid=${pid}`,
+    shutdownTimeoutMs: stackShutdownTimeoutMs,
+  })
 }
 
 const getProcessInfoCommand = (pid: number) => {
