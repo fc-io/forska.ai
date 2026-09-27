@@ -16,6 +16,15 @@ const createClaimStateDatabase = async () => {
 
   await connection.run('CREATE SCHEMA app')
   await connection.run(`
+    CREATE TABLE app.project (id VARCHAR PRIMARY KEY, archived BOOLEAN NOT NULL, delete_pending_at TIMESTAMPTZ);
+    INSERT INTO app.project VALUES
+      ('project-a', FALSE, NULL),
+      ('project-b', FALSE, NULL),
+      ('project-c', FALSE, NULL),
+      ('project-archived', TRUE, NULL),
+      ('project-deleting', FALSE, TIMESTAMPTZ '2026-09-27T07:00:00Z');
+  `)
+  await connection.run(`
     CREATE TABLE app.review_serving_dirty_work_claim_state (
       dirty_work_id VARCHAR PRIMARY KEY,
       project_id VARCHAR NOT NULL,
@@ -59,7 +68,7 @@ afterEach(() => {
   resetReviewServingVisibilityBacklogReportForTests()
 })
 
-test('visibility backlog reports pending and newly projected visibility work per project, largest backlog first', async () => {
+test('visibility backlog reports pending and newly projected visibility work per active project, largest backlog first', async () => {
   const {close, database, insert} = await createClaimStateDatabase()
 
   try {
@@ -73,6 +82,11 @@ test('visibility backlog reports pending and newly projected visibility work per
       ['a-summary-1', 'project-a', 'summary', 'pending', null, '2026-09-27T08:00:00Z'],
       ['b-queue-1', 'project-b', 'queue', 'failed', null, '2026-09-27T08:00:00Z'],
       ['c-scope-1', 'project-c', 'projectScope', 'completed', 'projected', '2026-09-27T08:00:40Z'],
+      ['archived-scope-1', 'project-archived', 'projectScope', 'pending', null, '2026-09-27T08:00:00Z'],
+      ['archived-scope-2', 'project-archived', 'projectScope', 'pending', null, '2026-09-27T08:00:00Z'],
+      ['archived-queue-1', 'project-archived', 'queue', 'pending', null, '2026-09-27T08:00:00Z'],
+      ['archived-queue-2', 'project-archived', 'queue', 'pending', null, '2026-09-27T08:00:00Z'],
+      ['deleting-queue-1', 'project-deleting', 'queue', 'pending', null, '2026-09-27T08:00:00Z'],
     ])
 
     expect(getReviewServingVisibilityBacklogPendingTotal()).toBeNull()

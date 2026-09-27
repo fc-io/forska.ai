@@ -4,6 +4,7 @@ import {
   type ReviewServingProjectionComponent,
   visibilityReviewServingProjectionComponents,
 } from './reviewServingContracts.ts'
+import {getReviewServingDirtyWorkActiveProjectPredicate} from './reviewServingDirtyWorkService.ts'
 
 type VisibilityComponent = (typeof visibilityReviewServingProjectionComponents)[number]
 
@@ -55,6 +56,9 @@ export const getReviewServingVisibilityBacklogSql = (input: {since: Date}) => {
     FROM app.review_serving_dirty_work_claim_state state
     WHERE state.projection_component IN (${visibilityReviewServingProjectionComponents.map(getSqlLiteral).join(', ')})
       AND (state.status <> 'completed' OR state.updated_at >= ${getTimestampSql(input.since)})
+      -- Archived and delete-pending projects are never claimed, so their leftover rows are not a backlog the
+      -- worker can drain; counting them kept the pressure wake on permanently.
+      AND ${getReviewServingDirtyWorkActiveProjectPredicate('state.project_id')}
     GROUP BY ALL
   `
 }
