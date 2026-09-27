@@ -1,5 +1,9 @@
 import {totalmem} from 'node:os'
 
+import {
+  isReviewServingProjectionComponent,
+  type ReviewServingProjectionComponent,
+} from '../reviewServing/reviewServingContracts.ts'
 import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
 import {runReviewServingProjectorWorker} from '../workers/reviewServingProjectorWorker.ts'
 import {getActiveDuckdbExclusiveWorkSnapshot, hasActiveDuckdbExclusiveWork} from './duckdbExclusiveWork.ts'
@@ -10,10 +14,13 @@ import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {pauseReviewServingProjector} from './reviewServingProjectorPause.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
+type ReviewServingProjectorComponentBatchSizes = Partial<Record<ReviewServingProjectionComponent, number>>
+
 type ReviewServingProjectorWorkerHeartbeatOptions = {
   backlogWakeComponentPasses?: number
   backlogWakeMinMs?: number
   batchSize?: number
+  componentBatchSizes?: ReviewServingProjectorComponentBatchSizes
   maxCompletedRebuildChunksPerRun?: number | null
   maxRowsPerWake?: number
   maxRunMs?: number | null
@@ -46,7 +53,14 @@ const defaultReviewServingProjectorWorkerSoftRssRatio = 0.85
 const defaultReviewServingProjectorWorkerBacklogWakeMinMs = 4_000
 const defaultReviewServingProjectorWorkerBacklogWakePasses = 6
 const defaultReviewServingProjectorWorkerDirtyWorkBatchSize = 256
-const defaultReviewServingProjectorWorkerDirtyWorkMaxRowsPerWake = 4_096
+const defaultReviewServingProjectorWorkerDirtyWorkMaxRowsPerWake = 8_192
+const defaultReviewServingProjectorWorkerComponentBatchSizes: ReviewServingProjectorComponentBatchSizes = {
+  humanStatus: 1_024,
+  llmStatus: 1_024,
+  projectScope: 1_536,
+  queue: 1_024,
+  selectedImport: 512,
+}
 let foregroundWorkRecycleDeferStartedAtMs: number | null = null
 let foregroundWorkRecycleDeferCount = 0
 
@@ -86,6 +100,39 @@ const getProductionBacklogDefault = (value: number) => {
   return getLowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun() === null ? value : undefined
 }
 
+const getComponentBatchSizeEntries = (entry: string) => {
+  const [component = '', size = ''] = entry.split('=').map((part) => {
+    return part.trim()
+  })
+  const batchSize = Number.parseInt(size, 10)
+
+  return isReviewServingProjectionComponent(component) && Number.isFinite(batchSize) && batchSize > 0
+    ? [[component, batchSize] as const]
+    : []
+}
+
+export const parseReviewServingProjectorComponentBatchSizes = (
+  value: string | undefined,
+): ReviewServingProjectorComponentBatchSizes => {
+  return Object.fromEntries((value ?? '').split(',').flatMap(getComponentBatchSizeEntries))
+}
+
+const getComponentBatchSizes = (options: ReviewServingProjectorWorkerHeartbeatOptions) => {
+  const productionDefaults =
+    getLowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun() === null
+      ? defaultReviewServingProjectorWorkerComponentBatchSizes
+      : {}
+
+  return (
+    options.componentBatchSizes ?? {
+      ...productionDefaults,
+      ...parseReviewServingProjectorComponentBatchSizes(
+        process.env.FORSKA_REVIEW_SERVING_DIRTY_WORK_COMPONENT_BATCH_SIZES,
+      ),
+    }
+  )
+}
+
 export const getReviewServingProjectorWorkerBacklogOptions = (
   options: ReviewServingProjectorWorkerHeartbeatOptions,
 ) => {
@@ -102,6 +149,7 @@ export const getReviewServingProjectorWorkerBacklogOptions = (
       options.batchSize
       ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE')
       ?? getProductionBacklogDefault(defaultReviewServingProjectorWorkerDirtyWorkBatchSize),
+    componentBatchSizes: getComponentBatchSizes(options),
     maxRowsPerWake:
       options.maxRowsPerWake
       ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_MAX_ROWS_PER_WAKE')

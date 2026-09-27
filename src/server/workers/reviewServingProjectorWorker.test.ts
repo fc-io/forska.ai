@@ -10,7 +10,10 @@ import {
   reviewServingRebuildChunkLongestWaitingClaimInterval,
   type ReviewServingRebuildChunkManifest,
 } from '../reviewServing/reviewServingChunkManifestRepository.ts'
-import {countReadyReviewServingComponents} from '../reviewServing/reviewServingContracts.ts'
+import {
+  countReadyReviewServingComponents,
+  type ReviewServingProjectionComponent,
+} from '../reviewServing/reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim} from '../reviewServing/reviewServingDirtyWorkService.ts'
 import {wakeReviewServingProjectorService} from '../reviewServing/reviewServingProjectorService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
@@ -562,6 +565,7 @@ const runJobDrivenDirtyWorkCycle = async (input: {
   backlogWakeComponentPasses?: number
   backlogWakeMinMs?: number
   chunkIdle?: boolean
+  componentBatchSizes?: Partial<Record<ReviewServingProjectionComponent, number>>
   componentRotationOffset: number
   lastAdmittedWakeAtMs?: number
   llmStatusBatchMs: number
@@ -668,6 +672,7 @@ const runJobDrivenDirtyWorkCycle = async (input: {
     {
       backlogWakeComponentPasses: input.backlogWakeComponentPasses,
       backlogWakeMinMs: input.backlogWakeMinMs,
+      componentBatchSizes: input.componentBatchSizes,
       componentRotationOffset: input.componentRotationOffset,
       lastAdmittedWakeAtMs: input.lastAdmittedWakeAtMs,
       maxRowsPerWake: input.maxRowsPerWake,
@@ -867,6 +872,29 @@ test('a configured minimum backlog wake budget and component passes keep the bac
   expect(cycle.harness.runChunkInputs).toHaveLength(1)
   expect(backlogWakeInput).toMatchObject({componentPasses: 3, maxWakeMs: 2_500})
   expect(cycle.result.projector.status).toBe('completed')
+})
+
+test('per-component batch sizes reach the backlog wake and leave the job-driven wake on the base batch size', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: {llmStatus: 600, queue: 600},
+    backlogWakeMinMs: 2_500,
+    chunkIdle: true,
+    componentBatchSizes: {llmStatus: 256, queue: 128},
+    componentRotationOffset: 0,
+    llmStatusBatchMs: 100,
+    maxRowsPerWake: 4_096,
+    maxWakeMs: 5_000,
+    pendingComponents: ['llmStatus', 'queue'],
+  })
+  const [jobDrivenWakeInput] = cycle.harness.wakeInputs
+  const backlogWakeInput = cycle.harness.wakeInputs.at(-1)
+
+  expect(jobDrivenWakeInput).toMatchObject({batchSize: 64, componentOrder: ['llmStatus', 'queue']})
+  expect(jobDrivenWakeInput).not.toHaveProperty('componentBatchSizes')
+  expect(backlogWakeInput).toMatchObject({batchSize: 64, componentBatchSizes: {llmStatus: 256, queue: 128}})
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(cycle.result).projectorRunClaimCounts).toMatchObject({
+    llmStatus: 64 * 4 + 256 * 1,
+  })
 })
 
 test('backlog wakes keep the cycle deadline and a single pass when no backlog budget is configured', async () => {

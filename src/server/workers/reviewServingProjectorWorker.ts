@@ -309,6 +309,7 @@ type ReviewServingProjectorWorkerCycleOptions = {
   backlogWakeComponentPasses?: number
   backlogWakeMinMs?: number
   batchSize?: number
+  componentBatchSizes?: Partial<Record<ReviewServingProjectionComponent, number>>
   cleanupIntervalMs?: number
   completedRebuildChunksInRun?: number
   componentRotationOffset?: number
@@ -6924,6 +6925,9 @@ const getBacklogWakeInput = (input: {
   return {
     ...getWakeInput(input),
     ...(componentPasses > 1 ? {componentPasses} : {}),
+    ...(input.options.componentBatchSizes === undefined
+      ? {}
+      : {componentBatchSizes: input.options.componentBatchSizes}),
     maxWakeMs: Math.max(
       0,
       getBacklogWakeAdmissionDeadlineMs(input) - getWorkerNowMs(input.dependencies, input.options),

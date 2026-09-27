@@ -149,6 +149,7 @@ export type IntakeReviewServingProjectorDirtyWorkResult =
 
 export type WakeReviewServingProjectorServiceInput = {
   batchSize: number
+  componentBatchSizes?: Partial<Record<ReviewServingProjectionComponent, number>>
   componentOrder?: readonly ReviewServingProjectionComponent[]
   componentPasses?: number
   componentRotationOffset?: number
@@ -370,7 +371,18 @@ const getNormalizedBudget = (input: WakeReviewServingProjectorServiceInput) => {
   const maxRowsPerWake = Math.max(0, Math.floor(input.maxRowsPerWake))
   const maxRetries = Math.max(0, Math.floor(input.maxRetries ?? 1))
 
-  return {batchSize, maxRetries, maxRowsPerWake}
+  return {batchSize, componentBatchSizes: input.componentBatchSizes ?? {}, maxRetries, maxRowsPerWake}
+}
+
+const getComponentBatchSize = (
+  budget: ReturnType<typeof getNormalizedBudget>,
+  component: ReviewServingProjectionComponent,
+) => {
+  const componentBatchSize = budget.componentBatchSizes[component]
+
+  return componentBatchSize !== undefined && Number.isFinite(componentBatchSize) && componentBatchSize >= 1
+    ? Math.floor(componentBatchSize)
+    : budget.batchSize
 }
 
 const getDefaultDatabase = (): ReviewServingProjectorServiceDatabase => {
@@ -940,7 +952,7 @@ export const wakeReviewServingProjectorService = async (
     }
 
     const claims = await claimDirtyWork(
-      {limit: Math.min(budget.batchSize, remainingRows), projectionComponent: component},
+      {limit: Math.min(getComponentBatchSize(budget, component), remainingRows), projectionComponent: component},
       database,
     )
     const claimIds = getDirtyWorkIds(claims)
@@ -1160,7 +1172,7 @@ export const wakeReviewServingProjectorService = async (
   >(
     async (previousState, component) => {
       const state = await previousState
-      const limit = Math.min(budget.batchSize, budget.maxRowsPerWake - state.processedRows)
+      const limit = Math.min(getComponentBatchSize(budget, component), budget.maxRowsPerWake - state.processedRows)
 
       if (state.settledComponents.includes(component)) {
         return state

@@ -1772,8 +1772,8 @@ test('claims dirty work from bounded per-row claim state with one exact update r
   expect(claimStateSelect).not.toContain('projection_key')
   expect(claimStateSelect).not.toContain('json_extract_string')
   expect(claimUpdates).toHaveLength(1)
-  expect(claimUpdates[0]).toContain('rowid =')
-  expect(claimUpdates[0]).toContain('dirty_work_id =')
+  expect(claimUpdates[0]).toContain('dirty_work_id IN (')
+  expect(claimUpdates[0]).not.toContain('OR dirty_work_id')
   expect(claimUpdates[0]).not.toContain('WITH claim_state_window AS')
   expect(claimUpdates[0]).not.toContain('SELECT dirty_work_id')
   expect(claimUpdates[0]).not.toContain('projection_key =')
@@ -1927,6 +1927,39 @@ test('a completed older claim cannot finish a newer running claim in DuckDB', as
     close()
   }
 })
+
+test('claims and completes one batch above the DuckDB expression depth limit and the base lane window in DuckDB', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+  const batchSize = 2_500
+
+  try {
+    await upsertReviewServingDirtyWorkBatch(
+      Array.from({length: batchSize}, (_, index) => {
+        return {
+          latestDeltaId: `delta-${index}`,
+          projectionComponent: 'display' as const,
+          projectionIdentity: 'display:identity-1',
+          scope: getArticleDisplayScope(`article-${index}`, index + 1, null, null),
+        }
+      }),
+      database,
+    )
+
+    const claims = await claimReviewServingDirtyWork({limit: batchSize, projectionComponent: 'display'}, database)
+
+    expect(claims).toHaveLength(batchSize)
+    expect(await completeReviewServingDirtyWorkClaims(claims, database)).toEqual({completedCount: batchSize})
+    expect(
+      await database.queryJson(`
+        SELECT status, CAST(count(*) AS INTEGER) AS count
+        FROM app.review_serving_dirty_work
+        GROUP BY status
+      `),
+    ).toEqual([{count: batchSize, status: 'completed'}])
+  } finally {
+    close()
+  }
+}, 120_000)
 
 test('completion rolls back the watermark and base state when claim-state maintenance fails in DuckDB', async () => {
   const {close, database} = await createDuckdbDirtyWorkDatabase()

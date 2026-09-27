@@ -447,6 +447,7 @@ const getHeartbeatBacklogLoopOptions = (env: Record<string, string>) => {
                 backlogWakeComponentPasses: options.backlogWakeComponentPasses ?? null,
                 backlogWakeMinMs: options.backlogWakeMinMs ?? null,
                 batchSize: options.batchSize ?? null,
+                componentBatchSizes: options.componentBatchSizes ?? null,
                 maxRowsPerWake: options.maxRowsPerWake ?? null,
               })
             },
@@ -470,6 +471,7 @@ const getHeartbeatBacklogLoopOptions = (env: Record<string, string>) => {
         FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS: '',
         FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES: '',
         FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE: '',
+        FORSKA_REVIEW_SERVING_DIRTY_WORK_COMPONENT_BATCH_SIZES: '',
         FORSKA_REVIEW_SERVING_DIRTY_WORK_MAX_ROWS_PER_WAKE: '',
         FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: '',
         ...env,
@@ -487,25 +489,66 @@ const getHeartbeatBacklogLoopOptions = (env: Record<string, string>) => {
 }
 
 test('review serving projector worker heartbeat uses the production backlog defaults above the low-memory profile and lets env override each', () => {
+  const productionComponentBatchSizes = {
+    humanStatus: 1_024,
+    llmStatus: 1_024,
+    projectScope: 1_536,
+    queue: 1_024,
+    selectedImport: 512,
+  }
+
   expect(getHeartbeatBacklogLoopOptions({DUCKDB_MEMORY_LIMIT: '16GB'})).toEqual([
-    {backlogWakeComponentPasses: 6, backlogWakeMinMs: 4_000, batchSize: 256, maxRowsPerWake: 4_096},
+    {
+      backlogWakeComponentPasses: 6,
+      backlogWakeMinMs: 4_000,
+      batchSize: 256,
+      componentBatchSizes: productionComponentBatchSizes,
+      maxRowsPerWake: 8_192,
+    },
   ])
   expect(
     getHeartbeatBacklogLoopOptions({
       DUCKDB_MEMORY_LIMIT: '16GB',
       FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS: '2500',
       FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE: '128',
+      FORSKA_REVIEW_SERVING_DIRTY_WORK_COMPONENT_BATCH_SIZES: 'queue=512, summary=64,unknown=9,llmStatus=0',
     }),
-  ).toEqual([{backlogWakeComponentPasses: 6, backlogWakeMinMs: 2_500, batchSize: 128, maxRowsPerWake: 4_096}])
+  ).toEqual([
+    {
+      backlogWakeComponentPasses: 6,
+      backlogWakeMinMs: 2_500,
+      batchSize: 128,
+      componentBatchSizes: {...productionComponentBatchSizes, queue: 512, summary: 64},
+      maxRowsPerWake: 8_192,
+    },
+  ])
 })
 
 test('review serving projector worker heartbeat keeps the low-memory profile off the production backlog defaults', () => {
   expect(getHeartbeatBacklogLoopOptions({DUCKDB_MEMORY_LIMIT: '8GB'})).toEqual([
-    {backlogWakeComponentPasses: null, backlogWakeMinMs: null, batchSize: null, maxRowsPerWake: null},
+    {
+      backlogWakeComponentPasses: null,
+      backlogWakeMinMs: null,
+      batchSize: null,
+      componentBatchSizes: {},
+      maxRowsPerWake: null,
+    },
   ])
   expect(
-    getHeartbeatBacklogLoopOptions({DUCKDB_MEMORY_LIMIT: '8GB', FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES: '3'}),
-  ).toEqual([{backlogWakeComponentPasses: 3, backlogWakeMinMs: null, batchSize: null, maxRowsPerWake: null}])
+    getHeartbeatBacklogLoopOptions({
+      DUCKDB_MEMORY_LIMIT: '8GB',
+      FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES: '3',
+      FORSKA_REVIEW_SERVING_DIRTY_WORK_COMPONENT_BATCH_SIZES: 'queue=512',
+    }),
+  ).toEqual([
+    {
+      backlogWakeComponentPasses: 3,
+      backlogWakeMinMs: null,
+      batchSize: null,
+      componentBatchSizes: {queue: 512},
+      maxRowsPerWake: null,
+    },
+  ])
 })
 
 test('review serving projector worker heartbeat does not start a loop while DuckDB exclusive work is active', () => {

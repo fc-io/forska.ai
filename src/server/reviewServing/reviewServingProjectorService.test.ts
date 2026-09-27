@@ -399,6 +399,125 @@ test('wake component passes revisit components that projected a full batch and s
   expect(result.releasedClaimIds).toEqual(['selected-import-1', 'selected-import-2'])
 })
 
+test('wake claims each component with its own batch size, falls back to the base size and settles against its own size', async () => {
+  const claimLimits: Array<[ReviewServingProjectionComponent, number]> = []
+  const {dependencies} = createDependencyHarness({
+    projectScope: [1, 2, 3, 4, 5].map((index) => {
+      return getClaim({component: 'projectScope', dirtyWorkId: `scope-${index}`})
+    }),
+    queue: [1, 2, 3].map((index) => {
+      return getClaim({component: 'queue', dirtyWorkId: `queue-${index}`})
+    }),
+    humanStatus: [1, 2].map((index) => {
+      return getClaim({component: 'humanStatus', dirtyWorkId: `human-${index}`})
+    }),
+  })
+  const claimDirtyWork = dependencies.claimDirtyWork
+
+  if (claimDirtyWork === undefined) {
+    throw new Error('missing harness claim')
+  }
+
+  dependencies.claimDirtyWork = async (params, database) => {
+    claimLimits.push([params.projectionComponent, params.limit])
+
+    return claimDirtyWork(params, database)
+  }
+  dependencies.runners = Object.fromEntries(
+    (['projectScope', 'queue', 'humanStatus'] as const).map((component) => {
+      return [
+        component,
+        async ({claims}: {claims: readonly ReviewServingDirtyWorkClaim[]}) => {
+          return {processedCount: claims.length}
+        },
+      ]
+    }),
+  )
+
+  const result = await wakeReviewServingProjectorService(
+    {
+      batchSize: 1,
+      componentBatchSizes: {projectScope: 4, queue: 2},
+      componentOrder: ['projectScope', 'queue', 'humanStatus'],
+      componentPasses: 3,
+      maxRowsPerWake: 100,
+      maxWakeMs: 1_000,
+      wakeId: 'wake-component-batch-sizes',
+    },
+    dependencies,
+  )
+
+  expect(claimLimits).toEqual([
+    ['projectScope', 4],
+    ['queue', 2],
+    ['humanStatus', 1],
+    ['projectScope', 4],
+    ['queue', 2],
+    ['humanStatus', 1],
+    ['humanStatus', 1],
+  ])
+  expect(
+    result.runs.map((run) => {
+      return [run.component, run.claimCount]
+    }),
+  ).toEqual([
+    ['projectScope', 4],
+    ['queue', 2],
+    ['humanStatus', 1],
+    ['projectScope', 1],
+    ['queue', 1],
+    ['humanStatus', 1],
+  ])
+})
+
+test('wake caps a component batch size by the rows left in the wake budget', async () => {
+  const claimLimits: Array<[ReviewServingProjectionComponent, number]> = []
+  const {dependencies} = createDependencyHarness({
+    projectScope: [1, 2, 3].map((index) => {
+      return getClaim({component: 'projectScope', dirtyWorkId: `scope-${index}`})
+    }),
+    queue: [1, 2, 3].map((index) => {
+      return getClaim({component: 'queue', dirtyWorkId: `queue-${index}`})
+    }),
+  })
+  const claimDirtyWork = dependencies.claimDirtyWork
+
+  if (claimDirtyWork === undefined) {
+    throw new Error('missing harness claim')
+  }
+
+  dependencies.claimDirtyWork = async (params, database) => {
+    claimLimits.push([params.projectionComponent, params.limit])
+
+    return claimDirtyWork(params, database)
+  }
+  dependencies.runners = {
+    projectScope: async ({claims}) => {
+      return {processedCount: claims.length}
+    },
+    queue: async ({claims}) => {
+      return {processedCount: claims.length}
+    },
+  }
+
+  await wakeReviewServingProjectorService(
+    {
+      batchSize: 1,
+      componentBatchSizes: {projectScope: 3, queue: 3},
+      componentOrder: ['projectScope', 'queue'],
+      maxRowsPerWake: 4,
+      maxWakeMs: 1_000,
+      wakeId: 'wake-component-batch-row-budget',
+    },
+    dependencies,
+  )
+
+  expect(claimLimits).toEqual([
+    ['projectScope', 3],
+    ['queue', 1],
+  ])
+})
+
 test('wake retries a failing projector batch and avoids marking it failed after replay succeeds', async () => {
   const {dependencies, failedClaimIds} = createDependencyHarness({
     queue: [getClaim({component: 'queue', dirtyWorkId: 'queue-1'})],

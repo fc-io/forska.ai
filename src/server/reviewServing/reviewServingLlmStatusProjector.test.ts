@@ -500,3 +500,30 @@ test('newly scoped articles emit unanswered status rows for enabled prompts', as
   expect(joined).toContain("'unanswered'")
   expect(joined).not.toContain('enabled_prompt_count =')
 })
+
+test('LLM judgment delta lookup matches claim watermark ranges through one claim range table for any batch size', async () => {
+  const {database, statements} = createLlmStatusDatabase()
+  const claims = Array.from({length: 1_500}, (_, index) => {
+    return llmClaim({
+      articleId: `article-${index}`,
+      dirtyWorkId: `dirty-work-${index}`,
+      firstSourceHighWaterMark: index + 1,
+      latestSourceHighWaterMark: index + 2,
+      sourcePartition: 'import-route:route-1',
+    })
+  })
+
+  await projectReviewServingLlmStatusPatches(projectInput(claims), database)
+
+  const selectStatement =
+    statements.find((statement) => {
+      return statement.includes('FROM app.review_change_delta delta')
+    }) ?? ''
+
+  expect(selectStatement).toContain(
+    'claim_range(source_partition, first_source_high_water_mark, latest_source_high_water_mark)',
+  )
+  expect(selectStatement).toContain("('import-route:route-1', 1500, 1501)")
+  expect(selectStatement).toContain('delta.source_high_water_mark >= claim_range.first_source_high_water_mark')
+  expect(selectStatement).not.toContain('OR (delta.source_partition')
+})
