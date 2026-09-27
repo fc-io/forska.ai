@@ -6904,10 +6904,7 @@ const getWakeInput = (input: {
 }
 
 const getBacklogWakeMinimumMs = (options: ReviewServingProjectorWorkerCycleOptions) => {
-  return Math.min(
-    getNonNegativeInteger(options.backlogWakeMinMs, 0),
-    getPositiveInteger(options.maxWakeMs, defaultReviewServingProjectorWorkerMaxWakeMs),
-  )
+  return getNonNegativeInteger(options.backlogWakeMinMs, 0)
 }
 
 const getBacklogWakeAdmissionDeadlineMs = (input: {

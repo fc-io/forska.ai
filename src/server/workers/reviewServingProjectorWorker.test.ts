@@ -897,6 +897,22 @@ test('a configured minimum backlog wake budget and component passes keep the bac
   expect(cycle.result.projector.status).toBe('completed')
 })
 
+test('a minimum backlog wake budget above the cycle wake budget is honored for the backlog wake', async () => {
+  const cycle = await runJobDrivenDirtyWorkCycle({
+    backlog: {llmStatus: 6, queue: 6},
+    backlogWakeComponentPasses: 3,
+    backlogWakeMinMs: 8_000,
+    componentRotationOffset: 0,
+    llmStatusBatchMs: 100,
+    maxRowsPerWake: 2,
+    maxWakeMs: 5_000,
+    pendingComponents: [],
+  })
+
+  expect(cycle.harness.runChunkInputs).toHaveLength(1)
+  expect(cycle.harness.wakeInputs.at(-1)).toMatchObject({componentPasses: 3, maxWakeMs: 8_000})
+})
+
 test('per-component batch sizes reach the backlog wake and leave the job-driven wake on the base batch size', async () => {
   const cycle = await runJobDrivenDirtyWorkCycle({
     backlog: {llmStatus: 600, queue: 600},

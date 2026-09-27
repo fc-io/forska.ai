@@ -51,7 +51,7 @@ const lowMemoryReviewServingProjectorWorkerMaxCompletedChunksPerRun = 16
 const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const highRssRestartGraceBytes = gibibyte
 const defaultReviewServingProjectorWorkerSoftRssRatio = 0.85
-const defaultReviewServingProjectorWorkerBacklogWakeMinMs = 4_000
+const defaultReviewServingProjectorWorkerBacklogWakeMinMs = 8_000
 const defaultReviewServingProjectorWorkerBacklogWakePasses = 6
 const defaultReviewServingProjectorWorkerDirtyWorkBatchSize = 256
 const defaultReviewServingProjectorWorkerDirtyWorkMaxRowsPerWake = 8_192
@@ -60,7 +60,7 @@ const defaultReviewServingProjectorWorkerComponentBatchSizes: ReviewServingProje
   llmStatus: 1_024,
   projectScope: 1_024,
   queue: 1_024,
-  selectedImport: 512,
+  selectedImport: 1_024,
 }
 let foregroundWorkRecycleDeferStartedAtMs: number | null = null
 let foregroundWorkRecycleDeferCount = 0
