@@ -1,6 +1,8 @@
-import {expect, test} from 'bun:test'
+import {afterEach, expect, test} from 'bun:test'
 
+import {createDuckdbShuttingDownError} from '../../utils/duckdbShuttingDownError.ts'
 import {HttpError} from '../../utils/httpError.ts'
+import {markServerShutdownStarted, resetServerShutdownStateForTests} from '../../utils/serverShutdownState.ts'
 import {
   isDataSourceImportRunningInProcess,
   startDataSourceImportInBackground,
@@ -31,6 +33,10 @@ const createStateStore = (calls: StateCall[]) => {
     },
   }
 }
+
+afterEach(() => {
+  resetServerShutdownStateForTests()
+})
 
 const waitFor = async (check: () => boolean) => {
   const deadline = Date.now() + 5000
@@ -225,4 +231,59 @@ test('background datasource import fails to start when the running state cannot 
 
   expect(String(startError)).toContain('DuckDB connection not started')
   expect(isDataSourceImportRunningInProcess('guard-state-write')).toBe(false)
+})
+
+test('background datasource import stopped by the DuckDB shutdown rejection stays resumable instead of failed', async () => {
+  const stateCalls: StateCall[] = []
+  const stateStore = createStateStore(stateCalls)
+  const shutdownError = createDuckdbShuttingDownError('transaction for import.storeArticles')
+
+  await startDataSourceImportInBackground({
+    dataSourceId: 'guard-shutdown',
+    importRoute: '/api/datasources/import/pubmed',
+    runImport: async (markImportStarted) => {
+      await markImportStarted()
+      await globalThis.Bun.sleep(1)
+      throw new Error(`${shutdownError.message} -- duckdb main query: INSERT INTO app.article`)
+    },
+    startsFresh: false,
+    stateStore,
+    trigger: 'auto_resume',
+  })
+
+  await waitFor(() => {
+    return !isDataSourceImportRunningInProcess('guard-shutdown')
+  })
+
+  expect(stateCalls).toEqual([
+    {dataSourceId: 'guard-shutdown', kind: 'started', startsFresh: false, trigger: 'auto_resume'},
+  ])
+})
+
+test('background datasource import failures after graceful shutdown started are interruptions, not failures', async () => {
+  const harvest = Promise.withResolvers<undefined>()
+  const stateCalls: StateCall[] = []
+  const stateStore = createStateStore(stateCalls)
+
+  await startDataSourceImportInBackground({
+    dataSourceId: 'guard-interrupted-store',
+    importRoute: '/api/datasources/import/europe-pmc-ppr',
+    runImport: async (markImportStarted) => {
+      await markImportStarted()
+      await harvest.promise
+    },
+    startsFresh: false,
+    stateStore,
+    trigger: 'manual',
+  })
+
+  markServerShutdownStarted('SIGTERM')
+  harvest.reject(new Error('INTERRUPT Error: Interrupted!'))
+  await waitFor(() => {
+    return !isDataSourceImportRunningInProcess('guard-interrupted-store')
+  })
+
+  expect(stateCalls).toEqual([
+    {dataSourceId: 'guard-interrupted-store', kind: 'started', startsFresh: false, trigger: 'manual'},
+  ])
 })

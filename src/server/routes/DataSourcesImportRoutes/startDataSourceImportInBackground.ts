@@ -3,8 +3,10 @@ import {
   type DataSourceImportTrigger,
   getDataSourceImportStateRepository,
 } from '../../services/dataSourceImportStateRepository.ts'
+import {isDuckdbShuttingDownError} from '../../utils/duckdbShuttingDownError.ts'
 import {HttpError} from '../../utils/httpError.ts'
 import {writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from '../../utils/runtimeLogger.ts'
+import {isServerShutdownInProgress} from '../../utils/serverShutdownState.ts'
 
 type DataSourceImportStateStore = Pick<DataSourceImportStateRepository, 'markRunFailed' | 'markRunStarted'>
 
@@ -21,6 +23,10 @@ const runningDataSourceImportIds = new Set<string>()
 
 export const isDataSourceImportRunningInProcess = (dataSourceId: string) => {
   return runningDataSourceImportIds.has(dataSourceId)
+}
+
+const isDataSourceImportInterruptedByShutdown = (error: unknown) => {
+  return isDuckdbShuttingDownError(error) || isServerShutdownInProgress()
 }
 
 const getDataSourceImportLogAttrs = (input: DataSourceImportRun, startedAtMs: number) => {
@@ -53,6 +59,15 @@ const logDataSourceImportFailed = (
     message: `[dataSourceImport] import failed for data source ${input.dataSourceId}`,
     severity: 'ERROR',
     terminalArgs: [error],
+  })
+}
+
+const logDataSourceImportInterrupted = (input: DataSourceImportRun, startedAtMs: number, error: unknown) => {
+  writeRuntimeOperatorLogEvent({
+    attrs: {...getDataSourceImportLogAttrs(input, startedAtMs), error},
+    event: 'data-source-import.interrupted',
+    message: `[dataSourceImport] import for data source ${input.dataSourceId} was interrupted by server shutdown; it resumes from the saved cursor on the next start`,
+    severity: 'WARN',
   })
 }
 
@@ -94,7 +109,7 @@ const runDataSourceImport = async (
   try {
     await input.runImport(markImportStarted)
   } catch (error) {
-    if (importState.started) {
+    if (importState.started && !isDataSourceImportInterruptedByShutdown(error)) {
       await recordDataSourceImportFailure(input, stateStore, error)
     }
     throw error
@@ -130,8 +145,10 @@ export const startDataSourceImportInBackground = async (input: DataSourceImportR
     () => {
       logDataSourceImportCompleted(input, startedAtMs)
     },
-    (error) => {
-      logDataSourceImportFailed(input, startedAtMs, importState, error)
+    (error: unknown) => {
+      return isDataSourceImportInterruptedByShutdown(error)
+        ? logDataSourceImportInterrupted(input, startedAtMs, error)
+        : logDataSourceImportFailed(input, startedAtMs, importState, error)
     },
   )
   await Promise.race([importStart.promise, importRun])
