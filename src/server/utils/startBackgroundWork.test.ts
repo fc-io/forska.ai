@@ -18,6 +18,7 @@ const runStartBackgroundWork = (input: {
   promoteAfterStart?: boolean
   role: 'api' | 'dev-single' | 'judge-worker' | 'maintenance-worker'
   rssBytes?: number
+  runShutdownHandlersAfterStart?: boolean
   waitAfterStartMs?: number
 }) => {
   const duckdbPath = join(tmpdir(), `forska-start-background-work-${process.pid}-${Date.now()}.duckdb`)
@@ -207,6 +208,10 @@ const runStartBackgroundWork = (input: {
         if ((input.waitAfterStartMs ?? 0) > 0) {
           await new Promise((resolve) => setTimeout(resolve, input.waitAfterStartMs))
         }
+        if (input.runShutdownHandlersAfterStart) {
+          const {runServerShutdownHandlers} = await import(getModulePath('./src/server/utils/serverShutdownState.ts'))
+          calls.push('shutdown-errors:' + (await runServerShutdownHandlers()).length)
+        }
         rmSync(pauseMarkerPath, {force: true})
         writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({calls}))
       `,
@@ -256,6 +261,28 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
     'reviewBulkOperationWorkerHeartbeat',
     'comparisonProjectServingMaintenanceWorkerHeartbeat',
     'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:default:default:false',
+  ])
+})
+
+test('startBackgroundWork stops every maintenance loop from the graceful shutdown handler', () => {
+  const result = runStartBackgroundWork({
+    duckdbMemoryLimit: '20GB',
+    role: 'maintenance-worker',
+    runShutdownHandlersAfterStart: true,
+  })
+
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'requestAttemptCloseoutBackfillScheduler',
+    'reviewBulkOperationWorkerHeartbeat',
+    'comparisonProjectServingMaintenanceWorkerHeartbeat',
+    'reviewServingProjectorWorkerHeartbeat:default:default:default:default:default:default:default:default:false',
+    'stopRequestAttemptCloseoutBackfillScheduler',
+    'stopReviewBulkOperationWorkerHeartbeat',
+    'stopComparisonProjectServingMaintenanceWorkerHeartbeat',
+    'stopReviewServingProjectorWorkerHeartbeat',
+    'shutdown-errors:0',
   ])
 })
 

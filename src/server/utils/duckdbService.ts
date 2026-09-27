@@ -25,7 +25,14 @@ import {
 } from './duckdbEngineCompatibility.ts'
 import {duckdbExpectedEngineIdentity} from './duckdbEngineContract.ts'
 import {getActiveDuckdbExclusiveWorkSnapshot, getDuckdbExclusiveWorkAdmissionError} from './duckdbExclusiveWork.ts'
+import {
+  type DuckdbGracefulShutdownLogEntry,
+  getDuckdbGracefulShutdownBudgetMs,
+  getDuckdbGracefulShutdownTimeouts,
+  runDuckdbGracefulShutdown,
+} from './duckdbGracefulShutdown.ts'
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
+import {createDuckdbShuttingDownError} from './duckdbShuttingDownError.ts'
 import {getDuckdbStartupChildProcessInput} from './duckdbStartupChildProcess.ts'
 import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
@@ -41,6 +48,8 @@ import {
   registerDuckdbOwnerDemotionHandler,
   releaseCurrentDuckdbOwnerLease,
 } from './serverRuntimeRole.ts'
+import {registerServerShutdownSignalHandlers, type ServerShutdownSignal} from './serverShutdownSignals.ts'
+import {isServerShutdownInProgress, runServerShutdownHandlers} from './serverShutdownState.ts'
 
 type DuckdbRuntimeConfig = {
   appendLaneCount: number
@@ -3000,7 +3009,7 @@ const getChainedDuckdbError = (error: unknown, nextError: unknown, context: stri
 let duckdbFatalRecoveryPromise: Promise<void> | null = null
 let duckdbFailedMutatingStatementTargetTable: string | null = null
 let duckdbLastMutatingStatementTargetTable: string | null = null
-let duckdbShutdownInProgress = false
+let duckdbStatementAdmissionClosed = false
 
 const isDuckdbRestartRequiredError = (error: unknown) => {
   const message = getNormalizedDuckdbError(error).message
@@ -3113,7 +3122,7 @@ const withDuckdbStatementErrorContext = async <T>({
   } catch (error) {
     const contextualError = getDuckdbErrorWithStatementContext(error, label, statement)
 
-    if (!canRetryAfterRestart || !isDuckdbRestartRequiredError(contextualError)) {
+    if (!canRetryAfterRestart || !isDuckdbRestartRequiredError(contextualError) || isServerShutdownInProgress()) {
       throw contextualError
     }
 
@@ -3133,6 +3142,10 @@ const recoverDuckdbRuntimeAfterFatalError = async (error: unknown, options: Clos
   }
 
   markDuckdbStartupRepairForFatalIndexedTableError(error)
+
+  if (isServerShutdownInProgress()) {
+    return
+  }
 
   writeRuntimeOperatorLogEvent({
     attrs: {error},
@@ -5695,7 +5708,8 @@ const withNormalizedDuckdbError = async <T>(work: () => Promise<T>, canRetryAfte
   } catch (error) {
     const normalizedError = getNormalizedDuckdbError(error)
 
-    if (duckdbShutdownInProgress && isDuckdbRestartRequiredError(normalizedError)) {
+    if (isServerShutdownInProgress() && isDuckdbRestartRequiredError(normalizedError)) {
+      markDuckdbStartupRepairForFatalIndexedTableError(normalizedError)
       throw normalizedError
     }
 
@@ -5888,7 +5902,7 @@ const getDuckdbActiveQueueDepth = () => {
 }
 
 const checkpointDuckdbBeforeClose = async (connection: DuckDBConnection | null, hasOpenTransaction: boolean) => {
-  if (connection === null || hasOpenTransaction || (duckdbShutdownInProgress && getDuckdbActiveQueueDepth() > 0)) {
+  if (connection === null || hasOpenTransaction || (isServerShutdownInProgress() && getDuckdbActiveQueueDepth() > 0)) {
     return
   }
 
@@ -6041,41 +6055,165 @@ const withProjectTransferForegroundMemoryHeadroomIfNeeded = async <T>(
   }
 }
 
-const closeDuckdbServiceForSignal = async () => {
-  duckdbShutdownInProgress = true
-  const shouldCloseRuntime = !shouldSerializeDuckdbConcurrentWork(getDuckdbRuntimeConfigValue().memoryLimit)
-  const shouldReleaseOwnerLease = shouldCloseRuntime || process.env.SERVER_ROLE === 'dev-single'
-
-  return closeDuckdbServiceWithoutBarrier({
-    checkpointBeforeClose: shouldCloseRuntime,
-    closeRuntime: shouldCloseRuntime,
-    releaseOwnerLease: shouldReleaseOwnerLease,
-  })
+const assertDuckdbAcceptingWork = (operation: string) => {
+  if (isServerShutdownInProgress()) {
+    throw createDuckdbShuttingDownError(operation)
+  }
 }
 
-const registerDuckdbShutdownHooks = () => {
-  if (duckdbServiceState.shutdownHooksRegistered) {
+const assertDuckdbStatementAdmitted = (statement: string) => {
+  if (duckdbStatementAdmissionClosed && !/^\s*ROLLBACK\b/iu.test(statement)) {
+    throw createDuckdbShuttingDownError(`${getDuckdbStatementKind(statement)} statement`)
+  }
+}
+
+const isDuckdbServiceIdleForShutdown = () => {
+  return (
+    duckdbServiceState.startupPromise === null
+    && !duckdbServiceState.duckdbMainQueueRunning
+    && duckdbServiceState.duckdbMainQueuedWork.length === 0
+    && getDuckdbActiveQueueDepth() === 0
+  )
+}
+
+const interruptDuckdbConnectionsForShutdown = () => {
+  const interruptErrors = [
+    duckdbServiceState.controlConnection,
+    duckdbServiceState.backgroundConnection,
+    ...duckdbServiceState.appendConnections,
+  ].map((connection) => {
+    return getCloseSyncError(
+      connection === null
+        ? null
+        : () => {
+            connection.interrupt()
+          },
+    )
+  })
+  const interruptError = getCombinedCloseError(interruptErrors)
+
+  if (interruptError !== null) {
+    writeRuntimeFailureLogEvent({
+      attrs: {error: interruptError},
+      event: 'duckdb.shutdown.interrupt-failure',
+      message: '[duckdb] failed to interrupt active DuckDB work during shutdown',
+      severity: 'WARN',
+      terminalArgs: [getCompactDuckdbErrorMessage(interruptError)],
+    })
+  }
+}
+
+const closeDuckdbConnectionsForShutdown = () => {
+  const activeConnections = [
+    duckdbServiceState.controlConnection,
+    duckdbServiceState.backgroundConnection,
+    ...duckdbServiceState.appendConnections,
+  ]
+
+  duckdbServiceState.appendConnections = []
+  duckdbServiceState.backgroundConnection = null
+  duckdbServiceState.controlConnection = null
+
+  const closeError = getCombinedCloseError(
+    activeConnections.map((connection) => {
+      return getCloseSyncError(
+        connection === null
+          ? null
+          : () => {
+              connection.interrupt()
+              connection.closeSync()
+            },
+      )
+    }),
+  )
+
+  if (closeError !== null) {
+    writeRuntimeFailureLogEvent({
+      attrs: {error: closeError},
+      event: 'duckdb.shutdown.connection-close-failure',
+      message: '[duckdb] failed to close DuckDB connections before the shutdown checkpoint',
+      severity: 'WARN',
+      terminalArgs: [getCompactDuckdbErrorMessage(closeError)],
+    })
+  }
+}
+
+const checkpointDuckdbForShutdown = async () => {
+  const duckdbInstance = duckdbServiceState.duckdbInstance
+
+  if (duckdbInstance === null) {
     return
   }
 
+  const checkpointConnection = await duckdbInstance.connect()
+
+  try {
+    await checkpointConnection.run('CHECKPOINT')
+  } finally {
+    checkpointConnection.closeSync()
+  }
+}
+
+const getDuckdbWalBytesForShutdown = () => {
+  const databasePath = getDuckdbRuntimeConfigValue().databasePath
+
+  return databasePath === ':memory:' ? null : (getDuckdbWalFileStatSnapshot(databasePath).sizeBytes ?? 0)
+}
+
+const writeDuckdbGracefulShutdownLogEntry = (entry: DuckdbGracefulShutdownLogEntry) => {
+  writeRuntimeOperatorLogEvent(entry)
+}
+
+export const runDuckdbServiceGracefulShutdown = async (signal: string) => {
+  const shouldCloseRuntime = !shouldSerializeDuckdbConcurrentWork(getDuckdbRuntimeConfigValue().memoryLimit)
+  const shouldReleaseOwnerLease = shouldCloseRuntime || process.env.SERVER_ROLE === 'dev-single'
+
+  return runDuckdbGracefulShutdown(
+    {
+      checkpoint: checkpointDuckdbForShutdown,
+      closeActiveConnections: closeDuckdbConnectionsForShutdown,
+      closeRuntime: async ({closeNative}) => {
+        await closeDuckdbServiceWithoutBarrier({
+          checkpointBeforeClose: false,
+          closeRuntime: shouldCloseRuntime && closeNative,
+          releaseOwnerLease: shouldReleaseOwnerLease,
+        })
+      },
+      closeStatementAdmission: () => {
+        duckdbStatementAdmissionClosed = true
+      },
+      getWalBytes: getDuckdbWalBytesForShutdown,
+      interruptActiveWork: interruptDuckdbConnectionsForShutdown,
+      isIdle: isDuckdbServiceIdleForShutdown,
+      isRuntimeOpen: () => {
+        return duckdbServiceState.duckdbInstance !== null
+      },
+      log: writeDuckdbGracefulShutdownLogEntry,
+      now: Date.now,
+      stopBackgroundWork: runServerShutdownHandlers,
+      wait: sleepMs,
+    },
+    {...getDuckdbGracefulShutdownTimeouts(process.env), shouldCheckpoint: shouldCloseRuntime, signal},
+  )
+}
+
+const getDuckdbShutdownForceExitAfterMs = () => {
+  return getDuckdbGracefulShutdownBudgetMs(getDuckdbGracefulShutdownTimeouts(process.env)) + 30_000
+}
+
+export const registerDuckdbShutdownHooks = () => {
   duckdbServiceState.shutdownHooksRegistered = true
-  ;(['SIGINT', 'SIGTERM'] as const).map((signal) => {
-    process.once(signal, () => {
-      void closeDuckdbServiceForSignal().then(
-        () => {
-          void exitWithRuntimeLogFlush({code: 0})
-        },
-        (error) => {
-          writeRuntimeFailureLogEvent({
-            attrs: {error, signal},
-            event: 'duckdb.shutdown.failure',
-            message: `[duckdb] shutdown failed on ${signal}`,
-            terminalArgs: [error],
-          })
-          void exitWithRuntimeLogFlush({code: 1})
-        },
-      )
-    })
+  registerServerShutdownSignalHandlers({
+    exit: async (code) => {
+      await exitWithRuntimeLogFlush({code})
+    },
+    forceExitAfterMs: getDuckdbShutdownForceExitAfterMs(),
+    log: (entry) => {
+      return entry.severity === 'ERROR' ? writeRuntimeFailureLogEvent(entry) : writeRuntimeOperatorLogEvent(entry)
+    },
+    runShutdown: async (signal: ServerShutdownSignal) => {
+      return runDuckdbServiceGracefulShutdown(signal)
+    },
   })
 }
 
@@ -6189,10 +6327,12 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
     return createAppendConnections(remainingCount - 1)
   }
 
+  assertDuckdbAcceptingWork('DuckDB open')
   await ensureCurrentDuckdbOwnerLease()
 
   try {
     await runDuckdbStartupWalPreflight(runtimeConfig)
+    assertDuckdbAcceptingWork('DuckDB open after startup preflight')
     duckdbInstance = await createDuckdbInstance(runtimeConfig)
     controlConnection = await duckdbInstance.connect()
     await createAppendConnections(appendLaneCount)
@@ -6238,6 +6378,8 @@ const ensureStartedDuckdbProcess = async () => {
   ) {
     return duckdbServiceState.controlConnection
   }
+
+  assertDuckdbAcceptingWork('DuckDB open')
 
   if (duckdbServiceState.startupPromise !== null) {
     return duckdbServiceState.startupPromise
@@ -6391,6 +6533,7 @@ const enqueueDuckdbMainQueueWork = async <T>(
 }
 
 const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
+  assertDuckdbAcceptingWork('new DuckDB work')
   const queuedAtMs = Date.now()
   duckdbServiceState.duckdbPendingCount += 1
   duckdbServiceState.duckdbMaxQueueDepth = Math.max(
@@ -6452,6 +6595,7 @@ export const waitForDuckdbForegroundQueue = ({
 }
 
 const enqueueDuckdbSerializedBackgroundWork = async <T>(work: () => Promise<T>): Promise<T> => {
+  assertDuckdbAcceptingWork('new DuckDB background work')
   const queuedAtMs = Date.now()
   duckdbServiceState.backgroundPendingCount += 1
   duckdbServiceState.backgroundMaxQueueDepth = Math.max(
@@ -6493,6 +6637,7 @@ const enqueueDuckdbSerializedBackgroundWork = async <T>(work: () => Promise<T>):
 }
 
 const enqueueDuckdbBackgroundWork = async <T>(work: () => Promise<T>): Promise<T> => {
+  assertDuckdbAcceptingWork('new DuckDB background work')
   const queuedAtMs = Date.now()
   duckdbServiceState.backgroundPendingCount += 1
   duckdbServiceState.backgroundMaxQueueDepth = Math.max(
@@ -6650,6 +6795,7 @@ const enqueueDuckdbAppendLaneWork = async <T>(
   laneIndex: number,
   work: (appendConnection: DuckDBConnection) => Promise<T>,
 ): Promise<T> => {
+  assertDuckdbAcceptingWork('new DuckDB append work')
   incrementDuckdbAppendQueueDepth(laneIndex)
   const appendQueue = duckdbServiceState.appendQueues[laneIndex] ?? Promise.resolve()
   const queuedWork = appendQueue.then(async () => {
@@ -6986,6 +7132,7 @@ const withDuckdbStatementDiagnostic = async <T>(
 }
 
 const runDuckdbSingleStatement = async (duckdbConnection: DuckDBConnection, statement: string) => {
+  assertDuckdbStatementAdmitted(statement)
   await withDuckdbStatementDiagnostic(duckdbConnection, statement, () => {
     return duckdbConnection.run(statement)
   })
@@ -6998,6 +7145,7 @@ const runDuckdbSingleStatementAndReadAll = async <T>(
   values?: DuckdbBoundValues,
   types?: DuckdbBoundTypes,
 ): Promise<T[]> => {
+  assertDuckdbStatementAdmitted(statement)
   return withDuckdbStatementDiagnostic(duckdbConnection, statement, async () => {
     const reader = await duckdbConnection.runAndReadAll(statement, values, types)
     return reader.getRowObjectsJson() as T[]
@@ -7366,6 +7514,8 @@ const assertDuckdbExclusiveWorkAllowsWorkload = (
   throw getDuckdbExclusiveWorkAdmissionError({operation, phase: exclusiveWork.phase, routeOrJobKey})
 }
 
+const duckdbOwnerWorkloadQueues = new Set<DuckdbWorkloadQueue>(['append', 'background', 'main'])
+
 const assertDuckdbWorkloadContextIsAllowed = (operation: DuckdbWorkloadOperation, context?: DuckdbWorkloadContext) => {
   assertDuckdbExclusiveWorkAllowsWorkload(operation, context)
 
@@ -7450,6 +7600,10 @@ const withDuckdbWorkloadContext = <T>({
   work: (runExecution: DuckdbWorkloadExecution) => Promise<T>
 }) => {
   assertDuckdbWorkloadContextIsAllowed(operation, context)
+
+  if (duckdbOwnerWorkloadQueues.has(queue)) {
+    assertDuckdbAcceptingWork(`${operation} for ${context?.routeOrJobKey ?? 'unclassified work'}`)
+  }
 
   const diagnosticContext = context ?? duckdbWorkloadDiagnosticStorage.getStore()?.context
   const timing = {executionDurationMs: null as number | null}
@@ -8143,7 +8297,10 @@ export const recoverDuckdbServiceAfterFatalError = async (error: unknown, option
 }
 
 registerDuckdbOwnerDemotionHandler(async () => {
-  if (duckdbServiceState.controlConnection !== null || duckdbServiceState.duckdbInstance !== null) {
+  if (
+    !isServerShutdownInProgress()
+    && (duckdbServiceState.controlConnection !== null || duckdbServiceState.duckdbInstance !== null)
+  ) {
     await closeDuckdbService()
   }
 })

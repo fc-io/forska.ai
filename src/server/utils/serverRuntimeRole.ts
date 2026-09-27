@@ -12,6 +12,7 @@ import {
   updateDuckdbOwnerLeaseHeartbeat,
 } from './duckdbOwnerLease.ts'
 import {clearUnresponsiveDuckdbOwnerWarnings, recordUnresponsiveDuckdbOwnerWarning} from './duckdbOwnerWarnings.ts'
+import {isDuckdbShuttingDownError} from './duckdbShuttingDownError.ts'
 import {getEnv} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {
@@ -33,6 +34,7 @@ import {
   shouldServerRoleMountDuckdbOwnerPrivateApi,
   shouldServerRoleMountPublicProductApi,
 } from './serverRole.ts'
+import {isServerShutdownInProgress} from './serverShutdownState.ts'
 
 type ServerRuntimeState = {
   autoMonitorStarted: boolean
@@ -67,9 +69,12 @@ const getRuntimeRoleErrorMessage = (error: unknown) => {
 const isDuckdbOwnerRoleLossError = (error: unknown) => {
   const message = getRuntimeRoleErrorMessage(error)
 
-  return duckdbRoleErrorFragments.some((fragment) => {
-    return message.includes(fragment)
-  })
+  return (
+    isDuckdbShuttingDownError(error)
+    || duckdbRoleErrorFragments.some((fragment) => {
+      return message.includes(fragment)
+    })
+  )
 }
 
 const getServerRuntimeState = () => {
@@ -486,7 +491,11 @@ export const canCurrentServerOwnDuckdb = () => {
 }
 
 export const shouldCurrentServerRunMaintenanceLoops = () => {
-  return !shouldDisableServerMutationWork() && canServerRoleRunMaintenanceLoops(getCurrentServerRole())
+  return (
+    !shouldDisableServerMutationWork()
+    && !isServerShutdownInProgress()
+    && canServerRoleRunMaintenanceLoops(getCurrentServerRole())
+  )
 }
 
 export const canCurrentServerRunMaintenanceLoops = shouldCurrentServerRunMaintenanceLoops

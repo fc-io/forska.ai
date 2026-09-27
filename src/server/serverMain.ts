@@ -23,6 +23,7 @@ import {
 } from './services/projectTransfer/projectTransferSessionRecovery.ts'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {parseDuckdbMemoryLimitToMiB} from './utils/duckdbMemoryLimit.ts'
+import {registerDuckdbShutdownHooks} from './utils/duckdbService.ts'
 import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
@@ -80,6 +81,10 @@ const startParentDisconnectMonitor = () => {
   }, parentMonitorIntervalMs)
 
   interval.unref()
+}
+
+if (canCurrentServerOwnDuckdb()) {
+  registerDuckdbShutdownHooks()
 }
 
 startParentDisconnectMonitor()
