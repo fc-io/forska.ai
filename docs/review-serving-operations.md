@@ -28,8 +28,23 @@ Failed to delete all rows from index
 database has been invalidated because of a previous fatal error
 ```
 
-keep the generated recovery manifest and any `*.pre-repair.duckdb` copy. If the
-affected table is `mart.review_filter_option_serving_v4`, use exclusive
+keep the generated recovery manifest and any `*.pre-repair.duckdb` copy.
+
+Startup repair never edits the live file in place. It clones the WAL-free
+database to `<duckdb>.repair-work.duckdb`, repairs the clone, checkpoints it,
+re-runs the failing startup probe on it, and only then renames it over the live
+file. Per failing table it tries, in order: rebuild that table's secondary
+(`CREATE INDEX`) indexes, rebuild the table with its repair strategy (for
+example `recreate-in-place`), rebuild every secondary index in the database.
+The manifest records `repairRungs`, `repairAttempts` (rungs, outcome, error,
+timings) and `repairWorkPath`. If no rung passes, the manifest says
+`recovery: indexed-table-rebuild-failed` and `liveDatabaseModified: false`, and
+the owner refuses to start until the process restarts. Recover by hand from a
+copy of the `*.pre-repair.duckdb` file with the stack stopped (for example
+`DUCKDB_PATH=<copy> bun run db:duck:rebuild-secondary-indexes`), then put the
+verified copy in place and restart.
+
+If the affected table is `mart.review_filter_option_serving_v4`, use exclusive
 maintenance access and rebuild the table into a fresh catalog lineage:
 
 ```sql
