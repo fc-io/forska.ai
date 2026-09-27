@@ -612,16 +612,65 @@ const getQualifiedDirtyWorkSelect = (dirtyWorkSql: string) => {
   `
 }
 
-const acknowledgeReviewServingDirtyWorkClaim = async (
-  claim: ReviewServingDirtyWorkClaim,
+type DirtyWorkClaimAcknowledgement = {claim: ReviewServingDirtyWorkClaim; dirtyAckId: string}
+
+const getDirtyWorkClaimAcknowledgements = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return [
+    ...new Map(
+      claims.map((claim) => {
+        return [getDirtyAckId(claim), claim] as const
+      }),
+    ).entries(),
+  ].map(([dirtyAckId, claim]): DirtyWorkClaimAcknowledgement => {
+    return {claim, dirtyAckId}
+  })
+}
+
+const getReservedDirtyAckIds = async (dirtyAckIds: readonly string[], database: ReviewServingDirtyWorkTransaction) => {
+  const rows = await database.queryJson<{dirtyAckId: string}>(`
+    SELECT dirty_ack_id AS dirtyAckId
+    FROM app.review_serving_dirty_work_ack_id_lookup
+    WHERE dirty_ack_id IN (${dirtyAckIds.map(getSqlLiteral).join(', ')})
+  `)
+
+  return new Set(
+    rows.map((row) => {
+      return row.dirtyAckId
+    }),
+  )
+}
+
+const getDirtyWorkClaimAcknowledgementValuesSql = (acknowledgements: readonly DirtyWorkClaimAcknowledgement[]) => {
+  return acknowledgements
+    .map(({claim, dirtyAckId}) => {
+      return `(
+      ${getSqlLiteral(dirtyAckId)},
+      ${getSqlLiteral(claim.dirtyWorkId)},
+      ${getSqlLiteral(claim.projectionComponent)},
+      ${getSqlLiteral(claim.projectionIdentity)},
+      ${getSqlLiteral(claim.sourcePartition)},
+      ${getSqlLiteral(claim.latestSourceHighWaterMark)},
+      ${getSqlLiteral(claim.dirtyRangeStart)},
+      ${getSqlLiteral(claim.dirtyRangeEnd)},
+      'completed',
+      current_timestamp
+    )`
+    })
+    .join(',\n    ')
+}
+
+const insertDirtyWorkClaimAcknowledgements = async (
+  acknowledgements: readonly DirtyWorkClaimAcknowledgement[],
   database: ReviewServingDirtyWorkTransaction,
 ) => {
-  const dirtyAckId = getDirtyAckId(claim)
-
-  if (!(await reserveReviewServingDirtyAckId(dirtyAckId, database))) {
-    return
-  }
-
+  await database.run(`
+    INSERT INTO app.review_serving_dirty_work_ack_id_lookup (dirty_ack_id)
+    VALUES ${acknowledgements
+      .map(({dirtyAckId}) => {
+        return `(${getSqlLiteral(dirtyAckId)})`
+      })
+      .join(', ')}
+  `)
   await database.run(`
     INSERT INTO app.review_serving_dirty_work_ack (
       dirty_ack_id,
@@ -635,19 +684,33 @@ const acknowledgeReviewServingDirtyWorkClaim = async (
       status,
       completed_at
     )
-    VALUES (
-      ${getSqlLiteral(dirtyAckId)},
-      ${getSqlLiteral(claim.dirtyWorkId)},
-      ${getSqlLiteral(claim.projectionComponent)},
-      ${getSqlLiteral(claim.projectionIdentity)},
-      ${getSqlLiteral(claim.sourcePartition)},
-      ${getSqlLiteral(claim.latestSourceHighWaterMark)},
-      ${getSqlLiteral(claim.dirtyRangeStart)},
-      ${getSqlLiteral(claim.dirtyRangeEnd)},
-      'completed',
-      current_timestamp
-    )
+    VALUES ${getDirtyWorkClaimAcknowledgementValuesSql(acknowledgements)}
   `)
+}
+
+const acknowledgeReviewServingDirtyWorkClaims = async (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  const acknowledgements = getDirtyWorkClaimAcknowledgements(claims)
+  const reservedDirtyAckIds =
+    acknowledgements.length === 0
+      ? new Set<string>()
+      : await getReservedDirtyAckIds(
+          acknowledgements.map(({dirtyAckId}) => {
+            return dirtyAckId
+          }),
+          database,
+        )
+  const newAcknowledgements = acknowledgements.filter(({dirtyAckId}) => {
+    return !reservedDirtyAckIds.has(dirtyAckId)
+  })
+
+  if (newAcknowledgements.length === 0) {
+    return
+  }
+
+  await insertDirtyWorkClaimAcknowledgements(newAcknowledgements, database)
 }
 
 const advanceReviewServingDirtySourceWatermarkEntries = async (
@@ -2212,11 +2275,7 @@ const completeReviewServingDirtyWorkClaimsInTransaction = async (
     ).values(),
   ]
 
-  await uniqueClaims.reduce<Promise<void>>((previousCompletion, claim) => {
-    return previousCompletion.then(async () => {
-      await acknowledgeReviewServingDirtyWorkClaim(claim, database)
-    })
-  }, Promise.resolve())
+  await acknowledgeReviewServingDirtyWorkClaims(uniqueClaims, database)
 
   if (uniqueClaims.length > 0) {
     await advanceReviewServingDirtySourceWatermark(uniqueClaims, database)
@@ -2299,11 +2358,7 @@ export const completeReviewServingDirtyWorkCoveredByRebuild = async (
       return !isClaimCoveredByHighWaterAckCoverage(claim, highWaterAckCoverages)
     })
 
-    await pointAckClaims.reduce<Promise<void>>((previousCompletion, claim) => {
-      return previousCompletion.then(async () => {
-        await acknowledgeReviewServingDirtyWorkClaim(claim, database)
-      })
-    }, Promise.resolve())
+    await acknowledgeReviewServingDirtyWorkClaims(pointAckClaims, database)
 
     await advanceReviewServingDirtySourceWatermarkEntries(
       coveredClaims.map((claim) => {

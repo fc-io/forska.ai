@@ -494,7 +494,7 @@ test('review serving projector worker heartbeat uses the production backlog defa
   const productionComponentBatchSizes = {
     humanStatus: 1_024,
     llmStatus: 1_024,
-    projectScope: 1_536,
+    projectScope: 1_024,
     queue: 1_024,
     selectedImport: 512,
   }

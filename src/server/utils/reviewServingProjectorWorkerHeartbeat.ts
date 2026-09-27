@@ -58,7 +58,7 @@ const defaultReviewServingProjectorWorkerDirtyWorkMaxRowsPerWake = 8_192
 const defaultReviewServingProjectorWorkerComponentBatchSizes: ReviewServingProjectorComponentBatchSizes = {
   humanStatus: 1_024,
   llmStatus: 1_024,
-  projectScope: 1_536,
+  projectScope: 1_024,
   queue: 1_024,
   selectedImport: 512,
 }

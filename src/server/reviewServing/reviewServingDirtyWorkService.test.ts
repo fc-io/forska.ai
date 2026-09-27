@@ -409,49 +409,43 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
     })
   }
   const insertAck = (statement: string) => {
-    const strings = getSqlStrings(statement)
-    const numbers = getNumbers(statement)
-    const compacted = statement.includes('NULL,')
-
-    if (compacted) {
-      for (let index = 0; index < strings.length; index += 5) {
-        const dirtyAckId = strings[index] ?? ''
-        const projectionComponent = strings[index + 1] ?? ''
-        const projectionIdentity = strings[index + 2] ?? ''
-        const sourcePartition = strings[index + 3] ?? ''
-
-        acks.set(dirtyAckId, {
-          completedSourceHighWaterMark: numbers[Math.floor(index / 5)] ?? 0,
-          dirtyAckId,
-          dirtyRangeEnd: null,
-          dirtyRangeStart: null,
-          dirtyWorkId: null,
-          projectionComponent,
-          projectionIdentity,
-          sourcePartition,
-          status: 'completed',
-        })
-      }
-
+    if (statement.includes('app.review_serving_dirty_work_ack_id_lookup')) {
       return
     }
 
-    const dirtyAckId = strings[0] ?? ''
-    const dirtyWorkId = compacted ? null : (strings[1] ?? '')
-    const projectionComponent = strings[compacted ? 1 : 2] ?? ''
-    const projectionIdentity = strings[compacted ? 2 : 3] ?? ''
-    const sourcePartition = strings[compacted ? 3 : 4] ?? ''
+    const columns = (statement.match(/INSERT INTO app\.review_serving_dirty_work_ack\s*\(([^)]*)\)/u)?.[1] ?? '')
+      .split(',')
+      .map((column) => {
+        return column.trim()
+      })
+    const valuesSql = statement.slice(statement.indexOf('VALUES') + 'VALUES'.length)
+    const tuples = [...valuesSql.matchAll(/\(((?:'(?:''|[^'])*'|[^()'])*)\)/gu)].map((match) => {
+      return [...(match[1] ?? '').matchAll(/'(?:''|[^'])*'|[^,\s][^,]*/gu)].map((token) => {
+        const value = token[0].trim()
 
-    acks.set(dirtyAckId, {
-      completedSourceHighWaterMark: numbers[0] ?? 0,
-      dirtyAckId,
-      dirtyRangeEnd: compacted ? null : (strings[6] ?? null),
-      dirtyRangeStart: compacted ? null : (strings[5] ?? null),
-      dirtyWorkId,
-      projectionComponent,
-      projectionIdentity,
-      sourcePartition,
-      status: 'completed',
+        return value === 'NULL' ? null : value.startsWith("'") ? value.slice(1, -1).replaceAll("''", "'") : value
+      })
+    })
+
+    tuples.forEach((values) => {
+      const row = Object.fromEntries(
+        columns.map((column, index) => {
+          return [column, values[index] ?? null]
+        }),
+      )
+      const dirtyAckId = row.dirty_ack_id ?? ''
+
+      acks.set(dirtyAckId, {
+        completedSourceHighWaterMark: Number(row.completed_source_high_water_mark ?? 0),
+        dirtyAckId,
+        dirtyRangeEnd: row.dirty_range_end ?? null,
+        dirtyRangeStart: row.dirty_range_start ?? null,
+        dirtyWorkId: row.dirty_work_id ?? null,
+        projectionComponent: row.projection_component ?? '',
+        projectionIdentity: row.projection_identity ?? '',
+        sourcePartition: row.source_partition ?? '',
+        status: 'completed',
+      })
     })
   }
   const deleteCompactedAcks = (statement: string) => {
@@ -2064,7 +2058,7 @@ test('a completed older claim cannot finish a newer running claim in DuckDB', as
   }
 })
 
-test('claims and completes one batch above the DuckDB expression depth limit and the base lane window in DuckDB', async () => {
+test('claims and completes one batch above the DuckDB expression depth limit and the base lane window, acknowledging each claim once, in DuckDB', async () => {
   const {close, database} = await createDuckdbDirtyWorkDatabase()
   const batchSize = 2_500
 
@@ -2085,6 +2079,7 @@ test('claims and completes one batch above the DuckDB expression depth limit and
 
     expect(claims).toHaveLength(batchSize)
     expect(await completeReviewServingDirtyWorkClaims(claims, database)).toEqual({completedCount: batchSize})
+    expect(await completeReviewServingDirtyWorkClaims(claims, database)).toEqual({completedCount: batchSize})
     expect(
       await database.queryJson(`
         SELECT status, CAST(count(*) AS INTEGER) AS count
@@ -2092,6 +2087,14 @@ test('claims and completes one batch above the DuckDB expression depth limit and
         GROUP BY status
       `),
     ).toEqual([{count: batchSize, status: 'completed'}])
+    expect(
+      await database.queryJson(`
+        SELECT
+          (SELECT CAST(count(*) AS INTEGER) FROM app.review_serving_dirty_work_ack) AS ackCount,
+          (SELECT CAST(count(DISTINCT dirty_work_id) AS INTEGER) FROM app.review_serving_dirty_work_ack) AS ackedDirtyWorkCount,
+          (SELECT CAST(count(*) AS INTEGER) FROM app.review_serving_dirty_work_ack_id_lookup) AS ackIdCount
+      `),
+    ).toEqual([{ackCount: batchSize, ackedDirtyWorkCount: batchSize, ackIdCount: batchSize}])
   } finally {
     close()
   }
