@@ -7169,6 +7169,130 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
   expect(parsed).toEqual({createCount: 2, releaseCount: 1, rows: [{value: 1}], runStatements: ['2:CHECKPOINT']})
 })
 
+test('duckdb service restarts and retries after a checkpoint-failure invalidation error', () => {
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', import.meta.url).href
+
+        let createCount = 0
+        let firstReadInvalidated = false
+        let releaseCount = 0
+        const runStatements = []
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            canCurrentServerOwnDuckdb: () => true,
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {
+              releaseCount += 1
+            },
+          }
+        })
+
+        void mock.module(new URL('./src/server/utils/createDuckdbInstance.ts', import.meta.url).href, () => ({
+          createDuckdbInstance: ({create, databasePath, options}) => create(databasePath, options),
+        }))
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            constructor(instanceId) {
+              this.instanceId = instanceId
+            }
+
+            async run(statement) {
+              if (statement === 'CHECKPOINT' && this.instanceId === 1) {
+                throw new Error('recovery checkpoint should not run')
+              }
+
+              runStatements.push(this.instanceId + ':' + statement)
+            }
+
+            async runAndReadAll() {
+              if (!firstReadInvalidated && this.instanceId === 1) {
+                firstReadInvalidated = true
+                throw new Error(
+                  'IO Error: Database "forska" has been invalidated because checkpointing failed. Detach and reattach it before using it again. Original error: Attempted to dereference shared_ptr that is NULL!',
+                )
+              }
+
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+              return new MockInstance(createCount)
+            }
+
+            constructor(instanceId) {
+              this.instanceId = instanceId
+            }
+
+            async connect() {
+              return new MockConnection(this.instanceId)
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance, version: () => ${JSON.stringify(duckdbDistributionManifest.engine.version)}}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?checkpoint-invalidated-restart-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        await duckdbService.closeDuckdbService()
+        console.log(JSON.stringify({createCount, releaseCount, rows, runStatements}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: join(tmpdir(), `f1-duckdb-service-checkpoint-invalidated-restart-test-${Date.now()}.duckdb`),
+        DUCKDB_TEMP_DIRECTORY: join(
+          tmpdir(),
+          `f1-duckdb-service-checkpoint-invalidated-restart-test-temp-${Date.now()}`,
+        ),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.toString() || result.stdout.toString() || 'DuckDB checkpoint-invalidated restart subprocess failed',
+    )
+  }
+
+  const parsed = parseJsonSubprocessStdout<{
+    createCount: number
+    releaseCount: number
+    rows: Array<{value: number}>
+    runStatements: string[]
+  }>(result.stdout.toString())
+
+  expect(parsed).toEqual({createCount: 2, releaseCount: 1, rows: [{value: 1}], runStatements: ['2:CHECKPOINT']})
+})
+
 test('duckdb service restarts and retries after a fatal rollback OOM', () => {
   const result = globalThis.Bun.spawnSync(
     [
