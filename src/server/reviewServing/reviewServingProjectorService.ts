@@ -234,10 +234,17 @@ const getRotatedComponentOrder = (
   return [...componentOrder.slice(startIndex), ...componentOrder.slice(0, startIndex)]
 }
 
-export const getVisibilityFirstReviewServingComponentOrder = (rotationOffset: number | undefined) => {
+export const getVisibilityFirstReviewServingComponentOrder = (
+  rotationOffset: number | undefined,
+  components?: readonly ReviewServingProjectionComponent[],
+) => {
+  const isIncluded = (component: ReviewServingProjectionComponent) => {
+    return components === undefined || components.includes(component)
+  }
+
   return [
-    ...getRotatedComponentOrder(visibilityReviewServingProjectionComponents, rotationOffset),
-    ...getRotatedComponentOrder(enrichmentReviewServingProjectionComponents, rotationOffset),
+    ...getRotatedComponentOrder(visibilityReviewServingProjectionComponents.filter(isIncluded), rotationOffset),
+    ...getRotatedComponentOrder(enrichmentReviewServingProjectionComponents.filter(isIncluded), rotationOffset),
   ]
 }
 

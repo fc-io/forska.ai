@@ -5394,9 +5394,59 @@ test('worker drains foreground critical rebuild chunks within a bounded chunk bu
   expect(result.projector).toMatchObject({status: 'completed'})
   expect(harness.wakeInputs).toHaveLength(1)
   expect(harness.wakeInputs[0]).toMatchObject({
-    componentOrder: [...countReadyReviewServingComponents, 'judgmentInputContent', 'payload'],
+    componentOrder: [
+      'projectScope',
+      'selectedImport',
+      'llmStatus',
+      'humanStatus',
+      'queue',
+      'display',
+      'payload',
+      'judgmentInputContent',
+    ],
   })
   expect(harness.cleanupInputs).toEqual([])
+})
+
+test('the foreground drain wake rotates its visibility components so status and queue work also go first', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const foregroundChunkInput = {...chunkInput, requestId: 'rebuild:foreground'}
+  const foregroundChunk = {...chunkManifest, requestId: 'rebuild:foreground'}
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return foregroundChunk
+    },
+    getNextChunk: async () => {
+      return foregroundChunkInput
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  await runReviewServingProjectorWorkerOnce(
+    {
+      componentRotationOffset: 3,
+      foregroundRebuildDrainChunkBudget: 2,
+      foregroundRebuildDrainCompletedCount: 1,
+      foregroundRebuildDrainStartedAtMs: 1_000,
+      foregroundRebuildDrainTtlMs: 10_000,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  expect(harness.wakeInputs[0]).toMatchObject({
+    componentOrder: [
+      'humanStatus',
+      'queue',
+      'projectScope',
+      'selectedImport',
+      'llmStatus',
+      'display',
+      'payload',
+      'judgmentInputContent',
+    ],
+  })
 })
 
 test('worker resumes normal projector work after the foreground drain budget is exhausted', async () => {
