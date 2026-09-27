@@ -4923,6 +4923,166 @@ test('worker splits an oversized status chunk by its real scope count', async ()
   expect(childRows).toHaveLength(Math.ceil(5_000 / 512))
 })
 
+test('worker splits an oversized chunk alone and still batch-writes the rest of its claimed batch', async () => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const oversizedChunkInput = {
+    ...chunkInput,
+    chunkEndKey: '00000000-0000-0000-0000-000000100000',
+    chunkStartKey: '00000000-0000-0000-0000-000000000001',
+    estimatedInputRows: 214_148,
+    estimatedOutputRows: 214_148,
+    projectionComponent: 'humanStatus' as const,
+    projectionIdentity: 'humanStatus:project-1',
+    requestId: 'rebuild:mixed-batch',
+  }
+  const firstFittingChunkInput = {
+    ...oversizedChunkInput,
+    chunkEndKey: '00000000-0000-0000-0000-000000100050',
+    chunkStartKey: '00000000-0000-0000-0000-000000100001',
+    estimatedInputRows: 50,
+    estimatedOutputRows: 50,
+  }
+  const secondFittingChunkInput = {
+    ...firstFittingChunkInput,
+    chunkEndKey: '00000000-0000-0000-0000-000000100099',
+    chunkStartKey: '00000000-0000-0000-0000-000000100051',
+  }
+  const chunkInputs = [oversizedChunkInput, firstFittingChunkInput, secondFittingChunkInput]
+  const chunks = chunkInputs.map((input, index) => {
+    return {
+      ...chunkManifest,
+      ...input,
+      chunkId: `chunk-mixed-batch-${index}`,
+    } satisfies ReviewServingRebuildChunkManifest
+  })
+  const [oversizedChunk, , lastFittingChunk] = chunks
+  const chunksByStartKey = new Map(
+    chunks.map((chunk) => {
+      return [chunk.chunkStartKey, chunk] as const
+    }),
+  )
+  const chunksById = new Map(
+    chunks.map((chunk) => {
+      return [chunk.chunkId, chunk] as const
+    }),
+  )
+  const componentState = {
+    optional: [],
+    required: [
+      {baseGeneration: '2', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '2', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+      {baseGeneration: '2', component: 'humanStatus', projectionIdentity: 'humanStatus:project-1'},
+    ],
+  }
+  let nextIndex = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('pendingChunkCount')) {
+      return [{pendingChunkCount: 1}] as T[]
+    }
+
+    if (statement.includes('FROM mart.project_scope_article counted_scope')) {
+      return [{scopeArticleCount: 5_000}] as T[]
+    }
+
+    if (statement.includes('RETURNING chunk_id AS chunkId')) {
+      return [{chunkId: oversizedChunk?.chunkId}] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      const chunkId = [...chunksById.keys()].find((id) => {
+        return statement.includes(id)
+      })
+
+      return [chunksById.get(chunkId ?? '') ?? lastFittingChunk] as T[]
+    }
+
+    if (statement.includes('FROM app.review_projection_identity_manifest')) {
+      return [
+        {
+          baseGeneration: lastFittingChunk?.outputBaseGeneration,
+          definitionVersion: 'humanStatus:v1',
+          inputDigest: lastFittingChunk?.inputDigest,
+          inputWatermark: lastFittingChunk?.inputWatermark,
+          inputWatermarksJson: {reviewChange: lastFittingChunk?.inputWatermark},
+          invalidationReason: lastFittingChunk?.inputDigest,
+          manifestId: 'manifest-humanStatus',
+          patchRangeEnd: lastFittingChunk?.inputWatermark,
+          patchRangeStart: lastFittingChunk?.inputWatermark,
+          patchWatermark: lastFittingChunk?.inputWatermark,
+          projectId: lastFittingChunk?.projectId,
+          projectionComponent: 'humanStatus',
+          projectionIdentity: 'humanStatus:project-1',
+          promptConfigHash: null,
+          reviewConfigHash: 'review-config-1',
+          status: 'candidate',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest') && !statement.includes('AS actualChecksum')) {
+      return [
+        {
+          componentStateJson: componentState,
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-humanStatus-mixed-batch',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes(reviewArticleServingDirectReadTable) && statement.includes('AS actualCount')) {
+      return [{actualChecksum: 'checksum-humanStatus-mixed-batch', actualCount: 2}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      harness.claimInputs.push(claimInput)
+
+      return chunksByStartKey.get(claimInput.chunkStartKey) ?? null
+    },
+    getNextChunk: async (getNextInput) => {
+      harness.getNextChunkInputs.push(getNextInput)
+
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      harness.heartbeatInputs.push(heartbeatInput)
+
+      return chunksById.get(heartbeatInput.chunkId) ?? null
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildChunkBatchSize: 3, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+  const joined = statements.join('\n')
+
+  expect(harness.claimInputs).toHaveLength(3)
+  expect(result.chunkBatchCount).toBe(3)
+  expect(result.chunk).toMatchObject({chunkId: lastFittingChunk?.chunkId, status: 'completed'})
+  expect(harness.runChunkInputs).toEqual([])
+  expect(joined).toContain('"splitReason":"admitted_oversized"')
+  expect(joined).toContain('humanStatusBatchWriter')
+  expect(joined).toContain("article_id >= '00000000-0000-0000-0000-000000100001'")
+  expect(joined).toContain("article_id <= '00000000-0000-0000-0000-000000100099'")
+})
+
 test('worker keeps opt-in rebuild chunk batches below the RSS cap', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const firstChunkInput = {
