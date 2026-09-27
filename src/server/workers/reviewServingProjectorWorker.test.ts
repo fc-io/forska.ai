@@ -2187,8 +2187,8 @@ test('worker can drain multiple rebuild chunks in one opt-in batch', async () =>
   expect(claimCountsAtRun).toEqual([2, 2])
   expect(heartbeatChunkIdsAtRun[0]).toContain('chunk-batch-1')
   expect(heartbeatChunkIdsAtRun[0]).toContain('chunk-batch-2')
-  expect(heartbeatChunkIdsAtRun[1]?.slice(heartbeatChunkIdsAtRun[0]?.length ?? 0)).toContain('chunk-batch-1')
-  expect(heartbeatChunkIdsAtRun[1]?.slice(heartbeatChunkIdsAtRun[0]?.length ?? 0)).toContain('chunk-batch-2')
+  // The batch was heartbeated moments before, so only the chunk about to run renews its own lease.
+  expect(heartbeatChunkIdsAtRun[1]?.slice(heartbeatChunkIdsAtRun[0]?.length ?? 0)).toEqual(['chunk-batch-2'])
   expect(harness.wakeInputs).toHaveLength(1)
 })
 
@@ -4508,7 +4508,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       component: 'llmStatus',
       endKeys: ['article-033', 'article-066', 'article-099'],
       identity: 'llmStatus:project-1',
-      preclaimTailLimit: 7,
+      preclaimTailLimit: 63,
       startKeys: ['article-001', 'article-033', 'article-066'],
       validationTable: reviewArticleServingDirectReadTable,
       writerName: 'llmStatusBatchWriter',
@@ -4517,7 +4517,7 @@ test('bounded worker coalesces lightweight foreground chunks under the completed
       component: 'humanStatus',
       endKeys: ['article-033', 'article-066', 'article-099'],
       identity: 'humanStatus:project-1',
-      preclaimTailLimit: 3,
+      preclaimTailLimit: 63,
       startKeys: ['article-001', 'article-033', 'article-066'],
       validationTable: reviewArticleServingDirectReadTable,
       writerName: 'humanStatusBatchWriter',
@@ -4837,6 +4837,90 @@ test('worker splits oversized foreground status rebuild chunks before execution'
   expect(joined).toContain('INSERT INTO app.review_rebuild_chunk_manifest')
   expect(joined).toContain('"splitReason":"admitted_oversized"')
   expect(joined).not.toContain("oom_category = 'duckdb_oom_split'")
+})
+
+const runOversizedStatusChunkWithScopeCount = async (scopeArticleCount: number) => {
+  const statements: string[] = []
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const oversizedChunkInput = {
+    ...chunkInput,
+    chunkEndKey: '00000000-0000-0000-0000-000000100000',
+    chunkStartKey: '00000000-0000-0000-0000-000000000001',
+    estimatedInputRows: 214_148,
+    estimatedOutputRows: 214_148,
+    projectionComponent: 'llmStatus' as const,
+    projectionIdentity: 'llmStatus:project-1',
+    requestId: 'rebuild:request-wide-estimate',
+  }
+  const oversizedChunk = {
+    ...chunkManifest,
+    ...oversizedChunkInput,
+    chunkId: 'chunk-request-wide-estimate',
+    requestId: oversizedChunkInput.requestId,
+  } satisfies ReviewServingRebuildChunkManifest
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('FROM mart.project_scope_article counted_scope')) {
+      return [{scopeArticleCount}] as T[]
+    }
+
+    if (statement.includes('RETURNING chunk_id AS chunkId')) {
+      return [{chunkId: oversizedChunk.chunkId}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return oversizedChunk
+    },
+    getCompatibleStatusChunks: async () => {
+      return []
+    },
+    getNextChunk: async () => {
+      return oversizedChunkInput
+    },
+    heartbeatChunk: async () => {
+      return oversizedChunk
+    },
+    runClaimedChunk: async ({chunk}) => {
+      harness.runChunkInputs.push(chunk)
+
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies)
+
+  return {
+    childInserts: statements.filter((statement) => {
+      return statement.includes('INSERT INTO app.review_rebuild_chunk_manifest')
+    }),
+    joined: statements.join('\n'),
+    runChunkInputs: harness.runChunkInputs,
+  }
+}
+
+test('worker runs a chunk whose real scope count fits the limit despite a request-wide estimate', async () => {
+  const result = await runOversizedStatusChunkWithScopeCount(300)
+
+  expect(result.childInserts).toEqual([])
+  expect(result.runChunkInputs).toHaveLength(1)
+  expect(result.joined).toContain('estimated_input_rows = 300')
+})
+
+test('worker splits an oversized status chunk by its real scope count', async () => {
+  const result = await runOversizedStatusChunkWithScopeCount(5_000)
+  const childRows = result.childInserts.join('\n').match(/"splitReason":"admitted_oversized"/gu) ?? []
+
+  expect(result.runChunkInputs).toEqual([])
+  expect(childRows).toHaveLength(Math.ceil(5_000 / 512))
 })
 
 test('worker keeps opt-in rebuild chunk batches below the RSS cap', async () => {

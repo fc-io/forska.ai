@@ -19,6 +19,7 @@ import {
   getReviewServingRebuildChunkClaimWhere,
   getReviewServingRebuildChunkManifest,
   heartbeatReviewServingRebuildChunkLease,
+  heartbeatReviewServingRebuildChunkLeases,
   isReviewServingRebuildChunkComplete,
   markReviewServingRebuildChunkFailed,
   releaseInactiveRequestRebuildChunkManifests,
@@ -223,6 +224,7 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
     projectId?: string | null
   }) => Promise<readonly ReviewServingProjectorWorkerChunkInput[]>
   heartbeatChunk: typeof heartbeatReviewServingRebuildChunkLease
+  heartbeatChunks?: typeof heartbeatReviewServingRebuildChunkLeases
   isChunkComplete: typeof isReviewServingRebuildChunkComplete
   prepareClaimedChunk?: (input: {
     chunk: ReviewServingRebuildChunkManifest
@@ -560,8 +562,11 @@ const defaultReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = 0
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSoftRssRatio = 0.85
 const defaultReviewServingProjectorWorkerRisingRssPressureBytes = 256 * 1024 ** 2
 const defaultReviewServingProjectorWorkerRebuildChunkBatchSize = 1
-const foregroundHumanStatusRebuildChunkBatchSize = 4
-const foregroundLlmStatusRebuildChunkBatchSize = 8
+// Status chunks write set-based SQL over their article ranges in one batch transaction. With one lease heartbeat and
+// one snapshot promotion per batch, 64 chunks cost about as much per chunk as the old batches of 4 and 8 did per
+// batch, and keep each batch transaction to a few seconds.
+const foregroundHumanStatusRebuildChunkBatchSize = 64
+const foregroundLlmStatusRebuildChunkBatchSize = 64
 const foregroundStatusRebuildDrainBatchBudget = 16
 const foregroundStatusReviewServingProjectorWorkerProgressYieldMs = 100
 const lightweightNativeHeavyReviewServingProjectorWorkerProgressYieldMs = 25
@@ -2438,6 +2443,7 @@ const completeSummaryRebuildChunkAfterBatchWrite = async (
         summaryBatchWriter: getRebuildChunkBatchWriterFanoutDiagnostics(input),
       },
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -2531,6 +2537,7 @@ const runSummaryRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -2670,6 +2677,37 @@ const splitClaimedArticleRangeRebuildChunk = async (
   })
 }
 
+// Rebuild requests stamp their request-wide row estimate on every parent chunk, so an estimate-based split cut
+// ~15k-article status parents into ~420 children of ~36 articles each. Splitting from the chunk's real scope count
+// gives children of the component's row limit, and a parent that already fits runs as it is.
+const countRebuildChunkScopeArticles = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; projectId: string},
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const [row] = await database.queryJson<{scopeArticleCount: number | string}>(`
+    SELECT COUNT(*) AS scopeArticleCount
+    FROM mart.project_scope_article counted_scope
+    WHERE counted_scope.project_id = ${getSqlLiteral(input.projectId)}
+      AND ${getChunkArticleRangePredicate({alias: 'counted_scope', chunk: input.chunk})}
+  `)
+  const articleCount = row === undefined ? Number.NaN : Number(row.scopeArticleCount)
+
+  return Number.isFinite(articleCount) ? articleCount : null
+}
+
+const recordRebuildChunkActualInputEstimate = async (
+  input: {chunk: ReviewServingRebuildChunkManifest; estimatedInputRows: number},
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET
+      estimated_input_rows = ${getSqlLiteral(input.estimatedInputRows)},
+      updated_at = current_timestamp
+    WHERE chunk_id = ${getSqlLiteral(input.chunk.chunkId)}
+  `)
+}
+
 const recoverAdmittedOversizedRebuildChunk = async (
   input: {chunk: ReviewServingRebuildChunkManifest; leaseOwner: string; timings?: Record<string, number>},
   database: ReviewServingChunkManifestRepositoryDatabase & ReviewServingProjectorWorkerDatabase,
@@ -2686,9 +2724,27 @@ const recoverAdmittedOversizedRebuildChunk = async (
     throw new Error(`${diagnostic}; bounded article range is not splittable`)
   }
 
+  const projectId = requireRebuildChunkProjectId(input.chunk)
+  const actualInputRows = await measureReviewServingProjectorWorkerPhase(
+    input.timings,
+    'recoverOversized.countRowsMs',
+    async () => {
+      return countRebuildChunkScopeArticles({chunk: input.chunk, projectId}, database)
+    },
+  )
+
+  if (actualInputRows !== null && inputRowLimit !== undefined && actualInputRows <= inputRowLimit) {
+    await recordRebuildChunkActualInputEstimate({chunk: input.chunk, estimatedInputRows: actualInputRows}, database)
+
+    return false
+  }
+
   const split = await splitClaimedArticleRangeRebuildChunk(
     {
-      chunk: input.chunk,
+      chunk:
+        actualInputRows === null
+          ? input.chunk
+          : {...input.chunk, estimatedInputRows: actualInputRows, estimatedOutputRows: actualInputRows},
       leaseOwner: input.leaseOwner,
       projectId: requireRebuildChunkProjectId(input.chunk),
       splitReason: 'admitted_oversized',
@@ -2980,6 +3036,7 @@ const completeProjectScopeRebuildChunkAfterBatchWrite = async (
       ...input.chunk,
       diagnosticsJson: {projectScopeBatchWriter: {rangeCount: input.batchRangeCount}},
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -3026,6 +3083,7 @@ const runProjectScopeRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -3403,6 +3461,7 @@ const completeSelectedImportRebuildChunkAfterBatchWrite = async (
         selectedImportBatchWriter: {rangeCount: input.batchRangeCount},
       },
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -3495,6 +3554,7 @@ const runSelectedImportRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -3533,6 +3593,7 @@ const completeDisplayRebuildChunkAfterBatchWrite = async (
         phaseTimings: {batchWriteMs: input.batchWriteMs},
       },
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -3617,6 +3678,7 @@ const runDisplayRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -3655,6 +3717,7 @@ const completePayloadRebuildChunkAfterBatchWrite = async (
         phaseTimings: {batchWriteMs: input.batchWriteMs},
       },
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -3750,6 +3813,7 @@ const runPayloadRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -3790,6 +3854,7 @@ const completeSearchRebuildChunkAfterBatchWrite = async (
         searchBatchWriter: getRebuildChunkBatchWriterFanoutDiagnostics(input),
       },
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -3878,6 +3943,7 @@ const runSearchRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -3916,6 +3982,7 @@ const completeQueueRebuildChunkAfterBatchWrite = async (
         queueBatchWriter: {rangeCount: input.batchRangeCount},
       },
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -3995,6 +4062,7 @@ const runQueueRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -4029,6 +4097,7 @@ const completeJudgmentInputContentRebuildChunkAfterBatchWrite = async (
       ...input.chunk,
       diagnosticsJson: {judgmentInputContentBatchWriter: {rangeCount: input.batchRangeCount}},
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -4131,6 +4200,7 @@ const runJudgmentInputContentRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -4140,6 +4210,33 @@ const runJudgmentInputContentRebuildChunkBatch = async (
       status: 'completed' as const,
     }
   })
+}
+
+// Batch runners complete their chunks with promoteSnapshot false and then try to promote each snapshot the batch
+// touched once, instead of once per chunk.
+const promoteRebuildChunkBatchSnapshots = async (
+  chunks: readonly ReviewServingRebuildChunkManifest[],
+  database: ReviewServingProjectorWorkerDatabase,
+) => {
+  const snapshots = [
+    ...new Map(
+      chunks.flatMap((chunk) => {
+        return chunk.projectId === null || chunk.snapshotId === null || chunk.snapshotId === undefined
+          ? []
+          : [
+              [
+                `${chunk.projectId}\u0000${chunk.snapshotId}`,
+                {projectId: chunk.projectId, snapshotId: chunk.snapshotId},
+              ] as const,
+            ]
+      }),
+    ).values(),
+  ]
+
+  await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+    await previous
+    await promoteReviewServingProjectorSnapshot(snapshot, database)
+  }, Promise.resolve())
 }
 
 const canRunLlmStatusRebuildChunkBatch = (chunks: readonly ReviewServingRebuildChunkManifest[]) => {
@@ -4178,6 +4275,7 @@ const completeLlmStatusRebuildChunkAfterBatchWrite = async (
         phaseTimings: {batchWriteMs: input.batchWriteMs},
       },
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -4255,6 +4353,7 @@ const runLlmStatusRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -4302,6 +4401,7 @@ const completeHumanStatusRebuildChunkAfterBatchWrite = async (
         phaseTimings: {batchWriteMs: input.batchWriteMs},
       },
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -4380,6 +4480,7 @@ const runHumanStatusRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -4420,6 +4521,7 @@ const completePostingRebuildChunkAfterBatchWrite = async (
         postingBatchWriter: getRebuildChunkBatchWriterFanoutDiagnostics(input),
       },
       leaseOwner: input.leaseOwner,
+      promoteSnapshot: false,
       validateOutput: async (tx) => {
         return getRebuildChunkOutputValidation({
           chunk: input.chunk,
@@ -4514,6 +4616,7 @@ const runPostingRebuildChunkBatch = async (
       database,
     )
   }, Promise.resolve())
+  await promoteRebuildChunkBatchSnapshots(input.chunks, database)
 
   return input.chunks.map((chunk) => {
     return {
@@ -5611,6 +5714,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
       return getCompatibleStatusRebuildChunkBatchInputs({database, excludeChunkIds, firstChunk, limit, now, projectId})
     },
     heartbeatChunk: heartbeatReviewServingRebuildChunkLease,
+    heartbeatChunks: heartbeatReviewServingRebuildChunkLeases,
     isChunkComplete: isReviewServingRebuildChunkComplete,
     runClaimedChunk: async ({chunk, database, leaseOwner}) => {
       return runReviewServingProjectorWorkerClaimedRebuildChunk({chunk, leaseOwner}, database)
@@ -5844,53 +5948,102 @@ const startClaimedRebuildChunkHeartbeat = (input: {
   }
 }
 
-const startClaimedRebuildChunkBatchHeartbeats = (input: {
+type ClaimedRebuildChunkBatchHeartbeatInput = {
   claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
   database: ReviewServingChunkManifestRepositoryDatabase
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
   workerId: string
-}) => {
-  const stopHeartbeats = input.claimedChunks.map((claimed) => {
-    return startClaimedRebuildChunkHeartbeat({
-      chunk: claimed.chunk,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      service: claimed.service,
-      workerId: input.workerId,
+}
+
+const lastRebuildChunkBatchHeartbeatAtMs = new WeakMap<
+  readonly ClaimedReviewServingProjectorWorkerRebuildChunk[],
+  number
+>()
+
+// One lease extension per claimed batch: chunks whose service can extend many leases at once share a statement, the
+// rest fall back to one heartbeat each. Throws when any chunk is no longer claimed, like the per-chunk heartbeat.
+const heartbeatClaimedRebuildChunkBatch = async (input: ClaimedRebuildChunkBatchHeartbeatInput) => {
+  const leaseExpiresAt = getRebuildChunkHeartbeatLeaseExpiresAt(input.dependencies, input.options)
+  const services = [
+    ...new Set(
+      input.claimedChunks.map((claimed) => {
+        return claimed.service
+      }),
+    ),
+  ]
+
+  await services.reduce<Promise<void>>(async (previous, service) => {
+    await previous
+
+    const serviceChunks = input.claimedChunks.filter((claimed) => {
+      return claimed.service === service
     })
-  })
+
+    if (service.heartbeatChunks === undefined) {
+      await serviceChunks.reduce<Promise<void>>(async (previousChunk, claimed) => {
+        await previousChunk
+        await heartbeatClaimedRebuildChunkLease({...input, chunk: claimed.chunk, service})
+      }, Promise.resolve())
+      return
+    }
+
+    const heldChunkIds = await service.heartbeatChunks(
+      {
+        chunkIds: serviceChunks.map((claimed) => {
+          return claimed.chunk.chunkId
+        }),
+        leaseExpiresAt,
+        leaseOwner: input.workerId,
+      },
+      input.database,
+    )
+    const lostChunk = serviceChunks.find((claimed) => {
+      return !heldChunkIds.has(claimed.chunk.chunkId)
+    })
+
+    if (lostChunk !== undefined) {
+      throw new Error(
+        `review serving rebuild chunk ${lostChunk.chunk.chunkId} is no longer claimed by ${input.workerId}`,
+      )
+    }
+  }, Promise.resolve())
+
+  lastRebuildChunkBatchHeartbeatAtMs.set(input.claimedChunks, Date.now())
+}
+
+const startClaimedRebuildChunkBatchHeartbeats = (input: ClaimedRebuildChunkBatchHeartbeatInput) => {
+  const interval = setInterval(
+    () => {
+      return void heartbeatClaimedRebuildChunkBatch(input).catch(() => {
+        return undefined
+      })
+    },
+    getPositiveInteger(input.options.heartbeatMs, defaultReviewServingProjectorWorkerHeartbeatMs),
+  )
+
+  interval.unref()
 
   return () => {
-    stopHeartbeats.reduce<undefined>((_previous, stopHeartbeat) => {
-      stopHeartbeat()
-
-      return undefined
-    }, undefined)
+    clearInterval(interval)
   }
 }
 
-const heartbeatClaimedRebuildChunkBatchLeases = async (input: {
-  claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
-  database: ReviewServingChunkManifestRepositoryDatabase
-  dependencies: ReviewServingProjectorWorkerDependencies
-  options: ReviewServingProjectorWorkerCycleOptions
-  workerId: string
-}) => {
-  await input.claimedChunks.reduce<Promise<void>>(async (previous, claimed) => {
-    await previous
-    await measureReviewServingProjectorWorkerPhase(claimed.timings, 'heartbeatMs', async () => {
-      await heartbeatClaimedRebuildChunkLease({
-        chunk: claimed.chunk,
-        database: input.database,
-        dependencies: input.dependencies,
-        options: input.options,
-        service: claimed.service,
-        workerId: input.workerId,
-      })
-    })
-  }, Promise.resolve())
+// Every component dispatcher heartbeats the claimed batch before it checks whether the batch is its own; a batch
+// heartbeated within the last half interval still holds fresh leases, so later dispatchers skip it.
+const heartbeatClaimedRebuildChunkBatchLeases = async (input: ClaimedRebuildChunkBatchHeartbeatInput) => {
+  const lastHeartbeatAtMs = lastRebuildChunkBatchHeartbeatAtMs.get(input.claimedChunks)
+  const heartbeatMs = getPositiveInteger(input.options.heartbeatMs, defaultReviewServingProjectorWorkerHeartbeatMs)
+
+  if (lastHeartbeatAtMs !== undefined && Date.now() - lastHeartbeatAtMs < heartbeatMs / 2) {
+    return
+  }
+
+  const [firstClaimed] = input.claimedChunks
+
+  await measureReviewServingProjectorWorkerPhase(firstClaimed?.timings, 'heartbeatMs', async () => {
+    await heartbeatClaimedRebuildChunkBatch(input)
+  })
 }
 
 const getErrorText = (error: unknown) => {

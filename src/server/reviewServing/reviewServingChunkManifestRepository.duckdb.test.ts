@@ -613,3 +613,45 @@ test('resetting expired running rebuild chunks in DuckDB only touches expired le
     },
   ])
 })
+
+test('batched rebuild chunk heartbeats in DuckDB extend only the leases the owner still holds', async () => {
+  const {heartbeatReviewServingRebuildChunkLeases} = await import('./reviewServingChunkManifestRepository.ts')
+  const runningChunk = {
+    component: 'humanStatus',
+    leaseExpiresAt: '2026-09-23T10:30:00Z',
+    leaseOwner: 'worker-batch',
+    projectId: 'project-heartbeat',
+    requestId: 'request-heartbeat',
+    startedAt: '2026-09-23T10:00:00Z',
+    status: 'running' as const,
+  }
+
+  await clearRebuildState()
+  await insertChunk({...runningChunk, chunkId: 'chunk-heartbeat-1'})
+  await insertChunk({...runningChunk, chunkId: 'chunk-heartbeat-2'})
+  await insertChunk({...runningChunk, chunkId: 'chunk-heartbeat-stolen', leaseOwner: 'worker-other'})
+  await insertChunk({...runningChunk, chunkId: 'chunk-heartbeat-done', status: 'completed'})
+
+  const heldChunkIds = await heartbeatReviewServingRebuildChunkLeases(
+    {
+      chunkIds: ['chunk-heartbeat-1', 'chunk-heartbeat-2', 'chunk-heartbeat-stolen', 'chunk-heartbeat-done'],
+      leaseExpiresAt: '2026-09-23T11:30:00.000Z',
+      leaseOwner: 'worker-batch',
+    },
+    getDatabase(),
+  )
+
+  expect([...heldChunkIds].sort()).toEqual(['chunk-heartbeat-1', 'chunk-heartbeat-2'])
+  expect(
+    await getDatabase().queryJson(`
+      SELECT chunk_id AS chunkId, strftime(lease_expires_at AT TIME ZONE 'UTC', '%H:%M') AS leaseExpiresAt
+      FROM app.review_rebuild_chunk_manifest
+      ORDER BY chunk_id
+    `),
+  ).toEqual([
+    {chunkId: 'chunk-heartbeat-1', leaseExpiresAt: '11:30'},
+    {chunkId: 'chunk-heartbeat-2', leaseExpiresAt: '11:30'},
+    {chunkId: 'chunk-heartbeat-done', leaseExpiresAt: '10:30'},
+    {chunkId: 'chunk-heartbeat-stolen', leaseExpiresAt: '10:30'},
+  ])
+})
