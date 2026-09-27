@@ -203,13 +203,15 @@ type WakeReviewServingProjectorState = {
   settledComponents: ReviewServingProjectionComponent[]
 }
 
-const defaultComponentOrder: readonly ReviewServingProjectionComponent[] = [
+export const visibilityReviewServingProjectionComponents: readonly ReviewServingProjectionComponent[] = [
   'projectScope',
   'selectedImport',
-  'display',
   'llmStatus',
   'humanStatus',
   'queue',
+]
+export const enrichmentReviewServingProjectionComponents: readonly ReviewServingProjectionComponent[] = [
+  'display',
   'payload',
   'posting',
   'summary',
@@ -231,6 +233,13 @@ const getRotatedComponentOrder = (
       : ((normalizedOffset % componentOrder.length) + componentOrder.length) % componentOrder.length
 
   return [...componentOrder.slice(startIndex), ...componentOrder.slice(0, startIndex)]
+}
+
+export const getVisibilityFirstReviewServingComponentOrder = (rotationOffset: number | undefined) => {
+  return [
+    ...getRotatedComponentOrder(visibilityReviewServingProjectionComponents, rotationOffset),
+    ...getRotatedComponentOrder(enrichmentReviewServingProjectionComponents, rotationOffset),
+  ]
 }
 
 const getComponentVisits = (
@@ -901,7 +910,7 @@ export const wakeReviewServingProjectorService = async (
   const budget = getNormalizedBudget(input)
   const startedAt = nowMs()
   const componentOrder =
-    input.componentOrder ?? getRotatedComponentOrder(defaultComponentOrder, input.componentRotationOffset)
+    input.componentOrder ?? getVisibilityFirstReviewServingComponentOrder(input.componentRotationOffset)
   const initialBlockedReason = await getWakeBlockedReason(input, dependencies)
   const budgetExhausted = budget.batchSize === 0 || budget.maxRowsPerWake === 0 || input.maxWakeMs <= 0
 
