@@ -416,6 +416,98 @@ test('review serving projector worker heartbeat scales default batch size above 
   ])
 })
 
+const getHeartbeatBacklogLoopOptions = (env: Record<string, string>) => {
+  const runScript = runBunSpawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').href
+        }
+
+        const heartbeatModulePath = getModulePath('./src/server/utils/reviewServingProjectorWorkerHeartbeat.ts')
+        const workerModulePath = getModulePath('./src/server/workers/reviewServingProjectorWorker.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const events = []
+
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            registerDuckdbOwnerDemotionHandler: () => {},
+            shouldCurrentServerRunMaintenanceLoops: () => true,
+          }
+        })
+
+        void mock.module(workerModulePath, () => {
+          return {
+            runReviewServingProjectorWorker: async (options) => {
+              events.push({
+                backlogWakeComponentPasses: options.backlogWakeComponentPasses ?? null,
+                backlogWakeMinMs: options.backlogWakeMinMs ?? null,
+                batchSize: options.batchSize ?? null,
+                maxRowsPerWake: options.maxRowsPerWake ?? null,
+              })
+            },
+          }
+        })
+
+        const {startReviewServingProjectorWorkerHeartbeat} = await import(heartbeatModulePath + '?backlog=' + Date.now())
+        startReviewServingProjectorWorkerHeartbeat({pollIntervalMs: 1})()
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5)
+        })
+
+        console.log(JSON.stringify({events}))
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS: '',
+        FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES: '',
+        FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE: '',
+        FORSKA_REVIEW_SERVING_DIRTY_WORK_MAX_ROWS_PER_WAKE: '',
+        FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_MAX_RSS_BYTES: '',
+        ...env,
+      },
+    },
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stdout.toString() || 'Review serving projector worker heartbeat backlog options test failed',
+    )
+  }
+
+  return (JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: unknown[]}).events
+}
+
+test('review serving projector worker heartbeat uses the production backlog defaults above the low-memory profile and lets env override each', () => {
+  expect(getHeartbeatBacklogLoopOptions({DUCKDB_MEMORY_LIMIT: '16GB'})).toEqual([
+    {backlogWakeComponentPasses: 6, backlogWakeMinMs: 4_000, batchSize: 256, maxRowsPerWake: 4_096},
+  ])
+  expect(
+    getHeartbeatBacklogLoopOptions({
+      DUCKDB_MEMORY_LIMIT: '16GB',
+      FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS: '2500',
+      FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE: '128',
+    }),
+  ).toEqual([{backlogWakeComponentPasses: 6, backlogWakeMinMs: 2_500, batchSize: 128, maxRowsPerWake: 4_096}])
+})
+
+test('review serving projector worker heartbeat keeps the low-memory profile off the production backlog defaults', () => {
+  expect(getHeartbeatBacklogLoopOptions({DUCKDB_MEMORY_LIMIT: '8GB'})).toEqual([
+    {backlogWakeComponentPasses: null, backlogWakeMinMs: null, batchSize: null, maxRowsPerWake: null},
+  ])
+  expect(
+    getHeartbeatBacklogLoopOptions({DUCKDB_MEMORY_LIMIT: '8GB', FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PASSES: '3'}),
+  ).toEqual([{backlogWakeComponentPasses: 3, backlogWakeMinMs: null, batchSize: null, maxRowsPerWake: null}])
+})
+
 test('review serving projector worker heartbeat does not start a loop while DuckDB exclusive work is active', () => {
   const runScript = runBunSpawnSync(
     [

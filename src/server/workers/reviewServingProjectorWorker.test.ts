@@ -1107,6 +1107,57 @@ test('worker admits projector work after a post-rebuild foreground burst within 
   expect(harness.wakeInputs[0]).toMatchObject({maxWakeMs: 80})
 })
 
+const runBacklogWakeAfterSlowChunkWithForegroundBurst = async (backlogWakeMinMs: number | undefined) => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const chunkService = harness.dependencies.rebuildChunkService
+
+  if (chunkService === undefined) {
+    throw new Error('Missing test chunk service')
+  }
+
+  let nowMs = 1_000
+  let queueDepth = 0
+  const waits: number[] = []
+  const originalRun = chunkService.runClaimedChunk
+
+  harness.dependencies.nowMs = () => {
+    return nowMs
+  }
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return queueDepth
+  }
+  chunkService.runClaimedChunk = async (input) => {
+    const result = await originalRun(input)
+    nowMs = 7_000
+    queueDepth = 1
+    return result
+  }
+  harness.dependencies.waitForForegroundQueue = async ({timeoutMs}) => {
+    waits.push(timeoutMs)
+    queueDepth = 0
+    return true
+  }
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {backlogWakeMinMs, maxWakeMs: 5_000, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  return {harness, result, waits}
+}
+
+test('a backlog wake with a minimum budget waits out a foreground burst after the chunk batch used the cycle deadline', async () => {
+  const guaranteed = await runBacklogWakeAfterSlowChunkWithForegroundBurst(4_000)
+  const cycleDeadlineOnly = await runBacklogWakeAfterSlowChunkWithForegroundBurst(undefined)
+
+  expect(guaranteed.harness.runChunkInputs).toHaveLength(1)
+  expect(guaranteed.waits).toEqual([4_000])
+  expect(guaranteed.result.projector.status).toBe('completed')
+  expect(guaranteed.harness.wakeInputs).toMatchObject([{componentOrder: undefined, maxWakeMs: 4_000}])
+  expect(cycleDeadlineOnly.waits).toEqual([0])
+  expect(cycleDeadlineOnly.harness.wakeInputs).toMatchObject([{maxWakeMs: 0}])
+})
+
 for (const barrier of ['exclusive', 'transfer', 'aborted'] as const) {
   test(`worker rechecks ${barrier} after its foreground admission wait`, async () => {
     const harness = createWorkerHarness({wakeStatus: 'completed'})

@@ -6895,6 +6895,24 @@ const getWakeInput = (input: {
   }
 }
 
+const getBacklogWakeMinimumMs = (options: ReviewServingProjectorWorkerCycleOptions) => {
+  return Math.min(
+    getNonNegativeInteger(options.backlogWakeMinMs, 0),
+    getPositiveInteger(options.maxWakeMs, defaultReviewServingProjectorWorkerMaxWakeMs),
+  )
+}
+
+const getBacklogWakeAdmissionDeadlineMs = (input: {
+  admissionDeadlineMs: number
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  return Math.max(
+    input.admissionDeadlineMs,
+    getWorkerNowMs(input.dependencies, input.options) + getBacklogWakeMinimumMs(input.options),
+  )
+}
+
 const getBacklogWakeInput = (input: {
   admissionDeadlineMs: number
   dependencies: ReviewServingProjectorWorkerDependencies
@@ -6902,18 +6920,13 @@ const getBacklogWakeInput = (input: {
   wakeId: string
 }): WakeReviewServingProjectorServiceInput => {
   const componentPasses = getPositiveInteger(input.options.backlogWakeComponentPasses, 1)
-  const minimumWakeMs = Math.min(
-    getNonNegativeInteger(input.options.backlogWakeMinMs, 0),
-    getPositiveInteger(input.options.maxWakeMs, defaultReviewServingProjectorWorkerMaxWakeMs),
-  )
 
   return {
     ...getWakeInput(input),
     ...(componentPasses > 1 ? {componentPasses} : {}),
     maxWakeMs: Math.max(
       0,
-      minimumWakeMs,
-      input.admissionDeadlineMs - getWorkerNowMs(input.dependencies, input.options),
+      getBacklogWakeAdmissionDeadlineMs(input) - getWorkerNowMs(input.dependencies, input.options),
     ),
   }
 }
@@ -10383,15 +10396,31 @@ const getNormalCycleBacklogWakeBlockedReason = (input: {
   return input.foregroundAdmission.blockedReason
 }
 
+// The backlog wake keeps its guaranteed minimum budget for foreground admission too: it waits for a short foreground
+// burst to drain within that budget instead of giving up because the cycle deadline already passed.
+const runBacklogWake = (
+  context: ReviewServingProjectorWorkerCycleContext,
+  wakeInputOverrides: Pick<WakeReviewServingProjectorServiceInput, 'componentOrder'>,
+) => {
+  const {admissionDeadlineMs, database, dependencies, options, wakeId} = context
+
+  return dependencies.wakeProjectors(
+    {...getBacklogWakeInput({admissionDeadlineMs, dependencies, options, wakeId}), ...wakeInputOverrides},
+    getWorkerProjectorServiceDependencies({
+      admissionDeadlineMs: getBacklogWakeAdmissionDeadlineMs({admissionDeadlineMs, dependencies, options}),
+      database,
+      dependencies,
+      options,
+    }),
+  )
+}
+
 const runStarvedReviewServingProjectorWorkerCycleWork = async (
   context: ReviewServingProjectorWorkerCycleContext,
 ): Promise<ReviewServingProjectorWorkerCycleWork> => {
-  const {admissionDeadlineMs, dependencies, options, projectorServiceDependencies, wakeId} = context
+  const {admissionDeadlineMs, dependencies, options} = context
   const backlogProjector = await runReviewServingProjectorWorkerCyclePhase('wakeProjectorsBeforeChunks', () => {
-    return dependencies.wakeProjectors(
-      getBacklogWakeInput({admissionDeadlineMs, dependencies, options, wakeId}),
-      projectorServiceDependencies,
-    )
+    return runBacklogWake(context, {})
   })
   const foregroundAdmission = await getReviewServingProjectorAdmission(dependencies, options, admissionDeadlineMs)
   const {cleanup, deltaIntake} = await runReviewServingProjectorWorkerMaintenancePhases(
@@ -10421,12 +10450,15 @@ const runStarvedReviewServingProjectorWorkerCycleWork = async (
 const runNormalReviewServingProjectorWorkerCycleWork = async (
   context: ReviewServingProjectorWorkerCycleContext,
 ): Promise<ReviewServingProjectorWorkerCycleWork> => {
-  const {admissionDeadlineMs, dependencies, options, projectorServiceDependencies, terminalFailedChunk, wakeId} =
-    context
+  const {admissionDeadlineMs, dependencies, options, terminalFailedChunk} = context
   const finalizedChunkBatch = await runReviewServingProjectorWorkerChunkBatchPhase(context)
   const chunk = finalizedChunkBatch.chunk
   const nowMs = getWorkerNowMs(dependencies, options)
-  const foregroundAdmission = await getReviewServingProjectorAdmission(dependencies, options, admissionDeadlineMs)
+  const foregroundAdmission = await getReviewServingProjectorAdmission(
+    dependencies,
+    options,
+    getBacklogWakeAdmissionDeadlineMs({admissionDeadlineMs, dependencies, options}),
+  )
   const shouldDrainNextForegroundActivationChunk = shouldPrioritizeNextRebuildChunk({
     chunk,
     dependencies,
@@ -10446,15 +10478,11 @@ const runNormalReviewServingProjectorWorkerCycleWork = async (
     backlogWakeBlockedReason !== null
       ? getBlockedReviewServingProjectorWakeResult(backlogWakeBlockedReason)
       : await runReviewServingProjectorWorkerCyclePhase('wakeProjectors', () => {
-          return dependencies.wakeProjectors(
-            {
-              ...getBacklogWakeInput({admissionDeadlineMs, dependencies, options, wakeId}),
-              componentOrder: shouldDrainNextForegroundActivationChunk
-                ? foregroundActivationDirtyWorkComponents
-                : undefined,
-            },
-            projectorServiceDependencies,
-          )
+          return runBacklogWake(context, {
+            componentOrder: shouldDrainNextForegroundActivationChunk
+              ? foregroundActivationDirtyWorkComponents
+              : undefined,
+          })
         })
 
   return {
