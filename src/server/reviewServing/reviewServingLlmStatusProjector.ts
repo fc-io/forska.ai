@@ -6,6 +6,7 @@ import {
   type ReviewServingIdentityValue,
 } from './reviewProjectionIdentity.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
@@ -720,6 +721,16 @@ const getLlmStatusPatchManifest = (
   }
 }
 
+const llmStatusChangedRowColumns = [
+  {name: 'review_config_hash', type: 'VARCHAR'},
+  {name: 'list_mode_key', type: 'VARCHAR'},
+  {name: 'article_id', type: 'VARCHAR'},
+  {name: 'prompt_config_hash', type: 'VARCHAR'},
+  {name: 'prompt_id', type: 'VARCHAR'},
+  {name: 'llm_status_key', type: 'VARCHAR'},
+  {name: 'tombstone', type: 'BOOLEAN'},
+] as const
+
 const getApplyLlmStatusServingStatement = (input: {
   baseGeneration: number
   includeExistingPatchRows: boolean
@@ -736,16 +747,23 @@ const getApplyLlmStatusServingStatement = (input: {
     tombstone: boolean
   }[]
 }) => {
-  const values = input.recordRows
-    .map((row) => {
-      return `(${getSqlLiteral(row.reviewConfigHash)}, ${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.llmStatusKey)}, ${getSqlLiteral(row.tombstone)})`
-    })
-    .join(', ')
-
   return input.recordRows.length === 0
     ? null
-    : `WITH changed(review_config_hash, list_mode_key, article_id, prompt_config_hash, prompt_id, llm_status_key, tombstone) AS (
-        SELECT * FROM (VALUES ${values})
+    : `WITH changed AS (
+        ${getReviewServingJsonRowsSql({
+          columns: llmStatusChangedRowColumns,
+          rows: input.recordRows.map((row) => {
+            return [
+              row.reviewConfigHash,
+              row.listModeKey,
+              row.articleId,
+              row.promptConfigHash,
+              row.promptId,
+              row.llmStatusKey,
+              row.tombstone,
+            ]
+          }),
+        })}
       ), candidate_prompt AS (
         SELECT
           changed.review_config_hash,

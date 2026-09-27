@@ -9,6 +9,7 @@ import {
   assertReviewServingProjectorWatermarkCanAdvance,
   type ReviewServingProjectorWatermarkAdvanceInput,
 } from './reviewServingDeltaReconciliation.ts'
+import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
 import {getReviewServingDirtyWorkScopeKey, type ReviewServingDirtyWorkScope} from './reviewServingProjectorDomain.ts'
 
 export type ReviewServingDirtyWorkStatus = 'blocked_by_rebuild' | 'completed' | 'failed' | 'pending' | 'running'
@@ -382,10 +383,20 @@ const getClaimNowMs = (params: ClaimReviewServingDirtyWorkParams) => {
   return (params.now ?? new Date()).getTime()
 }
 
-const getDirtyWorkClaimStateUpdatedAtMs = (row: DirtyWorkClaimStateRow) => {
-  const value = getDateValue(row.updatedAt)
+const dirtyWorkClaimStateUpdatedAtMsByRow = new WeakMap<DirtyWorkClaimStateRow, number>()
 
-  return value === null ? 0 : value.getTime()
+const getDirtyWorkClaimStateUpdatedAtMs = (row: DirtyWorkClaimStateRow) => {
+  const cachedMs = dirtyWorkClaimStateUpdatedAtMsByRow.get(row)
+
+  if (cachedMs !== undefined) {
+    return cachedMs
+  }
+
+  const value = getDateValue(row.updatedAt)
+  const updatedAtMs = value === null ? 0 : value.getTime()
+
+  dirtyWorkClaimStateUpdatedAtMsByRow.set(row, updatedAtMs)
+  return updatedAtMs
 }
 
 const isDirtyWorkClaimStateEligible = (params: ClaimReviewServingDirtyWorkParams, row: DirtyWorkClaimStateRow) => {
@@ -419,6 +430,43 @@ const getClaimStateRowComparator = (claimOrder: ReviewServingDirtyWorkClaimOrder
   return claimOrder === 'newest' ? compareNewestDirtyWorkClaimStateRows : compareDirtyWorkClaimStateRows
 }
 
+const getDirtyWorkClaimStateLaneKey = (
+  row: Pick<DirtyWorkClaimStateRow, 'projectId' | 'projectionComponent' | 'projectionIdentity' | 'sourcePartition'>,
+) => {
+  return JSON.stringify([row.projectId, row.projectionComponent, row.projectionIdentity, row.sourcePartition])
+}
+
+// A candidate waits while an unexpired running or failed claim in its lane sits at a lower watermark. Keeping only
+// the lowest such watermark per lane answers that in one pass; comparing every candidate with every window row was
+// quadratic and took ~3.7 s of JavaScript inside the claim transaction for a 4,096-claim batch.
+const getDirtyWorkClaimStateBlockingWatermarkByLane = (
+  rows: readonly DirtyWorkClaimStateRow[],
+  staleCutoffMs: number,
+) => {
+  const blockingWatermarkByLane = new Map<string, number>()
+
+  rows.forEach((row) => {
+    const watermark = Number(row.latestSourceHighWaterMark)
+
+    if (
+      (row.status !== 'running' && row.status !== 'failed')
+      || getDirtyWorkClaimStateUpdatedAtMs(row) <= staleCutoffMs
+      || Number.isNaN(watermark)
+    ) {
+      return
+    }
+
+    const laneKey = getDirtyWorkClaimStateLaneKey(row)
+    const currentWatermark = blockingWatermarkByLane.get(laneKey)
+
+    if (currentWatermark === undefined || watermark < currentWatermark) {
+      blockingWatermarkByLane.set(laneKey, watermark)
+    }
+  })
+
+  return blockingWatermarkByLane
+}
+
 const getClaimableDirtyWorkClaimStateRows = (
   params: ClaimReviewServingDirtyWorkParams,
   window: {claimOrder: ReviewServingDirtyWorkClaimOrder; rows: readonly DirtyWorkClaimStateRow[]},
@@ -440,25 +488,18 @@ const getClaimableDirtyWorkClaimStateRows = (
   }
 
   const staleCutoffMs = getClaimNowMs(params) - getStaleRunningClaimSeconds(params) * 1000
+  const blockingWatermarkByLane = getDirtyWorkClaimStateBlockingWatermarkByLane(claimStateRows, staleCutoffMs)
 
   return eligibleRows
     .filter((candidate) => {
+      const blockingWatermark = blockingWatermarkByLane.get(getDirtyWorkClaimStateLaneKey(candidate))
+
       return (
         candidate.projectId === first.projectId
         && candidate.projectionComponent === first.projectionComponent
         && candidate.projectionIdentity === first.projectionIdentity
         && candidate.sourcePartition === first.sourcePartition
-        && !claimStateRows.some((blocker) => {
-          return (
-            blocker.projectId === candidate.projectId
-            && blocker.projectionComponent === candidate.projectionComponent
-            && blocker.projectionIdentity === candidate.projectionIdentity
-            && blocker.sourcePartition === candidate.sourcePartition
-            && (blocker.status === 'running' || blocker.status === 'failed')
-            && getDirtyWorkClaimStateUpdatedAtMs(blocker) > staleCutoffMs
-            && Number(blocker.latestSourceHighWaterMark) < Number(candidate.latestSourceHighWaterMark)
-          )
-        })
+        && !(blockingWatermark !== undefined && blockingWatermark < Number(candidate.latestSourceHighWaterMark))
       )
     })
     .sort(compareRows)
@@ -640,36 +681,43 @@ const getReservedDirtyAckIds = async (dirtyAckIds: readonly string[], database: 
   )
 }
 
-const getDirtyWorkClaimAcknowledgementValuesSql = (acknowledgements: readonly DirtyWorkClaimAcknowledgement[]) => {
-  return acknowledgements
-    .map(({claim, dirtyAckId}) => {
-      return `(
-      ${getSqlLiteral(dirtyAckId)},
-      ${getSqlLiteral(claim.dirtyWorkId)},
-      ${getSqlLiteral(claim.projectionComponent)},
-      ${getSqlLiteral(claim.projectionIdentity)},
-      ${getSqlLiteral(claim.sourcePartition)},
-      ${getSqlLiteral(claim.latestSourceHighWaterMark)},
-      ${getSqlLiteral(claim.dirtyRangeStart)},
-      ${getSqlLiteral(claim.dirtyRangeEnd)},
-      'completed',
-      current_timestamp
-    )`
-    })
-    .join(',\n    ')
-}
+const dirtyWorkClaimAcknowledgementRowColumns = [
+  {name: 'dirty_ack_id', type: 'VARCHAR'},
+  {name: 'dirty_work_id', type: 'VARCHAR'},
+  {name: 'projection_component', type: 'VARCHAR'},
+  {name: 'projection_identity', type: 'VARCHAR'},
+  {name: 'source_partition', type: 'VARCHAR'},
+  {name: 'completed_source_high_water_mark', type: 'BIGINT'},
+  {name: 'dirty_range_start', type: 'VARCHAR'},
+  {name: 'dirty_range_end', type: 'VARCHAR'},
+] as const
 
 const insertDirtyWorkClaimAcknowledgements = async (
   acknowledgements: readonly DirtyWorkClaimAcknowledgement[],
   database: ReviewServingDirtyWorkTransaction,
 ) => {
+  const acknowledgementRowsSql = getReviewServingJsonRowsSql({
+    columns: dirtyWorkClaimAcknowledgementRowColumns,
+    rows: acknowledgements.map(({claim, dirtyAckId}) => {
+      return [
+        dirtyAckId,
+        claim.dirtyWorkId,
+        claim.projectionComponent,
+        claim.projectionIdentity,
+        claim.sourcePartition,
+        claim.latestSourceHighWaterMark,
+        claim.dirtyRangeStart,
+        claim.dirtyRangeEnd,
+      ]
+    }),
+  })
+
   await database.run(`
     INSERT INTO app.review_serving_dirty_work_ack_id_lookup (dirty_ack_id)
-    VALUES ${acknowledgements
-      .map(({dirtyAckId}) => {
-        return `(${getSqlLiteral(dirtyAckId)})`
-      })
-      .join(', ')}
+    SELECT acknowledgement.dirty_ack_id
+    FROM (
+      ${acknowledgementRowsSql}
+    ) AS acknowledgement
   `)
   await database.run(`
     INSERT INTO app.review_serving_dirty_work_ack (
@@ -684,7 +732,20 @@ const insertDirtyWorkClaimAcknowledgements = async (
       status,
       completed_at
     )
-    VALUES ${getDirtyWorkClaimAcknowledgementValuesSql(acknowledgements)}
+    SELECT
+      acknowledgement.dirty_ack_id,
+      acknowledgement.dirty_work_id,
+      acknowledgement.projection_component,
+      acknowledgement.projection_identity,
+      acknowledgement.source_partition,
+      acknowledgement.completed_source_high_water_mark,
+      acknowledgement.dirty_range_start,
+      acknowledgement.dirty_range_end,
+      'completed',
+      current_timestamp
+    FROM (
+      ${acknowledgementRowsSql}
+    ) AS acknowledgement
   `)
 }
 
@@ -958,28 +1019,39 @@ const isDirtyWorkClaimStateMaintainable = (
   return claim.projectionIdentity.trim().length > 0 && claim.sourcePartition.trim().length > 0
 }
 
-const getDirtyWorkClaimStateValuesSql = (claims: readonly DirtyWorkClaimStateInput[]) => {
-  return claims
-    .map((claim) => {
-      return `(
-        ${getSqlLiteral(claim.dirtyWorkId)},
-        ${
-          claim.storageRowId === null || claim.storageRowId === undefined
-            ? 'NULL'
-            : getStorageRowIdSql(claim.storageRowId)
-        },
-        ${getSqlLiteral(getDirtyWorkLaneProjectId(claim.projectId))},
-        ${getSqlLiteral(claim.projectionComponent)},
-        ${getSqlLiteral(claim.projectionIdentity)},
-        ${getSqlLiteral(claim.sourcePartition)},
-        ${getSqlLiteral(claim.status)},
-        ${getSqlLiteral(claim.lifecycleReason ?? null)},
-        ${getSqlLiteral(claim.latestSourceHighWaterMark)},
-        ${getSqlLiteral(claim.dirtyRangeStart)},
-        ${getSqlLiteral(claim.dirtyRangeEnd)}
-      )`
-    })
-    .join(',\n      ')
+const dirtyWorkClaimStateRowColumns = [
+  {name: 'dirty_work_id', type: 'VARCHAR'},
+  {name: 'storage_row_id', type: 'BIGINT'},
+  {name: 'project_id', type: 'VARCHAR'},
+  {name: 'projection_component', type: 'VARCHAR'},
+  {name: 'projection_identity', type: 'VARCHAR'},
+  {name: 'source_partition', type: 'VARCHAR'},
+  {name: 'status', type: 'VARCHAR'},
+  {name: 'lifecycle_reason', type: 'VARCHAR'},
+  {name: 'latest_source_high_water_mark', type: 'BIGINT'},
+  {name: 'dirty_range_start', type: 'VARCHAR'},
+  {name: 'dirty_range_end', type: 'VARCHAR'},
+] as const
+
+const getDirtyWorkClaimStateRowsSql = (claims: readonly DirtyWorkClaimStateInput[]) => {
+  return getReviewServingJsonRowsSql({
+    columns: dirtyWorkClaimStateRowColumns,
+    rows: claims.map((claim) => {
+      return [
+        claim.dirtyWorkId,
+        claim.storageRowId ?? null,
+        getDirtyWorkLaneProjectId(claim.projectId),
+        claim.projectionComponent,
+        claim.projectionIdentity,
+        claim.sourcePartition,
+        claim.status,
+        claim.lifecycleReason ?? null,
+        claim.latestSourceHighWaterMark,
+        claim.dirtyRangeStart,
+        claim.dirtyRangeEnd,
+      ]
+    }),
+  })
 }
 
 const maintainReviewServingDirtyWorkClaimStates = async (
@@ -992,7 +1064,6 @@ const maintainReviewServingDirtyWorkClaimStates = async (
     return
   }
 
-  const valuesSql = getDirtyWorkClaimStateValuesSql(maintainableClaims)
   const dirtyWorkIdsSql = getDirtyWorkIdListSql([
     ...new Set(
       maintainableClaims.map((claim) => {
@@ -1001,36 +1072,7 @@ const maintainReviewServingDirtyWorkClaimStates = async (
     ),
   ])
 
-  const changedRowsSql = `
-    SELECT
-      dirty_work_id,
-      storage_row_id,
-      project_id,
-      projection_component,
-      projection_identity,
-      source_partition,
-      status,
-      lifecycle_reason,
-      latest_source_high_water_mark,
-      dirty_range_start,
-      dirty_range_end
-    FROM (
-      VALUES
-      ${valuesSql}
-    ) AS changed(
-      dirty_work_id,
-      storage_row_id,
-      project_id,
-      projection_component,
-      projection_identity,
-      source_partition,
-      status,
-      lifecycle_reason,
-      latest_source_high_water_mark,
-      dirty_range_start,
-      dirty_range_end
-    )
-  `
+  const changedRowsSql = getDirtyWorkClaimStateRowsSql(maintainableClaims)
 
   await database.run(`
     UPDATE app.review_serving_dirty_work_claim_state existing
@@ -2022,12 +2064,18 @@ export const claimReviewServingDirtyWork = async (
   })
 }
 
-const getUpstreamGateClaimValuesSql = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
-  return claims
-    .map((claim) => {
-      return `(${getSqlLiteral(claim.dirtyWorkId)}, ${getSqlLiteral(claim.articleId)}, ${getSqlLiteral(claim.sourcePartition)}, CAST(${getSqlLiteral(claim.latestSourceHighWaterMark)} AS BIGINT))`
-    })
-    .join(', ')
+const getUpstreamGateClaimRowsSql = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return getReviewServingJsonRowsSql({
+    columns: [
+      {name: 'dirty_work_id', type: 'VARCHAR'},
+      {name: 'article_id', type: 'VARCHAR'},
+      {name: 'source_partition', type: 'VARCHAR'},
+      {name: 'latest_source_high_water_mark', type: 'BIGINT'},
+    ],
+    rows: claims.map((claim) => {
+      return [claim.dirtyWorkId, claim.articleId, claim.sourcePartition, claim.latestSourceHighWaterMark]
+    }),
+  })
 }
 
 // Watermarks only order changes within one source partition, so a claim waits for unfinished upstream work of its own
@@ -2050,8 +2098,8 @@ export const getReviewServingDirtyWorkClaimIdsAwaitingUpstream = async (
   }
 
   const rows = await database.queryJson<{dirtyWorkId: string}>(`
-    WITH claimed(dirty_work_id, article_id, source_partition, latest_source_high_water_mark) AS (
-      VALUES ${getUpstreamGateClaimValuesSql(articleClaims)}
+    WITH claimed AS (
+      ${getUpstreamGateClaimRowsSql(articleClaims)}
     )
     SELECT DISTINCT claimed.dirty_work_id AS dirtyWorkId
     FROM claimed

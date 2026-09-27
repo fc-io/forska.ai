@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {decodeReviewServingJsonRows} from '../test/decodeReviewServingJsonRows.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingLlmStatusPatches,
@@ -175,8 +176,12 @@ test('LLM judgment deltas recompute all article prompts before updating article 
   })
 
   expect(articleSelect).toContain("VALUES ('article-1')")
-  expect(updateStatement).toContain("'prompt-1'")
-  expect(updateStatement).toContain("'prompt-2'")
+  const updatedPromptIds = decodeReviewServingJsonRows(updateStatement ?? '').map((row) => {
+    return row.prompt_id
+  })
+
+  expect(updatedPromptIds).toContain('prompt-1')
+  expect(updatedPromptIds).toContain('prompt-2')
 })
 
 test('LLM deletes update serving directly without rebuilding unrelated components', async () => {

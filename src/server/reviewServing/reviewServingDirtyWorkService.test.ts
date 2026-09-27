@@ -2,6 +2,7 @@ import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {decodeReviewServingJsonRows} from '../test/decodeReviewServingJsonRows.ts'
 import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import {
   blockReviewServingDirtyWorkClaimsForRebuild,
@@ -419,20 +420,34 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
         return column.trim()
       })
     const valuesSql = statement.slice(statement.indexOf('VALUES') + 'VALUES'.length)
-    const tuples = [...valuesSql.matchAll(/\(((?:'(?:''|[^'])*'|[^()'])*)\)/gu)].map((match) => {
-      return [...(match[1] ?? '').matchAll(/'(?:''|[^'])*'|[^,\s][^,]*/gu)].map((token) => {
-        const value = token[0].trim()
+    const tuples = statement.includes('VALUES')
+      ? [...valuesSql.matchAll(/\(((?:'(?:''|[^'])*'|[^()'])*)\)/gu)].map((match) => {
+          return [...(match[1] ?? '').matchAll(/'(?:''|[^'])*'|[^,\s][^,]*/gu)].map((token) => {
+            const value = token[0].trim()
 
-        return value === 'NULL' ? null : value.startsWith("'") ? value.slice(1, -1).replaceAll("''", "'") : value
+            return value === 'NULL' ? null : value.startsWith("'") ? value.slice(1, -1).replaceAll("''", "'") : value
+          })
+        })
+      : []
+    const rows =
+      (statement.includes('from_json_strict(')
+        ? decodeReviewServingJsonRows(statement).map((jsonRow) => {
+            return Object.fromEntries(
+              Object.entries(jsonRow).map(([column, value]) => {
+                return [column, Array.isArray(value) ? null : value]
+              }),
+            )
+          })
+        : null)
+      ?? tuples.map((values) => {
+        return Object.fromEntries(
+          columns.map((column, index) => {
+            return [column, values[index] ?? null]
+          }),
+        )
       })
-    })
 
-    tuples.forEach((values) => {
-      const row = Object.fromEntries(
-        columns.map((column, index) => {
-          return [column, values[index] ?? null]
-        }),
-      )
+    rows.forEach((row) => {
       const dirtyAckId = row.dirty_ack_id ?? ''
 
       acks.set(dirtyAckId, {
@@ -2099,6 +2114,44 @@ test('claims and completes one batch above the DuckDB expression depth limit and
     close()
   }
 }, 120_000)
+
+test('a fresh running claim leaves the rest of its lane claimable and is reclaimed once stale, in DuckDB', async () => {
+  const {close, database} = await createDuckdbDirtyWorkDatabase()
+
+  try {
+    await upsertReviewServingDirtyWorkBatch(
+      [1, 2, 3].map((sourceHighWaterMark) => {
+        return {
+          latestDeltaId: `delta-${sourceHighWaterMark}`,
+          projectionComponent: 'display' as const,
+          projectionIdentity: 'display:identity-1',
+          scope: getArticleDisplayScope(`article-${sourceHighWaterMark}`, sourceHighWaterMark, null, null),
+        }
+      }),
+      database,
+    )
+
+    const firstClaims = await claimReviewServingDirtyWork({limit: 1, projectionComponent: 'display'}, database)
+    const laneClaims = await claimReviewServingDirtyWork({limit: 3, projectionComponent: 'display'}, database)
+    const staleClaims = await claimReviewServingDirtyWork(
+      {limit: 3, now: new Date(Date.now() + 24 * 60 * 60 * 1000), projectionComponent: 'display'},
+      database,
+    )
+    const getArticleIds = (claims: readonly {articleId: string | null}[]) => {
+      return claims
+        .map((claim) => {
+          return claim.articleId
+        })
+        .sort()
+    }
+
+    expect(getArticleIds(firstClaims)).toEqual(['article-1'])
+    expect(getArticleIds(laneClaims)).toEqual(['article-2', 'article-3'])
+    expect(getArticleIds(staleClaims)).toEqual(['article-1', 'article-2', 'article-3'])
+  } finally {
+    close()
+  }
+})
 
 test('completion rolls back the watermark and base state when claim-state maintenance fails in DuckDB', async () => {
   const {close, database} = await createDuckdbDirtyWorkDatabase()

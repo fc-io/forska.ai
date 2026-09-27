@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {decodeReviewServingJsonRows} from '../test/decodeReviewServingJsonRows.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingHumanStatusPatches,
@@ -208,7 +209,11 @@ test('summary human answers do not require prompt IDs and update summary-key ser
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(joined).not.toContain('mart.review_human_status_patch_v4')
-  expect(joined).toContain("'summary', 'answered', FALSE")
+  expect(
+    decodeReviewServingJsonRows(joined).map((row) => {
+      return [row.prompt_id, row.human_status_key, row.tombstone]
+    }),
+  ).toContainEqual(['summary', 'answered', 'false'])
   expect(joined).toContain("'humanStatus'")
   expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
@@ -233,7 +238,11 @@ test('Covidence summary placeholders with null answers remain human-unanswered',
 
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14})
   expect(joined).not.toContain('mart.review_human_status_patch_v4')
-  expect(joined).toContain("'summary', 'unanswered', FALSE")
+  expect(
+    decodeReviewServingJsonRows(joined).map((row) => {
+      return [row.prompt_id, row.human_status_key, row.tombstone]
+    }),
+  ).toContainEqual(['summary', 'unanswered', 'false'])
 })
 
 test('human prompt and summary answer changes use delta payload values as contribution inputs', async () => {

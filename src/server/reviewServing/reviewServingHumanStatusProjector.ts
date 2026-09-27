@@ -1,6 +1,7 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
+import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
 import {
   type ReviewServingProjectionIdentityManifestInput,
   type ReviewServingProjectionManifestStatus,
@@ -595,6 +596,16 @@ const getProjectScopedRows = async (
   `)
 }
 
+const humanStatusChangedRowColumns = [
+  {name: 'list_mode_key', type: 'VARCHAR'},
+  {name: 'article_id', type: 'VARCHAR'},
+  {name: 'review_config_hash', type: 'VARCHAR'},
+  {name: 'prompt_config_hash', type: 'VARCHAR'},
+  {name: 'prompt_id', type: 'VARCHAR'},
+  {name: 'human_status_key', type: 'VARCHAR'},
+  {name: 'tombstone', type: 'BOOLEAN'},
+] as const
+
 const getApplyHumanStatusServingStatement = (input: {
   baseGeneration: number
   currentSummaryReviewConfigHash: string | null
@@ -613,15 +624,23 @@ const getApplyHumanStatusServingStatement = (input: {
     tombstone: boolean
   }[]
 }) => {
-  const values = input.recordRows
-    .map((row) => {
-      return `(${getSqlLiteral(row.listModeKey)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.reviewConfigHash)}, ${getSqlLiteral(row.promptConfigHash)}, ${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.humanStatusKey)}, ${getSqlLiteral(row.tombstone)})`
-    })
-    .join(', ')
-  return values.length === 0
+  return input.recordRows.length === 0
     ? null
-    : `WITH changed(list_mode_key, article_id, review_config_hash, prompt_config_hash, prompt_id, human_status_key, tombstone) AS (
-        SELECT * FROM (VALUES ${values})
+    : `WITH changed AS (
+        ${getReviewServingJsonRowsSql({
+          columns: humanStatusChangedRowColumns,
+          rows: input.recordRows.map((row) => {
+            return [
+              row.listModeKey,
+              row.articleId,
+              row.reviewConfigHash,
+              row.promptConfigHash,
+              row.promptId,
+              row.humanStatusKey,
+              row.tombstone,
+            ]
+          }),
+        })}
       ), candidate_prompt AS (
         SELECT
           changed.list_mode_key,
