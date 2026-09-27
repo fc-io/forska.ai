@@ -711,6 +711,35 @@ export const createCandidateReviewServingSnapshotManifest = async (
   return {snapshotId: input.snapshotId}
 }
 
+// Grows a live snapshot's component lists in place. Recreating it would reset an active snapshot to candidate and
+// restart its created_at, so a rebuild train adds components to its snapshot with this instead.
+export const appendReviewServingSnapshotManifestComponents = async (
+  input: {
+    componentRequirements: ReviewServingComponentRequirements
+    componentState: ReviewServingSnapshotComponentStates
+    composedIdentity: ReviewServingIdentityValue
+    projectId: string
+    snapshotId: string
+  },
+  database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
+) => {
+  const rows = await database.queryJson<{snapshotId: string}>(`
+    UPDATE app.review_serving_snapshot_manifest
+    SET
+      composed_identity_json = ${getReviewServingJsonLiteral(input.composedIdentity)},
+      component_state_json = ${getReviewServingJsonLiteral(input.componentState as unknown as ReviewServingIdentityValue)},
+      required_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.requiredComponents)},
+      optional_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.optionalComponents)},
+      updated_at = current_timestamp
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND snapshot_status IN ('candidate', 'active')
+    RETURNING snapshot_id AS snapshotId
+  `)
+
+  return rows.length > 0
+}
+
 export const markCandidateReviewServingSnapshotManifestFailed = async (
   input: {lastError: string; projectId: string; snapshotId: string},
   database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),

@@ -4,7 +4,7 @@ import {Effect} from 'effect'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
+import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
   getReviewServingRebuildChunkId,
   releaseInactiveRequestRebuildChunkManifestsForUpsert,
@@ -1643,6 +1643,112 @@ export const boostReviewServingRebuildRequestPriority = async (
   `)
 
   return getReviewServingRebuildRequest({requestId: input.requestId}, database)
+}
+
+const maxCoalescedRebuildRequestDiagnostics = 20
+
+const getJsonObjectRecord = (value: unknown): Record<string, unknown> => {
+  const parsed = getJsonValue(value)
+
+  return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {}
+}
+
+const getJsonComponentList = (value: unknown) => {
+  const parsed = getJsonValue(value)
+
+  return Array.isArray(parsed)
+    ? parsed.filter((component): component is ReviewServingProjectionComponent => {
+        return typeof component === 'string' && isReviewServingProjectionComponent(component)
+      })
+    : []
+}
+
+// A rebuild train absorbs the components of later bootstrap requests for its project. Its request id, reason and
+// source watermarks stay as they were, so the freshness it promised its own claims does not change.
+export const mergeReviewServingRebuildRequestComponents = async (
+  input: {
+    coalesced: Record<string, ReviewServingIdentityValue>
+    componentSet: readonly ReviewServingProjectionComponent[]
+    priority?: number
+    requestId: string
+    requestedComponents: readonly ReviewServingProjectionComponent[]
+  },
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
+) => {
+  const request = await getReviewServingRebuildRequest({requestId: input.requestId}, database)
+
+  if (request === null || request.status !== 'admitted' || request.admissionState !== 'admitted') {
+    return null
+  }
+
+  const identity = getJsonObjectRecord(request.identityJson)
+  const diagnosticsJson = getJsonObjectRecord(request.diagnosticsJson)
+  const diagnostics = getJsonObjectRecord(diagnosticsJson.diagnostics)
+  const previousCoalesced: unknown[] = Array.isArray(diagnostics.coalesced) ? (diagnostics.coalesced as unknown[]) : []
+  const requestedComponents = getNormalizedComponents([...request.requestedComponents, ...input.requestedComponents])
+  const componentSet = getNormalizedComponents([...getJsonComponentList(identity.componentSet), ...input.componentSet])
+  const priority = Math.max(request.priority, getNormalizedPriority(input.priority ?? request.priority))
+
+  await database.run(`
+    UPDATE app.review_rebuild_request
+    SET requested_components_json = ${getJsonSqlLiteral(requestedComponents)},
+        identity_json = ${getJsonSqlLiteral({...identity, componentSet})},
+        priority = ${getSqlLiteral(priority)},
+        diagnostics_json = ${getJsonSqlLiteral({
+          ...diagnosticsJson,
+          diagnostics: {
+            ...diagnostics,
+            coalesced: [...previousCoalesced, input.coalesced].slice(-maxCoalescedRebuildRequestDiagnostics),
+          },
+        })},
+        updated_at = current_timestamp
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND status = 'admitted'
+      AND admission_state = 'admitted'
+  `)
+
+  return getReviewServingRebuildRequest({requestId: input.requestId}, database)
+}
+
+export const getCoalescedReviewServingRebuildRequestLastError = (survivorRequestId: string) => {
+  return `coalesced into rebuild train ${survivorRequestId}`
+}
+
+// Requests folded into a rebuild train are cancelled rather than failed, so readmission never brings them back, and
+// their unfinished chunks are closed.
+export const cancelCoalescedReviewServingRebuildRequests = async (
+  input: {requestIds: readonly string[]; survivorRequestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingRebuildRequestDatabase(),
+) => {
+  if (input.requestIds.length === 0) {
+    return
+  }
+
+  const lastError = getSqlLiteral(getCoalescedReviewServingRebuildRequestLastError(input.survivorRequestId))
+  const requestIdList = getSqlStringList(input.requestIds)
+
+  await database.run(`
+    UPDATE app.review_rebuild_request
+    SET status = 'cancelled',
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = ${lastError},
+        updated_at = current_timestamp
+    WHERE request_id IN (${requestIdList})
+      AND status IN ('admitted', 'running', 'failed')
+  `)
+  await database.run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET status = 'failed',
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        last_error = ${lastError},
+        updated_at = current_timestamp
+    WHERE request_id IN (${requestIdList})
+      AND status IN ('pending', 'failed')
+  `)
 }
 
 export const capActiveReviewServingRebuildRequestPriorityForProject = async (
