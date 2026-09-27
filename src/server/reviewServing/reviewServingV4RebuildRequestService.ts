@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto'
 import {Effect} from 'effect'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {
@@ -11,10 +11,11 @@ import {
   getStableReviewServingJson,
   type ReviewServingIdentityValue,
 } from './reviewProjectionIdentity.ts'
-import type {
-  ReviewServingChunkManifestRepositoryDatabase,
-  ReviewServingChunkManifestRepositoryTransaction,
-  ReviewServingRebuildChunkManifestInput,
+import {
+  type ReviewServingChunkManifestRepositoryDatabase,
+  type ReviewServingChunkManifestRepositoryTransaction,
+  type ReviewServingRebuildChunkManifestInput,
+  upsertReviewServingRebuildChunkManifests,
 } from './reviewServingChunkManifestRepository.ts'
 import {
   countReadyReviewServingComponents,
@@ -26,10 +27,12 @@ import {
   snapshotIndependentReviewServingComponents,
 } from './reviewServingContracts.ts'
 import {
+  appendReviewServingSnapshotManifestComponents,
   createCandidateReviewServingSnapshotManifest,
   getActiveOrLastKnownGoodReviewServingSnapshotManifest,
   getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
+  markCandidateReviewServingSnapshotManifestFailed,
   type ReviewServingProjectionIdentityManifest,
   type ReviewServingSnapshotManifest,
   upsertReviewServingProjectionIdentityManifest,
@@ -38,13 +41,17 @@ import {getReviewServingSourceWatermarkKeys} from './reviewServingProjectorDomai
 import {activateReviewServingProjectorSnapshot} from './reviewServingProjectorWriter.ts'
 import {
   boostReviewServingRebuildRequestPriority,
+  cancelCoalescedReviewServingRebuildRequests,
   createReviewServingRebuildRequest,
   defaultRebuildMaxAdmissionSplitCount,
   getActiveReviewServingRebuildRequestForProject,
   getBlockedOverBudgetReviewServingRebuildRequestForProject,
+  getCoalescedReviewServingRebuildRequestLastError,
   getNonSplittableDefaultRebuildComponents,
   getReviewServingRebuildChunkEstimate,
+  getReviewServingRebuildRequest,
   getReviewServingRebuildRequestId,
+  mergeReviewServingRebuildRequestComponents,
   type ReviewServingRebuildRequest,
   type ReviewServingRebuildRequestBudget,
   type ReviewServingRebuildRequestEstimate,
@@ -2067,6 +2074,762 @@ const getReviewServingV4RebuildStats = async (
   } satisfies ReviewServingV4RebuildStatsRow
 }
 
+// One bootstrap "train" per project and review config: a bootstrap-type request builds its own snapshot, and every
+// such request rebuilt the whole count-ready set for its own snapshot. During a large import one project had seven of
+// them (one per enrichment reason) with identical watermarks, each rebuilding ~1.2M articles per component, and every
+// dirty-work patch fanned out to all eight live snapshots. A later bootstrap-type request now joins the running train
+// and adds the components it lacks; the train's watermarks never change, so claims newer than the train wait for it.
+const requestlessReviewServingRebuildReasons = ['requestless_bootstrap_rebuild', 'requestless_summary_range_rebuild']
+const supersededReviewServingRebuildRequestLastErrorPrefixes = ['superseded', 'coalesced']
+const reviewServingV4BootstrapTrainCheckIntervalMs = 60_000
+const lastReviewServingV4BootstrapTrainCheckAtMsByProject = new Map<string, number>()
+
+type ReviewServingV4OpenForegroundRequestRow = {
+  createdAt: string
+  lastError: string | null
+  openChunkCount: number | string
+  priority: number | string
+  projectId: string
+  requestId: string
+  reviewConfigHash: string | null
+  snapshotId: string | null
+  snapshotStatus: string | null
+  status: string
+}
+
+type ReviewServingV4OpenForegroundRequest = {
+  createdAt: string
+  openChunkCount: number
+  priority: number
+  projectId: string
+  requestId: string
+  reviewConfigHash: string | null
+  snapshotId: string | null
+  status: 'admitted' | 'failed'
+}
+
+type ReviewServingV4BootstrapTrainExtension = {
+  coalescedRequestIds?: readonly string[]
+  components: readonly ReviewServingProjectionComponent[]
+  priority?: number
+  projectId: string
+  reason: string
+  requestedComponents: readonly ReviewServingProjectionComponent[]
+  requestId: string
+  snapshotId: string
+}
+
+export type CoalescedReviewServingV4BootstrapTrain = {
+  addedComponents: readonly ReviewServingProjectionComponent[]
+  cancelledRequestIds: readonly string[]
+  projectId: string
+  survivorRequestId: string
+}
+
+const getReviewServingV4RequestlessReasonSqlList = () => {
+  return requestlessReviewServingRebuildReasons.map(getSqlLiteral).join(', ')
+}
+
+const getReviewServingV4ReadmittableFailedRequestSql = (requestAlias: string) => {
+  return supersededReviewServingRebuildRequestLastErrorPrefixes
+    .map((prefix) => {
+      return `COALESCE(${requestAlias}.last_error, '') NOT LIKE ${getSqlLiteral(`${prefix}%`)}`
+    })
+    .join(' AND ')
+}
+
+// Admitted foreground requests plus failed ones that readmission would bring back, each with the live snapshot most of
+// its unfinished chunks build (NULL for in-place requests).
+const getReviewServingV4OpenForegroundRequests = async (
+  input: {projectIds: readonly string[]; reviewConfigHash?: string | null},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+): Promise<readonly ReviewServingV4OpenForegroundRequest[]> => {
+  if (input.projectIds.length === 0) {
+    return []
+  }
+
+  const projectIdList = input.projectIds.map(getSqlLiteral).join(', ')
+  const reviewConfigHashFilter =
+    input.reviewConfigHash === undefined
+      ? ''
+      : `AND json_extract_string(request.identity_json, '$.reviewConfigHash') IS NOT DISTINCT FROM ${getSqlLiteral(
+          input.reviewConfigHash,
+        )}`
+  const rows = await database.queryJson<ReviewServingV4OpenForegroundRequestRow>(`
+    WITH open_request AS (
+      SELECT request.*
+      FROM app.review_rebuild_request request
+      WHERE request.project_id IN (${projectIdList})
+        AND request.admission_state = 'admitted'
+        AND request.reason NOT IN (${getReviewServingV4RequestlessReasonSqlList()})
+        AND (
+          request.status = 'admitted'
+          OR (request.status = 'failed' AND ${getReviewServingV4ReadmittableFailedRequestSql('request')})
+        )
+        ${reviewConfigHashFilter}
+    ),
+    request_chunk AS (
+      SELECT
+        chunk.request_id,
+        chunk.snapshot_id,
+        COUNT(*) FILTER (WHERE chunk.status IN ('pending', 'running', 'failed')) AS open_chunk_count,
+        COUNT(*) FILTER (WHERE chunk.status IN ('blocked_over_budget', 'quarantined')) AS blocked_chunk_count
+      FROM app.review_rebuild_chunk_manifest chunk
+      WHERE chunk.project_id IN (${projectIdList})
+        AND chunk.request_id IN (SELECT request_id FROM open_request)
+      GROUP BY chunk.request_id, chunk.snapshot_id
+    ),
+    request_open_chunk AS (
+      SELECT
+        request_id,
+        SUM(open_chunk_count) AS open_chunk_count,
+        SUM(blocked_chunk_count) AS blocked_chunk_count
+      FROM request_chunk
+      GROUP BY request_id
+    ),
+    request_live_snapshot AS (
+      SELECT
+        request_chunk.request_id,
+        arg_max(request_chunk.snapshot_id, request_chunk.open_chunk_count) AS snapshot_id,
+        arg_max(snapshot.snapshot_status, request_chunk.open_chunk_count) AS snapshot_status
+      FROM request_chunk
+      INNER JOIN app.review_serving_snapshot_manifest snapshot
+        ON snapshot.project_id IN (${projectIdList})
+       AND snapshot.snapshot_id = request_chunk.snapshot_id
+       AND snapshot.snapshot_status IN ('candidate', 'active')
+      WHERE request_chunk.open_chunk_count > 0
+      GROUP BY request_chunk.request_id
+    )
+    SELECT
+      open_request.request_id AS requestId,
+      open_request.project_id AS projectId,
+      open_request.status,
+      open_request.priority,
+      open_request.created_at AS createdAt,
+      open_request.last_error AS lastError,
+      json_extract_string(open_request.identity_json, '$.reviewConfigHash') AS reviewConfigHash,
+      request_live_snapshot.snapshot_id AS snapshotId,
+      request_live_snapshot.snapshot_status AS snapshotStatus,
+      request_open_chunk.open_chunk_count AS openChunkCount
+    FROM open_request
+    INNER JOIN request_open_chunk ON request_open_chunk.request_id = open_request.request_id
+    LEFT JOIN request_live_snapshot ON request_live_snapshot.request_id = open_request.request_id
+    WHERE request_open_chunk.open_chunk_count > 0
+      AND request_open_chunk.blocked_chunk_count = 0
+    ORDER BY open_request.priority DESC, open_request.created_at ASC, open_request.request_id ASC
+  `)
+
+  return rows.flatMap((row) => {
+    return row.status === 'admitted' || row.status === 'failed'
+      ? [
+          {
+            createdAt: row.createdAt,
+            openChunkCount: getSafeCount(row.openChunkCount),
+            priority: getSafeCount(row.priority),
+            projectId: row.projectId,
+            requestId: row.requestId,
+            reviewConfigHash: row.reviewConfigHash,
+            snapshotId: row.snapshotId,
+            status: row.status,
+          },
+        ]
+      : []
+  })
+}
+
+const getReviewServingV4ObjectRecord = (value: unknown): Record<string, unknown> => {
+  const parsed = getJsonValue(value)
+
+  return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {}
+}
+
+const getReviewServingV4NumericSourceWatermarks = (value: unknown): Record<string, number> => {
+  return Object.fromEntries(
+    Object.entries(getReviewServingV4ObjectRecord(value)).flatMap(([key, entry]) => {
+      const numericEntry = Number(entry)
+
+      return typeof entry !== 'object' && Number.isFinite(numericEntry) ? [[key, numericEntry] as const] : []
+    }),
+  )
+}
+
+const getReviewServingV4RequestDirtySourceWatermarks = (request: ReviewServingRebuildRequest) => {
+  const sourceWatermarks = getReviewServingV4ObjectRecord(request.sourceWatermarksJson)
+
+  return getReviewServingV4NumericSourceWatermarks(sourceWatermarks.dirtySourceWatermarks)
+}
+
+const getReviewServingV4RequestComponentSet = (request: ReviewServingRebuildRequest) => {
+  const componentSet = getReviewServingV4ObjectRecord(request.identityJson).componentSet
+
+  return getCanonicalReviewServingComponents([
+    ...request.requestedComponents,
+    ...(Array.isArray(componentSet)
+      ? componentSet.filter((component): component is ReviewServingProjectionComponent => {
+          return (
+            typeof component === 'string'
+            && reviewServingProjectionComponents.includes(component as ReviewServingProjectionComponent)
+          )
+        })
+      : []),
+  ])
+}
+
+// A train may absorb a request only when its watermarks are at or above the request's on every key: the absorbed
+// request's claims were completed as covered by those watermarks when it was admitted.
+const doReviewServingV4SourceWatermarksCover = (covering: Record<string, number>, covered: Record<string, number>) => {
+  return Object.entries(covered).every(([key, value]) => {
+    return (covering[key] ?? Number.NEGATIVE_INFINITY) >= value
+  })
+}
+
+// The train's own top-level ranges of one article-range component; added components reuse them, and oversized ones
+// are split by their real scope count when claimed.
+const getReviewServingV4BootstrapTrainArticleRanges = async (
+  input: {requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+): Promise<readonly ReviewServingV4BootstrapArticleRange[]> => {
+  const rows = await database.queryJson<{chunkEndKey: string; chunkStartKey: string; component: string}>(`
+    SELECT DISTINCT
+      projection_component AS component,
+      chunk_start_key AS chunkStartKey,
+      chunk_end_key AS chunkEndKey
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND parent_chunk_id IS NULL
+    ORDER BY chunk_start_key, chunk_end_key
+  `)
+  const rangesByComponent = rows.reduce((ranges, row) => {
+    return ranges.set(row.component, [...(ranges.get(row.component) ?? []), row])
+  }, new Map<string, typeof rows>())
+  const [widestComponentRanges = []] = [...rangesByComponent.values()].sort((left, right) => {
+    return right.length - left.length
+  })
+
+  return widestComponentRanges.map((range) => {
+    return {
+      chunkEndKey: range.chunkEndKey,
+      chunkStartKey: range.chunkStartKey,
+      humanJudgmentCount: 0,
+      scopedArticleCount: 0,
+      summaryHumanJudgmentCount: 0,
+    }
+  })
+}
+
+const getReviewServingV4BootstrapTrainChunkBudgetFields = async (
+  input: {requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const [row] = await database.queryJson<{
+    budgetJson: unknown
+    estimatedInputRows: number | null
+    estimatedOutputBytes: number | null
+    estimatedOutputRows: number | null
+    estimatedPayloadBytes: number | null
+    estimatedPromptCount: number | null
+    estimatedTempBytes: number | null
+    maxInputRows: number | null
+    maxOutputBytes: number | null
+    maxOutputRows: number | null
+    maxPayloadBytes: number | null
+    maxPromptCount: number | null
+    maxTempBytes: number | null
+  }>(`
+    SELECT
+      budget_json AS budgetJson,
+      estimated_input_rows AS estimatedInputRows,
+      estimated_output_bytes AS estimatedOutputBytes,
+      estimated_output_rows AS estimatedOutputRows,
+      estimated_payload_bytes AS estimatedPayloadBytes,
+      estimated_prompt_count AS estimatedPromptCount,
+      estimated_temp_bytes AS estimatedTempBytes,
+      max_input_rows AS maxInputRows,
+      max_output_bytes AS maxOutputBytes,
+      max_output_rows AS maxOutputRows,
+      max_payload_bytes AS maxPayloadBytes,
+      max_prompt_count AS maxPromptCount,
+      max_temp_bytes AS maxTempBytes
+    FROM app.review_rebuild_chunk_manifest
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND parent_chunk_id IS NULL
+    ORDER BY created_at ASC, chunk_id ASC
+    LIMIT 1
+  `)
+
+  return {
+    budgetJson: getJsonValue(row?.budgetJson) ?? {},
+    estimatedInputRows: row?.estimatedInputRows ?? null,
+    estimatedOutputBytes: row?.estimatedOutputBytes ?? null,
+    estimatedOutputRows: row?.estimatedOutputRows ?? null,
+    estimatedPayloadBytes: row?.estimatedPayloadBytes ?? null,
+    estimatedPromptCount: row?.estimatedPromptCount ?? null,
+    estimatedTempBytes: row?.estimatedTempBytes ?? null,
+    maxInputRows: row?.maxInputRows ?? null,
+    maxOutputBytes: row?.maxOutputBytes ?? null,
+    maxOutputRows: row?.maxOutputRows ?? null,
+    maxPayloadBytes: row?.maxPayloadBytes ?? null,
+    maxPromptCount: row?.maxPromptCount ?? null,
+    maxTempBytes: row?.maxTempBytes ?? null,
+  }
+}
+
+// Adds the components the train lacks to its snapshot (in place), its identity manifests and its chunks, and merges the
+// request's components. Returns null when the train can no longer take them; the caller then plans a request of its own.
+const extendReviewServingV4BootstrapTrain = async (
+  input: ReviewServingV4BootstrapTrainExtension,
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const request = await getReviewServingRebuildRequest({requestId: input.requestId}, database)
+  const snapshot = await getReviewServingSnapshotManifest(
+    {projectId: input.projectId, snapshotId: input.snapshotId},
+    database,
+  )
+
+  if (
+    request?.status !== 'admitted'
+    || request.admissionState !== 'admitted'
+    || snapshot === null
+    || (snapshot.status !== 'candidate' && snapshot.status !== 'active')
+  ) {
+    return null
+  }
+
+  const snapshotComponentSet = new Set([...snapshot.requiredComponents, ...snapshot.optionalComponents])
+  const addedComponents = getCanonicalReviewServingComponents(
+    input.components.filter((component) => {
+      return !snapshotComponentSet.has(component)
+    }),
+  )
+  const addedRequirements = getReviewServingV4BootstrapComponentRequirements(addedComponents)
+
+  if (snapshot.status === 'active' && addedRequirements.requiredComponents.length > 0) {
+    return null
+  }
+
+  if (addedComponents.length > 0) {
+    const articleRanges = await getReviewServingV4BootstrapTrainArticleRanges({requestId: input.requestId}, database)
+
+    if (articleRanges.length === 0) {
+      return null
+    }
+
+    const sourceWatermarks = getReviewServingV4NumericSourceWatermarks(snapshot.sourceWatermarks)
+    const inputWatermark = getReviewServingV4BootstrapInputWatermark(sourceWatermarks)
+
+    await upsertReviewServingV4BootstrapProjectionManifests(
+      {
+        components: addedComponents,
+        inputWatermark,
+        projectId: input.projectId,
+        reviewConfigHash: snapshot.reviewConfigHash,
+        sourceWatermarks,
+      },
+      database,
+    )
+
+    const addedComponentState = await composeReviewServingCandidateSnapshotManifest(
+      {
+        componentIdentities: Object.fromEntries(
+          addedComponents.map((component) => {
+            return [
+              component,
+              {
+                projectId: input.projectId,
+                projectionComponent: component,
+                projectionIdentity: getReviewServingV4BootstrapProjectionIdentity({
+                  component,
+                  projectId: input.projectId,
+                }),
+              },
+            ]
+          }),
+        ),
+        componentRequirements: addedRequirements,
+        composedIdentity: snapshot.composedIdentity,
+        projectId: input.projectId,
+        reviewConfigHash: snapshot.reviewConfigHash,
+        selectedImportSnapshotId: snapshot.selectedImportSnapshotId ?? '',
+        snapshotId: input.snapshotId,
+        sourceWatermarks,
+      },
+      database,
+    )
+    const composedIdentity = getReviewServingV4ObjectRecord(snapshot.composedIdentity)
+    const appended = await appendReviewServingSnapshotManifestComponents(
+      {
+        componentRequirements: {
+          optionalComponents: [...snapshot.optionalComponents, ...addedRequirements.optionalComponents],
+          requiredComponents: [...snapshot.requiredComponents, ...addedRequirements.requiredComponents],
+        },
+        componentState: {
+          optional: [...snapshot.componentState.optional, ...addedComponentState.componentState.optional],
+          required: [...snapshot.componentState.required, ...addedComponentState.componentState.required],
+        },
+        composedIdentity: {
+          ...composedIdentity,
+          componentSet: getCanonicalReviewServingComponents([...snapshotComponentSet, ...addedComponents]),
+        } as ReviewServingIdentityValue,
+        projectId: input.projectId,
+        snapshotId: input.snapshotId,
+      },
+      database,
+    )
+
+    if (!appended) {
+      throw new Error(`review serving rebuild train snapshot ${input.snapshotId} is no longer live`)
+    }
+
+    const budgetFields = await getReviewServingV4BootstrapTrainChunkBudgetFields({requestId: input.requestId}, database)
+
+    await upsertReviewServingRebuildChunkManifests(
+      getReviewServingV4BootstrapChunks({
+        articleRanges,
+        components: addedComponents,
+        inputWatermark,
+        projectId: input.projectId,
+        snapshotId: input.snapshotId,
+        sourceWatermarks,
+      }).map((chunk) => {
+        return {
+          ...chunk,
+          ...budgetFields,
+          admissionState: 'admitted' as const,
+          requestId: input.requestId,
+          status: 'pending' as const,
+        }
+      }),
+      database,
+    )
+  }
+
+  const merged = await mergeReviewServingRebuildRequestComponents(
+    {
+      coalesced: {
+        addedComponents,
+        at: new Date().toISOString(),
+        coalescedRequestIds: input.coalescedRequestIds ?? [],
+        reason: input.reason,
+        requestedComponents: getCanonicalReviewServingComponents(input.requestedComponents),
+      },
+      componentSet: [...snapshotComponentSet, ...addedComponents],
+      priority: input.priority,
+      requestId: input.requestId,
+      requestedComponents: [...input.requestedComponents, ...addedComponents],
+    },
+    database,
+  )
+
+  if (merged === null) {
+    throw new Error(`review serving rebuild train ${input.requestId} is no longer admitted`)
+  }
+
+  return merged
+}
+
+// Returns the project's running train after adding the components this request needs, or null when there is none.
+const joinReviewServingV4BootstrapTrain = async (
+  input: Omit<ReviewServingV4BootstrapTrainExtension, 'requestId' | 'snapshotId'> & {reviewConfigHash: string | null},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const [train] = (
+    await getReviewServingV4OpenForegroundRequests(
+      {projectIds: [input.projectId], reviewConfigHash: input.reviewConfigHash},
+      database,
+    )
+  ).filter((request) => {
+    return request.status === 'admitted' && request.snapshotId !== null
+  })
+
+  if (train?.snapshotId === undefined || train.snapshotId === null) {
+    return null
+  }
+
+  const snapshotId = train.snapshotId
+
+  return runReviewServingV4RebuildStatsPhase('joinBootstrapTrain', () => {
+    return database.transaction((tx) => {
+      return extendReviewServingV4BootstrapTrain({...input, requestId: train.requestId, snapshotId}, tx)
+    })
+  }).catch((error: unknown) => {
+    reviewServingV4RebuildStatsLogger.log(
+      'review-serving-v4-rebuild-stats:join-bootstrap-train-failed',
+      '[reviewServingV4RebuildRequest] could not join the running rebuild train; planning a request of its own',
+      {error, event: 'joinBootstrapTrainFailed', projectId: input.projectId, requestId: train.requestId},
+    )
+
+    return null
+  })
+}
+
+// Remaining work of each request's unfinished chunks, in scoped articles; used to keep the train with the least left.
+const getReviewServingV4RemainingArticleCounts = async (
+  input: {projectId: string; requestIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const rows = await database.queryJson<{remainingArticleCount: number | string; requestId: string}>(`
+    SELECT
+      chunk.request_id AS requestId,
+      COUNT(scope.article_id) AS remainingArticleCount
+    FROM app.review_rebuild_chunk_manifest chunk
+    LEFT JOIN mart.project_scope_article scope
+      ON scope.project_id = chunk.project_id
+     AND scope.article_id BETWEEN chunk.chunk_start_key AND chunk.chunk_end_key
+    WHERE chunk.project_id = ${getSqlLiteral(input.projectId)}
+      AND chunk.request_id IN (${input.requestIds.map(getSqlLiteral).join(', ')})
+      AND chunk.status IN ('pending', 'running', 'failed')
+    GROUP BY chunk.request_id
+  `)
+  const [scope] = await database.queryJson<{scopedArticleCount: number | string}>(`
+    SELECT COUNT(*) AS scopedArticleCount
+    FROM mart.project_scope_article
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+  `)
+
+  return {
+    remainingArticleCounts: new Map(
+      rows.map((row) => {
+        return [row.requestId, getSafeCount(row.remainingArticleCount)] as const
+      }),
+    ),
+    scopedArticleCount: getSafeCount(scope?.scopedArticleCount),
+  }
+}
+
+type ReviewServingV4CoalesceMember = ReviewServingV4OpenForegroundRequest & {
+  componentSet: readonly ReviewServingProjectionComponent[]
+  dirtySourceWatermarks: Record<string, number>
+  request: ReviewServingRebuildRequest
+}
+
+const getReviewServingV4CoalescePlan = (input: {
+  members: readonly ReviewServingV4CoalesceMember[]
+  remainingArticleCounts: ReadonlyMap<string, number>
+  scopedArticleCount: number
+}) => {
+  const trains = input.members.filter((member) => {
+    return member.snapshotId !== null
+  })
+  const plans = trains
+    .filter((candidate) => {
+      return candidate.status === 'admitted'
+    })
+    .map((survivor) => {
+      const isCoveredBySurvivor = (member: ReviewServingV4CoalesceMember) => {
+        return (
+          member.requestId !== survivor.requestId
+          && doReviewServingV4SourceWatermarksCover(survivor.dirtySourceWatermarks, member.dirtySourceWatermarks)
+        )
+      }
+      const absorbedTrains = trains.filter(isCoveredBySurvivor)
+      const survivorComponentSet = new Set(survivor.componentSet)
+      const addedComponents = getCanonicalReviewServingComponents(
+        absorbedTrains.flatMap((member) => {
+          return member.componentSet
+        }),
+      ).filter((component) => {
+        return !survivorComponentSet.has(component)
+      })
+      const trainComponentSet = new Set([...survivor.componentSet, ...addedComponents])
+      const absorbedInPlaceRequests = input.members.filter((member) => {
+        return (
+          member.snapshotId === null
+          && member.status === 'failed'
+          && isCoveredBySurvivor(member)
+          && member.request.requestedComponents.every((component) => {
+            return trainComponentSet.has(component)
+          })
+        )
+      })
+      const absorbed = [...absorbedTrains, ...absorbedInPlaceRequests]
+      const remainingWork =
+        (input.remainingArticleCounts.get(survivor.requestId) ?? 0) + addedComponents.length * input.scopedArticleCount
+      const absorbedWork = absorbed.reduce((total, member) => {
+        return total + (input.remainingArticleCounts.get(member.requestId) ?? 0)
+      }, 0)
+
+      return {absorbed, absorbedWork, addedComponents, remainingWork, survivor}
+    })
+    .filter((plan) => {
+      return plan.absorbed.some((member) => {
+        return member.snapshotId !== null
+      })
+    })
+    .sort((left, right) => {
+      return right.absorbed.length - left.absorbed.length || left.remainingWork - right.remainingWork
+    })
+
+  return plans[0] ?? null
+}
+
+// Folds concurrent trains of a project and review config into the one with the least work left, and cancels failed
+// in-place requests that train already covers (readmission would otherwise rebuild them from older watermarks).
+export const coalesceReviewServingV4BootstrapTrains = async (
+  input: {nowMs?: number; projectId?: string | null},
+  database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase,
+): Promise<readonly CoalescedReviewServingV4BootstrapTrain[]> => {
+  const nowMs = input.nowMs ?? Date.now()
+  const projectRows = await database.queryJson<{projectId: string}>(`
+    SELECT project_id AS projectId
+    FROM app.review_rebuild_request request
+    WHERE request.admission_state = 'admitted'
+      AND request.reason NOT IN (${getReviewServingV4RequestlessReasonSqlList()})
+      AND (
+        request.status = 'admitted'
+        OR (request.status = 'failed' AND ${getReviewServingV4ReadmittableFailedRequestSql('request')})
+      )
+      ${input.projectId ? `AND request.project_id = ${getSqlLiteral(input.projectId)}` : ''}
+    GROUP BY project_id
+    HAVING COUNT(*) > 1
+  `)
+  const projectIds = projectRows
+    .map((row) => {
+      return row.projectId
+    })
+    .filter((projectId) => {
+      return (
+        nowMs - (lastReviewServingV4BootstrapTrainCheckAtMsByProject.get(projectId) ?? 0)
+        >= reviewServingV4BootstrapTrainCheckIntervalMs
+      )
+    })
+
+  projectIds.forEach((projectId) => {
+    lastReviewServingV4BootstrapTrainCheckAtMsByProject.set(projectId, nowMs)
+  })
+
+  const openRequests = await getReviewServingV4OpenForegroundRequests({projectIds}, database)
+  const groups = openRequests.reduce((grouped, request) => {
+    const key = `${request.projectId}\u0000${request.reviewConfigHash ?? ''}`
+
+    return grouped.set(key, [...(grouped.get(key) ?? []), request])
+  }, new Map<string, ReviewServingV4OpenForegroundRequest[]>())
+  const coalesced: CoalescedReviewServingV4BootstrapTrain[] = []
+
+  for (const group of groups.values()) {
+    if (
+      group.filter((request) => {
+        return request.snapshotId !== null
+      }).length < 2
+    ) {
+      continue
+    }
+
+    const members = await group.reduce<Promise<ReviewServingV4CoalesceMember[]>>(async (previous, openRequest) => {
+      const loaded = await previous
+      const request = await getReviewServingRebuildRequest({requestId: openRequest.requestId}, database)
+
+      return request === null
+        ? loaded
+        : [
+            ...loaded,
+            {
+              ...openRequest,
+              componentSet: getReviewServingV4RequestComponentSet(request),
+              dirtySourceWatermarks: getReviewServingV4RequestDirtySourceWatermarks(request),
+              request,
+            },
+          ]
+    }, Promise.resolve([]))
+    const [firstMember] = members
+
+    if (firstMember === undefined) {
+      continue
+    }
+
+    const {remainingArticleCounts, scopedArticleCount} = await getReviewServingV4RemainingArticleCounts(
+      {
+        projectId: firstMember.projectId,
+        requestIds: members.map((member) => {
+          return member.requestId
+        }),
+      },
+      database,
+    )
+    const plan = getReviewServingV4CoalescePlan({members, remainingArticleCounts, scopedArticleCount})
+
+    if (plan === null || plan.survivor.snapshotId === null) {
+      continue
+    }
+
+    const survivorSnapshotId = plan.survivor.snapshotId
+    const absorbedRequestIds = plan.absorbed.map((member) => {
+      return member.requestId
+    })
+    const merged = await database
+      .transaction(async (tx) => {
+        const extended = await extendReviewServingV4BootstrapTrain(
+          {
+            coalescedRequestIds: absorbedRequestIds,
+            components: plan.absorbed.flatMap((member) => {
+              return member.snapshotId === null ? [] : member.componentSet
+            }),
+            priority: Math.max(
+              plan.survivor.priority,
+              ...plan.absorbed.map((member) => {
+                return member.priority
+              }),
+            ),
+            projectId: plan.survivor.projectId,
+            reason: 'coalesceBootstrapTrains',
+            requestedComponents: plan.absorbed.flatMap((member) => {
+              return member.snapshotId === null ? [] : member.request.requestedComponents
+            }),
+            requestId: plan.survivor.requestId,
+            snapshotId: survivorSnapshotId,
+          },
+          tx,
+        )
+
+        if (extended === null) {
+          return false
+        }
+
+        await cancelCoalescedReviewServingRebuildRequests(
+          {requestIds: absorbedRequestIds, survivorRequestId: plan.survivor.requestId},
+          tx,
+        )
+        await plan.absorbed.reduce<Promise<void>>(async (previous, member) => {
+          await previous
+
+          if (member.snapshotId !== null && member.snapshotId !== survivorSnapshotId) {
+            await markCandidateReviewServingSnapshotManifestFailed(
+              {
+                lastError: getCoalescedReviewServingRebuildRequestLastError(plan.survivor.requestId),
+                projectId: member.projectId,
+                snapshotId: member.snapshotId,
+              },
+              tx,
+            )
+          }
+        }, Promise.resolve())
+
+        return true
+      })
+      .catch((error: unknown) => {
+        reviewServingV4RebuildStatsLogger.log(
+          'review-serving-v4-rebuild-stats:coalesce-bootstrap-trains-failed',
+          '[reviewServingV4RebuildRequest] could not coalesce rebuild trains',
+          {error, event: 'coalesceBootstrapTrainsFailed', projectId: plan.survivor.projectId},
+        )
+
+        return false
+      })
+
+    if (merged) {
+      coalesced.push({
+        addedComponents: plan.addedComponents,
+        cancelledRequestIds: absorbedRequestIds,
+        projectId: plan.survivor.projectId,
+        survivorRequestId: plan.survivor.requestId,
+      })
+    }
+  }
+
+  return coalesced
+}
+
 export const requestReviewServingV4RebuildEffect = (
   input: RequestReviewServingV4RebuildInput,
   database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase,
@@ -2128,6 +2891,36 @@ export const requestReviewServingV4RebuildEffect = (
       }
 
       return activeRequest
+    }
+
+    const joinedTrain =
+      shouldReuseActiveRequest
+      && (input.reason !== 'missingReviewServingSnapshot'
+        || !(await hasLegacyRequiredEnrichmentBootstrapCandidate(
+          {projectId: input.projectId, reviewConfigHash},
+          requestDatabase,
+        )))
+        ? await joinReviewServingV4BootstrapTrain(
+            {
+              components: getReviewServingV4BootstrapComponents({
+                components: isRequestedOptionalDirtyWorkBootstrap
+                  ? getOptionalDirtyWorkBootstrapComponents(requestedComponents)
+                  : requestedComponents,
+                pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
+                requestedOnly: isRequestedComponentBootstrap,
+              }),
+              priority: requestPriority,
+              projectId: input.projectId,
+              reason: input.reason,
+              requestedComponents,
+              reviewConfigHash,
+            },
+            requestDatabase,
+          )
+        : null
+
+    if (joinedTrain !== null) {
+      return joinedTrain
     }
 
     const blockedRequest =

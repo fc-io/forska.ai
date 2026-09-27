@@ -144,6 +144,7 @@ import {
   projectReviewServingTitleSearchRebuildRows,
   projectReviewServingTitleSearchRows,
 } from '../reviewServing/reviewServingTitleSearchProjector.ts'
+import {coalesceReviewServingV4BootstrapTrains} from '../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {
   getReviewServingVisibilityBacklogPendingTotal,
   reportReviewServingVisibilityBacklog,
@@ -243,6 +244,7 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
 
 type ReviewServingProjectorWorkerDependencies = {
   cleanupDirtyWorkRetention?: typeof cleanupReviewServingDirtyWorkRetention
+  coalesceBootstrapRebuildTrains?: typeof coalesceReviewServingV4BootstrapTrains
   cleanupRetentionState?: typeof cleanupReviewServingRetentionState
   cleanupStaleCandidateSnapshots?: typeof cleanupStaleCandidateReviewServingSnapshotManifests
   getCleanupTargets?: (
@@ -10895,6 +10897,20 @@ export const runReviewServingProjectorWorkerCycle = async (
   })
   await runReviewServingProjectorWorkerCyclePhase('failInconsistentForegroundRequests', () => {
     return failInconsistentAndSupersededForegroundRebuildRequests({database, projectId: options.rebuildProjectId})
+  })
+  await runReviewServingProjectorWorkerCyclePhase('coalesceBootstrapRebuildTrains', async () => {
+    const coalesced = await (dependencies.coalesceBootstrapRebuildTrains ?? coalesceReviewServingV4BootstrapTrains)(
+      {nowMs: getWorkerNowMs(dependencies, options), projectId: options.rebuildProjectId},
+      database,
+    )
+
+    coalesced.forEach((train) => {
+      reviewServingProjectorWorkerCycleLogger.log(
+        `review-serving-projector-worker:coalesced-bootstrap-trains:${train.survivorRequestId}`,
+        '[reviewServingProjectorWorker] coalesced concurrent rebuild trains',
+        {...train, event: 'coalescedBootstrapRebuildTrains'},
+      )
+    })
   })
   await runReviewServingProjectorWorkerCyclePhase('failSupersededRequestlessBootstrapRequests', () => {
     return failSupersededRequestlessBootstrapRebuildRequests({database, projectId: options.rebuildProjectId})
