@@ -2,7 +2,12 @@ import {Effect} from 'effect'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
-import {countReadyReviewServingComponents, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  countReadyReviewServingComponents,
+  enrichmentReviewServingProjectionComponents,
+  type ReviewServingProjectionComponent,
+  visibilityReviewServingProjectionComponents,
+} from './reviewServingContracts.ts'
 import {
   blockReviewServingDirtyWorkClaimsForRebuild,
   claimReviewServingDirtyWork,
@@ -212,21 +217,6 @@ type ReviewServingProjectorComponentVisit = {
   component: ReviewServingProjectionComponent
 }
 
-export const visibilityReviewServingProjectionComponents: readonly ReviewServingProjectionComponent[] = [
-  'projectScope',
-  'selectedImport',
-  'llmStatus',
-  'humanStatus',
-  'queue',
-]
-export const enrichmentReviewServingProjectionComponents: readonly ReviewServingProjectionComponent[] = [
-  'display',
-  'payload',
-  'posting',
-  'summary',
-  'judgmentInputContent',
-  'search',
-]
 const projectorFailureLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const blockedRebuildRequestReuseMs = defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds * 1000
 

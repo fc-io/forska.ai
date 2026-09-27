@@ -27,6 +27,23 @@ export const countReadyReviewServingComponents = [
   ...defaultReadableReviewServingComponents,
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
+export const visibilityReviewServingProjectionComponents = [
+  'projectScope',
+  'selectedImport',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+export const enrichmentReviewServingProjectionComponents = [
+  'display',
+  'payload',
+  'posting',
+  'summary',
+  'judgmentInputContent',
+  'search',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
 export const filterReadyReviewServingComponents = [
   'projectScope',
   'selectedImport',

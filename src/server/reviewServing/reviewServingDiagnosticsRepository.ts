@@ -8,6 +8,7 @@ import {
   isReviewServingProjectionComponent,
   type ReviewServingProjectionComponent,
   type ReviewServingSearchAvailability,
+  visibilityReviewServingProjectionComponents,
 } from './reviewServingContracts.ts'
 import {defaultReviewServingDirtyWorkStaleClaimSeconds} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
@@ -73,8 +74,17 @@ export type ReviewServingDiagnosticsDirtyWorkDetails = {
   sourcePartitionLags: ReviewServingDiagnosticsDirtySourceLag[]
 }
 
+export type ReviewServingDiagnosticsVisibilityBacklog = {
+  components: Array<{component: ReviewServingProjectionComponent; pendingCount: number; projectedRecentCount: number}>
+  madeVisibleRecentCount: number
+  recentWindowMinutes: number
+}
+
 export type ReviewServingDiagnosticsDirtyWorkState = ReviewServingDiagnosticsCountState
-  & Partial<ReviewServingDiagnosticsDirtyWorkDetails> & {blockedByRebuildCount: number}
+  & Partial<ReviewServingDiagnosticsDirtyWorkDetails> & {
+    blockedByRebuildCount: number
+    visibilityBacklog?: ReviewServingDiagnosticsVisibilityBacklog
+  }
 
 export type ReviewServingDiagnosticsRebuildChunkState = ReviewServingDiagnosticsCountState & {
   blockedQueuedCount: number
@@ -171,6 +181,7 @@ type DiagnosticsSummaryRow = {
   dirtyWorkLifecycleReasonCountsJson?: unknown
   dirtyWorkOldestQueuedAt: string | null
   dirtyWorkPendingCount: number
+  dirtyWorkVisibilityBacklogJson?: unknown
   dirtyWorkSourcePartitionLagsJson?: unknown
   dirtyWorkRunningCount: number
   dirtyWorkUpdatedAt: string | null
@@ -742,6 +753,51 @@ const oldestBarrierSelectSql = `
         oldest_barrier.sourceHighWaterMark AS oldestBarrierSourceHighWaterMark,
         oldest_barrier.status AS oldestBarrierStatus,`
 
+const visibilityBacklogRecentWindowMinutes = 10
+
+const getVisibilityBacklogComponentSql = (component: ReviewServingProjectionComponent, now: Date | string) => {
+  return `${component} := STRUCT_PACK(
+            pendingCount := CAST(COUNT(*) FILTER (
+              WHERE status <> 'completed' AND projection_component = ${getSqlLiteral(component)}
+            ) AS INTEGER),
+            projectedRecentCount := CAST(COUNT(*) FILTER (
+              WHERE status = 'completed'
+                AND lifecycle_reason = 'projected'
+                AND projection_component = ${getSqlLiteral(component)}
+                AND updated_at >= ${getDiagnosticsTimestampLiteral(now)} - INTERVAL '${visibilityBacklogRecentWindowMinutes} minutes'
+            ) AS INTEGER)
+          )`
+}
+
+const getVisibilityBacklogSelectSql = (now: Date | string) => {
+  return `to_json(STRUCT_PACK(
+          ${visibilityReviewServingProjectionComponents
+            .map((component) => {
+              return getVisibilityBacklogComponentSql(component, now)
+            })
+            .join(',\n          ')}
+        ))`
+}
+
+const getDiagnosticsVisibilityBacklog = (value: unknown): ReviewServingDiagnosticsVisibilityBacklog => {
+  const counts = (getJsonValue(value) ?? {}) as Partial<
+    Record<ReviewServingProjectionComponent, {pendingCount?: unknown; projectedRecentCount?: unknown}>
+  >
+  const components = visibilityReviewServingProjectionComponents.map((component) => {
+    return {
+      component,
+      pendingCount: Number(counts[component]?.pendingCount ?? 0),
+      projectedRecentCount: Number(counts[component]?.projectedRecentCount ?? 0),
+    }
+  })
+
+  return {
+    components,
+    madeVisibleRecentCount: Number(counts.selectedImport?.projectedRecentCount ?? 0),
+    recentWindowMinutes: visibilityBacklogRecentWindowMinutes,
+  }
+}
+
 const getDiagnosticsSummaryRowsEffect = (
   input: ReviewServingDiagnosticsInput,
   database: ReviewServingDiagnosticsDatabase,
@@ -886,7 +942,8 @@ const getDiagnosticsSummaryRowsEffect = (
           MIN(created_at) FILTER (
             WHERE ${queuedDirtyWorkPredicate}
           ) AS oldestQueuedAt,
-          MAX(updated_at) FILTER (WHERE status IN ('failed', 'running', 'completed')) AS updatedAt
+          MAX(updated_at) FILTER (WHERE status IN ('failed', 'running', 'completed')) AS updatedAt,
+          ${getVisibilityBacklogSelectSql(now)} AS visibilityBacklogJson
         FROM app.review_serving_dirty_work
         WHERE project_id = ${getSqlLiteral(input.projectId)}
       )${includeDetails ? getDirtyWorkDetailCtesSql(input.projectId) : ''}, live_rebuild_chunk AS (
@@ -1053,6 +1110,7 @@ const getDiagnosticsSummaryRowsEffect = (
         dirty_work.completedCount AS dirtyWorkCompletedCount,
         dirty_work.oldestQueuedAt AS dirtyWorkOldestQueuedAt,
         dirty_work.updatedAt AS dirtyWorkUpdatedAt,
+        dirty_work.visibilityBacklogJson AS dirtyWorkVisibilityBacklogJson,
         rebuild_chunk.pendingCount AS rebuildChunkPendingCount,
         rebuild_chunk.runningCount AS rebuildChunkRunningCount,
         rebuild_chunk.failedCount AS rebuildChunkFailedCount,
@@ -1156,6 +1214,7 @@ const getDiagnosticsDirtyWorkState = (
         ...getDiagnosticsCountState(row, 'dirtyWork'),
         blockedByRebuildCount: Number(row.dirtyWorkBlockedByRebuildCount ?? 0),
         ...details,
+        visibilityBacklog: getDiagnosticsVisibilityBacklog(row.dirtyWorkVisibilityBacklogJson),
       }
 }
 

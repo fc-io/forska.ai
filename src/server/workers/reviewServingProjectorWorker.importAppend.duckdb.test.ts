@@ -1,6 +1,9 @@
 import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
-import type {ReviewServingProjectionComponent} from '../reviewServing/reviewServingContracts.ts'
+import {
+  type ReviewServingProjectionComponent,
+  visibilityReviewServingProjectionComponents,
+} from '../reviewServing/reviewServingContracts.ts'
 import type {WakeReviewServingProjectorServiceResult} from '../reviewServing/reviewServingProjectorService.ts'
 import type {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
@@ -642,10 +645,7 @@ const wakeVisibilityBacklog = async (input: {
   claimOrderOffset: number
   wakeId: string
 }) => {
-  const [
-    {visibilityReviewServingProjectionComponents, wakeReviewServingProjectorService},
-    {getDefaultReviewServingProjectorRunners},
-  ] = await Promise.all([
+  const [{wakeReviewServingProjectorService}, {getDefaultReviewServingProjectorRunners}] = await Promise.all([
     import('../reviewServing/reviewServingProjectorService.ts'),
     import('./reviewServingProjectorWorker.ts'),
   ])
