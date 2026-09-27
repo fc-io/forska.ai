@@ -2453,6 +2453,84 @@ export const completeReviewServingDirtyWorkCoveredByRebuild = async (
   return {completedCount}
 }
 
+// Pending or parked dirty work whose article a completed rebuild chunk re-read after the change arrived needs no
+// patch: the chunk wrote that article from newer source state. It completes and is acknowledged like projected work.
+// Rows that changed or were claimed since they were selected are left alone.
+export const completeReviewServingDirtyWorkRebuiltByChunks = async (
+  claims: readonly ReviewServingDirtyWorkClaim[],
+  database: ReviewServingDirtyWorkTransaction,
+) => {
+  const uniqueClaims = [
+    ...new Map(
+      claims.map((claim) => {
+        return [claim.dirtyWorkId, claim]
+      }),
+    ).values(),
+  ]
+
+  if (uniqueClaims.length === 0) {
+    return {completedCount: 0}
+  }
+
+  const completedRows = await database.queryJson<{dirtyWorkId: string}>(`
+    UPDATE app.review_serving_dirty_work
+    SET status = 'completed', lifecycle_reason = 'covered_by_rebuild', updated_at = current_timestamp
+    WHERE ${getDirtyWorkUpdatePredicate(uniqueClaims)}
+      AND status IN ('pending', 'blocked_by_rebuild')
+      AND ${getDirtyWorkClaimWatermarkPredicate(uniqueClaims)}
+    RETURNING dirty_work_id AS dirtyWorkId
+  `)
+  const completedDirtyWorkIds = new Set(
+    completedRows.map((row) => {
+      return row.dirtyWorkId
+    }),
+  )
+  const completedClaims = uniqueClaims.filter((claim) => {
+    return completedDirtyWorkIds.has(claim.dirtyWorkId)
+  })
+
+  if (completedClaims.length === 0) {
+    return {completedCount: 0}
+  }
+
+  await acknowledgeReviewServingDirtyWorkClaims(completedClaims, database)
+  await advanceReviewServingDirtySourceWatermarkEntries(
+    [
+      ...completedClaims
+        .reduce((entries, claim) => {
+          const key = `${claim.projectId ?? ''}\u0000${claim.sourcePartition}`
+          const previous = entries.get(key)
+
+          return previous !== undefined && previous.sourceHighWaterMark >= claim.latestSourceHighWaterMark
+            ? entries
+            : entries.set(key, {
+                projectId: claim.projectId,
+                sourceHighWaterMark: claim.latestSourceHighWaterMark,
+                sourcePartition: claim.sourcePartition,
+              })
+        }, new Map<string, DirtyWorkSourceWatermarkCompletion>())
+        .values(),
+    ],
+    database,
+  )
+  await maintainReviewServingDirtyWorkClaimStates(
+    completedClaims.map((claim) => {
+      return {...claim, lifecycleReason: 'covered_by_rebuild' as const, status: 'completed' as const}
+    }),
+    database,
+  )
+
+  return {completedCount: completedClaims.length}
+}
+
+export const getReviewServingDirtyWorkRecordSelectSql = (dirtyWorkSql: string) => {
+  return getQualifiedDirtyWorkSelect(dirtyWorkSql)
+}
+
+export const getReviewServingDirtyWorkRecordFromRow = (row: unknown) => {
+  return getDirtyWorkRecordFromRow(row as DirtyWorkRow)
+}
+
 export const completeReviewServingDirtyWorkClaimsAndAdvanceWatermark = async (
   input: {claims: readonly ReviewServingDirtyWorkClaim[]; watermark: ReviewServingProjectorWatermarkAdvanceInput},
   database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,

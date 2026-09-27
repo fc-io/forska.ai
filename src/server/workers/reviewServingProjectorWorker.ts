@@ -113,6 +113,7 @@ import {
   projectReviewServingQueueRebuildRanges,
   projectReviewServingQueueRebuildRows,
 } from '../reviewServing/reviewServingQueueProjector.ts'
+import {retireReviewServingDirtyWorkRebuiltByChunks} from '../reviewServing/reviewServingRebuiltDirtyWorkRetirement.ts'
 import {
   cleanupReviewServingRetentionState,
   getReviewServingRetentionCleanupTargets,
@@ -245,6 +246,7 @@ type ReviewServingProjectorWorkerRebuildChunkService = {
 type ReviewServingProjectorWorkerDependencies = {
   cleanupDirtyWorkRetention?: typeof cleanupReviewServingDirtyWorkRetention
   coalesceBootstrapRebuildTrains?: typeof coalesceReviewServingV4BootstrapTrains
+  retireRebuiltDirtyWork?: typeof retireReviewServingDirtyWorkRebuiltByChunks
   cleanupRetentionState?: typeof cleanupReviewServingRetentionState
   cleanupStaleCandidateSnapshots?: typeof cleanupStaleCandidateReviewServingSnapshotManifests
   getCleanupTargets?: (
@@ -10915,6 +10917,20 @@ export const runReviewServingProjectorWorkerCycle = async (
         {...train, event: 'coalescedBootstrapRebuildTrains'},
       )
     })
+  })
+  await runReviewServingProjectorWorkerCyclePhase('retireRebuiltDirtyWork', async () => {
+    const retirement = await (dependencies.retireRebuiltDirtyWork ?? retireReviewServingDirtyWorkRebuiltByChunks)(
+      {nowMs: getWorkerNowMs(dependencies, options), projectId: options.rebuildProjectId},
+      database,
+    )
+
+    if (retirement.retiredCount > 0) {
+      reviewServingProjectorWorkerCycleLogger.log(
+        'review-serving-projector-worker:retired-rebuilt-dirty-work',
+        '[reviewServingProjectorWorker] retired dirty work its rebuild already covered',
+        {event: 'retiredRebuiltDirtyWork', retiredCount: retirement.retiredCount},
+      )
+    }
   })
   await runReviewServingProjectorWorkerCyclePhase('failSupersededRequestlessBootstrapRequests', () => {
     return failSupersededRequestlessBootstrapRebuildRequests({database, projectId: options.rebuildProjectId})
