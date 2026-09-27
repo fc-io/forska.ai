@@ -1,7 +1,7 @@
 import {Buffer} from 'node:buffer'
 import {existsSync, mkdirSync, readFileSync, rmSync, truncateSync, unlinkSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
-import {join} from 'node:path'
+import {join, win32} from 'node:path'
 
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
@@ -287,12 +287,35 @@ test('duckdb snapshot creation fails when the pre-copy checkpoint fails', () => 
   expect(parsed.runStatements).toEqual(['CHECKPOINT'])
 })
 
+const getWindowsPathArtifacts = (posixPath: string) => {
+  const windowsPath = win32.normalize(posixPath)
+
+  return [windowsPath, `${windowsPath}.startup-recovery`, `${windowsPath}.wal`, win32.dirname(windowsPath)].map(
+    (artifact) => {
+      return join(process.cwd(), artifact)
+    },
+  )
+}
+
+const runWithoutWindowsPathArtifacts = <T>(posixPaths: readonly string[], run: () => T) => {
+  try {
+    return run()
+  } finally {
+    posixPaths.flatMap(getWindowsPathArtifacts).forEach((artifact) => {
+      rmSync(artifact, {force: true, recursive: true})
+    })
+  }
+}
+
 test('duckdb snapshot close failures still restart the Windows embedded runtime', () => {
-  const result = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
+  const duckdbPath = join(tmpdir(), `f1-duckdb-service-snapshot-close-failure-test-${Date.now()}.duckdb`)
+  const duckdbTempDirectory = join(tmpdir(), `f1-duckdb-service-snapshot-close-failure-test-temp-${Date.now()}`)
+  const result = runWithoutWindowsPathArtifacts([duckdbPath, duckdbTempDirectory], () => {
+    return globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
         const {mock} = await import('bun:test')
 
         Object.defineProperty(process, 'platform', {configurable: true, value: 'win32'})
@@ -363,23 +386,24 @@ test('duckdb snapshot close failures still restart the Windows embedded runtime'
         console.log(JSON.stringify({createCountAfterQuery: createCount, createCountAfterSnapshot, errorMessage, row}))
         await duckdbService.closeDuckdbService({checkpointBeforeClose: false})
       `,
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        API_SERVER_PORT: '3999',
-        DUCKDB_MEMORY_LIMIT: '20GB',
-        DUCKDB_PATH: join(tmpdir(), `f1-duckdb-service-snapshot-close-failure-test-${Date.now()}.duckdb`),
-        DUCKDB_TEMP_DIRECTORY: join(tmpdir(), `f1-duckdb-service-snapshot-close-failure-test-temp-${Date.now()}`),
-        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
-        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-        SERVER_ROLE: 'maintenance-worker',
-        SERVER_DUCKDB_OWNER_URL: '',
-        VITE_PORT: '3000',
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          API_SERVER_PORT: '3999',
+          DUCKDB_MEMORY_LIMIT: '20GB',
+          DUCKDB_PATH: duckdbPath,
+          DUCKDB_TEMP_DIRECTORY: duckdbTempDirectory,
+          RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+          RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+          SERVER_ROLE: 'maintenance-worker',
+          SERVER_DUCKDB_OWNER_URL: '',
+          VITE_PORT: '3000',
+        },
       },
-    },
-  )
+    )
+  })
 
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB snapshot close subprocess failed')
