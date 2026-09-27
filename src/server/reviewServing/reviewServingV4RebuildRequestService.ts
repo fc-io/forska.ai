@@ -2085,6 +2085,7 @@ const reviewServingV4BootstrapTrainCheckIntervalMs = 60_000
 const lastReviewServingV4BootstrapTrainCheckAtMsByProject = new Map<string, number>()
 
 type ReviewServingV4OpenForegroundRequestRow = {
+  blockedChunkCount: number | string
   createdAt: string
   lastError: string | null
   openChunkCount: number | string
@@ -2098,6 +2099,7 @@ type ReviewServingV4OpenForegroundRequestRow = {
 }
 
 type ReviewServingV4OpenForegroundRequest = {
+  blockedChunkCount: number
   createdAt: string
   openChunkCount: number
   priority: number
@@ -2136,6 +2138,12 @@ const getReviewServingV4ReadmittableFailedRequestSql = (requestAlias: string) =>
       return `COALESCE(${requestAlias}.last_error, '') NOT LIKE ${getSqlLiteral(`${prefix}%`)}`
     })
     .join(' AND ')
+}
+
+// A train other requests can join or be folded into: admitted, building a live snapshot, with nothing blocked.
+// Blocked or failed trains are only ever folded into another one.
+const isReviewServingV4RunnableBootstrapTrain = (request: ReviewServingV4OpenForegroundRequest) => {
+  return request.status === 'admitted' && request.snapshotId !== null && request.blockedChunkCount === 0
 }
 
 // Admitted foreground requests plus failed ones that readmission would bring back, each with the live snapshot most of
@@ -2210,12 +2218,12 @@ const getReviewServingV4OpenForegroundRequests = async (
       json_extract_string(open_request.identity_json, '$.reviewConfigHash') AS reviewConfigHash,
       request_live_snapshot.snapshot_id AS snapshotId,
       request_live_snapshot.snapshot_status AS snapshotStatus,
-      request_open_chunk.open_chunk_count AS openChunkCount
+      request_open_chunk.open_chunk_count AS openChunkCount,
+      request_open_chunk.blocked_chunk_count AS blockedChunkCount
     FROM open_request
     INNER JOIN request_open_chunk ON request_open_chunk.request_id = open_request.request_id
     LEFT JOIN request_live_snapshot ON request_live_snapshot.request_id = open_request.request_id
     WHERE request_open_chunk.open_chunk_count > 0
-      AND request_open_chunk.blocked_chunk_count = 0
     ORDER BY open_request.priority DESC, open_request.created_at ASC, open_request.request_id ASC
   `)
 
@@ -2223,13 +2231,14 @@ const getReviewServingV4OpenForegroundRequests = async (
     return row.status === 'admitted' || row.status === 'failed'
       ? [
           {
+            blockedChunkCount: getSafeCount(row.blockedChunkCount),
             createdAt: row.createdAt,
             openChunkCount: getSafeCount(row.openChunkCount),
             priority: getSafeCount(row.priority),
             projectId: row.projectId,
             requestId: row.requestId,
             reviewConfigHash: row.reviewConfigHash,
-            snapshotId: row.snapshotId,
+            snapshotId: typeof row.snapshotId === 'string' ? row.snapshotId : null,
             status: row.status,
           },
         ]
@@ -2409,6 +2418,20 @@ const extendReviewServingV4BootstrapTrain = async (
     return null
   }
 
+  const requestedComponentSet = new Set(request.requestedComponents)
+
+  // Dirty-work wakes re-request on every pass while their claims wait for the train; leave the row alone then, since
+  // its updated_at orders high-priority claims.
+  if (
+    addedComponents.length === 0
+    && (input.priority ?? 0) <= request.priority
+    && input.requestedComponents.every((component) => {
+      return requestedComponentSet.has(component)
+    })
+  ) {
+    return request
+  }
+
   if (addedComponents.length > 0) {
     const articleRanges = await getReviewServingV4BootstrapTrainArticleRanges({requestId: input.requestId}, database)
 
@@ -2539,9 +2562,7 @@ const joinReviewServingV4BootstrapTrain = async (
       {projectIds: [input.projectId], reviewConfigHash: input.reviewConfigHash},
       database,
     )
-  ).filter((request) => {
-    return request.status === 'admitted' && request.snapshotId !== null
-  })
+  ).filter(isReviewServingV4RunnableBootstrapTrain)
 
   if (train?.snapshotId === undefined || train.snapshotId === null) {
     return null
@@ -2613,9 +2634,7 @@ const getReviewServingV4CoalescePlan = (input: {
     return member.snapshotId !== null
   })
   const plans = trains
-    .filter((candidate) => {
-      return candidate.status === 'admitted'
-    })
+    .filter(isReviewServingV4RunnableBootstrapTrain)
     .map((survivor) => {
       const isCoveredBySurvivor = (member: ReviewServingV4CoalesceMember) => {
         return (
@@ -2768,7 +2787,7 @@ export const coalesceReviewServingV4BootstrapTrains = async (
             priority: Math.max(
               plan.survivor.priority,
               ...plan.absorbed.map((member) => {
-                return member.priority
+                return member.snapshotId === null ? 0 : member.priority
               }),
             ),
             projectId: plan.survivor.projectId,
