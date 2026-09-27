@@ -5408,6 +5408,58 @@ test('worker drains foreground critical rebuild chunks within a bounded chunk bu
   expect(harness.cleanupInputs).toEqual([])
 })
 
+const runForegroundDrainCycle = async (lastMaintenanceAtMs: number | undefined) => {
+  const harness = createWorkerHarness({nowMs: 100_000, wakeStatus: 'completed'})
+  const foregroundChunkInput = {...chunkInput, requestId: 'rebuild:foreground'}
+  const foregroundChunk = {...chunkManifest, requestId: 'rebuild:foreground'}
+
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async () => {
+      return foregroundChunk
+    },
+    getNextChunk: async () => {
+      return foregroundChunkInput
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {
+      foregroundRebuildDrainChunkBudget: 2,
+      foregroundRebuildDrainCompletedCount: 1,
+      foregroundRebuildDrainStartedAtMs: 100_000,
+      foregroundRebuildDrainTtlMs: 10_000,
+      lastMaintenanceAtMs,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  return {harness, result}
+}
+
+test('a foreground drain defers delta intake and cleanup for at most the starvation window', async () => {
+  const deferred = await runForegroundDrainCycle(100_000 - 29_999)
+  const expired = await runForegroundDrainCycle(100_000 - 30_000)
+
+  expect(deferred.harness.dirtyWorkRetentionCleanupInputs).toEqual([])
+  expect(deferred.result.nextMaintenanceAtMs).toBe(100_000 - 29_999)
+  expect(expired.harness.dirtyWorkRetentionCleanupInputs).toHaveLength(1)
+  expect(expired.result.nextMaintenanceAtMs).toBe(100_000)
+  expect(expired.harness.wakeInputs[0]).toMatchObject({
+    componentOrder: [
+      'projectScope',
+      'selectedImport',
+      'llmStatus',
+      'humanStatus',
+      'queue',
+      'display',
+      'payload',
+      'judgmentInputContent',
+    ],
+  })
+})
+
 test('the foreground drain wake rotates its visibility components so status and queue work also go first', async () => {
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const foregroundChunkInput = {...chunkInput, requestId: 'rebuild:foreground'}
