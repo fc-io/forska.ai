@@ -1,16 +1,23 @@
-import {expect, test} from 'bun:test'
+import {afterEach, expect, test} from 'bun:test'
 
+import {createDuckdbShuttingDownError} from '../utils/duckdbShuttingDownError.ts'
+import {markServerShutdownStarted, resetServerShutdownStateForTests} from '../utils/serverShutdownState.ts'
 import {
   dataSourceImportPageRetryDelaysMs,
   isTransientDataSourceImportError,
   withDataSourceImportPageRetry,
 } from './dataSourceImportRetry.ts'
 
+afterEach(() => {
+  resetServerShutdownStateForTests()
+})
+
 test('owner freezes, restarts and connection errors are transient data source import errors', () => {
   const transientMessages = [
     'DuckDB workload budget exceeded for import.storeArticles: duration 487605ms exceeded timeout 120000ms',
     'TransactionContext Error: Current transaction is aborted (please ROLLBACK)',
     'FATAL Error: database has been invalidated because of a previous fatal error',
+    'IO Error: Database "forska" has been invalidated because checkpointing failed. Detach and reattach it before using it again.',
     'DuckDB connection not started',
     'DuckDB instance not started',
     'IO Error: Could not set lock on file "forska.duckdb": Conflicting lock is held',
@@ -121,4 +128,45 @@ test('page retry fails right away on a non-transient error', async () => {
 
   expect(attempts).toEqual([1])
   expect(String(error)).toContain('Data source import lease was lost')
+})
+
+test('DuckDB shutdown rejections are not transient, so the page fails at once and the import stays resumable', async () => {
+  const attempts: number[] = []
+  const shutdownError = createDuckdbShuttingDownError('transaction for import.storeArticles')
+  const error = await withDataSourceImportPageRetry(
+    'PubMed page 7',
+    async () => {
+      attempts.push(attempts.length + 1)
+      throw shutdownError
+    },
+    [0, 0, 0, 0],
+  ).catch((caught: unknown) => {
+    return caught
+  })
+
+  expect(isTransientDataSourceImportError(shutdownError)).toBe(false)
+  expect(isTransientDataSourceImportError(new Error(`${shutdownError.message} -- duckdb main query: SELECT 1`))).toBe(
+    false,
+  )
+  expect(attempts).toEqual([1])
+  expect(error).toBe(shutdownError)
+})
+
+test('page retry stops retrying transient errors once graceful shutdown started', async () => {
+  const attempts: number[] = []
+
+  markServerShutdownStarted('SIGTERM')
+  const error = await withDataSourceImportPageRetry(
+    'PubMed page 7',
+    async () => {
+      attempts.push(attempts.length + 1)
+      throw new Error('fetch failed')
+    },
+    [0, 0, 0, 0],
+  ).catch((caught: unknown) => {
+    return caught
+  })
+
+  expect(attempts).toEqual([1])
+  expect(String(error)).toContain('fetch failed')
 })

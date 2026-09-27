@@ -1,7 +1,9 @@
 import {sleep} from '../../utils/sleep.ts'
 import {isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
+import {isDuckdbShuttingDownError} from '../utils/duckdbShuttingDownError.ts'
 import {writeRuntimeOperatorLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError} from '../utils/serverRuntimeRole.ts'
+import {isServerShutdownInProgress} from '../utils/serverShutdownState.ts'
 
 export const dataSourceImportPageRetryDelaysMs = [10_000, 30_000, 60_000, 120_000] as const
 
@@ -16,6 +18,7 @@ const transientDataSourceImportErrorFragments = [
   'duckdb workload budget exceeded',
   'current transaction is aborted',
   'database has been invalidated because of a previous fatal error',
+  'has been invalidated because checkpointing failed',
   'must be restarted prior to being used again',
   'failed to rollback transaction',
   'duckdb connection not started',
@@ -55,6 +58,7 @@ export const isTransientDataSourceImportError = (error: unknown) => {
 
   return (
     !hasFragment(message, permanentDataSourceImportErrorFragments)
+    && !isDuckdbShuttingDownError(error)
     && (isExpectedDuckdbOwnerRoleLossError(error)
       || isDuckdbExclusiveWorkAdmissionError(error)
       || hasFragment(message, transientDataSourceImportErrorFragments)
@@ -92,7 +96,7 @@ export const withDataSourceImportPageRetry = async <T>(
     return await operation().catch(async (error: unknown) => {
       const delayMs = delaysMs[attemptIndex]
 
-      if (delayMs === undefined || !isTransientDataSourceImportError(error)) {
+      if (delayMs === undefined || isServerShutdownInProgress() || !isTransientDataSourceImportError(error)) {
         throw error
       }
 
