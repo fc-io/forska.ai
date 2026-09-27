@@ -3,6 +3,7 @@ import {afterEach, expect, test} from 'bun:test'
 
 import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import {
+  getReviewServingVisibilityBacklogPendingTotal,
   getReviewServingVisibilityBacklogProjects,
   reportReviewServingVisibilityBacklog,
   resetReviewServingVisibilityBacklogReportForTests,
@@ -74,8 +75,11 @@ test('visibility backlog reports pending and newly projected visibility work per
       ['c-scope-1', 'project-c', 'projectScope', 'completed', 'projected', '2026-09-27T08:00:40Z'],
     ])
 
+    expect(getReviewServingVisibilityBacklogPendingTotal()).toBeNull()
+
     const projects = await reportReviewServingVisibilityBacklog({database, nowMs: Date.parse('2026-09-27T08:01:00Z')})
 
+    expect(getReviewServingVisibilityBacklogPendingTotal()).toBe(3)
     expect(projects).toEqual([
       {
         madeVisibleCount: 1,

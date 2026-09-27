@@ -587,6 +587,8 @@ const runJobDrivenDirtyWorkCycle = async (input: {
   backlog?: Partial<Record<JobDrivenTestComponent, number>>
   backlogWakeComponentPasses?: number
   backlogWakeMinMs?: number
+  backlogWakePressureMinMs?: number
+  visibilityBacklogPendingTotal?: number | null
   chunkIdle?: boolean
   componentBatchSizes?: Partial<Record<ReviewServingProjectionComponent, number>>
   componentRotationOffset: number
@@ -607,6 +609,9 @@ const runJobDrivenDirtyWorkCycle = async (input: {
 
   harness.dependencies.nowMs = () => {
     return nowMs
+  }
+  harness.dependencies.getVisibilityBacklogPendingTotal = () => {
+    return input.visibilityBacklogPendingTotal ?? null
   }
   harness.database.queryJson = async <T>(statement: string) => {
     return (
@@ -695,6 +700,7 @@ const runJobDrivenDirtyWorkCycle = async (input: {
     {
       backlogWakeComponentPasses: input.backlogWakeComponentPasses,
       backlogWakeMinMs: input.backlogWakeMinMs,
+      backlogWakePressureMinMs: input.backlogWakePressureMinMs,
       componentBatchSizes: input.componentBatchSizes,
       componentRotationOffset: input.componentRotationOffset,
       lastAdmittedWakeAtMs: input.lastAdmittedWakeAtMs,
@@ -911,6 +917,30 @@ test('a minimum backlog wake budget above the cycle wake budget is honored for t
 
   expect(cycle.harness.runChunkInputs).toHaveLength(1)
   expect(cycle.harness.wakeInputs.at(-1)).toMatchObject({componentPasses: 3, maxWakeMs: 8_000})
+})
+
+test('a large visibility backlog raises the backlog wake budget to the pressure minimum', async () => {
+  const runWithPendingTotal = (visibilityBacklogPendingTotal: number | null) => {
+    return runJobDrivenDirtyWorkCycle({
+      backlog: {llmStatus: 6, queue: 6},
+      backlogWakeComponentPasses: 3,
+      backlogWakeMinMs: 2_500,
+      backlogWakePressureMinMs: 12_000,
+      componentRotationOffset: 0,
+      llmStatusBatchMs: 100,
+      maxRowsPerWake: 2,
+      maxWakeMs: 5_000,
+      pendingComponents: [],
+      visibilityBacklogPendingTotal,
+    })
+  }
+  const underPressure = await runWithPendingTotal(10_000)
+  const belowThreshold = await runWithPendingTotal(9_999)
+  const unknown = await runWithPendingTotal(null)
+
+  expect(underPressure.harness.wakeInputs.at(-1)).toMatchObject({maxWakeMs: 12_000})
+  expect(belowThreshold.harness.wakeInputs.at(-1)).toMatchObject({maxWakeMs: 2_500})
+  expect(unknown.harness.wakeInputs.at(-1)).toMatchObject({maxWakeMs: 2_500})
 })
 
 test('per-component batch sizes reach the backlog wake and leave the job-driven wake on the base batch size', async () => {

@@ -35,6 +35,7 @@ const reviewServingVisibilityBacklogLogger = createRateLimitedLogger({
 })
 
 let lastVisibilityBacklogReportAtMs: number | null = null
+let lastVisibilityBacklogPendingTotal: number | null = null
 
 const getTimestampSql = (value: Date) => {
   return `TIMESTAMPTZ ${getSqlLiteral(value.toISOString())}`
@@ -125,6 +126,8 @@ const logReviewServingVisibilityBacklog = async (
   const rows = await input.database.queryJson<VisibilityBacklogRow>(getReviewServingVisibilityBacklogSql({since}))
   const projects = getReviewServingVisibilityBacklogProjects(rows, reviewServingVisibilityBacklogReportProjectLimit)
 
+  lastVisibilityBacklogPendingTotal = projects[0]?.pendingTotal ?? 0
+
   reviewServingVisibilityBacklogLogger.log(
     'review-serving-projector-worker:visibility-backlog',
     '[reviewServingProjectorWorker] visibility backlog',
@@ -157,6 +160,11 @@ export const reportReviewServingVisibilityBacklog = async (input: {
   )
 }
 
+export const getReviewServingVisibilityBacklogPendingTotal = () => {
+  return lastVisibilityBacklogPendingTotal
+}
+
 export const resetReviewServingVisibilityBacklogReportForTests = () => {
   lastVisibilityBacklogReportAtMs = null
+  lastVisibilityBacklogPendingTotal = null
 }

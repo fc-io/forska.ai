@@ -20,6 +20,8 @@ type ReviewServingProjectorWorkerHeartbeatOptions = {
   backlogWakeAlternateClaimOrder?: boolean
   backlogWakeComponentPasses?: number
   backlogWakeMinMs?: number
+  backlogWakePressureMinMs?: number
+  backlogWakePressureThreshold?: number
   batchSize?: number
   componentBatchSizes?: ReviewServingProjectorComponentBatchSizes
   maxCompletedRebuildChunksPerRun?: number | null
@@ -52,6 +54,8 @@ const lowMemoryReviewServingProjectorWorkerRestartDelayMs = 5_000
 const highRssRestartGraceBytes = gibibyte
 const defaultReviewServingProjectorWorkerSoftRssRatio = 0.85
 const defaultReviewServingProjectorWorkerBacklogWakeMinMs = 8_000
+const defaultReviewServingProjectorWorkerBacklogWakePressureMinMs = 16_000
+const defaultReviewServingProjectorWorkerBacklogWakePressureThreshold = 10_000
 const defaultReviewServingProjectorWorkerBacklogWakePasses = 6
 const defaultReviewServingProjectorWorkerDirtyWorkBatchSize = 256
 const defaultReviewServingProjectorWorkerDirtyWorkMaxRowsPerWake = 8_192
@@ -149,6 +153,14 @@ export const getReviewServingProjectorWorkerBacklogOptions = (
       options.backlogWakeMinMs
       ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_MIN_MS')
       ?? getProductionBacklogDefault(defaultReviewServingProjectorWorkerBacklogWakeMinMs),
+    backlogWakePressureMinMs:
+      options.backlogWakePressureMinMs
+      ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PRESSURE_MIN_MS')
+      ?? getProductionBacklogDefault(defaultReviewServingProjectorWorkerBacklogWakePressureMinMs),
+    backlogWakePressureThreshold:
+      options.backlogWakePressureThreshold
+      ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_BACKLOG_WAKE_PRESSURE_THRESHOLD')
+      ?? getProductionBacklogDefault(defaultReviewServingProjectorWorkerBacklogWakePressureThreshold),
     batchSize:
       options.batchSize
       ?? getOptionalIntegerEnv('FORSKA_REVIEW_SERVING_DIRTY_WORK_BATCH_SIZE')
