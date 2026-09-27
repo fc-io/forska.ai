@@ -10,7 +10,10 @@ import {
   type ReviewServingSearchAvailability,
   type ReviewServingSnapshotComponentStates,
 } from './reviewServingContracts.ts'
-import {type ReviewServingDirtyWorkCoverage} from './reviewServingDirtyWorkService.ts'
+import {
+  isReviewServingDirtyWorkNewestFirstSourcePartition,
+  type ReviewServingDirtyWorkCoverage,
+} from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingProjectionIdentityManifest,
   type ReviewServingManifestRepositoryTransaction,
@@ -22,6 +25,7 @@ import {
   getReviewServingSourceWatermarkKeys,
   type ReviewServingProjectionComponentIdentity,
 } from './reviewServingProjectorDomain.ts'
+import {getReviewServingRebuildChunkBuiltPredicateSql} from './reviewServingSupersededRebuildChunk.ts'
 
 export type ReviewServingSnapshotPromotionDatabase = ReviewServingManifestRepositoryTransaction
 
@@ -595,7 +599,46 @@ const getSeedCappedSourceWatermark = (
     : Math.min(seedSourceWatermark, manifestSourceWatermark)
 }
 
-export const getPromotedReviewServingSnapshotDirtyWorkCoverages = async (
+const getCandidateBuiltComponents = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  const rows = await database.queryJson<{component: ReviewServingProjectionComponent}>(`
+    SELECT DISTINCT chunk.projection_component AS component
+    FROM app.review_rebuild_chunk_manifest chunk
+    WHERE chunk.project_id = ${getSqlLiteral(candidate.projectId)}
+      AND chunk.snapshot_id = ${getSqlLiteral(candidate.snapshotId)}
+      AND ${getReviewServingRebuildChunkBuiltPredicateSql('chunk')}
+  `)
+
+  return new Set(
+    rows.map((row) => {
+      return row.component
+    }),
+  )
+}
+
+const getRebuiltOnlyNewestFirstCoverages = async (
+  candidate: ReviewServingSnapshotManifest,
+  coverages: readonly ReviewServingDirtyWorkCoverage[],
+  database: ReviewServingSnapshotPromotionDatabase,
+) => {
+  const hasNewestFirstCoverage = coverages.some((coverage) => {
+    return isReviewServingDirtyWorkNewestFirstSourcePartition(coverage.sourcePartition)
+  })
+  const builtComponents = hasNewestFirstCoverage
+    ? await getCandidateBuiltComponents(candidate, database)
+    : new Set<ReviewServingProjectionComponent>()
+
+  return coverages.filter((coverage) => {
+    return (
+      !isReviewServingDirtyWorkNewestFirstSourcePartition(coverage.sourcePartition)
+      || builtComponents.has(coverage.projectionComponent)
+    )
+  })
+}
+
+const getManifestSeedCappedDirtyWorkCoverages = async (
   candidate: ReviewServingSnapshotManifest,
   database: ReviewServingSnapshotPromotionDatabase,
 ): Promise<ReviewServingDirtyWorkCoverage[]> => {
@@ -640,6 +683,15 @@ export const getPromotedReviewServingSnapshotDirtyWorkCoverages = async (
 
     return [...accumulated, ...manifestCoverages]
   }, Promise.resolve([]))
+}
+
+export const getPromotedReviewServingSnapshotDirtyWorkCoverages = async (
+  candidate: ReviewServingSnapshotManifest,
+  database: ReviewServingSnapshotPromotionDatabase,
+): Promise<ReviewServingDirtyWorkCoverage[]> => {
+  const coverages = await getManifestSeedCappedDirtyWorkCoverages(candidate, database)
+
+  return getRebuiltOnlyNewestFirstCoverages(candidate, coverages, database)
 }
 
 export const getReviewServingOptionalComponentAvailability = (input: {

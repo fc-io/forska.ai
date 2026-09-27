@@ -306,6 +306,7 @@ const isReviewServingRetentionCleanupEnabled = () => {
 }
 
 type ReviewServingProjectorWorkerCycleOptions = {
+  backlogWakeAlternateClaimOrder?: boolean
   backlogWakeComponentPasses?: number
   backlogWakeMinMs?: number
   batchSize?: number
@@ -6928,6 +6929,8 @@ const getBacklogWakeInput = (input: {
     ...(input.options.componentBatchSizes === undefined
       ? {}
       : {componentBatchSizes: input.options.componentBatchSizes}),
+    alternateClaimOrder: input.options.backlogWakeAlternateClaimOrder ?? true,
+    claimOrderOffset: getNonNegativeInteger(input.options.componentRotationOffset, 0),
     maxWakeMs: Math.max(
       0,
       getBacklogWakeAdmissionDeadlineMs(input) - getWorkerNowMs(input.dependencies, input.options),
