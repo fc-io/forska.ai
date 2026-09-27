@@ -15,6 +15,7 @@ import {
   getChunkedDirtyWorkRebuildPriority,
   getMissingSnapshotRepairPriority,
   getReviewServingProjectorComponentRunPlan,
+  getVisibilityFirstReviewServingComponentOrder,
   intakeReviewServingProjectorDirtyWork,
   type ReviewServingProjectorServiceDependencies,
   searchReviewServingRebuildPriority,
@@ -1713,15 +1714,115 @@ const wakeFirstClaimedComponent = async (input: {
   return claimedComponents
 }
 
-test('wake rotates the default component order by the rotation offset so tail components periodically go first', async () => {
+test('wake rotates the visibility components by the rotation offset so each of them periodically goes first', async () => {
   expect(await wakeFirstClaimedComponent({componentRotationOffset: 0})).toEqual(['projectScope'])
   expect(await wakeFirstClaimedComponent({componentRotationOffset: 1})).toEqual(['selectedImport'])
-  expect(await wakeFirstClaimedComponent({componentRotationOffset: 2})).toEqual(['display'])
-  expect(await wakeFirstClaimedComponent({componentRotationOffset: 8})).toEqual(['summary'])
-  expect(await wakeFirstClaimedComponent({componentRotationOffset: 9})).toEqual(['judgmentInputContent'])
-  expect(await wakeFirstClaimedComponent({componentRotationOffset: 10})).toEqual(['search'])
-  expect(await wakeFirstClaimedComponent({componentRotationOffset: 11})).toEqual(['projectScope'])
-  expect(await wakeFirstClaimedComponent({componentRotationOffset: 23})).toEqual(['selectedImport'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 2})).toEqual(['llmStatus'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 4})).toEqual(['queue'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 5})).toEqual(['projectScope'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 8})).toEqual(['humanStatus'])
+  expect(await wakeFirstClaimedComponent({componentRotationOffset: 11})).toEqual(['selectedImport'])
+})
+
+const wakeClaimedComponentsInOnePass = async (componentRotationOffset: number) => {
+  const {claimedComponents, dependencies} = createDependencyHarness({})
+
+  dependencies.runners = Object.fromEntries(
+    getVisibilityFirstReviewServingComponentOrder(0).map((component) => {
+      return [
+        component,
+        async () => {
+          return {processedCount: 1}
+        },
+      ]
+    }),
+  )
+
+  await wakeReviewServingProjectorService(
+    {batchSize: 1, componentRotationOffset, maxRowsPerWake: 11, maxWakeMs: 1_000, wakeId: 'wake-visibility-first'},
+    dependencies,
+  )
+
+  return claimedComponents
+}
+
+test('wake visits every visibility component before any enrichment component and rotates each group separately', async () => {
+  expect(await wakeClaimedComponentsInOnePass(0)).toEqual([
+    'projectScope',
+    'selectedImport',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'display',
+    'payload',
+    'posting',
+    'summary',
+    'judgmentInputContent',
+    'search',
+  ])
+  expect(await wakeClaimedComponentsInOnePass(3)).toEqual([
+    'humanStatus',
+    'queue',
+    'projectScope',
+    'selectedImport',
+    'llmStatus',
+    'summary',
+    'judgmentInputContent',
+    'search',
+    'display',
+    'payload',
+    'posting',
+  ])
+  expect(await wakeClaimedComponentsInOnePass(8)).toEqual([
+    'humanStatus',
+    'queue',
+    'projectScope',
+    'selectedImport',
+    'llmStatus',
+    'posting',
+    'summary',
+    'judgmentInputContent',
+    'search',
+    'display',
+    'payload',
+  ])
+})
+
+test('wake component passes keep the visibility group ahead of enrichment in every pass', async () => {
+  const {claimedComponents, dependencies} = createDependencyHarness({
+    llmStatus: [1, 2].map((index) => {
+      return getClaim({component: 'llmStatus', dirtyWorkId: `llm-${index}`})
+    }),
+    summary: [1, 2].map((index) => {
+      return {...getClaim({component: 'summary', dirtyWorkId: `summary-${index}`}), projectId: null}
+    }),
+  })
+
+  dependencies.runners = {
+    llmStatus: async ({claims}) => {
+      return {processedCount: claims.length}
+    },
+    summary: async ({claims}) => {
+      return {processedCount: claims.length}
+    },
+  }
+
+  const result = await wakeReviewServingProjectorService(
+    {batchSize: 1, componentPasses: 3, maxRowsPerWake: 10, maxWakeMs: 1_000, wakeId: 'wake-visibility-passes'},
+    dependencies,
+  )
+
+  expect(claimedComponents).toEqual(['llmStatus', 'summary', 'llmStatus', 'summary', 'llmStatus', 'summary'])
+  expect(
+    result.runs.map((run) => {
+      return [run.component, run.claimCount]
+    }),
+  ).toEqual([
+    ['llmStatus', 1],
+    ['summary', 1],
+    ['llmStatus', 1],
+    ['summary', 1],
+  ])
 })
 
 test('wake reports why it was blocked and lets an explicit caller admission override the queue depth rule', async () => {
