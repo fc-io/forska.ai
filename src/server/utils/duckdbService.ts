@@ -2916,6 +2916,15 @@ const getDuckdbStartupWalCheckpointInstanceOptions = (runtimeConfig: DuckdbRunti
   }
 }
 
+const getDuckdbStartupPreflightInstanceOptions = (
+  runtimeConfig: DuckdbRuntimeConfig,
+  hadWalBeforePreflight: boolean,
+) => {
+  return hadWalBeforePreflight
+    ? getDuckdbStartupWalCheckpointInstanceOptions(runtimeConfig)
+    : getDuckdbInstanceOptions(runtimeConfig)
+}
+
 export const getReadOnlyDuckdbRuntimeOptions = (input: ReadOnlyDuckdbRuntimeOptionsInput = {}) => {
   const runtimeConfig = getDuckdbRuntimeConfigValue()
   const tempDirectory = input.tempDirectory ?? runtimeConfig.tempDirectory
@@ -4979,7 +4988,7 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig, hadW
     script: getDuckdbStartupPreflightScript(),
     serializedArguments: [
       JSON.stringify(runtimeConfig.databasePath),
-      JSON.stringify(getDuckdbInstanceOptions(runtimeConfig)),
+      JSON.stringify(getDuckdbStartupPreflightInstanceOptions(runtimeConfig, hadWalBeforePreflight)),
       JSON.stringify(preflightRepairSpecs),
       JSON.stringify(activeRepairSpecPath),
     ],

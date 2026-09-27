@@ -990,6 +990,7 @@ test('duckdb service defers checkpoints after skipped startup WAL checkpoint on 
       parsed.createOptionsHistory[0]?.checkpoint_threshold,
     )
     expect(parsed.preflightChildTimeout).toBe(120_000)
+    expect(parsed.preflightChildOptions?.memory_limit).toBe(parsed.checkpointChildOptions?.memory_limit)
     expect(parsed.preflightChildOptions?.legacy_disable_null_type).toBe('true')
     expect(parsed.checkpointChildOptions?.legacy_disable_null_type).toBe('true')
     expect(parsed.preflightChildOptions?.disabled_optimizers).toBe('cte_inlining')

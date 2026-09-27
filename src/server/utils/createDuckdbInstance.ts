@@ -69,8 +69,25 @@ export const createDuckdbInstance = async ({
           throw new Error(`DuckDB did not attach exactly one persistent database: ${databasePath}`)
         }
 
-        await connection.run(`USE "${databaseName.replaceAll('"', '""')}"`)
+        const databaseIdentifier = `"${databaseName.replaceAll('"', '""')}"`
+
+        await connection.run(`USE ${databaseIdentifier}`)
         await connection.run(`DETACH "${bootstrapCatalog}"`)
+
+        if (!readOnly) {
+          await connection.run(`CHECKPOINT ${databaseIdentifier}`).catch(async (checkpointError: unknown) => {
+            await connection.run('PRAGMA disable_checkpoint_on_shutdown').catch(() => {
+              return undefined
+            })
+
+            throw new Error(
+              `DuckDB could not checkpoint ${databasePath} right after opening it for writing. `
+                + 'It was closed without a shutdown checkpoint and its WAL was left in place. '
+                + `Checkpoint error: ${checkpointError instanceof Error ? checkpointError.message : String(checkpointError)}`,
+              {cause: checkpointError},
+            )
+          })
+        }
       }
     } catch (error) {
       try {
