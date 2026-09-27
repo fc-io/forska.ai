@@ -2268,6 +2268,34 @@ export const heartbeatReviewServingRebuildChunkLease = async (
   return chunk?.status === 'running' && chunk.leaseOwner === input.leaseOwner ? chunk : null
 }
 
+// Extends the leases of a whole claimed batch in one statement and returns the chunk ids still held by leaseOwner.
+// Per-chunk heartbeats cost an UPDATE plus a full-scan read-back each, several times per chunk and batch.
+export const heartbeatReviewServingRebuildChunkLeases = async (
+  input: {chunkIds: readonly string[]; leaseExpiresAt: Date | string; leaseOwner: string},
+  database: ReviewServingChunkManifestRepositoryTransaction = getReviewServingChunkManifestDatabase(),
+) => {
+  if (input.chunkIds.length === 0) {
+    return new Set<string>()
+  }
+
+  const rows = await database.queryJson<{chunkId: string}>(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET
+      lease_expires_at = ${getReviewServingChunkTimestampLiteral(input.leaseExpiresAt)},
+      updated_at = current_timestamp
+    WHERE chunk_id IN (${input.chunkIds.map(getSqlLiteral).join(', ')})
+      AND status = 'running'
+      AND lease_owner = ${getSqlLiteral(input.leaseOwner)}
+    RETURNING chunk_id AS chunkId
+  `)
+
+  return new Set(
+    rows.map((row) => {
+      return row.chunkId
+    }),
+  )
+}
+
 const isPositiveInteger = (value: unknown) => {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
 }
@@ -2373,6 +2401,9 @@ export const writeReviewServingRebuildChunkOutput = async (
     diagnosticsJson?: unknown
     estimatedInputRows?: number | null
     leaseOwner: string
+    // Batch runners pass false and promote each touched snapshot once after the whole batch: a promotion attempt
+    // after every chunk costs ~180 ms and cannot succeed while the rest of the batch is still pending.
+    promoteSnapshot?: boolean
     writeMode?: 'atomic' | 'idempotent-output'
     validateOutput: (
       tx: ReviewServingChunkManifestRepositoryTransaction,
@@ -2430,7 +2461,12 @@ export const writeReviewServingRebuildChunkOutput = async (
     `)
     const completed = await getReviewServingRebuildChunkManifest({chunkId}, tx)
     await completeFinishedReviewServingRebuildRequest({requestId: completed?.requestId ?? input.requestId}, tx)
-    if (completed?.projectId !== null && completed?.projectId !== undefined && completed.snapshotId !== null) {
+    if (
+      input.promoteSnapshot !== false
+      && completed?.projectId !== null
+      && completed?.projectId !== undefined
+      && completed.snapshotId !== null
+    ) {
       await promoteReviewServingProjectorSnapshot(
         {projectId: completed.projectId, snapshotId: completed.snapshotId},
         {
