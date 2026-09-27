@@ -143,7 +143,10 @@ import {
   projectReviewServingTitleSearchRebuildRows,
   projectReviewServingTitleSearchRows,
 } from '../reviewServing/reviewServingTitleSearchProjector.ts'
-import {reportReviewServingVisibilityBacklog} from '../reviewServing/reviewServingVisibilityBacklog.ts'
+import {
+  getReviewServingVisibilityBacklogPendingTotal,
+  reportReviewServingVisibilityBacklog,
+} from '../reviewServing/reviewServingVisibilityBacklog.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
@@ -258,6 +261,7 @@ type ReviewServingProjectorWorkerDependencies = {
   nowMs?: () => number
   projectorServiceDependencies?: Omit<ReviewServingProjectorServiceDependencies, 'database' | 'nowMs'>
   rebuildChunkService?: ReviewServingProjectorWorkerRebuildChunkService
+  getVisibilityBacklogPendingTotal?: typeof getReviewServingVisibilityBacklogPendingTotal
   reportVisibilityBacklog?: typeof reportReviewServingVisibilityBacklog
   collectGarbageAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void> | void
   recycleDuckdbAfterCompletedRebuildChunk?: (chunk: ReviewServingRebuildChunkManifest) => Promise<void>
@@ -312,6 +316,8 @@ type ReviewServingProjectorWorkerCycleOptions = {
   backlogWakeAlternateClaimOrder?: boolean
   backlogWakeComponentPasses?: number
   backlogWakeMinMs?: number
+  backlogWakePressureMinMs?: number
+  backlogWakePressureThreshold?: number
   batchSize?: number
   componentBatchSizes?: Partial<Record<ReviewServingProjectionComponent, number>>
   cleanupIntervalMs?: number
@@ -543,6 +549,7 @@ const defaultReviewServingProjectorWorkerLeaseMs = 120_000
 const defaultReviewServingProjectorWorkerMaxRetries = 1
 const defaultReviewServingProjectorWorkerMaxRowsPerWake = 512
 const defaultReviewServingProjectorWorkerMaxWakeMs = 5_000
+const defaultReviewServingProjectorWorkerBacklogWakePressureThreshold = 10_000
 const defaultReviewServingProjectorWorkerDeltaIntakeBudgetMs = 5_000
 const reviewServingProjectorWorkerImportDeltaIntakeWindowLimit = 1_024
 const defaultReviewServingProjectorWorkerWakeStarvationMs = 30_000
@@ -5611,6 +5618,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   },
   recycleDuckdbAfterCompletedRebuildChunk: closeDuckdbAfterCompletedRebuildChunk,
   recycleDuckdbAfterFatalRebuildChunkError: closeDuckdbAfterFatalRebuildChunkError,
+  getVisibilityBacklogPendingTotal: getReviewServingVisibilityBacklogPendingTotal,
   reportVisibilityBacklog: reportReviewServingVisibilityBacklog,
   sleep,
   wakeProjectors: wakeReviewServingProjectorService,
@@ -6903,8 +6911,28 @@ const getWakeInput = (input: {
   }
 }
 
-const getBacklogWakeMinimumMs = (options: ReviewServingProjectorWorkerCycleOptions) => {
-  return getNonNegativeInteger(options.backlogWakeMinMs, 0)
+const isUnderVisibilityBacklogPressure = (input: {
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  const pendingTotal = input.dependencies.getVisibilityBacklogPendingTotal?.() ?? null
+  const threshold = getPositiveInteger(
+    input.options.backlogWakePressureThreshold,
+    defaultReviewServingProjectorWorkerBacklogWakePressureThreshold,
+  )
+
+  return pendingTotal !== null && pendingTotal >= threshold
+}
+
+const getBacklogWakeMinimumMs = (input: {
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}) => {
+  const minimumMs = getNonNegativeInteger(input.options.backlogWakeMinMs, 0)
+
+  return isUnderVisibilityBacklogPressure(input)
+    ? Math.max(minimumMs, getNonNegativeInteger(input.options.backlogWakePressureMinMs, 0))
+    : minimumMs
 }
 
 const getBacklogWakeAdmissionDeadlineMs = (input: {
@@ -6914,7 +6942,7 @@ const getBacklogWakeAdmissionDeadlineMs = (input: {
 }) => {
   return Math.max(
     input.admissionDeadlineMs,
-    getWorkerNowMs(input.dependencies, input.options) + getBacklogWakeMinimumMs(input.options),
+    getWorkerNowMs(input.dependencies, input.options) + getBacklogWakeMinimumMs(input),
   )
 }
 
