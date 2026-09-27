@@ -204,8 +204,8 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(selectStatement).toContain("json_extract_string(selected_source.raw_payload, '$.covidence.citation.url')")
   expect(selectStatement).toContain("WHEN current_link.id IS NOT NULL THEN concat('0:', hot.selected_rank_key)")
   expect(joined).not.toContain('mart.review_selected_import_patch_v4')
-  expect(joined).toContain('DELETE FROM mart.review_article_serving_base_v4 serving')
-  expect(joined).toContain('DELETE FROM mart.review_article_serving_list_mode_state_v4 state')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_base_v4 serving')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_list_mode_state_v4 state')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_base_v4')
   expect(joined).toContain('INSERT INTO mart.review_article_serving_list_mode_state_v4')
   expect(joined).toContain('TRUE AS has_llm_list_mode')
@@ -253,12 +253,15 @@ test('selected-import dirty routine updates only claimed articles', async () => 
   expect(joined).toContain('serving_template AS')
   expect(joined).toContain('PARTITION BY raw.project_id, raw.review_config_hash, raw.snapshot_id')
   expect(joined).toContain('FROM mart.review_article_serving_base_v4 existing')
-  expect(joined).toContain('INNER JOIN mart.review_article_serving_list_mode_state_v4 existing_state')
-  expect(joined).toContain('existing_state.has_llm_list_mode IS TRUE')
-  expect(joined).toContain('existing_state.has_human_list_mode IS TRUE')
-  expect(joined).toContain('existing_state.has_both_list_mode IS TRUE')
-  expect(joined).toContain('existing_state.has_unassessed_list_mode IS TRUE')
-  expect(joined).toContain('existing.article_id = changed.article_id')
+  expect(joined).toContain('FROM mart.review_article_serving_list_mode_state_v4 existing')
+  expect(joined).toContain('existing.article_id IN (SELECT changed.article_id FROM changed)')
+  expect(joined).toContain('LEFT JOIN existing_base')
+  expect(joined).toContain('existing_base.article_id IS NULL')
+  expect(joined).toContain('LEFT JOIN existing_state')
+  expect(joined).toContain('existing_state.article_id IS NULL')
+  expect(joined).not.toContain(
+    'NOT EXISTS (\n              SELECT 1\n              FROM mart.review_article_serving_base_v4 existing',
+  )
   expectNoCompatibilityServingViewRead(joined)
   expect(joined).not.toContain('changed.import_route_id AS selected_import_route_id')
   expect(joined).not.toContain('serving.selected_import_route_id')
@@ -435,7 +438,9 @@ test('selected-import tombstones clear selected columns without deleting curated
   await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
   const joined = statements.join('\n')
 
-  expect(joined).toContain('changed.scope_tombstone = TRUE')
+  expect(joined).not.toContain('changed.scope_tombstone = TRUE')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_base_v4')
+  expect(joined).not.toContain('DELETE FROM mart.review_article_serving_list_mode_state_v4')
   expect(joined).toContain('changed.scope_tombstone = FALSE')
   expect(joined).not.toContain('changed.import_route_id AS selected_import_route_id')
   expect(joined).toContain('NULL')
@@ -909,16 +914,98 @@ test('selected-import serving insert can seed rows from snapshot templates witho
   })
 
   expect(servingInsert).not.toContain('source_metadata')
-  expect(servingInsert).toContain('review-config-1')
-  expect(servingInsert).toContain('snapshot-1')
+  expect(servingInsert).toContain("('review-config-1', 'snapshot-1', 3)")
+  expect(servingInsert).toContain('AS known(review_config_hash, snapshot_id, base_generation)')
+  expect(servingInsert).not.toContain('FROM mart.review_article_serving_base_v4 serving')
+  expect(servingInsert).not.toContain('llmStatus:identity-1')
+})
+
+test('selected-import serving templates scan serving rows only for snapshots without a usable manifest state', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase({
+    dirtyRows: [
+      {
+        articleId: 'article-1',
+        articleTitle: 'Selected Import Title',
+        conflictFlag: false,
+        duplicateFlag: false,
+        externalId: 'selected-external-1',
+        importRouteId: 'import-route-1',
+        journalTitle: 'Selected Journal',
+        publicationYear: 2026,
+        selectedRankKey: '0001:article-1',
+        selectedRankNumeric: 1,
+        sourceRecordKey: 'source-record-1',
+        selectedSourceUrl: 'https://selected.example/article-1',
+        scopeTombstone: false,
+        tombstone: false,
+      },
+    ],
+    snapshotRows: [
+      {
+        componentStateJson: JSON.stringify({
+          optional: [],
+          required: [
+            {
+              baseGeneration: '3',
+              component: 'selectedImport',
+              patchWatermark: '1',
+              projectionIdentity: 'selectedImport:identity-1',
+            },
+          ],
+        }),
+        reviewConfigHash: 'review-config-1',
+        snapshotId: 'snapshot-1',
+      },
+      {
+        componentStateJson: JSON.stringify({optional: [], required: []}),
+        reviewConfigHash: 'review-config-1',
+        snapshotId: 'snapshot-without-selected-import-state',
+      },
+    ],
+  })
+
+  await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
+
+  const servingInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_article_serving_base_v4')
+  })
+
+  expect(servingInsert).toContain('FROM mart.review_article_serving_base_v4 serving')
   expect(servingInsert).toContain("json_extract_string(component_state.value, '$.component') = 'selectedImport'")
   expect(servingInsert).toContain(
     "json_extract_string(component_state.value, '$.projectionIdentity') = 'selectedImport:identity-1'",
   )
-  expect(servingInsert).not.toContain(
-    "json_extract_string(snapshot.composed_identity_json, '$.selectedImport.projectionIdentity')",
-  )
-  expect(servingInsert).not.toContain('llmStatus:identity-1')
+  expect(servingInsert).toContain("('review-config-1', 'snapshot-1', 3)")
+})
+
+test('selected-import scope tombstones delete serving rows while plain additions skip the deletes', async () => {
+  const {database, statements} = createSelectedImportDirtyDatabase({
+    dirtyRows: [
+      {
+        articleId: 'article-1',
+        articleTitle: null,
+        conflictFlag: null,
+        duplicateFlag: null,
+        externalId: null,
+        importRouteId: null,
+        journalTitle: null,
+        publicationYear: null,
+        selectedRankKey: null,
+        selectedRankNumeric: null,
+        sourceRecordKey: null,
+        selectedSourceUrl: null,
+        scopeTombstone: true,
+        tombstone: true,
+      },
+    ],
+  })
+
+  await projectReviewServingSelectedImportDirty(projectDirtyInput([selectedImportClaim()]), database)
+  const joined = statements.join('\n')
+
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_base_v4 serving')
+  expect(joined).toContain('DELETE FROM mart.review_article_serving_list_mode_state_v4 state')
+  expect(joined).toContain('changed.scope_tombstone = TRUE')
 })
 
 test('selected-import dirty budget is a no-op without legacy runtime patch reads', async () => {
