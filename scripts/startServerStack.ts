@@ -3,7 +3,7 @@ import {mkdir, rename, unlink, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
-import {spawn, spawnSync, type Subprocess} from 'bun'
+import {spawn, type Subprocess} from 'bun'
 import {Effect} from 'effect'
 
 import {getBackgroundServerEnv, getBackgroundServerStackConfig} from '../src/server/utils/backgroundServerStack.ts'
@@ -26,9 +26,16 @@ import {
   readJsonProcessLockState,
   readProcessLockForAcquisition,
 } from './processLockAcquisition.ts'
+import {getLiveProcessTreeDependencies, isProcessAlive, stopProcessTree} from './processTree.ts'
 import {releaseStoppedServerLocks} from './releaseStoppedServerLocks.ts'
+import {
+  getServerStackRoleShutdownTimeoutMs,
+  getServerStackShutdownTimeouts,
+  type ServerStackManagedRole,
+  stopServerStackRolesInOrder,
+} from './serverStackShutdown.ts'
 
-type ManagedRole = 'api' | 'judge' | 'maintenance'
+type ManagedRole = ServerStackManagedRole
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
 type ServerStackLockMetadata = {
   apiPort: number
@@ -80,8 +87,6 @@ const plannedMaintenanceRestartExitCode = 0
 const restartDelayMs = 1_000
 const maintenanceStartupTimeoutMs = 1_800_000
 const judgeStartupTimeoutMs = 90_000
-const shutdownTimeoutMs = 20_000
-const forcedKillTimeoutMs = 5_000
 const duckdbOwnerPollIntervalMs = 250
 const judgeHealthWatchdogFailureThreshold = 3
 const judgeHealthWatchdogIntervalMs = 5_000
@@ -89,6 +94,7 @@ const parentMonitorIntervalMs = 1_000
 const serverStackLockHeartbeatIntervalMs = 1_000
 
 const config = getBackgroundServerStackConfig(process.env)
+const serverStackShutdownTimeouts = getServerStackShutdownTimeouts(process.env)
 const managedProcessRuntimeIdentities = new WeakMap<ServerProcess, RuntimeProcessIdentity>()
 const serverStackLockPath = join(
   tmpdir(),
@@ -107,7 +113,7 @@ if (
 }
 
 console.log(
-  `[server:stack] api_port=${config.apiPort} maintenance_port=${config.maintenancePort} judge_port=${config.judgePort} maintenance_duckdb_memory_limit=${config.maintenanceDuckdbMemoryLimit}`,
+  `[server:stack] api_port=${config.apiPort} maintenance_port=${config.maintenancePort} judge_port=${config.judgePort} maintenance_duckdb_memory_limit=${config.maintenanceDuckdbMemoryLimit} maintenance_shutdown_timeout_ms=${serverStackShutdownTimeouts.maintenanceShutdownTimeoutMs}`,
 )
 
 const isMissingFileError = (error: unknown) => {
@@ -116,78 +122,6 @@ const isMissingFileError = (error: unknown) => {
 
 const isExistingFileError = (error: unknown) => {
   return error instanceof Error && 'code' in error && error.code === 'EEXIST'
-}
-
-const isProcessAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-const getChildProcessIdsCommand = (pid: number) => {
-  return process.platform === 'win32'
-    ? [
-        'powershell.exe',
-        '-NoLogo',
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `Get-CimInstance Win32_Process -Filter "ParentProcessId = ${pid}" | Select-Object -ExpandProperty ProcessId`,
-      ]
-    : ['pgrep', '-P', String(pid)]
-}
-
-const getChildProcessIds = (pid: number) => {
-  let result: ReturnType<typeof spawnSync>
-
-  try {
-    result = spawnSync(getChildProcessIdsCommand(pid), {stderr: 'pipe', stdin: 'ignore', stdout: 'pipe'})
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return []
-    }
-
-    throw error
-  }
-
-  if (result.exitCode !== 0) {
-    return []
-  }
-
-  return result.stdout
-    .toString()
-    .split(/\s+/u)
-    .map((value) => {
-      return Number(value)
-    })
-    .filter((value) => {
-      return Number.isInteger(value) && value > 0
-    })
-}
-
-const getDescendantProcessIds = (pid: number): number[] => {
-  const childPids = getChildProcessIds(pid)
-
-  return childPids.flatMap((childPid) => {
-    return [childPid, ...getDescendantProcessIds(childPid)]
-  })
-}
-
-const killProcessIds = (pids: number[], signal: 'SIGTERM' | 'SIGKILL') => {
-  for (const pid of new Set(pids)) {
-    try {
-      if (isProcessAlive(pid)) {
-        process.kill(pid, signal)
-      }
-    } catch (error) {
-      if (isProcessAlive(pid)) {
-        throw error
-      }
-    }
-  }
 }
 
 const readServerStackLock = async () => {
@@ -369,73 +303,21 @@ const waitFor = async (ms: number) => {
   })
 }
 
-const waitForProcessExit = async (pid: number, deadlineMs = Date.now() + shutdownTimeoutMs): Promise<boolean> => {
-  if (!isProcessAlive(pid)) {
-    return true
-  }
-
-  if (Date.now() >= deadlineMs) {
-    return false
-  }
-
-  await waitFor(250)
-  return waitForProcessExit(pid, deadlineMs)
-}
-
-const waitForProcessIdsExit = async (pids: number[], deadlineMs = Date.now() + shutdownTimeoutMs) => {
-  const uniquePids = [...new Set(pids)]
-
-  await Promise.all(
-    uniquePids.map((pid) => {
-      return waitForProcessExit(pid, deadlineMs)
+const stopServerProcessTree = async ({
+  pid,
+  processName,
+  shutdownTimeoutMs,
+}: {
+  pid: number
+  processName: string
+  shutdownTimeoutMs: number
+}) => {
+  await stopProcessTree(
+    getLiveProcessTreeDependencies((message) => {
+      console.error(`[server:stack] ${message}`)
     }),
+    {forcedKillTimeoutMs: serverStackShutdownTimeouts.forcedKillTimeoutMs, pid, processName, shutdownTimeoutMs},
   )
-
-  return uniquePids.filter((pid) => {
-    return isProcessAlive(pid)
-  })
-}
-
-const stopProcessTree = async ({pid, processName}: {pid: number; processName: string}) => {
-  const descendantPids = getDescendantProcessIds(pid)
-  const capturedPids = [...descendantPids, pid]
-  const shutdownDeadlineMs = Date.now() + shutdownTimeoutMs
-
-  killProcessIds([pid], 'SIGTERM')
-
-  const survivingDescendantPids =
-    (await waitForProcessIdsExit([pid], shutdownDeadlineMs)).length > 0
-      ? descendantPids
-      : [...getDescendantProcessIds(pid), ...descendantPids].filter((descendantPid) => {
-          return isProcessAlive(descendantPid)
-        })
-
-  if (survivingDescendantPids.length > 0) {
-    console.error(
-      `[server:stack] ${processName} left pids=${[...new Set(survivingDescendantPids)].join(',')} running after its own shutdown; sending SIGTERM`,
-    )
-    killProcessIds(survivingDescendantPids, 'SIGTERM')
-  }
-
-  const survivingPids = await waitForProcessIdsExit(capturedPids, shutdownDeadlineMs)
-
-  if (survivingPids.length === 0) {
-    return
-  }
-
-  console.error(
-    `[server:stack] ${processName} pids=${survivingPids.join(',')} did not exit after SIGTERM; sending SIGKILL`,
-  )
-
-  const forcedKillPids = [...getDescendantProcessIds(pid), ...capturedPids]
-
-  killProcessIds(forcedKillPids, 'SIGKILL')
-
-  const forcedKillSurvivors = await waitForProcessIdsExit(forcedKillPids, Date.now() + forcedKillTimeoutMs)
-
-  if (forcedKillSurvivors.length > 0) {
-    throw new Error(`Timed out waiting for ${processName} pids=${forcedKillSurvivors.join(',')} to exit`)
-  }
 }
 
 const isDuckdbOwnerReady = async (duckdbOwnerUrl: string) => {
@@ -504,12 +386,16 @@ const getBackgroundServerRole = (role: ManagedRole) => {
   return role === 'judge' ? 'judge-worker' : role === 'maintenance' ? 'maintenance-worker' : role
 }
 
-const stopExternalProcess = async ({pid, processName}: {pid: number; processName: string}) => {
+const stopExternalProcess = async ({pid, processName, role}: {pid: number; processName: string; role: ManagedRole}) => {
   if (!isProcessAlive(pid)) {
     return
   }
 
-  await stopProcessTree({pid, processName})
+  await stopServerProcessTree({
+    pid,
+    processName,
+    shutdownTimeoutMs: getServerStackRoleShutdownTimeoutMs(role, serverStackShutdownTimeouts),
+  })
 }
 
 const removeFileIfExists = async (filePath: string) => {
@@ -573,7 +459,7 @@ const stopConflictingJudgeWorker = async (envValues: Record<string, string | und
   console.log(
     `[server:stack] taking over existing judge worker pid=${currentLock.metadata.pid} journal=${currentLock.identity.journalPath}`,
   )
-  await stopExternalProcess({pid: currentLock.metadata.pid, processName: 'judge worker'})
+  await stopExternalProcess({pid: currentLock.metadata.pid, processName: 'judge worker', role: 'judge'})
 }
 
 const stopConflictingDuckdbOwner = async (envValues: Record<string, string | undefined>) => {
@@ -591,7 +477,7 @@ const stopConflictingDuckdbOwner = async (envValues: Record<string, string | und
   console.log(
     `[server:stack] taking over existing DuckDB owner pid=${currentLease.pid} port=${currentLease.apiServerPort}`,
   )
-  await stopExternalProcess({pid: currentLease.pid, processName: 'DuckDB owner'})
+  await stopExternalProcess({pid: currentLease.pid, processName: 'DuckDB owner', role: 'maintenance'})
 }
 
 const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
@@ -622,7 +508,7 @@ const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => 
   return serverProcess
 }
 
-const stopServerProcess = async (serverProcess: ServerProcess | null) => {
+const stopServerProcess = async (role: ManagedRole, serverProcess: ServerProcess | null) => {
   if (!isServerProcessRunning(serverProcess)) {
     return
   }
@@ -632,7 +518,11 @@ const stopServerProcess = async (serverProcess: ServerProcess | null) => {
   if (pid === undefined) {
     serverProcess.kill('SIGTERM')
   } else {
-    await stopProcessTree({pid, processName: 'server process'})
+    await stopServerProcessTree({
+      pid,
+      processName: `${role} server process`,
+      shutdownTimeoutMs: getServerStackRoleShutdownTimeoutMs(role, serverStackShutdownTimeouts),
+    })
     return
   }
 
@@ -652,7 +542,7 @@ const stopManagedServerProcess = async (role: ManagedRole, serverProcess = getMa
     setManagedServerProcess(role, null)
   }
 
-  await stopServerProcess(serverProcess)
+  await stopServerProcess(role, serverProcess)
   await releaseManagedServerLocks(role, serverProcess)
 }
 
@@ -1048,11 +938,14 @@ const shutdown = async (exitCode = 0) => {
   stopParentMonitor()
   stopServerStackLockHeartbeat()
   stopJudgeHealthWatchdog()
-  await Promise.all([
-    stopManagedServerProcess('api'),
-    stopManagedServerProcess('judge'),
-    stopManagedServerProcess('maintenance'),
-  ])
+  const stopErrors = await stopServerStackRolesInOrder((role) => {
+    return stopManagedServerProcess(role)
+  })
+
+  if (stopErrors.length > 0) {
+    console.error('[server:stack] some managed processes did not stop cleanly', stopErrors)
+  }
+
   await releaseServerStackLock()
   process.exit(exitCode)
 }
