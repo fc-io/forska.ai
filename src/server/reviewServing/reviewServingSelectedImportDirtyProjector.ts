@@ -279,7 +279,9 @@ const getSelectedImportServingTemplates = async (
     ORDER BY updated_at DESC
   `)
 
-  return rows.flatMap(getTemplateRowsFromSnapshot)
+  const templates = rows.flatMap(getTemplateRowsFromSnapshot)
+
+  return {coversEverySnapshot: templates.length === rows.length, templates}
 }
 
 const getTemplateValuesSql = (templates: readonly SelectedImportServingTemplateRow[]) => {
@@ -345,7 +347,7 @@ const getSelectedImportChangedRowsCte = (values: string) => {
          )`
 }
 
-const getSelectedImportServingTemplateCte = (input: {
+const getSelectedImportServingTemplateRawSql = (input: {
   baseGeneration: number
   projectId: string
   projectionIdentity: string
@@ -354,8 +356,7 @@ const getSelectedImportServingTemplateCte = (input: {
 }) => {
   const fallbackTemplateCte = getFallbackTemplateCte({projectId: input.projectId, templates: input.templates})
 
-  return `serving_template_raw AS (
-            SELECT DISTINCT
+  return `SELECT DISTINCT
               1 AS template_priority,
               serving.project_id,
               serving.review_config_hash,
@@ -377,7 +378,37 @@ const getSelectedImportServingTemplateCte = (input: {
                   )}
                   AND snapshot.snapshot_status IN ('candidate', 'active')
               )
-            ${fallbackTemplateCte}
+            ${fallbackTemplateCte}`
+}
+
+const getSelectedImportTemplateOnlySql = (input: {
+  projectId: string
+  templates: readonly SelectedImportServingTemplateRow[]
+}) => {
+  return `SELECT DISTINCT
+              0 AS template_priority,
+              ${getSqlLiteral(input.projectId)} AS project_id,
+              known.review_config_hash,
+              known.snapshot_id,
+              known.base_generation
+            FROM (VALUES ${getTemplateValuesSql(input.templates)}) AS known(review_config_hash, snapshot_id, base_generation)`
+}
+
+const getSelectedImportServingTemplateCte = (input: {
+  baseGeneration: number
+  coversEverySnapshot: boolean
+  projectId: string
+  projectionIdentity: string
+  selectedImportSnapshotId: string
+  templates: readonly SelectedImportServingTemplateRow[]
+}) => {
+  const rawSql =
+    input.coversEverySnapshot && input.templates.length > 0
+      ? getSelectedImportTemplateOnlySql(input)
+      : getSelectedImportServingTemplateRawSql(input)
+
+  return `serving_template_raw AS (
+            ${rawSql}
            ), serving_template AS (
             SELECT
               project_id,
@@ -506,8 +537,13 @@ const getSelectedImportDirtyRows = async (
       `)
 }
 
+const getChangedArticlePredicate = (alias: string) => {
+  return `${alias}.article_id IN (SELECT changed.article_id FROM changed)`
+}
+
 const getApplySelectedImportServingStatements = (input: {
   baseGeneration: number
+  coversEverySnapshot: boolean
   patchWatermark: number
   projectId: string
   projectionIdentity: string
@@ -523,9 +559,11 @@ const getApplySelectedImportServingStatements = (input: {
   const changedCte = getSelectedImportChangedRowsCte(values)
   const servingTemplateCte = getSelectedImportServingTemplateCte(input)
 
-  return values.length === 0
-    ? []
-    : [
+  const hasScopeTombstone = input.rows.some((row) => {
+    return row.scopeTombstone
+  })
+  const tombstoneStatements = hasScopeTombstone
+    ? [
         `WITH ${changedCte}
          DELETE FROM mart.review_article_serving_base_v4 serving
          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
@@ -571,7 +609,20 @@ const getApplySelectedImportServingStatements = (input: {
               WHERE changed.article_id = state.article_id
                AND changed.scope_tombstone = TRUE
             )`,
-        `WITH ${changedCte}, ${servingTemplateCte}
+      ]
+    : []
+
+  return values.length === 0
+    ? []
+    : [
+        ...tombstoneStatements,
+        `WITH ${changedCte}, ${servingTemplateCte},
+          existing_base AS (
+            SELECT existing.review_config_hash, existing.snapshot_id, existing.article_id
+            FROM mart.review_article_serving_base_v4 existing
+            WHERE existing.project_id = ${getSqlLiteral(input.projectId)}
+              AND ${getChangedArticlePredicate('existing')}
+          )
           INSERT INTO mart.review_article_serving_base_v4 (
             project_id,
             review_config_hash,
@@ -597,29 +648,12 @@ const getApplySelectedImportServingStatements = (input: {
           INNER JOIN app."article" article
             ON article.id = changed.article_id
           CROSS JOIN serving_template template
+          LEFT JOIN existing_base
+            ON existing_base.review_config_hash = template.review_config_hash
+            AND existing_base.snapshot_id = template.snapshot_id
+            AND existing_base.article_id = changed.article_id
           WHERE changed.scope_tombstone = FALSE
-            AND NOT EXISTS (
-              SELECT 1
-              FROM mart.review_article_serving_base_v4 existing
-              INNER JOIN mart.review_article_serving_list_mode_state_v4 existing_state
-                ON existing_state.project_id = existing.project_id
-                AND existing_state.review_config_hash = existing.review_config_hash
-                AND existing_state.snapshot_id = existing.snapshot_id
-                AND existing_state.article_id = existing.article_id
-              WHERE existing.project_id = template.project_id
-                AND existing.review_config_hash = template.review_config_hash
-                AND existing.snapshot_id = template.snapshot_id
-                AND existing.article_id = changed.article_id
-                AND ${hasAnyListModeMembershipPredicate('existing_state')}
-            )
-            AND NOT EXISTS (
-              SELECT 1
-              FROM mart.review_article_serving_base_v4 existing_base
-              WHERE existing_base.project_id = template.project_id
-                AND existing_base.review_config_hash = template.review_config_hash
-                AND existing_base.snapshot_id = template.snapshot_id
-                AND existing_base.article_id = changed.article_id
-            )`,
+            AND existing_base.article_id IS NULL`,
         `WITH ${changedCte}, ${servingTemplateCte}
           UPDATE mart.review_article_serving_list_mode_state_v4 state
           SET
@@ -637,8 +671,15 @@ const getApplySelectedImportServingStatements = (input: {
             AND state.project_id = template.project_id
             AND state.review_config_hash = template.review_config_hash
             AND state.snapshot_id = template.snapshot_id
-            AND state.article_id = changed.article_id`,
-        `WITH ${changedCte}, ${servingTemplateCte}
+            AND state.article_id = changed.article_id
+            AND ${getChangedArticlePredicate('state')}`,
+        `WITH ${changedCte}, ${servingTemplateCte},
+          existing_state AS (
+            SELECT existing.review_config_hash, existing.snapshot_id, existing.article_id
+            FROM mart.review_article_serving_list_mode_state_v4 existing
+            WHERE existing.project_id = ${getSqlLiteral(input.projectId)}
+              AND ${getChangedArticlePredicate('existing')}
+          )
           INSERT INTO mart.review_article_serving_list_mode_state_v4 (
             project_id,
             review_config_hash,
@@ -668,15 +709,12 @@ const getApplySelectedImportServingStatements = (input: {
             ${getSqlLiteral(input.patchWatermark)} AS unassessed_patch_watermark
           FROM changed
           CROSS JOIN serving_template template
+          LEFT JOIN existing_state
+            ON existing_state.review_config_hash = template.review_config_hash
+            AND existing_state.snapshot_id = template.snapshot_id
+            AND existing_state.article_id = changed.article_id
           WHERE changed.scope_tombstone = FALSE
-            AND NOT EXISTS (
-              SELECT 1
-              FROM mart.review_article_serving_list_mode_state_v4 existing
-              WHERE existing.project_id = template.project_id
-                AND existing.review_config_hash = template.review_config_hash
-                AND existing.snapshot_id = template.snapshot_id
-                AND existing.article_id = changed.article_id
-            )`,
+            AND existing_state.article_id IS NULL`,
         `WITH ${changedCte}
          UPDATE mart.review_article_serving_base_v4 serving
          SET patch_watermark = GREATEST(serving.patch_watermark, ${getSqlLiteral(input.patchWatermark)})
@@ -684,6 +722,7 @@ const getApplySelectedImportServingStatements = (input: {
          WHERE serving.project_id = ${getSqlLiteral(input.projectId)}
            AND serving.base_generation = ${getSqlLiteral(input.baseGeneration)}
            AND serving.article_id = changed.article_id
+           AND ${getChangedArticlePredicate('serving')}
            AND changed.scope_tombstone = FALSE
            AND serving.patch_watermark < ${getSqlLiteral(input.patchWatermark)}`,
       ]
@@ -891,7 +930,7 @@ export const projectReviewServingSelectedImportDirty = async (
   database: ReviewServingSelectedImportDirtyProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportDirtyProjectorDatabase,
 ) => {
   const rows = await getSelectedImportDirtyRows(input, database)
-  const templates = await getSelectedImportServingTemplates(input, database)
+  const {coversEverySnapshot, templates} = await getSelectedImportServingTemplates(input, database)
   const dirtyWatermark = getDirtyWatermark(input.claims)
   const shouldAcknowledgeClaims = input.claims.length > 0 && input.acknowledgeClaims !== false
   const stagingRecords = rows.map((row) => {
@@ -907,6 +946,7 @@ export const projectReviewServingSelectedImportDirty = async (
       records: stagingRecords,
       statements: getApplySelectedImportServingStatements({
         baseGeneration: input.baseGeneration,
+        coversEverySnapshot,
         patchWatermark: dirtyWatermark,
         projectId: input.projectId,
         projectionIdentity: input.projectionIdentity,
