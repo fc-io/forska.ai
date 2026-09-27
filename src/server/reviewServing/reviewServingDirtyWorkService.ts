@@ -21,6 +21,7 @@ export type ReviewServingDirtyWorkLifecycleReason =
   | 'orphan_missing_component'
   | 'projected'
   | 'released'
+  | 'repartitioned'
   | 'superseded_by_high_water'
 
 export type ReviewServingDirtyWorkDatabase = {
@@ -911,7 +912,6 @@ const getDirtyWorkSourceWatermarkKeySql = (sourcePartitionSql: string) => {
   const sourceKeySql = `split_part(${sourcePartitionSql}, ':', 1)`
 
   return `CASE ${sourceKeySql}
-    WHEN 'article' THEN 'reviewChange'
     WHEN 'humanJudgment' THEN 'reviewChange'
     WHEN 'import-run-article' THEN 'importRunArticle'
     WHEN 'importRoute' THEN 'importRunArticle'
