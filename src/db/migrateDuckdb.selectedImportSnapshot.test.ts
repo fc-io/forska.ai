@@ -137,7 +137,7 @@ const runManaged = (databasePath: string, action = 'await migrateDuckdb()', expe
   expect(result.exitCode, output).toBe(0)
   if (!expectRepair) {
     expect(output).not.toMatch(
-      /rebuilt indexed tables|restarting embedded runtime after fatal|marked indexed table repair/,
+      /repaired indexed tables on a clone|indexed-table repair attempt|restarting embedded runtime after fatal|marked indexed table repair/,
     )
   }
   return output
@@ -257,7 +257,9 @@ test('selected-import snapshot runtime repair removes indexes without dropping r
     await seedIndexedSnapshot(path, true)
     const before = await getSnapshot(path)
     markRepair(path)
-    expect(runManaged(path, 'await database.queryJson("SELECT 1")', true)).toContain('rebuilt indexed tables')
+    expect(runManaged(path, 'await database.queryJson("SELECT 1")', true)).toContain(
+      'repaired indexed tables on a clone',
+    )
     const repaired = await getSnapshot(path)
     expectIndexFree(repaired)
     expect(repaired.rows).toEqual(before.rows)
