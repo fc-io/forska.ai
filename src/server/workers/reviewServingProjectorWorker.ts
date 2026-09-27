@@ -9721,6 +9721,232 @@ const runSummaryReviewServingProjectorWorkerRebuildChunkBatch = async (input: {
   return runReviewServingProjectorWorkerRebuildChunkBatchWith(input, runSummaryRebuildChunkBatch)
 }
 
+const runClaimedCompatibleReviewServingProjectorWorkerRebuildChunkBatch = async (
+  input: Parameters<typeof runReviewServingProjectorWorkerRebuildChunk>[0] & {
+    claimedChunks: readonly ClaimedReviewServingProjectorWorkerRebuildChunk[]
+  },
+): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number}> => {
+  let completedCount = 0
+  let lastCompletedChunk: ReviewServingProjectorWorkerChunkResult | null = null
+
+  const projectScopeBatch = await runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (projectScopeBatch !== null) {
+    return projectScopeBatch
+  }
+
+  const selectedImportBatch = await runSelectedImportReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (selectedImportBatch !== null) {
+    return selectedImportBatch
+  }
+
+  const displayBatch = await runDisplayReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (displayBatch !== null) {
+    return displayBatch
+  }
+
+  const payloadBatch = await runPayloadReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (payloadBatch !== null) {
+    return payloadBatch
+  }
+
+  const searchBatch = await runSearchReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (searchBatch !== null) {
+    return searchBatch
+  }
+
+  const llmStatusBatch = await runLlmStatusReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (llmStatusBatch !== null) {
+    return llmStatusBatch
+  }
+
+  const humanStatusBatch = await runHumanStatusReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (humanStatusBatch !== null) {
+    return humanStatusBatch
+  }
+
+  const queueBatch = await runQueueReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (queueBatch !== null) {
+    return queueBatch
+  }
+
+  const judgmentInputContentBatch = await runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (judgmentInputContentBatch !== null) {
+    return judgmentInputContentBatch
+  }
+
+  const postingBatch = await runPostingReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (postingBatch !== null) {
+    return postingBatch
+  }
+
+  const summaryBatch = await runSummaryReviewServingProjectorWorkerRebuildChunkBatch({
+    claimedChunks: input.claimedChunks,
+    database: input.database,
+    dependencies: input.dependencies,
+    options: input.options,
+    workerId: input.workerId,
+  })
+
+  if (summaryBatch !== null) {
+    return summaryBatch
+  }
+
+  const hasPreparedBatch = input.claimedChunks.every((claimed) => {
+    return claimed.service.prepareClaimedChunk !== undefined
+  })
+
+  if (hasPreparedBatch) {
+    try {
+      const preparedOutputs = await prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+        claimedChunks: input.claimedChunks,
+        database: input.database,
+        dependencies: input.dependencies,
+        options: input.options,
+        workloadContext: input.workloadContext,
+        workerId: input.workerId,
+      })
+
+      for (const [index, claimed] of input.claimedChunks.entries()) {
+        await heartbeatClaimedRebuildChunkBatchLeases({
+          claimedChunks: input.claimedChunks,
+          database: input.database,
+          dependencies: input.dependencies,
+          options: input.options,
+          workerId: input.workerId,
+        })
+
+        const chunk = await runPreparedClaimedReviewServingProjectorWorkerRebuildChunk({
+          claimed,
+          database: input.database,
+          preparedOutput: preparedOutputs[index],
+          workloadContext: input.workloadContext,
+          workerId: input.workerId,
+        })
+
+        completedCount += 1
+        lastCompletedChunk = chunk
+      }
+
+      return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
+    } catch (error) {
+      return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
+        claimedChunks: input.claimedChunks.slice(completedCount),
+        completedCount,
+        database: input.database,
+        dependencies: input.dependencies,
+        error,
+        workerId: input.workerId,
+      })
+    }
+  }
+
+  for (const claimed of input.claimedChunks) {
+    await heartbeatClaimedRebuildChunkBatchLeases({
+      claimedChunks: input.claimedChunks,
+      database: input.database,
+      dependencies: input.dependencies,
+      options: input.options,
+      workerId: input.workerId,
+    })
+
+    const chunk = await runClaimedReviewServingProjectorWorkerRebuildChunk({
+      claimedChunk: claimed.chunk,
+      database: input.database,
+      dependencies: input.dependencies,
+      options: input.options,
+      service: claimed.service,
+      timings: claimed.timings,
+      workloadContext: input.workloadContext,
+      workerId: input.workerId,
+    })
+
+    if (chunk.status === 'completed') {
+      completedCount += 1
+      lastCompletedChunk = chunk
+
+      if (chunk.requestId !== null) {
+        return {chunk, completedCount}
+      }
+
+      continue
+    }
+
+    return {chunk, completedCount}
+  }
+
+  return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
+}
+
 const runReviewServingProjectorWorkerRebuildChunkBatch = async (
   input: Parameters<typeof runReviewServingProjectorWorkerRebuildChunk>[0],
 ): Promise<{chunk: ReviewServingProjectorWorkerChunkResult; completedCount: number}> => {
@@ -9739,224 +9965,17 @@ const runReviewServingProjectorWorkerRebuildChunkBatch = async (
       logReviewServingProjectorWorkerRebuildChunkStarted({chunk: claimed.chunk, workerId: input.workerId})
     }
 
-    if (
-      claimedBatch.claimedChunks.some((claimed) => {
-        return isAdmittedOversizedRebuildChunk(claimed.chunk)
-      })
-    ) {
-      for (const claimed of claimedBatch.claimedChunks) {
-        const chunk = await runClaimedReviewServingProjectorWorkerRebuildChunk({
-          claimedChunk: claimed.chunk,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          service: claimed.service,
-          timings: claimed.timings,
-          workloadContext: input.workloadContext,
-          workerId: input.workerId,
-        })
-
-        if (chunk.status === 'completed') {
-          completedCount += 1
-          lastCompletedChunk = chunk
-          continue
-        }
-
-        return {chunk, completedCount}
-      }
-
-      return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
-    }
-
-    const projectScopeBatch = await runProjectScopeReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
+    // An admitted oversized chunk is split (or runs alone once its real count fits) on its own, and the rest of the
+    // claimed batch still goes through the batch writers: running the whole batch one chunk at a time whenever it
+    // caught an oversized parent made those batches ~6x slower.
+    const fittingClaimedChunks = claimedBatch.claimedChunks.filter((claimed) => {
+      return !isAdmittedOversizedRebuildChunk(claimed.chunk)
     })
-
-    if (projectScopeBatch !== null) {
-      return projectScopeBatch
-    }
-
-    const selectedImportBatch = await runSelectedImportReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (selectedImportBatch !== null) {
-      return selectedImportBatch
-    }
-
-    const displayBatch = await runDisplayReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (displayBatch !== null) {
-      return displayBatch
-    }
-
-    const payloadBatch = await runPayloadReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (payloadBatch !== null) {
-      return payloadBatch
-    }
-
-    const searchBatch = await runSearchReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (searchBatch !== null) {
-      return searchBatch
-    }
-
-    const llmStatusBatch = await runLlmStatusReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (llmStatusBatch !== null) {
-      return llmStatusBatch
-    }
-
-    const humanStatusBatch = await runHumanStatusReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (humanStatusBatch !== null) {
-      return humanStatusBatch
-    }
-
-    const queueBatch = await runQueueReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (queueBatch !== null) {
-      return queueBatch
-    }
-
-    const judgmentInputContentBatch = await runJudgmentInputContentReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (judgmentInputContentBatch !== null) {
-      return judgmentInputContentBatch
-    }
-
-    const postingBatch = await runPostingReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (postingBatch !== null) {
-      return postingBatch
-    }
-
-    const summaryBatch = await runSummaryReviewServingProjectorWorkerRebuildChunkBatch({
-      claimedChunks: claimedBatch.claimedChunks,
-      database: input.database,
-      dependencies: input.dependencies,
-      options: input.options,
-      workerId: input.workerId,
-    })
-
-    if (summaryBatch !== null) {
-      return summaryBatch
-    }
-
-    const hasPreparedBatch = claimedBatch.claimedChunks.every((claimed) => {
-      return claimed.service.prepareClaimedChunk !== undefined
-    })
-
-    if (hasPreparedBatch) {
-      try {
-        const preparedOutputs = await prepareClaimedReviewServingProjectorWorkerRebuildChunkBatch({
-          claimedChunks: claimedBatch.claimedChunks,
-          database: input.database,
-          dependencies: input.dependencies,
-          options: input.options,
-          workloadContext: input.workloadContext,
-          workerId: input.workerId,
-        })
-
-        for (const [index, claimed] of claimedBatch.claimedChunks.entries()) {
-          await heartbeatClaimedRebuildChunkBatchLeases({
-            claimedChunks: claimedBatch.claimedChunks,
-            database: input.database,
-            dependencies: input.dependencies,
-            options: input.options,
-            workerId: input.workerId,
-          })
-
-          const chunk = await runPreparedClaimedReviewServingProjectorWorkerRebuildChunk({
-            claimed,
-            database: input.database,
-            preparedOutput: preparedOutputs[index],
-            workloadContext: input.workloadContext,
-            workerId: input.workerId,
-          })
-
-          completedCount += 1
-          lastCompletedChunk = chunk
-        }
-
-        return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
-      } catch (error) {
-        return failClaimedReviewServingProjectorWorkerRebuildChunkBatch({
-          claimedChunks: claimedBatch.claimedChunks.slice(completedCount),
-          completedCount,
-          database: input.database,
-          dependencies: input.dependencies,
-          error,
-          workerId: input.workerId,
-        })
-      }
-    }
 
     for (const claimed of claimedBatch.claimedChunks) {
-      await heartbeatClaimedRebuildChunkBatchLeases({
-        claimedChunks: claimedBatch.claimedChunks,
-        database: input.database,
-        dependencies: input.dependencies,
-        options: input.options,
-        workerId: input.workerId,
-      })
+      if (!isAdmittedOversizedRebuildChunk(claimed.chunk)) {
+        continue
+      }
 
       const chunk = await runClaimedReviewServingProjectorWorkerRebuildChunk({
         claimedChunk: claimed.chunk,
@@ -9969,21 +9988,38 @@ const runReviewServingProjectorWorkerRebuildChunkBatch = async (
         workerId: input.workerId,
       })
 
-      if (chunk.status === 'completed') {
-        completedCount += 1
-        lastCompletedChunk = chunk
-
-        if (chunk.requestId !== null) {
-          return {chunk, completedCount}
-        }
-
-        continue
+      if (chunk.status !== 'completed') {
+        return {chunk, completedCount}
       }
 
-      return {chunk, completedCount}
+      completedCount += 1
+      lastCompletedChunk = chunk
+
+      if (fittingClaimedChunks.length > 0) {
+        await heartbeatClaimedRebuildChunkBatchLeases({
+          claimedChunks: fittingClaimedChunks,
+          database: input.database,
+          dependencies: input.dependencies,
+          options: input.options,
+          workerId: input.workerId,
+        })
+      }
     }
 
-    return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
+    if (fittingClaimedChunks.length === 0) {
+      return {chunk: lastCompletedChunk ?? {chunkId: null, status: 'idle'}, completedCount}
+    }
+
+    const fittingBatch = await runClaimedCompatibleReviewServingProjectorWorkerRebuildChunkBatch({
+      ...input,
+      claimedChunks: fittingClaimedChunks,
+    })
+
+    return {
+      chunk:
+        fittingBatch.chunk.status === 'idle' && lastCompletedChunk !== null ? lastCompletedChunk : fittingBatch.chunk,
+      completedCount: completedCount + fittingBatch.completedCount,
+    }
   }
 
   for (let index = 0; index < batchSize; index += 1) {
