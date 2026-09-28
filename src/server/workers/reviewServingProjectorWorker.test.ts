@@ -3482,6 +3482,12 @@ test('worker batches a few small search rebuild ranges while preserving foregrou
   expect(joined).not.toContain("scope.article_id >= 'article-065'")
   expect(joined).not.toContain("scope.article_id <= 'article-072'")
   expect(joined).toContain('searchBatchWriter')
+  expect(
+    statements.filter((statement) => {
+      return statement.includes('AS chunk_count_7')
+    }),
+  ).toHaveLength(1)
+  expect(joined).not.toContain('search_article.article_id >=')
 })
 
 test('search rebuild chunk batch size follows the DuckDB memory tier and never exceeds the run budget', () => {

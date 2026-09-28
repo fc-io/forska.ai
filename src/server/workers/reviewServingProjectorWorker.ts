@@ -1493,6 +1493,64 @@ const getSearchRebuildChunkOutputCount = async (
   return row ?? {actualChecksum: '', actualCount: 0}
 }
 
+// One pass over the project's title-search postings counts every chunk of a batch. The per-chunk count unnests the
+// whole posting list of the project each time (~0.5-1 s on a 1.2M-article project), so after a 32-chunk batch write
+// completing the chunks took ~17 s against ~1.7 s for the write itself.
+const canUseBatchedCheapRebuildChunkValidation = (chunks: readonly ReviewServingRebuildChunkManifest[]) => {
+  return (
+    !shouldUseStrictRebuildValidationWithoutExpectedChecksum()
+    && chunks.every((chunk) => {
+      return chunk.checksum === null && chunk.projectionIdentity === chunks[0]?.projectionIdentity
+    })
+  )
+}
+
+const getSearchRebuildChunkBatchOutputCounts = async (
+  input: {chunks: readonly ReviewServingRebuildChunkManifest[]; snapshotIds: readonly string[]},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  const [firstChunk] = input.chunks
+
+  if (firstChunk === undefined) {
+    return new Map<string, RebuildChunkOutputChecksumRow>()
+  }
+
+  // One filtered count per chunk over a single unnest: joining the postings to the chunk ranges sorted ~3M article ids
+  // and took ~8 s for 32 ranges, the filtered counts take ~0.2 s.
+  const projectId = requireRebuildChunkProjectId(firstChunk)
+  const [row] = await database.queryJson<Record<string, number | string>>(`
+    WITH search_posting AS (
+      SELECT search_article.article_id
+      FROM mart.review_title_search_serving_v4 search
+      CROSS JOIN unnest(search.article_ids) AS search_article(article_id)
+      WHERE search.project_id = ${getSqlLiteral(projectId)}
+        AND search.search_identity = ${getSqlLiteral(firstChunk.projectionIdentity)}
+        AND ${getAliasedSnapshotIdPredicate('search', input.snapshotIds)}
+    )
+    SELECT
+      ${input.chunks
+        .map((chunk, index) => {
+          return `CAST(COUNT(*) FILTER (WHERE ${getChunkArticleRangeExpression({
+            articleIdSql: 'search_posting.article_id',
+            chunk,
+          })}) AS INTEGER) AS chunk_count_${index}`
+        })
+        .join(',\n      ')}
+    FROM search_posting
+  `)
+
+  return new Map(
+    input.chunks.map((chunk, index) => {
+      const actualCount = Number(row?.[`chunk_count_${index}`] ?? 0)
+
+      return [
+        chunk.chunkId,
+        {actualChecksum: createHash('sha256').update(`cheap-count:${actualCount}`).digest('hex'), actualCount},
+      ] as const
+    }),
+  )
+}
+
 const getLlmStatusRebuildChunkOutputChecksum = async (
   input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -3863,6 +3921,7 @@ const completeSearchRebuildChunkAfterBatchWrite = async (
     batchWriteMs: number
     chunk: ReviewServingRebuildChunkManifest
     leaseOwner: string
+    outputCount?: RebuildChunkOutputChecksumRow
     snapshotIds: readonly string[]
   },
   database: ReviewServingChunkManifestRepositoryDatabase,
@@ -3883,8 +3942,11 @@ const completeSearchRebuildChunkAfterBatchWrite = async (
           getChecksum: () => {
             return getSearchRebuildChunkOutputChecksum({chunk: input.chunk, snapshotIds: input.snapshotIds}, tx)
           },
-          getCount: () => {
-            return getSearchRebuildChunkOutputCount({chunk: input.chunk, snapshotIds: input.snapshotIds}, tx)
+          getCount: async () => {
+            return (
+              input.outputCount
+              ?? getSearchRebuildChunkOutputCount({chunk: input.chunk, snapshotIds: input.snapshotIds}, tx)
+            )
           },
         })
       },
@@ -3950,6 +4012,9 @@ const runSearchRebuildChunkBatch = async (
   }, Promise.resolve())
   const batchWriteMs = getNonNegativeElapsedMs(batchWriteStartedAtMs)
   const batchWriteRss = getReviewServingProjectorWorkerRssDiagnostics(batchWriteRssBeforeBytes)
+  const outputCounts = canUseBatchedCheapRebuildChunkValidation(input.chunks)
+    ? await getSearchRebuildChunkBatchOutputCounts({chunks: input.chunks, snapshotIds}, database)
+    : null
 
   await input.chunks.reduce<Promise<void>>(async (previous, chunk) => {
     await previous
@@ -3960,6 +4025,7 @@ const runSearchRebuildChunkBatch = async (
         batchWriteRss,
         chunk,
         leaseOwner: input.leaseOwner,
+        outputCount: outputCounts?.get(chunk.chunkId),
         snapshotIds,
       },
       database,
