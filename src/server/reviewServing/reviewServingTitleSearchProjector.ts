@@ -49,6 +49,7 @@ export type ProjectReviewServingTitleSearchRebuildInput = {
   chunkStartArticleId?: string | null
   projectId: string
   projectScopeIdentity: string
+  replaceExistingRows?: boolean
   searchIdentity: string
   selectedImportSnapshotId?: string | null
   snapshotId: string
@@ -431,6 +432,14 @@ const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServi
     articleTitleSql: getSelectedImportTitleSql(input),
     projectId: input.projectId,
     projectScopeIdentity: input.projectScopeIdentity,
+    ...(input.replaceExistingRows === true
+      ? {
+          replacedArticleRange: {
+            chunkEndArticleId: input.chunkEndArticleId,
+            chunkStartArticleId: input.chunkStartArticleId,
+          },
+        }
+      : {}),
     searchIdentity: input.searchIdentity,
     selectedImportJoinSql: getSelectedImportTitleJoinSql(input),
     snapshotId: input.snapshotId,

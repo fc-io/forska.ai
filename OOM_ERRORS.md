@@ -1,5 +1,13 @@
 # OOM Errors
 
+## 2026-09-28 - Review-Serving Search Rebuild Output Counts
+
+- Error: No OOM. `limiting rebuild chunk batch size due to RSS cap` with `appBytes` 5.5-6.0 GB against the 4 GiB app headroom clamped search rebuild batches from 32 to 1 while an active snapshot's search was rebuilt in place.
+- Context: `getSearchRebuildChunkBatchOutputCounts` and the single-chunk search count/checksum, run after every search rebuild chunk write.
+- Cause: The count unnested every title-search posting of the target snapshot (18.2M on c671e7fb) for each 32-chunk batch. Once a snapshot holds the whole component, which is always true for an in-place refresh and true for the tail of any search build, that took 2.7-2.9 s and 4-5 GB of untracked memory per batch.
+- Fix: Only rows whose sorted article-id list overlaps the batch's key span (`list_extract(article_ids, 1) <= end AND list_extract(article_ids, -1) >= start`) are unnested.
+- Verification: On a production clone a 32-chunk batch count went from 2,888 ms and +4.1 GB footprint to 165 ms; the in-place search refresh of c671e7fb went from ~128 to ~448 chunks per minute with app memory at ~1.1 GB and no batch-size limiting, and the refreshed postings kept the same count and checksum as the reference snapshot. `bun test src/server/workers/reviewServingProjectorWorker.test.ts`.
+
 ## 2026-09-20 - Review-Serving Fair Dirty-Work Claims And Set-Based High-Water Coalescing
 
 - Error: No new OOM. This records the memory profile of three throughput changes made for the `6554M` Apple container profile (DuckDB about 3.2 GiB, RSS cap 4 GiB, low-memory worker with `maxCompletedChunksPerRun` 16) so the 2026-08-05 "sorted full backlog" claim regression cannot return.
