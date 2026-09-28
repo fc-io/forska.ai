@@ -137,7 +137,7 @@ export const reviewServingBulkJobStatuses = ['pending', 'running', 'completed', 
 
 export type ReviewServingBulkJobStatus = (typeof reviewServingBulkJobStatuses)[number]
 
-export const reviewServingSnapshotStatuses = ['candidate', 'active', 'failed', 'retired'] as const
+export const reviewServingSnapshotStatuses = ['candidate', 'active', 'failed', 'retired', 'purging'] as const
 
 export type ReviewServingSnapshotStatus = (typeof reviewServingSnapshotStatuses)[number]
 

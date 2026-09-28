@@ -114,13 +114,6 @@ import {
   projectReviewServingQueueRebuildRows,
 } from '../reviewServing/reviewServingQueueProjector.ts'
 import {retireReviewServingDirtyWorkRebuiltByChunks} from '../reviewServing/reviewServingRebuiltDirtyWorkRetirement.ts'
-import {
-  cleanupReviewServingRetentionState,
-  getReviewServingRetentionCleanupTargets,
-  type ReviewServingRetentionCleanupInput,
-  type ReviewServingRetentionCleanupResult,
-  type ReviewServingRetentionServiceDatabase,
-} from '../reviewServing/reviewServingRetentionService.ts'
 import {projectReviewServingSelectedImportDirty} from '../reviewServing/reviewServingSelectedImportDirtyProjector.ts'
 import {deleteReviewServingSelectedImportSnapshotRows} from '../reviewServing/reviewServingSelectedImportMaintenance.ts'
 import {
@@ -131,6 +124,11 @@ import {
   refreshReviewServingSelectedImportServingArticleRange,
 } from '../reviewServing/reviewServingSelectedImportProjector.ts'
 import {composeReviewServingCandidateSnapshotManifest} from '../reviewServing/reviewServingSnapshotPromotionService.ts'
+import {
+  purgeReviewServingSnapshots,
+  type ReviewServingSnapshotPurgeDatabase,
+  type ReviewServingSnapshotPurgeResult,
+} from '../reviewServing/reviewServingSnapshotPurge.ts'
 import {
   planReviewServingSummaryLedgerPatches,
   type ReviewServingSummaryLedgerSnapshotPatch,
@@ -178,8 +176,6 @@ type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorSe
   queryJsonBackground?: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
   transactionBackground?: ReviewServingChunkManifestRepositoryDatabase['transaction']
 }
-
-type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupInput
 
 type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {checksum?: string | null}
 type ReviewServingProjectorWorkerMemoryUsage = {budget?: ProcessMemoryBudgetUsage; rss: number}
@@ -254,14 +250,10 @@ type ReviewServingProjectorWorkerDependencies = {
   cleanupDirtyWorkRetention?: typeof cleanupReviewServingDirtyWorkRetention
   coalesceBootstrapRebuildTrains?: typeof coalesceReviewServingV4BootstrapTrains
   retireRebuiltDirtyWork?: typeof retireReviewServingDirtyWorkRebuiltByChunks
-  cleanupRetentionState?: typeof cleanupReviewServingRetentionState
   cleanupStaleCandidateSnapshots?: typeof cleanupStaleCandidateReviewServingSnapshotManifests
-  getCleanupTargets?: (
-    database: ReviewServingRetentionServiceDatabase,
-  ) => Promise<readonly ReviewServingProjectorWorkerCleanupTarget[]>
   getDatabase?: () => ReviewServingProjectorWorkerDatabase
     & ReviewServingChunkManifestRepositoryDatabase
-    & ReviewServingRetentionServiceDatabase
+    & ReviewServingSnapshotPurgeDatabase
   getMemoryUsage?: () => ReviewServingProjectorWorkerMemoryUsage
   hasActiveProjectTransferBackgroundActivity?: () => boolean
   hasActiveProjectTransferSession?: () => Promise<boolean>
@@ -273,6 +265,7 @@ type ReviewServingProjectorWorkerDependencies = {
   intakeReviewChangeDeltas?: typeof intakeReviewChangeDeltasToDirtyWork
   nowMs?: () => number
   projectorServiceDependencies?: Omit<ReviewServingProjectorServiceDependencies, 'database' | 'nowMs'>
+  purgeSnapshots?: typeof purgeReviewServingSnapshots
   rebuildChunkService?: ReviewServingProjectorWorkerRebuildChunkService
   getVisibilityBacklogPendingTotal?: typeof getReviewServingVisibilityBacklogPendingTotal
   reportVisibilityBacklog?: typeof reportReviewServingVisibilityBacklog
@@ -292,7 +285,6 @@ const reviewServingProjectorWorkerTimingLogger = createRateLimitedLogger({
   sink: 'file-only',
   windowMs: 60_000,
 })
-const reviewServingRetentionCleanupEnabledEnv = 'FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED'
 const reviewServingProjectorWorkerStaleCandidateCleanupSource = 'worker staleCandidateCleanup'
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
@@ -319,10 +311,6 @@ const getRebuildChunkBatchWriterFanoutDiagnostics = (input: {
     rangeCount: input.batchRangeCount,
     snapshotCount: input.snapshotIds.length,
   }
-}
-
-const isReviewServingRetentionCleanupEnabled = () => {
-  return process.env[reviewServingRetentionCleanupEnabledEnv] === 'true'
 }
 
 type ReviewServingProjectorWorkerCycleOptions = {
@@ -441,18 +429,20 @@ type ReviewServingProjectorWorkerStaleCandidateCleanupResult =
   | (CleanupStaleCandidateReviewServingSnapshotManifestsResult & {status: 'completed'})
   | {error: string; status: 'failed'}
 
+type ReviewServingProjectorWorkerSnapshotPurgeResult =
+  | (ReviewServingSnapshotPurgeResult & {status: 'completed'})
+  | {error: string; status: 'failed'}
+
 type ReviewServingProjectorWorkerCleanupResult =
   | {
       dirtyWorkRetentionCleanup: CleanupReviewServingDirtyWorkRetentionResult | null
-      retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
-      retentionScopes: readonly string[]
+      snapshotPurge: ReviewServingProjectorWorkerSnapshotPurgeResult | null
       staleCandidateCleanup: ReviewServingProjectorWorkerStaleCandidateCleanupResult | null
       status: 'completed'
     }
   | {
       dirtyWorkRetentionCleanup: CleanupReviewServingDirtyWorkRetentionResult | null
-      retentionCleanups: readonly ReviewServingRetentionCleanupResult[]
-      retentionScopes: readonly string[]
+      snapshotPurge: ReviewServingProjectorWorkerSnapshotPurgeResult | null
       staleCandidateCleanup: ReviewServingProjectorWorkerStaleCandidateCleanupResult | null
       status: 'skipped'
     }
@@ -5761,18 +5751,15 @@ const collectGarbageAfterCompletedRebuildChunk = () => {
 const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWorkerDependencies = {
   collectGarbageAfterCompletedRebuildChunk,
   cleanupDirtyWorkRetention: cleanupReviewServingDirtyWorkRetention,
-  cleanupRetentionState: cleanupReviewServingRetentionState,
   cleanupStaleCandidateSnapshots: cleanupStaleCandidateReviewServingSnapshotManifests,
   getDatabase: getAppDatabaseService as ReviewServingProjectorWorkerDependencies['getDatabase'],
   getAppendQueueDepth: () => {
     return getDuckdbAppendRuntimeMetrics().queueDepth
   },
-  getCleanupTargets: (database) => {
-    return getReviewServingRetentionCleanupTargets({}, database)
-  },
   getForegroundQueueDepth: () => {
     return getDuckdbQueueRuntimeMetricsSnapshot().main.queueDepth
   },
+  purgeSnapshots: purgeReviewServingSnapshots,
   waitForForegroundQueue: waitForDuckdbForegroundQueue,
   hasActiveProjectTransferBackgroundActivity,
   hasActiveDuckdbExclusiveWork,
@@ -7199,7 +7186,7 @@ const getReviewServingProjectorWorkerDatabase = (
   workloadContext: DuckdbWorkloadContext,
 ): ReviewServingProjectorWorkerDatabase
   & ReviewServingChunkManifestRepositoryDatabase
-  & ReviewServingRetentionServiceDatabase => {
+  & ReviewServingSnapshotPurgeDatabase => {
   const database = dependencies.getDatabase?.() ?? getAppDatabaseService()
 
   // Projector work runs at background priority on the owner's serialized DuckDB queue, so judge
@@ -7240,7 +7227,7 @@ const getReviewServingProjectorWorkerDatabase = (
     },
   } as ReviewServingProjectorWorkerDatabase
     & ReviewServingChunkManifestRepositoryDatabase
-    & ReviewServingRetentionServiceDatabase
+    & ReviewServingSnapshotPurgeDatabase
 }
 
 const getWakeInput = (input: {
@@ -7987,8 +7974,7 @@ export const getReviewServingProjectorWorkerCycleLogAttrs = (result: ReviewServi
     chunkId: result.chunk.chunkId,
     chunkRequestId: 'requestId' in result.chunk ? result.chunk.requestId : null,
     chunkStatus: result.chunk.status,
-    cleanupRetentionCleanups: result.cleanup.retentionCleanups,
-    cleanupRetentionScopes: result.cleanup.retentionScopes,
+    cleanupSnapshotPurge: getSnapshotPurgeLogAttrs(result.cleanup.snapshotPurge),
     cleanupStaleCandidateCleanup: result.cleanup.staleCandidateCleanup,
     cleanupStatus: result.cleanup.status,
     dirtyWorkRetentionCleanup: result.cleanup.dirtyWorkRetentionCleanup,
@@ -10236,7 +10222,7 @@ const runReviewServingProjectorWorkerStaleCandidateCleanup = async ({
   database,
   dependencies,
 }: {
-  database: ReviewServingRetentionServiceDatabase
+  database: ReviewServingSnapshotPurgeDatabase
   dependencies: ReviewServingProjectorWorkerDependencies
 }): Promise<ReviewServingProjectorWorkerStaleCandidateCleanupResult | null> => {
   const cleanupStaleCandidateSnapshots = dependencies.cleanupStaleCandidateSnapshots
@@ -10267,12 +10253,98 @@ const runReviewServingProjectorWorkerStaleCandidateCleanup = async ({
   }
 }
 
+const getSnapshotPurgeOutcomeCount = (
+  result: ReviewServingSnapshotPurgeResult,
+  outcome: ReviewServingSnapshotPurgeResult['snapshots'][number]['outcome'],
+) => {
+  return result.snapshots.filter((snapshot) => {
+    return snapshot.outcome === outcome
+  }).length
+}
+
+const getSnapshotPurgeLogAttrs = (result: ReviewServingProjectorWorkerSnapshotPurgeResult | null) => {
+  if (result === null || result.status === 'failed') {
+    return result
+  }
+
+  return {
+    deletedRows: result.deletedRows,
+    elapsedMs: result.elapsedMs,
+    partialSnapshotCount: getSnapshotPurgeOutcomeCount(result, 'partial'),
+    purgedSnapshotCount: getSnapshotPurgeOutcomeCount(result, 'purged'),
+    recreatedSnapshotCount: getSnapshotPurgeOutcomeCount(result, 'recreated'),
+    skippedSnapshotCount: getSnapshotPurgeOutcomeCount(result, 'skipped'),
+    status: result.status,
+    stopReason: result.stopReason,
+  }
+}
+
+const logReviewServingProjectorWorkerSnapshotPurge = (result: ReviewServingSnapshotPurgeResult) => {
+  reviewServingProjectorWorkerCycleLogger.log(
+    'review-serving-projector-worker:snapshot-purge',
+    '[reviewServingProjectorWorker] purged failed and retired review-serving snapshots',
+    {
+      ...getSnapshotPurgeLogAttrs({...result, status: 'completed'}),
+      component: 'reviewServingProjectorWorker',
+      event: 'snapshotPurge',
+      snapshots: result.snapshots,
+    },
+  )
+}
+
+const runReviewServingProjectorWorkerSnapshotPurge = async ({
+  database,
+  dependencies,
+  options,
+}: {
+  database: ReviewServingSnapshotPurgeDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}): Promise<ReviewServingProjectorWorkerSnapshotPurgeResult | null> => {
+  const purgeSnapshots = dependencies.purgeSnapshots
+
+  if (purgeSnapshots === undefined) {
+    return null
+  }
+
+  try {
+    const result = await purgeSnapshots(
+      {
+        nowMs: dependencies.nowMs ?? Date.now,
+        projectId: options.rebuildProjectId,
+        shouldYield: () => {
+          return (
+            options.signal?.aborted === true
+            || hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker(dependencies)
+            || hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
+          )
+        },
+      },
+      database,
+    )
+
+    if (result.snapshots.length > 0) {
+      logReviewServingProjectorWorkerSnapshotPurge(result)
+    }
+
+    return {...result, status: 'completed'}
+  } catch (error) {
+    reviewServingProjectorWorkerCycleLogger.warn(
+      'review-serving-projector-worker:snapshot-purge:failed',
+      '[reviewServingProjectorWorker] review-serving snapshot purge failed',
+      {component: 'reviewServingProjectorWorker', error, event: 'snapshotPurgeFailed'},
+    )
+
+    return {error: getErrorText(error), status: 'failed'}
+  }
+}
+
 const runReviewServingProjectorWorkerCleanup = async ({
   database,
   dependencies,
   options,
 }: {
-  database: ReviewServingRetentionServiceDatabase
+  database: ReviewServingSnapshotPurgeDatabase
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }): Promise<ReviewServingProjectorWorkerCleanupResult> => {
@@ -10284,57 +10356,18 @@ const runReviewServingProjectorWorkerCleanup = async ({
   const lastCleanupAtMs = options.lastCleanupAtMs ?? null
 
   if (!shouldRunCleanup({cleanupIntervalMs, lastCleanupAtMs, nowMs})) {
-    return {
-      dirtyWorkRetentionCleanup: null,
-      retentionCleanups: [],
-      retentionScopes: [],
-      staleCandidateCleanup: null,
-      status: 'skipped',
-    }
+    return getSkippedReviewServingProjectorWorkerCleanupResult()
   }
 
   const dirtyWorkRetentionCleanup = (await dependencies.cleanupDirtyWorkRetention?.({}, database)) ?? null
   const staleCandidateCleanup = await runReviewServingProjectorWorkerStaleCandidateCleanup({database, dependencies})
-  const maintenanceStatus =
-    dirtyWorkRetentionCleanup === null && staleCandidateCleanup === null ? 'skipped' : 'completed'
-  const cleanupRetentionState = dependencies.cleanupRetentionState
+  const snapshotPurge = await runReviewServingProjectorWorkerSnapshotPurge({database, dependencies, options})
+  const status =
+    dirtyWorkRetentionCleanup === null && staleCandidateCleanup === null && snapshotPurge === null
+      ? 'skipped'
+      : 'completed'
 
-  if (!isReviewServingRetentionCleanupEnabled()) {
-    return {
-      dirtyWorkRetentionCleanup,
-      retentionCleanups: [],
-      retentionScopes: [],
-      staleCandidateCleanup,
-      status: maintenanceStatus,
-    }
-  }
-
-  const cleanupTargets = await dependencies.getCleanupTargets?.(database)
-
-  if (!cleanupRetentionState || cleanupTargets === undefined || cleanupTargets.length === 0) {
-    return {
-      dirtyWorkRetentionCleanup,
-      retentionCleanups: [],
-      retentionScopes: [],
-      staleCandidateCleanup,
-      status: maintenanceStatus,
-    }
-  }
-
-  const retentionCleanups = await cleanupTargets.reduce<Promise<ReviewServingRetentionCleanupResult[]>>(
-    async (previousCleanups, target) => {
-      const cleanups = await previousCleanups
-      const cleanup = await cleanupRetentionState(target, database)
-
-      return [...cleanups, cleanup]
-    },
-    Promise.resolve([]),
-  )
-  const retentionScopes = retentionCleanups.map((cleanup) => {
-    return cleanup.retentionScope
-  })
-
-  return {dirtyWorkRetentionCleanup, retentionCleanups, retentionScopes, staleCandidateCleanup, status: 'completed'}
+  return {dirtyWorkRetentionCleanup, snapshotPurge, staleCandidateCleanup, status}
 }
 
 const getDeltaIntakePartitionSample = async (
@@ -10813,13 +10846,7 @@ type ReviewServingProjectorWorkerCycleWork = {
 }
 
 const getSkippedReviewServingProjectorWorkerCleanupResult = (): ReviewServingProjectorWorkerCleanupResult => {
-  return {
-    dirtyWorkRetentionCleanup: null,
-    retentionCleanups: [],
-    retentionScopes: [],
-    staleCandidateCleanup: null,
-    status: 'skipped',
-  }
+  return {dirtyWorkRetentionCleanup: null, snapshotPurge: null, staleCandidateCleanup: null, status: 'skipped'}
 }
 
 const runReviewServingProjectorWorkerChunkBatchPhase = async (context: ReviewServingProjectorWorkerCycleContext) => {
@@ -11033,8 +11060,7 @@ export const runReviewServingProjectorWorkerCycle = async (
     const chunk = getIdleReviewServingProjectorWorkerCycleChunkResult()
     const cleanup = {
       dirtyWorkRetentionCleanup: null,
-      retentionCleanups: [],
-      retentionScopes: [],
+      snapshotPurge: null,
       staleCandidateCleanup: null,
       status: 'skipped' as const,
     }

@@ -30,7 +30,7 @@ const sqlGuardExcludedFiles = new Set([
   sqlGuardDefinitionFile,
   join(reviewServingSourceRoot, 'reviewServingChunkManifestRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingRebuildRequestRepository.ts'),
-  join(reviewServingSourceRoot, 'reviewServingRetentionService.ts'),
+  join(reviewServingSourceRoot, 'reviewServingSnapshotPurge.ts'),
   join(reviewServingSourceRoot, 'reviewServingReviewConfig.ts'),
   join(reviewServingSourceRoot, 'reviewServingDiagnosticsRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingDirtyWorkService.ts'),

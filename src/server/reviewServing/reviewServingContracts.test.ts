@@ -31,7 +31,7 @@ test('review serving contracts export explicit lifecycle state values', () => {
   expect(reviewServingCountAvailabilityStates).toEqual(['ready', 'stale', 'unavailable', 'async'])
   expect(reviewServingSearchAvailabilityStates).toEqual(['ready', 'indexing', 'unavailable', 'async'])
   expect(reviewServingBulkJobStatuses).toEqual(['pending', 'running', 'completed', 'failed', 'cancelled'])
-  expect(reviewServingSnapshotStatuses).toEqual(['candidate', 'active', 'failed', 'retired'])
+  expect(reviewServingSnapshotStatuses).toEqual(['candidate', 'active', 'failed', 'retired', 'purging'])
   expect(reviewServingComponentRequirements).toEqual(['required', 'optional'])
 })
 

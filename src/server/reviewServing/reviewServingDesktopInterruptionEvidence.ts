@@ -80,16 +80,17 @@ export const reviewServingDesktopInterruptionEvidence: readonly ReviewServingDes
   },
   {
     area: 'cleanupResume',
-    contract: 'retention cleanup advances bounded marks and protects active, pinned, and last-known-good snapshots',
+    contract:
+      'snapshot purge resumes purging snapshots in bounded batches and protects active, candidate, last-known-good, latest retired, pinned, and job- or request-referenced snapshots',
     evidenceFiles: [
-      'src/server/reviewServing/reviewServingRetentionService.ts',
-      'src/server/reviewServing/reviewServingRetentionService.test.ts',
+      'src/server/reviewServing/reviewServingSnapshotPurge.ts',
+      'src/server/reviewServing/reviewServingSnapshotPurge.duckdb.test.ts',
     ],
     requiredMarkers: [
-      'app.review_serving_retention_mark',
-      'defaultRetentionCleanupBatchSize = 512',
-      'getActivePinPredicate',
-      'retention cleanup advances a bounded cursor',
+      "snapshot.snapshot_status = 'purging'",
+      'heapTableRowsPerStatement = 1_000_000',
+      'app.review_serving_snapshot_pin',
+      'each call is bounded by snapshots, deleted rows, time and foreground work and resumes a partial purge',
     ],
   },
   {

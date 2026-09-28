@@ -40,29 +40,6 @@ export const deleteReviewServingSelectedImportSnapshotRows = async (
   await database.run(getDeleteSelectedImportStagingSnapshotRowsStatement(input))
 }
 
-export const getDeleteRetiredSelectedImportPublishedRowsStatement = (input: {
-  activePinPredicateSql: string
-  activeSnapshotManifestPredicateSql: string
-  batchSize: number
-  orderBySql: string
-  projectId: string
-  selectedImportProtectedPredicateSql: string
-}) => {
-  return `
-    DELETE FROM ${selectedImportPublishedTable}
-    WHERE rowid IN (
-        SELECT candidate.rowid
-        FROM ${selectedImportPublishedTable} candidate
-        WHERE candidate.project_id = ${getSqlLiteral(input.projectId)}
-          AND NOT (${input.activeSnapshotManifestPredicateSql})
-          AND NOT (${input.selectedImportProtectedPredicateSql})
-          AND NOT (${input.activePinPredicateSql})
-        ORDER BY ${input.orderBySql}
-        LIMIT ${getSqlLiteral(input.batchSize)}
-      )
-  `
-}
-
 export const getSelectedImportCurrentStartupMutationProbeSql = () => {
   return `
       DROP TABLE IF EXISTS startup_probe_review_selected_article_import_current_v4;

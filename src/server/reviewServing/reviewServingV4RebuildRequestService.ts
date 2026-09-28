@@ -33,6 +33,7 @@ import {
   getReviewServingProjectionIdentityManifest,
   getReviewServingSnapshotManifest,
   markCandidateReviewServingSnapshotManifestFailed,
+  releaseDeadReviewServingSnapshotManifest,
   type ReviewServingProjectionIdentityManifest,
   type ReviewServingSnapshotManifest,
   upsertReviewServingProjectionIdentityManifest,
@@ -1566,6 +1567,7 @@ const seedReviewServingV4Bootstrap = async (
   input: PreparedReviewServingV4Bootstrap,
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
+  await releaseDeadReviewServingSnapshotManifest({projectId: input.projectId, snapshotId: input.snapshotId}, database)
   await upsertReviewServingV4BootstrapProjectionManifests(
     {
       components: input.rebuiltComponents,

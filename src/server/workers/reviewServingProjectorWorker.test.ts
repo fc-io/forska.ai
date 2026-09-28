@@ -16,6 +16,10 @@ import {
 } from '../reviewServing/reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim} from '../reviewServing/reviewServingDirtyWorkService.ts'
 import {wakeReviewServingProjectorService} from '../reviewServing/reviewServingProjectorService.ts'
+import type {
+  PurgeReviewServingSnapshotsInput,
+  ReviewServingSnapshotPurgeResult,
+} from '../reviewServing/reviewServingSnapshotPurge.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getProcessActivitySnapshot, resetProcessActivityStateForTests} from '../utils/processActivityState.ts'
 import {
@@ -156,11 +160,26 @@ const fakeStaleCandidateCleanupResult = {
   skippedSnapshotCount: 1,
 }
 
+const fakeSnapshotPurgeResult = {
+  deletedRows: 7,
+  elapsedMs: 3,
+  snapshots: [
+    {
+      deletedRows: 7,
+      outcome: 'purged',
+      previousStatus: 'failed',
+      projectId: 'project-1',
+      snapshotId: 'snapshot-failed',
+    },
+  ],
+  stopReason: 'complete',
+} satisfies ReviewServingSnapshotPurgeResult
+
 const createWorkerHarness = (input?: {
   chunkComplete?: boolean
-  cleanupTargets?: Array<{batchSize: number; now: Date | string; projectId: string; reviewConfigHash?: string | null}>
   nowMs?: number
   runChunkThrows?: boolean
+  snapshotPurgeThrows?: boolean
   staleCandidateCleanupThrows?: boolean
   wakeStatus?: 'blocked' | 'completed' | 'failed' | 'partial'
 }) => {
@@ -204,8 +223,7 @@ const createWorkerHarness = (input?: {
   const claimInputs: unknown[] = []
   const dirtyWorkRetentionCleanupInputs: unknown[] = []
   const staleCandidateCleanupInputs: unknown[] = []
-  const cleanupTargetInputs: unknown[] = []
-  const cleanupInputs: unknown[] = []
+  const snapshotPurgeInputs: PurgeReviewServingSnapshotsInput[] = []
   const failedChunks: unknown[] = []
   const garbageCollectedChunks: ReviewServingRebuildChunkManifest[] = []
   const getNextChunkInputs: unknown[] = []
@@ -220,22 +238,6 @@ const createWorkerHarness = (input?: {
 
       return {deletedDirtyWorkCount: 5}
     },
-    cleanupRetentionState: async (cleanupInput: {
-      batchSize?: number
-      projectId: string
-      reviewConfigHash?: string | null
-    }) => {
-      cleanupInputs.push(cleanupInput)
-
-      return {
-        cleanupBatchSize: cleanupInput.batchSize ?? 0,
-        cleanupSpecKind: 'snapshot',
-        cleanupTable: 'mart.review_article_serving_v4',
-        cleanupTableIndex: 0,
-        nextCleanupTableIndex: 1,
-        retentionScope: cleanupInput.projectId,
-      }
-    },
     cleanupStaleCandidateSnapshots: async (cleanupInput) => {
       staleCandidateCleanupInputs.push(cleanupInput)
 
@@ -245,16 +247,20 @@ const createWorkerHarness = (input?: {
 
       return fakeStaleCandidateCleanupResult
     },
-    getCleanupTargets: async (databaseInput) => {
-      cleanupTargetInputs.push(databaseInput)
-
-      return input?.cleanupTargets ?? []
-    },
     getDatabase: () => {
       return database
     },
     nowMs: () => {
       return input?.nowMs ?? 1_000
+    },
+    purgeSnapshots: async (purgeInput) => {
+      snapshotPurgeInputs.push(purgeInput ?? {})
+
+      if (input?.snapshotPurgeThrows) {
+        throw new Error('snapshot purge failed')
+      }
+
+      return fakeSnapshotPurgeResult
     },
     rebuildChunkService: {
       claimChunk: async (claimInput) => {
@@ -312,8 +318,6 @@ const createWorkerHarness = (input?: {
 
   return {
     claimInputs,
-    cleanupInputs,
-    cleanupTargetInputs,
     database,
     dependencies,
     dirtyWorkRetentionCleanupInputs,
@@ -326,6 +330,7 @@ const createWorkerHarness = (input?: {
     recycledChunks,
     runChunkInputs,
     runStatements,
+    snapshotPurgeInputs,
     staleCandidateCleanupInputs,
     wakeInputs,
     workloadContexts,
@@ -1093,7 +1098,7 @@ test('batch fanout diagnostics stay manifest derived without foreground diagnost
   const source = readWorkerSource()
   const helperSource =
     source.match(
-      /const getRebuildChunkBatchWriterFanoutDiagnostics = \([\s\S]*?\n}\n\nconst isReviewServingRetentionCleanupEnabled/,
+      /const getRebuildChunkBatchWriterFanoutDiagnostics = \([\s\S]*?\n}\n\ntype ReviewServingProjectorWorkerCycleOptions/,
     )?.[0] ?? ''
 
   expect(helperSource).toContain('estimatedInputRows')
@@ -1125,7 +1130,7 @@ test('worker yields before draining rebuild chunks while foreground DuckDB work 
   expect(harness.claimInputs).toEqual([])
   expect(harness.runChunkInputs).toEqual([])
   expect(harness.wakeInputs).toEqual([])
-  expect(harness.cleanupInputs).toEqual([])
+  expect(harness.snapshotPurgeInputs).toEqual([])
   expect(harness.dirtyWorkRetentionCleanupInputs).toEqual([])
   expect(harness.workloadContexts).toEqual([])
 })
@@ -2079,7 +2084,7 @@ test('worker skips background review work while project transfer background work
   expect(harness.claimInputs).toEqual([])
   expect(harness.runChunkInputs).toEqual([])
   expect(harness.wakeInputs).toEqual([])
-  expect(harness.cleanupInputs).toEqual([])
+  expect(harness.snapshotPurgeInputs).toEqual([])
 })
 
 test('worker skips background review work while DuckDB exclusive work is active', async () => {
@@ -2103,7 +2108,7 @@ test('worker skips background review work while DuckDB exclusive work is active'
   expect(harness.claimInputs).toEqual([])
   expect(harness.runChunkInputs).toEqual([])
   expect(harness.wakeInputs).toEqual([])
-  expect(harness.cleanupInputs).toEqual([])
+  expect(harness.snapshotPurgeInputs).toEqual([])
 })
 
 test('worker can drain multiple rebuild chunks in one opt-in batch', async () => {
@@ -5854,7 +5859,7 @@ test('worker drains foreground critical rebuild chunks within a bounded chunk bu
       'judgmentInputContent',
     ],
   })
-  expect(harness.cleanupInputs).toEqual([])
+  expect(harness.snapshotPurgeInputs).toEqual([])
 })
 
 const runForegroundDrainCycle = async (lastMaintenanceAtMs: number | undefined) => {
@@ -6074,7 +6079,7 @@ test('worker keeps draining foreground status rebuild chunks beyond the heavy-ch
   expect(result.projector).toMatchObject({status: 'completed'})
   expect(harness.wakeInputs).toHaveLength(1)
   expect(result.deltaIntake).toEqual({convertedPartitions: 0, dirtyWorkCount: 0, status: 'idle'})
-  expect(harness.cleanupInputs).toEqual([])
+  expect(harness.snapshotPurgeInputs).toEqual([])
 })
 
 test('worker yields to activation projectors after foreground native-heavy rebuild chunks', async () => {
@@ -7753,146 +7758,105 @@ test('worker refreshes request candidate snapshot state before promotion', async
   expect(joined).toContain("status = 'completed'")
 })
 
-test('worker schedules dirty-work cleanup after its cleanup interval and skips retention cleanup by default', async () => {
-  const cleanupTarget = {batchSize: 10, now: new Date('2026-06-16T10:00:00.000Z'), projectId: 'project-1'}
-  const skippedHarness = createWorkerHarness({cleanupTargets: [cleanupTarget], nowMs: 1_000})
-  const completedHarness = createWorkerHarness({cleanupTargets: [cleanupTarget], nowMs: 62_000})
-  const dirtyWorkOnlyHarness = createWorkerHarness({cleanupTargets: [], nowMs: 62_000})
-  const previousRetentionCleanupEnabled = process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
-  delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
+test('worker runs dirty-work cleanup, stale candidate cleanup and the snapshot purge after its cleanup interval', async () => {
+  const skippedHarness = createWorkerHarness({nowMs: 1_000})
+  const completedHarness = createWorkerHarness({nowMs: 62_000})
+  const skipped = await runReviewServingProjectorWorkerOnce(
+    {cleanupIntervalMs: 60_000, lastCleanupAtMs: 10_000, workerId: 'worker-1'},
+    skippedHarness.dependencies,
+  )
+  const completed = await runReviewServingProjectorWorkerOnce(
+    {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
+    completedHarness.dependencies,
+  )
 
-  try {
-    const skipped = await runReviewServingProjectorWorkerOnce(
-      {cleanupIntervalMs: 60_000, lastCleanupAtMs: 10_000, workerId: 'worker-1'},
-      skippedHarness.dependencies,
-    )
-    const completed = await runReviewServingProjectorWorkerOnce(
-      {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
-      completedHarness.dependencies,
-    )
-    const dirtyWorkOnly = await runReviewServingProjectorWorkerOnce(
-      {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
-      dirtyWorkOnlyHarness.dependencies,
-    )
-
-    expect(skipped.cleanup.status).toBe('skipped')
-    expect(skippedHarness.cleanupTargetInputs).toEqual([])
-    expect(skippedHarness.cleanupInputs).toEqual([])
-    expect(skippedHarness.dirtyWorkRetentionCleanupInputs).toEqual([])
-    expect(skippedHarness.staleCandidateCleanupInputs).toEqual([])
-    expect(completed.cleanup).toEqual({
-      dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
-      retentionCleanups: [],
-      retentionScopes: [],
-      staleCandidateCleanup: {...fakeStaleCandidateCleanupResult, status: 'completed'},
-      status: 'completed',
-    })
-    expect(completedHarness.cleanupTargetInputs).toEqual([])
-    expect(completedHarness.cleanupInputs).toEqual([])
-    expect(completedHarness.dirtyWorkRetentionCleanupInputs).toEqual([{}])
-    expect(completedHarness.staleCandidateCleanupInputs).toEqual([
-      {source: reviewServingProjectorWorkerStaleCandidateCleanupSource},
-    ])
-    expect(reviewServingProjectorWorkerStaleCandidateCleanupSource).toBe('worker staleCandidateCleanup')
-    expect(completed.nextCleanupAtMs).toBe(62_000)
-    expect(dirtyWorkOnly.cleanup.status).toBe('completed')
-    expect(dirtyWorkOnly.cleanup.retentionCleanups).toEqual([])
-    expect(dirtyWorkOnly.cleanup.dirtyWorkRetentionCleanup).toMatchObject({deletedDirtyWorkCount: 5})
-    expect(dirtyWorkOnlyHarness.cleanupTargetInputs).toEqual([])
-    expect(dirtyWorkOnly.nextCleanupAtMs).toBe(62_000)
-  } finally {
-    if (previousRetentionCleanupEnabled === undefined) {
-      delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
-    } else {
-      process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED = previousRetentionCleanupEnabled
-    }
-  }
+  expect(skipped.cleanup.status).toBe('skipped')
+  expect(skippedHarness.snapshotPurgeInputs).toEqual([])
+  expect(skippedHarness.dirtyWorkRetentionCleanupInputs).toEqual([])
+  expect(skippedHarness.staleCandidateCleanupInputs).toEqual([])
+  expect(completed.cleanup).toEqual({
+    dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
+    snapshotPurge: {...fakeSnapshotPurgeResult, status: 'completed'},
+    staleCandidateCleanup: {...fakeStaleCandidateCleanupResult, status: 'completed'},
+    status: 'completed',
+  })
+  expect(completedHarness.dirtyWorkRetentionCleanupInputs).toEqual([{}])
+  expect(completedHarness.staleCandidateCleanupInputs).toEqual([
+    {source: reviewServingProjectorWorkerStaleCandidateCleanupSource},
+  ])
+  expect(reviewServingProjectorWorkerStaleCandidateCleanupSource).toBe('worker staleCandidateCleanup')
+  expect(
+    completedHarness.snapshotPurgeInputs.map((purgeInput) => {
+      return Object.keys(purgeInput).sort()
+    }),
+  ).toEqual([['nowMs', 'projectId', 'shouldYield']])
+  expect(completedHarness.snapshotPurgeInputs[0]?.nowMs?.()).toBe(62_000)
+  expect(completed.nextCleanupAtMs).toBe(62_000)
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(completed).cleanupSnapshotPurge).toEqual({
+    deletedRows: 7,
+    elapsedMs: 3,
+    partialSnapshotCount: 0,
+    purgedSnapshotCount: 1,
+    recreatedSnapshotCount: 0,
+    skippedSnapshotCount: 0,
+    status: 'completed',
+    stopReason: 'complete',
+  })
 })
 
-test('worker runs retention cleanup when the review-serving retention cleanup gate is enabled', async () => {
-  const cleanupTarget = {batchSize: 10, now: new Date('2026-06-16T10:00:00.000Z'), projectId: 'project-1'}
-  const completedHarness = createWorkerHarness({cleanupTargets: [cleanupTarget], nowMs: 62_000})
-  const previousRetentionCleanupEnabled = process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
-  process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED = 'true'
+test('the snapshot purge yields while foreground DuckDB work is queued', async () => {
+  const harness = createWorkerHarness({nowMs: 62_000})
+  let foregroundQueueDepth = 0
 
-  try {
-    const completed = await runReviewServingProjectorWorkerOnce(
-      {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
-      completedHarness.dependencies,
-    )
-
-    expect(completed.cleanup).toEqual({
-      dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
-      retentionCleanups: [
-        {
-          cleanupBatchSize: 10,
-          cleanupSpecKind: 'snapshot',
-          cleanupTable: 'mart.review_article_serving_v4',
-          cleanupTableIndex: 0,
-          nextCleanupTableIndex: 1,
-          retentionScope: 'project-1',
-        },
-      ],
-      retentionScopes: ['project-1'],
-      staleCandidateCleanup: {...fakeStaleCandidateCleanupResult, status: 'completed'},
-      status: 'completed',
-    })
-    expect(completedHarness.cleanupTargetInputs).toHaveLength(1)
-    expect(completedHarness.cleanupInputs).toEqual([cleanupTarget])
-    expect(completedHarness.dirtyWorkRetentionCleanupInputs).toEqual([{}])
-    expect(completedHarness.staleCandidateCleanupInputs).toEqual([
-      {source: reviewServingProjectorWorkerStaleCandidateCleanupSource},
-    ])
-    expect(completed.nextCleanupAtMs).toBe(62_000)
-  } finally {
-    if (previousRetentionCleanupEnabled === undefined) {
-      delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
-    } else {
-      process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED = previousRetentionCleanupEnabled
-    }
+  harness.dependencies.getForegroundQueueDepth = () => {
+    return foregroundQueueDepth
   }
+
+  await runReviewServingProjectorWorkerOnce(
+    {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+
+  const [purgeInput] = harness.snapshotPurgeInputs
+
+  expect(purgeInput?.shouldYield?.()).toBe(false)
+  foregroundQueueDepth = 1
+  expect(purgeInput?.shouldYield?.()).toBe(true)
 })
 
-test('worker contains stale candidate cleanup failures and still completes the rest of its cleanup cycle', async () => {
-  const harness = createWorkerHarness({cleanupTargets: [], nowMs: 62_000, staleCandidateCleanupThrows: true})
-  const skippedHarness = createWorkerHarness({cleanupTargets: [], nowMs: 60_999, staleCandidateCleanupThrows: true})
-  const previousRetentionCleanupEnabled = process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
-  delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
+test('worker contains stale candidate cleanup and snapshot purge failures and still completes its cleanup cycle', async () => {
+  const harness = createWorkerHarness({nowMs: 62_000, snapshotPurgeThrows: true, staleCandidateCleanupThrows: true})
+  const skippedHarness = createWorkerHarness({
+    nowMs: 60_999,
+    snapshotPurgeThrows: true,
+    staleCandidateCleanupThrows: true,
+  })
+  const result = await runReviewServingProjectorWorkerOnce(
+    {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
+    harness.dependencies,
+  )
+  const skipped = await runReviewServingProjectorWorkerOnce(
+    {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
+    skippedHarness.dependencies,
+  )
 
-  try {
-    const result = await runReviewServingProjectorWorkerOnce(
-      {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
-      harness.dependencies,
-    )
-    const skipped = await runReviewServingProjectorWorkerOnce(
-      {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
-      skippedHarness.dependencies,
-    )
-
-    expect(result.cleanup).toEqual({
-      dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
-      retentionCleanups: [],
-      retentionScopes: [],
-      staleCandidateCleanup: {error: 'stale candidate cleanup failed', status: 'failed'},
-      status: 'completed',
-    })
-    expect(harness.staleCandidateCleanupInputs).toEqual([{source: 'worker staleCandidateCleanup'}])
-    expect(result.nextCleanupAtMs).toBe(62_000)
-    expect(skipped.cleanup).toEqual({
-      dirtyWorkRetentionCleanup: null,
-      retentionCleanups: [],
-      retentionScopes: [],
-      staleCandidateCleanup: null,
-      status: 'skipped',
-    })
-    expect(skippedHarness.staleCandidateCleanupInputs).toEqual([])
-  } finally {
-    if (previousRetentionCleanupEnabled === undefined) {
-      delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
-    } else {
-      process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED = previousRetentionCleanupEnabled
-    }
-  }
+  expect(result.cleanup).toEqual({
+    dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
+    snapshotPurge: {error: 'snapshot purge failed', status: 'failed'},
+    staleCandidateCleanup: {error: 'stale candidate cleanup failed', status: 'failed'},
+    status: 'completed',
+  })
+  expect(harness.staleCandidateCleanupInputs).toEqual([{source: 'worker staleCandidateCleanup'}])
+  expect(harness.snapshotPurgeInputs).toHaveLength(1)
+  expect(result.nextCleanupAtMs).toBe(62_000)
+  expect(skipped.cleanup).toEqual({
+    dirtyWorkRetentionCleanup: null,
+    snapshotPurge: null,
+    staleCandidateCleanup: null,
+    status: 'skipped',
+  })
+  expect(skippedHarness.staleCandidateCleanupInputs).toEqual([])
+  expect(skippedHarness.snapshotPurgeInputs).toEqual([])
 })
 
 test('worker backs off failed wakes and stops cleanly when aborted during sleep', async () => {
@@ -7919,9 +7883,7 @@ test('worker loop reports its last cleanup timestamp so bounded restarts do not 
   const pollIntervalMs = 2_000
   const restartDelayMs = 5_000
   const firstLoopStartAtMs = 1_000_000
-  const previousRetentionCleanupEnabled = process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
   let clockMs = firstLoopStartAtMs
-  delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
 
   const runBoundedLoop = async (lastCleanupAtMs: number | null) => {
     const harness = createWorkerHarness()
@@ -7958,53 +7920,45 @@ test('worker loop reports its last cleanup timestamp so bounded restarts do not 
     }
   }
 
-  try {
-    // Loop 1 is seeded with its own start time. Cleanup becomes eligible exactly when the loop is
-    // aborted, so it never runs inside this loop, but the timestamp is reported back unchanged.
-    const firstLoop = await runBoundedLoop(firstLoopStartAtMs)
+  // Loop 1 is seeded with its own start time. Cleanup becomes eligible exactly when the loop is
+  // aborted, so it never runs inside this loop, but the timestamp is reported back unchanged.
+  const firstLoop = await runBoundedLoop(firstLoopStartAtMs)
 
-    expect(firstLoop.cleanupRuns).toBe(0)
-    expect(firstLoop.result).toEqual({
-      componentRotationOffset: firstLoop.cycleCount,
-      lastAdmittedWakeAtMs: firstLoopStartAtMs,
-      lastCleanupAtMs: firstLoopStartAtMs,
-      reason: 'aborted',
-    })
+  expect(firstLoop.cleanupRuns).toBe(0)
+  expect(firstLoop.result).toEqual({
+    componentRotationOffset: firstLoop.cycleCount,
+    lastAdmittedWakeAtMs: firstLoopStartAtMs,
+    lastCleanupAtMs: firstLoopStartAtMs,
+    reason: 'aborted',
+  })
 
-    clockMs += restartDelayMs
+  clockMs += restartDelayMs
 
-    // Pre-fix heartbeat behaviour: reseeding with the new loop's start time starves cleanup again.
-    const reseededLoop = await runBoundedLoop(clockMs)
+  // Pre-fix heartbeat behaviour: reseeding with the new loop's start time starves cleanup again.
+  const reseededLoop = await runBoundedLoop(clockMs)
 
-    expect(reseededLoop.cleanupRuns).toBe(0)
-    expect(reseededLoop.result).toEqual({
-      componentRotationOffset: reseededLoop.cycleCount,
-      lastAdmittedWakeAtMs: reseededLoop.loopStartedAtMs,
-      lastCleanupAtMs: reseededLoop.loopStartedAtMs,
-      reason: 'aborted',
-    })
+  expect(reseededLoop.cleanupRuns).toBe(0)
+  expect(reseededLoop.result).toEqual({
+    componentRotationOffset: reseededLoop.cycleCount,
+    lastAdmittedWakeAtMs: reseededLoop.loopStartedAtMs,
+    lastCleanupAtMs: reseededLoop.loopStartedAtMs,
+    reason: 'aborted',
+  })
 
-    clockMs += restartDelayMs
+  clockMs += restartDelayMs
 
-    // Fixed heartbeat behaviour: carrying the previous loop's timestamp makes the first cycle of the
-    // restarted loop eligible, cleanup runs once, and the new timestamp is reported for the next loop.
-    const carriedLoop = await runBoundedLoop(firstLoop.result.lastCleanupAtMs)
+  // Fixed heartbeat behaviour: carrying the previous loop's timestamp makes the first cycle of the
+  // restarted loop eligible, cleanup runs once, and the new timestamp is reported for the next loop.
+  const carriedLoop = await runBoundedLoop(firstLoop.result.lastCleanupAtMs)
 
-    expect(carriedLoop.cleanupRuns).toBe(1)
-    expect(carriedLoop.result).toEqual({
-      componentRotationOffset: carriedLoop.cycleCount,
-      lastAdmittedWakeAtMs: carriedLoop.loopStartedAtMs,
-      lastCleanupAtMs: carriedLoop.loopStartedAtMs,
-      reason: 'aborted',
-    })
-    expect(carriedLoop.result.lastCleanupAtMs).toBeGreaterThan(firstLoopStartAtMs)
-  } finally {
-    if (previousRetentionCleanupEnabled === undefined) {
-      delete process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED
-    } else {
-      process.env.FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED = previousRetentionCleanupEnabled
-    }
-  }
+  expect(carriedLoop.cleanupRuns).toBe(1)
+  expect(carriedLoop.result).toEqual({
+    componentRotationOffset: carriedLoop.cycleCount,
+    lastAdmittedWakeAtMs: carriedLoop.loopStartedAtMs,
+    lastCleanupAtMs: carriedLoop.loopStartedAtMs,
+    reason: 'aborted',
+  })
+  expect(carriedLoop.result.lastCleanupAtMs).toBeGreaterThan(firstLoopStartAtMs)
 })
 
 test('worker yields after completed request chunks so progress readers can run', async () => {
@@ -8457,11 +8411,11 @@ test('selected import runner releases dirty work while base projection is still 
   ).toBe(false)
 })
 
-test('worker default dependencies discover chunks and cleanup targets instead of no-op defaults', () => {
+test('worker default dependencies discover chunks and purge snapshots instead of no-op defaults', () => {
   const source = readWorkerSource()
 
   expect(source).toContain('getNextClaimableReviewServingRebuildChunk')
-  expect(source).toContain('getReviewServingRetentionCleanupTargets')
+  expect(source).toContain('purgeSnapshots: purgeReviewServingSnapshots')
   expect(source).toContain('runReviewServingProjectorWorkerClaimedRebuildChunk')
   expect(source).not.toContain('getNextChunk: async () => {\n      return null')
   expect(source).not.toContain("runClaimedChunk: async () => {\n      return {status: 'completed'}")

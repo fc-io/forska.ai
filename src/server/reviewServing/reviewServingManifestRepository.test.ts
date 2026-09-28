@@ -342,6 +342,7 @@ const createFakeManifestDatabase = (
       if (
         snapshot.projectId === projectId
         && snapshot.status !== 'active'
+        && snapshot.status !== 'purging'
         && !keepSnapshotIds.includes(snapshot.snapshotId)
       ) {
         snapshots.set(key, {...snapshot, status: 'retired', updatedAt: getClock()})
@@ -525,7 +526,7 @@ const createFakeManifestDatabase = (
       activateCandidate(statement)
     }
 
-    if (statement.includes("snapshot_status <> 'active'")) {
+    if (statement.includes("snapshot_status NOT IN ('active', 'purging')")) {
       retireObsolete(statement)
     }
   }

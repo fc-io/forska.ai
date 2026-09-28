@@ -367,7 +367,6 @@ const reviewServingPhase1Tables = [
   'app.review_write_overlay',
   'app.review_bulk_operation_job',
   'app.review_search_job',
-  'app.review_serving_retention_mark',
   'mart.review_selected_article_import_current_v4',
   'mart.review_title_search_serving_v4',
   'mart.review_article_serving_base_v4',
@@ -405,6 +404,7 @@ const retiredReviewServingTables = new Set<string>([
   'app.review_rebuild_partial_cleanup_authorization',
   'app.review_serving_dirty_work_ack',
   'app.review_serving_dirty_work_ack_id_lookup',
+  'app.review_serving_retention_mark',
 ])
 const reviewServingTablesConvertedToViews = new Set<string>(['app.review_selected_article_import_v4'])
 
