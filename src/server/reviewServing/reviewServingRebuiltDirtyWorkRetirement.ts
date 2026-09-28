@@ -5,6 +5,7 @@ import {
   completeReviewServingDirtyWorkRebuiltByChunks,
   getReviewServingDirtyWorkRecordFromRow,
   getReviewServingDirtyWorkRecordSelectSql,
+  getReviewServingDirtyWorkUnheldPredicate,
   type ReviewServingDirtyWorkDatabase,
 } from './reviewServingDirtyWorkService.ts'
 import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
@@ -260,7 +261,7 @@ const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[]) => {
         AND rebuilt_component.projection_component = dirty_work.projection_component
         AND rebuilt_component.projection_identity = dirty_work.projection_identity
         AND dirty_work.updated_at < rebuilt_component.latest_started_at
-      WHERE dirty_work.status IN ('pending', 'blocked_by_rebuild')
+      WHERE ${getReviewServingDirtyWorkUnheldPredicate('dirty_work')}
         AND dirty_work.article_id IS NOT NULL
     ),
     retirable AS (
@@ -277,7 +278,7 @@ const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[]) => {
     )
     ${getReviewServingDirtyWorkRecordSelectSql('dirty_work')}
     WHERE dirty_work.dirty_work_id IN (SELECT dirty_work_id FROM retirable)
-      AND dirty_work.status IN ('pending', 'blocked_by_rebuild')
+      AND ${getReviewServingDirtyWorkUnheldPredicate('dirty_work')}
   `
 }
 

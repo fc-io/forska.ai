@@ -10,6 +10,7 @@ import {getActiveDuckdbExclusiveWorkSnapshot, hasActiveDuckdbExclusiveWork} from
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {recordProcessActivityEvent} from './processActivityState.ts'
+import {getProcessMemoryPressureBytes} from './processMemoryPressure.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {pauseReviewServingProjector} from './reviewServingProjectorPause.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
@@ -203,7 +204,7 @@ const shouldRecycleDuckdbBeforeReviewServingProjectorRestart = (
 ) => {
   const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options)
 
-  return maxRssBytes > 0 && process.memoryUsage().rss >= maxRssBytes
+  return maxRssBytes > 0 && getProcessMemoryPressureBytes() >= maxRssBytes
 }
 
 const shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle = () => {
@@ -291,7 +292,7 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   }
 
   const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options)
-  const rssBytes = process.memoryUsage().rss
+  const rssBytes = getProcessMemoryPressureBytes()
   const activeForegroundWork = await getActiveForegroundDuckdbWork()
 
   if (hasActiveForegroundDuckdbWork(activeForegroundWork)) {
@@ -324,7 +325,7 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   globalThis.Bun.gc(true)
   resetForegroundWorkRecycleDeferral()
 
-  const rssBytesAfterRecycle = process.memoryUsage().rss
+  const rssBytesAfterRecycle = getProcessMemoryPressureBytes()
   const hardRestartRssBytes = getReviewServingProjectorWorkerHardRestartRssBytes(maxRssBytes)
 
   if (rssBytesAfterRecycle < hardRestartRssBytes || !shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle()) {
