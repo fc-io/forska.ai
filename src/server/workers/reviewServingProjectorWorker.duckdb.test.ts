@@ -444,9 +444,6 @@ const getFinalizationCycleDependencies = (): ReviewServingProjectorWorkerDepende
     cleanupStaleCandidateSnapshots: async () => {
       return {failedSnapshots: [], projectIds: [], remainingStaleCandidateCount: 0, skippedSnapshotCount: 0}
     },
-    getCleanupTargets: async () => {
-      return []
-    },
     getDatabase: () => {
       return getDatabase() as never
     },
@@ -820,4 +817,61 @@ test('a superseded rebuild request closes its leftover chunks and is never readm
     {requestId: 'rebuild:superseded-new', status: 'completed'},
     {requestId: 'rebuild:superseded-old', status: 'failed'},
   ])
+})
+
+test('the worker cleanup purges an unreferenced failed snapshot through its background database', async () => {
+  const [{runReviewServingProjectorWorkerOnce}, {purgeReviewServingSnapshots}] = await Promise.all([
+    import('./reviewServingProjectorWorker.ts'),
+    import('../reviewServing/reviewServingSnapshotPurge.ts'),
+  ])
+  const purgeProjectId = 'project-purge-worker'
+  const purgedSnapshotId = 'snapshot-purge-worker'
+  const countSnapshotRows = async () => {
+    const [row] = await getDatabase().queryJson<{manifests: number | string; rows: number | string}>(`
+      SELECT
+        (
+          SELECT COUNT(*) FROM app.review_serving_snapshot_manifest
+          WHERE project_id = '${purgeProjectId}' AND snapshot_id = '${purgedSnapshotId}'
+        ) AS manifests,
+        (
+          SELECT COUNT(*) FROM mart.review_unassessed_queue_article_rank_serving_v4
+          WHERE project_id = '${purgeProjectId}' AND snapshot_id = '${purgedSnapshotId}'
+        ) AS rows
+    `)
+
+    return {manifests: Number(row?.manifests ?? 0), rows: Number(row?.rows ?? 0)}
+  }
+
+  await getDatabase().run(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
+      required_components_json, optional_components_json, source_watermarks_json, updated_at, failed_at
+    ) VALUES (
+      '${purgeProjectId}', '${purgedSnapshotId}', 'failed', '${reviewConfigHash}', '{}',
+      '{"optional":[],"required":[]}', '[]', '[]', '{}', current_timestamp - INTERVAL 2 HOUR,
+      current_timestamp - INTERVAL 2 HOUR
+    )
+  `)
+  await getDatabase().run(`
+    INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 (
+      project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, article_id, activity_sort_at
+    ) VALUES
+      ('${purgeProjectId}', '${reviewConfigHash}', '${purgedSnapshotId}', 'unassessed', 1, 'article-10', current_timestamp),
+      ('${purgeProjectId}', '${reviewConfigHash}', '${purgedSnapshotId}', 'unassessed', 1, 'article-50', current_timestamp)
+  `)
+
+  expect(await countSnapshotRows()).toEqual({manifests: 1, rows: 2})
+
+  const result = await runReviewServingProjectorWorkerOnce(
+    {rebuildProjectId: purgeProjectId, workerId: 'worker-purge'},
+    {...getFinalizationCycleDependencies(), purgeSnapshots: purgeReviewServingSnapshots},
+  )
+
+  expect(result.cleanup.snapshotPurge).toMatchObject({
+    deletedRows: 2,
+    snapshots: [{outcome: 'purged', previousStatus: 'failed', projectId: purgeProjectId, snapshotId: purgedSnapshotId}],
+    status: 'completed',
+    stopReason: 'complete',
+  })
+  expect(await countSnapshotRows()).toEqual({manifests: 0, rows: 0})
 })

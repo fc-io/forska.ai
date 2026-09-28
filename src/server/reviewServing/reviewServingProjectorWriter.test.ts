@@ -1318,7 +1318,6 @@ test('only the projector writer boundary writes V4 mart rows and promotes active
     'src/server/reviewServing/reviewServingJudgmentPayloadProjector.ts',
     'src/server/reviewServing/reviewServingLlmStatusProjector.ts',
     'src/server/reviewServing/reviewServingQueueProjector.ts',
-    'src/server/reviewServing/reviewServingRetentionService.ts',
     'src/server/reviewServing/reviewServingSelectedImportDirtyProjector.ts',
     'src/server/reviewServing/reviewServingSelectedImportProjector.ts',
     'src/server/reviewServing/reviewServingSummaryLedger.ts',

@@ -2,6 +2,13 @@
 
 Date: 2026-08-14
 
+Status (2026-09-28): superseded. The row-level retention service, its
+`FORSKA_REVIEW_SERVING_RETENTION_CLEANUP_ENABLED` gate and
+`app.review_serving_retention_mark` are gone. The projector worker's cleanup
+phase now purges unreferenced failed and retired snapshots one snapshot at a
+time (`src/server/reviewServing/reviewServingSnapshotPurge.ts`). The rest of
+this document is kept as history.
+
 ## Goal
 
 Replace the disabled broad review-serving snapshot/mart retention cleanup with

@@ -590,7 +590,6 @@ const hotReviewServingTables = [
   'app.review_serving_projector_watermark',
   'app.review_rebuild_request',
   'app.review_rebuild_chunk_manifest',
-  'app.review_serving_retention_mark',
   'mart.review_article_filter_posting_serving_v4',
   'mart.review_article_judgment_detail_serving_v4',
   'mart.review_article_count_serving_v4',

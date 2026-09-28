@@ -278,7 +278,10 @@ const isProjectionStatusTrustedWithoutChunks = (
   status: string | null,
 ) => {
   return (
-    manifest.status !== 'candidate' || status === 'active' || isSharedSnapshotIndependentProjection(component, status)
+    manifest.status !== 'purging'
+    && (manifest.status !== 'candidate'
+      || status === 'active'
+      || isSharedSnapshotIndependentProjection(component, status))
   )
 }
 
@@ -709,6 +712,30 @@ export const createCandidateReviewServingSnapshotManifest = async (
   `)
 
   return {snapshotId: input.snapshotId}
+}
+
+// A bootstrap clones rows into its deterministic snapshot id before it creates the candidate manifest. When that id
+// still belongs to a failed, retired or purging snapshot, the snapshot purge could delete the cloned rows in between.
+// The purge only deletes rows while the manifest says 'purging' and only fences a failed snapshot an hour after it
+// failed, so the bootstrap first marks the old manifest as freshly failed: a purge in progress stops, and if the
+// bootstrap dies before its candidate exists, the purge removes the half-cloned rows an hour later.
+const reviewServingBootstrapReseedLastError = 'released for a bootstrap that re-creates this snapshot id'
+
+export const releaseDeadReviewServingSnapshotManifest = async (
+  input: {projectId: string; snapshotId: string},
+  database: ReviewServingManifestRepositoryTransaction = getAppDatabaseService(),
+) => {
+  await database.run(`
+    UPDATE app.review_serving_snapshot_manifest
+    SET
+      snapshot_status = 'failed',
+      failed_at = current_timestamp,
+      last_error = ${getSqlLiteral(reviewServingBootstrapReseedLastError)},
+      updated_at = current_timestamp
+    WHERE project_id = ${getSqlLiteral(input.projectId)}
+      AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+      AND snapshot_status IN ('failed', 'retired', 'purging')
+  `)
 }
 
 // Grows a live snapshot's component lists in place. Recreating it would reset an active snapshot to candidate and
@@ -1384,7 +1411,7 @@ export const retireObsoleteReviewServingSnapshotManifests = async (
       updated_at = current_timestamp
     WHERE project_id = ${getSqlLiteral(input.projectId)}
       AND ${getReviewConfigPredicate(input.reviewConfigHash)}
-      AND snapshot_status <> 'active'
+      AND snapshot_status NOT IN ('active', 'purging')
       ${keepPredicate}
   `)
 }
