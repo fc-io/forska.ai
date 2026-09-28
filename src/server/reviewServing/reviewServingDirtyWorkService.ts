@@ -2453,9 +2453,25 @@ export const completeReviewServingDirtyWorkCoveredByRebuild = async (
   return {completedCount}
 }
 
-// Pending or parked dirty work whose article a completed rebuild chunk re-read after the change arrived needs no
-// patch: the chunk wrote that article from newer source state. It completes and is acknowledged like projected work.
-// Rows that changed or were claimed since they were selected are left alone.
+// Rows no live claim holds: pending, parked behind a rebuild, or claimed/failed so long ago that the claim is stale
+// (its worker restarted; claims pick such rows up again after the same interval).
+export const getReviewServingDirtyWorkUnheldPredicate = (dirtyWorkSql: string | null = null) => {
+  const column = (name: string) => {
+    return dirtyWorkSql === null ? name : `${dirtyWorkSql}.${name}`
+  }
+
+  return `(
+      ${column('status')} IN ('pending', 'blocked_by_rebuild')
+      OR (
+        ${column('status')} IN ('running', 'failed')
+        AND ${column('updated_at')} <= current_timestamp - INTERVAL '${defaultReviewServingDirtyWorkStaleClaimSeconds} seconds'
+      )
+    )`
+}
+
+// Unheld dirty work whose article a completed rebuild chunk re-read after the change arrived needs no patch: the chunk
+// wrote that article from newer source state. It completes and is acknowledged like projected work. Rows that changed
+// or were claimed since they were selected are left alone.
 export const completeReviewServingDirtyWorkRebuiltByChunks = async (
   claims: readonly ReviewServingDirtyWorkClaim[],
   database: ReviewServingDirtyWorkTransaction,
@@ -2476,7 +2492,7 @@ export const completeReviewServingDirtyWorkRebuiltByChunks = async (
     UPDATE app.review_serving_dirty_work
     SET status = 'completed', lifecycle_reason = 'covered_by_rebuild', updated_at = current_timestamp
     WHERE ${getDirtyWorkUpdatePredicate(uniqueClaims)}
-      AND status IN ('pending', 'blocked_by_rebuild')
+      AND ${getReviewServingDirtyWorkUnheldPredicate()}
       AND ${getDirtyWorkClaimWatermarkPredicate(uniqueClaims)}
     RETURNING dirty_work_id AS dirtyWorkId
   `)

@@ -14,6 +14,7 @@ import {
   getDuckdbQueueRuntimeMetricsSnapshot,
 } from '../../utils/duckdbService.ts'
 import {getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from '../../utils/env.ts'
+import {getProcessMemoryPressureBytes} from '../../utils/processMemoryPressure.ts'
 import type {ProjectTransferProgressPayload} from './projectTransferContracts.ts'
 
 const projectTransferExclusiveWorkPollIntervalMs = 250
@@ -27,7 +28,7 @@ const getProjectTransferExclusiveWorkMaxRssBytes = () => {
 const getProjectTransferExclusiveWorkReadinessSnapshot = () => {
   const queueMetrics = getDuckdbQueueRuntimeMetricsSnapshot()
   const appendMetrics = getDuckdbAppendRuntimeMetrics()
-  const rssBytes = process.memoryUsage().rss
+  const rssBytes = getProcessMemoryPressureBytes()
   const maxRssBytes = getProjectTransferExclusiveWorkMaxRssBytes()
   const rssReady = rssBytes < maxRssBytes * projectTransferExclusiveWorkReadyRssRatio
 

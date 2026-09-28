@@ -165,6 +165,7 @@ import {
 } from '../utils/duckdbService.ts'
 import {getClampedReviewServingSearchRebuildChunkBatchSize} from '../utils/env.ts'
 import {recordProcessActivityEvent} from '../utils/processActivityState.ts'
+import {getProcessMemoryPressureBytes} from '../utils/processMemoryPressure.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']> & {
@@ -5797,7 +5798,7 @@ export const getReviewServingProjectorWorkerSearchRebuildChunkBatchSize = (input
 const getReviewServingProjectorWorkerMemoryUsage = (
   dependencies: ReviewServingProjectorWorkerDependencies,
 ): ReviewServingProjectorWorkerMemoryUsage => {
-  return dependencies.getMemoryUsage?.() ?? process.memoryUsage()
+  return dependencies.getMemoryUsage?.() ?? {rss: getProcessMemoryPressureBytes()}
 }
 
 const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
@@ -5867,7 +5868,7 @@ const getEffectiveReviewServingProjectorWorkerRebuildChunkBatchSize = (input: {
     reviewServingProjectorWorkerCycleLogger.warn(
       'review-serving-projector-worker:rebuild-chunk-batch-rss-cap',
       '[reviewServingProjectorWorker] limiting rebuild chunk batch size due to RSS cap',
-      {batchSize, effectiveBatchSize: 1, maxRssBytes, rssBytes},
+      {batchSize, effectiveBatchSize: 1, maxRssBytes, processRssBytes: process.memoryUsage().rss, rssBytes},
     )
 
     return 1

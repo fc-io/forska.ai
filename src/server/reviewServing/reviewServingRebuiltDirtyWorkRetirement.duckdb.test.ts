@@ -10,7 +10,7 @@ const tempRuntimeRoot = createTempRuntimeRoot('review-serving-rebuilt-dirty-work
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
 
-const chunkStartedAt = '2026-09-28T01:00:00Z'
+const chunkStartedMinutesAgo = 5
 
 let database: ReturnType<typeof getAppDatabaseService> | null = null
 
@@ -67,8 +67,8 @@ const insertCompletedChunk = async (input: {
       started_at, completed_at, snapshot_id, request_id, output_base_generation, last_error
     ) VALUES (
       '${input.chunkId}', '${input.projectId}', '${input.component}', '${input.component}:${input.projectId}',
-      '${input.startKey}', '${input.endKey}', 'completed', TIMESTAMPTZ '${chunkStartedAt}',
-      TIMESTAMPTZ '${chunkStartedAt}' + INTERVAL 1 MINUTE, '${input.snapshotId}', 'rebuild:${input.projectId}', 0,
+      '${input.startKey}', '${input.endKey}', 'completed', current_timestamp - INTERVAL '${chunkStartedMinutesAgo} minutes',
+      current_timestamp - INTERVAL '${chunkStartedMinutesAgo - 1} minutes', '${input.snapshotId}', 'rebuild:${input.projectId}', 0,
       ${input.lastError === undefined ? 'NULL' : `'${input.lastError}'`}
     )
   `)
@@ -80,7 +80,7 @@ const insertDirtyWork = async (input: {
   dirtyWorkId: string
   projectId: string
   status: string
-  updatedAt: string
+  updatedMinutesAgo: number
 }) => {
   await getDatabase().run(`
     INSERT INTO app.review_serving_dirty_work (
@@ -90,8 +90,9 @@ const insertDirtyWork = async (input: {
     ) VALUES (
       '${input.dirtyWorkId}', '${input.projectId}', 'article', '${input.projectId}:${input.articleId}',
       '${input.articleId}', '${input.component}', '${input.component}:${input.projectId}', 'article.judgmentInput.updated',
-      'article:all', 7, 7, 'delta-${input.dirtyWorkId}', '${input.status}', TIMESTAMPTZ '${input.updatedAt}',
-      TIMESTAMPTZ '${input.updatedAt}'
+      'article:all', 7, 7, 'delta-${input.dirtyWorkId}', '${input.status}',
+      current_timestamp - INTERVAL '${input.updatedMinutesAgo} minutes',
+      current_timestamp - INTERVAL '${input.updatedMinutesAgo} minutes'
     )
   `)
   await getDatabase().run(`
@@ -126,7 +127,7 @@ afterAll(async () => {
   tempRuntimeRoot.cleanup()
 })
 
-test('dirty work that a completed rebuild chunk re-read is completed, the rest keeps waiting for a patch', async () => {
+test('unheld dirty work that a completed rebuild chunk re-read is completed, the rest keeps waiting for a patch', async () => {
   const {resetReviewServingRebuiltDirtyWorkRetirementForTests, retireReviewServingDirtyWorkRebuiltByChunks} =
     await import('./reviewServingRebuiltDirtyWorkRetirement.ts')
 
@@ -159,7 +160,7 @@ test('dirty work that a completed rebuild chunk re-read is completed, the rest k
     dirtyWorkId: 'dirty-before-chunk',
     projectId: 'project-rebuilt',
     status: 'pending',
-    updatedAt: '2026-09-28T00:30:00Z',
+    updatedMinutesAgo: 30,
   })
   await insertDirtyWork({
     articleId: 'article-c',
@@ -167,7 +168,7 @@ test('dirty work that a completed rebuild chunk re-read is completed, the rest k
     dirtyWorkId: 'dirty-parked-before-chunk',
     projectId: 'project-rebuilt',
     status: 'blocked_by_rebuild',
-    updatedAt: '2026-09-28T00:40:00Z',
+    updatedMinutesAgo: 20,
   })
   await insertDirtyWork({
     articleId: 'article-d',
@@ -175,7 +176,7 @@ test('dirty work that a completed rebuild chunk re-read is completed, the rest k
     dirtyWorkId: 'dirty-after-chunk',
     projectId: 'project-rebuilt',
     status: 'pending',
-    updatedAt: '2026-09-28T01:05:00Z',
+    updatedMinutesAgo: 1,
   })
   await insertDirtyWork({
     articleId: 'article-x',
@@ -183,7 +184,7 @@ test('dirty work that a completed rebuild chunk re-read is completed, the rest k
     dirtyWorkId: 'dirty-outside-range',
     projectId: 'project-rebuilt',
     status: 'pending',
-    updatedAt: '2026-09-28T00:30:00Z',
+    updatedMinutesAgo: 30,
   })
   await insertDirtyWork({
     articleId: 'article-e',
@@ -191,7 +192,15 @@ test('dirty work that a completed rebuild chunk re-read is completed, the rest k
     dirtyWorkId: 'dirty-running',
     projectId: 'project-rebuilt',
     status: 'running',
-    updatedAt: '2026-09-28T00:30:00Z',
+    updatedMinutesAgo: 10,
+  })
+  await insertDirtyWork({
+    articleId: 'article-f',
+    component: 'payload',
+    dirtyWorkId: 'dirty-stale-claim',
+    projectId: 'project-rebuilt',
+    status: 'running',
+    updatedMinutesAgo: 30,
   })
   await insertDirtyWork({
     articleId: 'article-b',
@@ -199,7 +208,7 @@ test('dirty work that a completed rebuild chunk re-read is completed, the rest k
     dirtyWorkId: 'dirty-superseded-chunk',
     projectId: 'project-rebuilt',
     status: 'pending',
-    updatedAt: '2026-09-28T00:30:00Z',
+    updatedMinutesAgo: 30,
   })
 
   await insertSnapshot({
@@ -228,12 +237,13 @@ test('dirty work that a completed rebuild chunk re-read is completed, the rest k
     dirtyWorkId: 'dirty-candidate-still-needs-patch',
     projectId: 'project-with-candidate',
     status: 'pending',
-    updatedAt: '2026-09-28T00:30:00Z',
+    updatedMinutesAgo: 30,
   })
 
   resetReviewServingRebuiltDirtyWorkRetirementForTests()
 
-  const retirement = await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: Date.parse('2026-09-28T02:00:00Z')})
+  const startedAtMs = Date.now()
+  const retirement = await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: startedAtMs})
   const dirtyWork = await getDatabase().queryJson<{
     claimStatus: string
     dirtyWorkId: string
@@ -251,7 +261,7 @@ test('dirty work that a completed rebuild chunk re-read is completed, the rest k
     ORDER BY dirty.dirty_work_id
   `)
 
-  expect(retirement).toEqual({retiredCount: 2, scanned: true})
+  expect(retirement).toEqual({retiredCount: 3, scanned: true})
   expect(dirtyWork).toEqual([
     {claimStatus: 'pending', dirtyWorkId: 'dirty-after-chunk', lifecycleReason: null, status: 'pending'},
     {
@@ -274,20 +284,26 @@ test('dirty work that a completed rebuild chunk re-read is completed, the rest k
       status: 'completed',
     },
     {claimStatus: 'running', dirtyWorkId: 'dirty-running', lifecycleReason: null, status: 'running'},
+    {
+      claimStatus: 'completed',
+      dirtyWorkId: 'dirty-stale-claim',
+      lifecycleReason: 'covered_by_rebuild',
+      status: 'completed',
+    },
     {claimStatus: 'pending', dirtyWorkId: 'dirty-superseded-chunk', lifecycleReason: null, status: 'pending'},
   ])
   expect(
     await getDatabase().queryJson<{count: number}>(`
       SELECT COUNT(*)::INTEGER AS count
       FROM app.review_serving_dirty_work_ack
-      WHERE dirty_work_id IN ('dirty-before-chunk', 'dirty-parked-before-chunk')
+      WHERE dirty_work_id IN ('dirty-before-chunk', 'dirty-parked-before-chunk', 'dirty-stale-claim')
     `),
-  ).toEqual([{count: 2}])
-  expect(await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: Date.parse('2026-09-28T02:00:10Z')})).toEqual({
+  ).toEqual([{count: 3}])
+  expect(await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: startedAtMs + 10_000})).toEqual({
     retiredCount: 0,
     scanned: true,
   })
-  expect(await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: Date.parse('2026-09-28T02:00:20Z')})).toEqual({
+  expect(await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: startedAtMs + 20_000})).toEqual({
     retiredCount: 0,
     scanned: false,
   })
