@@ -971,7 +971,7 @@ test('chunked full summary rebuild accumulator writes are idempotent through nor
   }
 })
 
-test('summary rebuild request finalization reduces partials in bounded accumulator batches', async () => {
+test('summary rebuild request finalization selects completed accumulator rows through one uncorrelated rowid set', async () => {
   const statements: string[] = []
   const finalizationPhases: string[] = []
   const chunkRows = Array.from({length: 257}, (_, index) => {
@@ -1023,13 +1023,17 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   const accumulatorReads = statements.filter((statement) => {
     return statement.includes('FROM mart.review_article_summary_rebuild_accumulator_v4 accumulator')
   })
-  expect(accumulatorReads.length).toBeGreaterThanOrEqual(2)
-  expect(joined).toContain('chunk.snapshot_id = ')
-  expect(joined).toContain("chunk.chunk_id IN ('chunk-001', 'chunk-002'")
-  expect(joined).toContain("chunk.chunk_id IN ('chunk-257')")
-  expect(joined).toContain('mart.review_article_summary_rebuild_accumulator_v4 accumulator')
-  expect(joined).toContain("contains(accumulator.source_chunk_ids_key, '\n' || chunk.chunk_id || '\n')")
-  expect(joined).toContain('FROM mart.review_article_summary_rebuild_accumulator_chunk_v4 accumulator_chunk')
+  expect(accumulatorReads.length).toBe(3)
+  accumulatorReads.forEach((statement) => {
+    expect(statement).toContain('accumulator.rowid IN (')
+    expect(statement).toContain("chunk.snapshot_id = 'snapshot-1'")
+    expect(statement).toContain('unnest(list_slice(key_parts, 2, len(key_parts) - 1))')
+    expect(statement).toContain('INNER JOIN mart.review_article_summary_rebuild_accumulator_chunk_v4 accumulator_chunk')
+  })
+  // A correlated chunk join copies each row's source key per completed chunk (125 GB of temp on the live DB).
+  expect(joined).not.toContain('contains(accumulator.source_chunk_ids_key')
+  expect(joined).not.toContain('chunk.request_id = accumulator.request_id')
+  expect(joined).not.toContain("chunk.chunk_id IN ('chunk-001'")
   expect(joined).not.toContain('serving_key')
   expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_count_publication AS')
   expect(joined).toContain('CREATE TEMPORARY TABLE temp_summary_rebuild_facet_publication AS')
@@ -1047,35 +1051,24 @@ test('summary rebuild request finalization reduces partials in bounded accumulat
   expect(joined).not.toContain('mart.review_article_summary_contribution_v4')
   expect(joined).not.toContain('mart.review_article_summary_contribution_rebuild_partial_v4')
   expect(joined).not.toContain('DELETE FROM mart.review_article_summary_rebuild_partial_v4')
-  expect(finalizationPhases).toEqual([
-    'accumulatorChunkBatch',
-    'accumulatorChunkBatch',
-    'accumulatorReduction',
-    'countPublication',
-    'facetPublication',
-    'snapshot',
-  ])
+  expect(finalizationPhases).toEqual(['countPublication', 'facetPublication', 'snapshot'])
   expect(result).toMatchObject({
     requestId: 'rebuild-summary-1',
     snapshots: [
       {
-        accumulatorChunkBatchCount: 2,
         accumulatorPartialCount: 1,
         chunkCount: 257,
         countPublicationRowCount: 2,
         facetPublicationRowCount: 3,
-        maxAccumulatorChunkBatchSize: 256,
         skipped: false,
       },
     ],
   })
   const phaseTimings = result.snapshots[0]?.phaseTimings ?? {}
   expect(phaseTimings.accumulatorPartialCountMs).toBeGreaterThanOrEqual(0)
-  expect(phaseTimings.accumulatorReductionMs).toBeGreaterThanOrEqual(0)
   expect(phaseTimings.countPublicationMs).toBeGreaterThanOrEqual(0)
   expect(phaseTimings.facetPublicationMs).toBeGreaterThanOrEqual(0)
   expect(phaseTimings.readAccumulatorStateMs).toBeGreaterThanOrEqual(0)
-  expect(phaseTimings.accumulatorChunkBatchYieldMs).toBeGreaterThanOrEqual(0)
   expect(phaseTimings.countPublicationYieldMs).toBeGreaterThanOrEqual(0)
 })
 
@@ -1245,6 +1238,59 @@ test('summary rebuild request finalization ignores stale partial chunks without 
       `)
 
       expect(countRows).toEqual([{countValue: '3'}])
+    } finally {
+      close()
+    }
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
+test('summary rebuild request finalization counts a legacy source key id only between newlines', async () => {
+  const duckdbPath = `/tmp/forska-summary-source-key-delimiters-${Date.now()}.duckdb`
+
+  try {
+    const {close, database} = await createDuckdbSummaryDatabase(duckdbPath)
+
+    try {
+      await createSummaryReductionSchema(database)
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-current']})
+      await insertSummaryChunkManifestRows(database, {chunkIds: ['chunk-running'], status: 'running'})
+      await database.run(`
+        INSERT INTO mart.review_article_summary_rebuild_accumulator_v4 (
+          request_id,
+          project_id,
+          review_config_hash,
+          snapshot_id,
+          summary_kind,
+          summary_identity,
+          list_mode_key,
+          count_kind,
+          summary_definition_version,
+          filter_key,
+          count_value,
+          source_chunk_ids_key
+        ) VALUES
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-1', 3, '\nchunk-other\nchunk-current\n'),
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-2', 5, 'chunk-current\n'),
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-3', 7, '\\nchunk-current\\n'),
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-4', 11, '\nchunk-running\n'),
+          ('rebuild-summary-1', 'project-1', 'review-config-1', 'snapshot-1', 'count', 'review.llm.assessedByPrompt', 'llm', 'review.llm.assessedByPrompt', 'review-llm-assessed-by-prompt:v1', 'prompt:prompt-5', 13, '\nchunk-current-2\n')
+      `)
+
+      await reduceReviewServingSummaryRebuildPartialsForRequestSnapshots(
+        {
+          requestId: 'rebuild-summary-1',
+          snapshots: [{projectId: 'project-1', reviewConfigHash: 'review-config-1', snapshotId: 'snapshot-1'}],
+        },
+        database,
+      )
+      const countRows = await database.queryJson<{countValue: string; filterKey: string}>(`
+        SELECT filter_key AS filterKey, CAST(count_value AS VARCHAR) AS countValue
+        FROM mart.review_article_count_serving_v4
+      `)
+
+      expect(countRows).toEqual([{countValue: '3', filterKey: 'prompt:prompt-1'}])
     } finally {
       close()
     }
