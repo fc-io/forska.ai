@@ -59,16 +59,24 @@ const insertCompletedChunk = async (input: {
   lastError?: string
   projectId: string
   snapshotId: string
+  startedNow?: boolean
   startKey: string
 }) => {
+  const startedAtSql = input.startedNow
+    ? 'current_timestamp'
+    : `current_timestamp - INTERVAL '${chunkStartedMinutesAgo} minutes'`
+  const completedAtSql = input.startedNow
+    ? 'current_timestamp'
+    : `current_timestamp - INTERVAL '${chunkStartedMinutesAgo - 1} minutes'`
+
   await getDatabase().run(`
     INSERT INTO app.review_rebuild_chunk_manifest (
       chunk_id, project_id, projection_component, projection_identity, chunk_start_key, chunk_end_key, status,
       started_at, completed_at, snapshot_id, request_id, output_base_generation, last_error
     ) VALUES (
       '${input.chunkId}', '${input.projectId}', '${input.component}', '${input.component}:${input.projectId}',
-      '${input.startKey}', '${input.endKey}', 'completed', current_timestamp - INTERVAL '${chunkStartedMinutesAgo} minutes',
-      current_timestamp - INTERVAL '${chunkStartedMinutesAgo - 1} minutes', '${input.snapshotId}', 'rebuild:${input.projectId}', 0,
+      '${input.startKey}', '${input.endKey}', 'completed', ${startedAtSql},
+      ${completedAtSql}, '${input.snapshotId}', 'rebuild:${input.projectId}', 0,
       ${input.lastError === undefined ? 'NULL' : `'${input.lastError}'`}
     )
   `)
@@ -307,4 +315,117 @@ test('unheld dirty work that a completed rebuild chunk re-read is completed, the
     retiredCount: 0,
     scanned: false,
   })
+})
+
+test('a row the projector claimed and released after its chunk started is retired, a row changed after the chunk started is not', async () => {
+  const [
+    {resetReviewServingRebuiltDirtyWorkRetirementForTests, retireReviewServingDirtyWorkRebuiltByChunks},
+    {claimReviewServingDirtyWork, releaseReviewServingDirtyWorkClaims, upsertReviewServingDirtyWork},
+    {getReviewServingDirtyWorkScopeForChange},
+  ] = await Promise.all([
+    import('./reviewServingRebuiltDirtyWorkRetirement.ts'),
+    import('./reviewServingDirtyWorkService.ts'),
+    import('./reviewServingProjectorDomain.ts'),
+  ])
+  const projectId = 'project-churned'
+  const pause = () => {
+    return new Promise((resolve) => {
+      setTimeout(resolve, 20)
+    })
+  }
+  const upsertDisplayChange = async (articleId: string, sourceHighWaterMark: number) => {
+    const scope = getReviewServingDirtyWorkScopeForChange({
+      changeKind: 'article.display.updated',
+      dirtyRangeEnd: null,
+      dirtyRangeStart: null,
+      sourceHighWaterMark,
+      sourcePartition: 'article:all',
+      values: {articleId, changedDisplayFieldNames: ['title'], projectId, sourceHighWaterMark},
+    })
+
+    if (scope === null) {
+      throw new Error('expected an article dirty-work scope')
+    }
+
+    return upsertReviewServingDirtyWork(
+      {
+        latestDeltaId: `delta-${articleId}`,
+        projectionComponent: 'display',
+        projectionIdentity: `display:${projectId}`,
+        scope,
+      },
+      getDatabase(),
+    )
+  }
+
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', '${projectId}', 'model-churned', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await insertSnapshot({components: ['display'], projectId, snapshotId: 'snapshot-churned', status: 'active'})
+
+  const changedBeforeChunk = await upsertDisplayChange('article-b', 11)
+
+  await pause()
+  await insertCompletedChunk({
+    chunkId: 'chunk-churned-display',
+    component: 'display',
+    endKey: 'article-m',
+    projectId,
+    snapshotId: 'snapshot-churned',
+    startedNow: true,
+    startKey: 'article-a',
+  })
+  await pause()
+
+  const changedAfterChunk = await upsertDisplayChange('article-c', 12)
+
+  await pause()
+
+  const claims = await claimReviewServingDirtyWork({limit: 10, projectionComponent: 'display'}, getDatabase())
+
+  await releaseReviewServingDirtyWorkClaims(
+    claims.map((claim) => {
+      return claim.dirtyWorkId
+    }),
+    getDatabase(),
+  )
+
+  resetReviewServingRebuiltDirtyWorkRetirementForTests()
+
+  const retirement = await retireReviewServingDirtyWorkRebuiltByChunks({projectId})
+  const dirtyWork = await getDatabase().queryJson<{
+    dirtyWorkId: string
+    lifecycleReason: string | null
+    releasedAfterChunk: boolean
+    status: string
+  }>(`
+    SELECT
+      dirty.dirty_work_id AS dirtyWorkId,
+      dirty.status,
+      dirty.lifecycle_reason AS lifecycleReason,
+      dirty.updated_at > chunk.started_at AS releasedAfterChunk
+    FROM app.review_serving_dirty_work dirty
+    CROSS JOIN app.review_rebuild_chunk_manifest chunk
+    WHERE dirty.project_id = '${projectId}'
+      AND chunk.chunk_id = 'chunk-churned-display'
+    ORDER BY dirty.article_id
+  `)
+
+  expect(claims).toHaveLength(2)
+  expect(retirement).toEqual({retiredCount: 1, scanned: true})
+  expect(dirtyWork).toEqual([
+    {
+      dirtyWorkId: changedBeforeChunk.dirtyWorkId,
+      lifecycleReason: 'covered_by_rebuild',
+      releasedAfterChunk: true,
+      status: 'completed',
+    },
+    {
+      dirtyWorkId: changedAfterChunk.dirtyWorkId,
+      lifecycleReason: 'released',
+      releasedAfterChunk: true,
+      status: 'pending',
+    },
+  ])
 })

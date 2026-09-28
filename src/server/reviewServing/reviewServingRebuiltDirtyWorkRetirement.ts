@@ -15,7 +15,9 @@ import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
 // one project ~5M enrichment rows (posting, summary, search, payload, judgment input) queued behind a rebuild that
 // rewrote all of them, draining through incremental patches at a few thousand rows an hour. Once the rebuilt snapshot
 // is active and no candidate also carries the component, a pending row whose article a completed chunk started to
-// rebuild after the row last changed is complete: the chunk read the change.
+// rebuild after the row last changed is complete: the chunk read the change. "Last changed" is source_changed_at, when
+// a source change was last merged into the row. updated_at also moves on every claim and release, and the projector
+// claims and releases rows that wait behind a running rebuild on each wake, so it would hide most of them.
 
 const retirementSelectLimit = 16_384
 const retirementCompletionBatchSize = 4_096
@@ -237,6 +239,9 @@ const getTargetsWithRebuiltRanges = async (
   })
 }
 
+// Rows written before source_changed_at existed and closed since have none; updated_at bounds their last change.
+const dirtyWorkSourceChangedAtSql = 'COALESCE(dirty_work.source_changed_at, dirty_work.updated_at)'
+
 // Rows older than the newest covering chunk of their component are narrowed first, then matched to a chunk range that
 // started after them.
 const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[]) => {
@@ -254,13 +259,13 @@ const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[]) => {
         dirty_work.projection_component,
         dirty_work.projection_identity,
         dirty_work.article_id,
-        dirty_work.updated_at
+        ${dirtyWorkSourceChangedAtSql} AS source_changed_at
       FROM app.review_serving_dirty_work dirty_work
       INNER JOIN rebuilt_component
         ON rebuilt_component.project_id = dirty_work.project_id
         AND rebuilt_component.projection_component = dirty_work.projection_component
         AND rebuilt_component.projection_identity = dirty_work.projection_identity
-        AND dirty_work.updated_at < rebuilt_component.latest_started_at
+        AND ${dirtyWorkSourceChangedAtSql} < rebuilt_component.latest_started_at
       WHERE ${getReviewServingDirtyWorkUnheldPredicate('dirty_work')}
         AND dirty_work.article_id IS NOT NULL
     ),
@@ -273,7 +278,7 @@ const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[]) => {
         AND rebuilt_range.projection_identity = older_dirty_work.projection_identity
         AND older_dirty_work.article_id >= rebuilt_range.chunk_start_key
         AND older_dirty_work.article_id <= rebuilt_range.chunk_end_key
-        AND older_dirty_work.updated_at < rebuilt_range.started_at
+        AND older_dirty_work.source_changed_at < rebuilt_range.started_at
       LIMIT ${retirementSelectLimit}
     )
     ${getReviewServingDirtyWorkRecordSelectSql('dirty_work')}

@@ -187,7 +187,8 @@ const createDuckdbDirtyWorkDatabase = async () => {
       status VARCHAR NOT NULL DEFAULT 'pending',
       lifecycle_reason VARCHAR,
       created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      source_changed_at TIMESTAMPTZ
     )
   `)
   await connection.run(`
