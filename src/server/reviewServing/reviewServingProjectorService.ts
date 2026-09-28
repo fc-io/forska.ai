@@ -360,8 +360,27 @@ const getSourceWatermarkCoverageRecords = (sourceWatermarks: Record<string, unkn
   return dirtySourceWatermarks === null ? [sourceWatermarks] : [sourceWatermarks, dirtySourceWatermarks]
 }
 
+// A request only covers claims of components it builds: its watermarks say nothing about the other components of the
+// snapshot it builds into (an in-place rebuild of the active snapshot builds only a few of them).
+const getRebuildRequestComponents = (request: ReviewServingRebuildRequest) => {
+  const componentSet = getObjectRecord(request.identityJson)?.componentSet
+
+  return new Set<string>([
+    ...request.requestedComponents,
+    ...(Array.isArray(componentSet)
+      ? componentSet.filter((component): component is string => {
+          return typeof component === 'string'
+        })
+      : []),
+  ])
+}
+
 const isClaimCoveredByRebuildRequest = (claim: ReviewServingDirtyWorkClaim, request: ReviewServingRebuildRequest) => {
-  if (claim.projectId === null || request.projectId !== claim.projectId) {
+  if (
+    claim.projectId === null
+    || request.projectId !== claim.projectId
+    || !getRebuildRequestComponents(request).has(claim.projectionComponent)
+  ) {
     return false
   }
 

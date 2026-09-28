@@ -1,6 +1,10 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
-import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  postingUpstreamReviewServingComponents,
+  type ReviewServingProjectionComponent,
+  summaryUpstreamReviewServingComponents,
+} from './reviewServingContracts.ts'
 import {
   completeReviewServingDirtyWorkRebuiltByChunks,
   getReviewServingDirtyWorkRecordFromRow,
@@ -242,11 +246,34 @@ const getTargetsWithRebuiltRanges = async (
 // Rows written before source_changed_at existed and closed since have none; updated_at bounds their last change.
 const dirtyWorkSourceChangedAtSql = 'COALESCE(dirty_work.source_changed_at, dirty_work.updated_at)'
 
+// Posting and summary chunks read their own snapshot's rows of these components, not the source, so a chunk only
+// rebuilt a derived row's article from current inputs when no input row of that article was still waiting (or finished
+// after the chunk started). The same pairs gate their incremental patches.
+const derivedComponentUpstreamRows = [
+  ...postingUpstreamReviewServingComponents.map((upstream) => {
+    return ['posting', upstream] as const
+  }),
+  ...summaryUpstreamReviewServingComponents.map((upstream) => {
+    return ['summary', upstream] as const
+  }),
+]
+
+const getDerivedComponentUpstreamCteSql = () => {
+  return `derived_upstream(projection_component, upstream_component) AS (
+      VALUES ${derivedComponentUpstreamRows
+        .map(([component, upstream]) => {
+          return `(${getSqlLiteral(component)}, ${getSqlLiteral(upstream)})`
+        })
+        .join(', ')}
+    )`
+}
+
 // Rows older than the newest covering chunk of their component are narrowed first, then matched to a chunk range that
-// started after them.
+// started after them, and, for derived components, after the inputs it read had caught up with them.
 const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[]) => {
   return `
     WITH ${getRebuiltRangeCteSql(targets)},
+    ${getDerivedComponentUpstreamCteSql()},
     rebuilt_component AS (
       SELECT project_id, projection_component, projection_identity, MAX(started_at) AS latest_started_at
       FROM rebuilt_range
@@ -259,6 +286,8 @@ const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[]) => {
         dirty_work.projection_component,
         dirty_work.projection_identity,
         dirty_work.article_id,
+        dirty_work.source_partition,
+        dirty_work.latest_source_high_water_mark,
         ${dirtyWorkSourceChangedAtSql} AS source_changed_at
       FROM app.review_serving_dirty_work dirty_work
       INNER JOIN rebuilt_component
@@ -279,6 +308,18 @@ const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[]) => {
         AND older_dirty_work.article_id >= rebuilt_range.chunk_start_key
         AND older_dirty_work.article_id <= rebuilt_range.chunk_end_key
         AND older_dirty_work.source_changed_at < rebuilt_range.started_at
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM derived_upstream
+        INNER JOIN app.review_serving_dirty_work upstream
+          ON upstream.projection_component = derived_upstream.upstream_component
+        WHERE derived_upstream.projection_component = older_dirty_work.projection_component
+          AND upstream.project_id = older_dirty_work.project_id
+          AND upstream.article_id = older_dirty_work.article_id
+          AND upstream.source_partition = older_dirty_work.source_partition
+          AND upstream.first_source_high_water_mark <= older_dirty_work.latest_source_high_water_mark
+          AND (upstream.status <> 'completed' OR upstream.updated_at >= rebuilt_range.started_at)
+      )
       LIMIT ${retirementSelectLimit}
     )
     ${getReviewServingDirtyWorkRecordSelectSql('dirty_work')}

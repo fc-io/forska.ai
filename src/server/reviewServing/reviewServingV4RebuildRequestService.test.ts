@@ -114,6 +114,7 @@ type FakeDirtyWorkRow = {
 
 type FakeRequestDatabaseOptions = {
   activeBootstrapComponentsWithoutChunks?: readonly ReviewServingProjectionComponent[]
+  buildingComponentRequests?: readonly {component: ReviewServingProjectionComponent; requestId: string}[]
   completedBootstrapComponents?: readonly ReviewServingProjectionComponent[]
   coveredDirtyWorkRows?: readonly FakeDirtyWorkRow[]
   dirtyWatermarks?: readonly FakeDirtyWatermark[]
@@ -125,6 +126,7 @@ type FakeRequestDatabaseOptions = {
   snapshotComponents?: readonly ReviewServingProjectionComponent[]
   staleBootstrapComponents?: readonly ReviewServingProjectionComponent[]
   supersededBootstrapComponents?: readonly ReviewServingProjectionComponent[]
+  unfinishedActiveComponents?: readonly ReviewServingProjectionComponent[]
 }
 
 const getSqlStrings = (statement: string) => {
@@ -642,13 +644,19 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return [{legacyRequiredEnrichmentCount: options.legacyRequiredEnrichmentCandidate === true ? 1 : 0}] as T[]
     }
 
+    if (statement.includes('arg_max(open_request.request_id, open_request.priority)')) {
+      return (options.buildingComponentRequests ?? []) as T[]
+    }
+
     if (
       statement.includes('app.review_rebuild_chunk_manifest')
       && statement.includes('chunk.projection_component AS component')
     ) {
+      const unfinishedActiveComponentSet = new Set(options.unfinishedActiveComponents ?? [])
+
       return [...completedBootstrapComponentSet].map((component) => {
         return {
-          completedChunkCount: 2,
+          completedChunkCount: unfinishedActiveComponentSet.has(component) ? 1 : 2,
           component,
           maxChunkUpdatedAt: '2026-06-20T10:03:30.000Z',
           outputBaseGeneration: 0,
@@ -1571,11 +1579,14 @@ test('V4 payload dirty-work bootstrap still reuses payload chunks completed for 
   })
 })
 
-test('V4 summary dirty-work bootstrap rebuilds cloneable payload and queue whose manifests predate the judgment import watermark', async () => {
+test('V4 summary dirty-work repair bootstrap rebuilds cloneable payload and queue whose manifests predate the judgment import watermark', async () => {
+  // The active snapshot no longer serves display, so summary dirty work builds a new snapshot instead of refreshing the
+  // active one in place.
   const {database, statements} = createFakeRequestDatabase(
     {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
     {
       completedBootstrapComponents: [...countReadyReviewServingComponents, 'payload', 'summary'],
+      unfinishedActiveComponents: ['display'],
       dirtyWatermarks: judgmentImportDirtyWatermarks,
       reusableBootstrapSourceSnapshotId: 'snapshot:active-reusable',
       reusableManifestSourceWatermarks: {reviewChange: 1},
@@ -1618,11 +1629,14 @@ test('V4 summary dirty-work bootstrap rebuilds cloneable payload and queue whose
   })
 })
 
-test('V4 summary dirty-work bootstrap keeps cloning payload and queue whose manifests already cover the judgment import watermark', async () => {
+test('V4 summary dirty-work repair bootstrap keeps cloning payload and queue whose manifests already cover the judgment import watermark', async () => {
+  // The active snapshot no longer serves display, so summary dirty work builds a new snapshot instead of refreshing the
+  // active one in place.
   const {database, statements} = createFakeRequestDatabase(
     {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
     {
       completedBootstrapComponents: [...countReadyReviewServingComponents, 'payload', 'summary'],
+      unfinishedActiveComponents: ['display'],
       dirtyWatermarks: judgmentImportDirtyWatermarks,
       reusableBootstrapSourceSnapshotId: 'snapshot:active-reusable',
       reusableManifestSourceWatermarks: {judgmentSqliteOutboxImport: 2, reviewChange: 1},

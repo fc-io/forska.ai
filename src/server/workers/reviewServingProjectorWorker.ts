@@ -38,6 +38,7 @@ import {
   countReadyReviewServingComponents,
   reviewServingListModes,
   type ReviewServingProjectionComponent,
+  summaryUpstreamReviewServingComponents,
 } from '../reviewServing/reviewServingContracts.ts'
 import {
   cleanupReviewServingDirtyWorkRetention,
@@ -5113,16 +5114,6 @@ const getNonAcknowledgingSnapshotComponentStates = (
   })
 }
 
-// Summary reads the serving rows these components write (posting owns the duplicate and conflict flags).
-const summaryUpstreamComponents = [
-  'llmStatus',
-  'humanStatus',
-  'queue',
-  'payload',
-  'selectedImport',
-  'posting',
-] as const satisfies readonly ReviewServingProjectionComponent[]
-
 const getSummaryLedgerPatchWatermark = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
   return Math.max(
     0,
@@ -5236,7 +5227,7 @@ const runSummaryLedgerPatches = async (
 ) => {
   const {manifest, projectId, snapshots} = await getDefaultRunnerInputs(context, database)
   const awaitingUpstreamClaimIds = await getReviewServingDirtyWorkClaimIdsAwaitingUpstream(
-    {claims: context.claims, projectId, upstreamComponents: summaryUpstreamComponents},
+    {claims: context.claims, projectId, upstreamComponents: summaryUpstreamReviewServingComponents},
     database,
   )
   const plan = await planReviewServingSummaryLedgerPatches(

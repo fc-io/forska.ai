@@ -4,7 +4,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
 import {getReviewServingArticlesInRunningRebuildChunks} from './reviewServingCandidateRebuildCoverage.ts'
-import {type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {postingUpstreamReviewServingComponents} from './reviewServingContracts.ts'
 import {
   getReviewServingDirtyWorkClaimIdsAwaitingUpstream,
   releaseReviewServingDirtyWorkClaims,
@@ -1413,14 +1413,6 @@ export const projectReviewServingFilterPostingRanges = async (
   }
 }
 
-const postingUpstreamComponents = [
-  'llmStatus',
-  'humanStatus',
-  'queue',
-  'payload',
-  'selectedImport',
-] as const satisfies readonly ReviewServingProjectionComponent[]
-
 // A posting patch reads the list-mode state, judgment detail and selected-import rows of its articles, so a claim
 // waits while the same article has unfinished upstream work at or below its watermark. A claim whose article lies in
 // a running posting rebuild chunk waits for the chunk: chunk inserts have no key and could duplicate a list row the
@@ -1439,7 +1431,7 @@ export const deferReviewServingPostingClaimsAwaitingInputs = async (
     database,
   )
   const awaitingUpstreamClaimIds = await getReviewServingDirtyWorkClaimIdsAwaitingUpstream(
-    {claims: input.claims, projectId: input.projectId, upstreamComponents: postingUpstreamComponents},
+    {claims: input.claims, projectId: input.projectId, upstreamComponents: postingUpstreamReviewServingComponents},
     database,
   )
   const deferredClaimIds = input.claims

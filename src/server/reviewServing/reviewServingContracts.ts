@@ -63,6 +63,28 @@ export const detailReadyReviewServingComponents = [
   'payload',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
+// Components whose rows a posting reads from its own snapshot: the list-mode state, judgment detail and selected-import
+// rows of its articles.
+export const postingUpstreamReviewServingComponents = [
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'payload',
+  'selectedImport',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+// Summary reads the serving rows these components write (posting owns the duplicate and conflict flags).
+export const summaryUpstreamReviewServingComponents = [
+  ...postingUpstreamReviewServingComponents,
+  'posting',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
+// Components whose serving rows a rebuild request publishes when it is finalized, after every one of its chunks
+// completed, rather than chunk by chunk.
+export const requestFinalizedReviewServingComponents = [
+  'summary',
+] as const satisfies readonly ReviewServingProjectionComponent[]
+
 export const fullyEnrichedReviewServingComponents = [
   ...defaultReadableReviewServingComponents,
   'posting',

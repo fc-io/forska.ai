@@ -4,6 +4,7 @@ import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {
   isReviewServingProjectionComponent,
+  requestFinalizedReviewServingComponents,
   type ReviewServingComponentRequirements,
   type ReviewServingProjectionComponent,
   type ReviewServingSnapshotComponentStates,
@@ -16,6 +17,7 @@ import {
   type ReviewServingSourcePartitionWatermarks,
 } from './reviewServingProjectorDomain.ts'
 import {getReviewServingRebuildChunkInPlaceRefreshPredicateSql} from './reviewServingRebuildChunkInputDigest.ts'
+import {reviewServingSummaryBucketTable} from './reviewServingSummaryLedger.ts'
 import {
   getReviewServingRebuildChunkBuiltPredicateSql,
   getReviewServingRebuildChunkUnstartedSupersededPredicateSql,
@@ -136,6 +138,7 @@ type SnapshotComponentChunkAvailabilityRow = {
   component: string | null
   maxChunkUpdatedAt: string | null
   outputBaseGeneration: number | string | null
+  outputPublished?: boolean | null
   projectionIdentity: string | null
   requestCreatedAt: string | null
   requestId: string | null
@@ -286,6 +289,31 @@ const isProjectionStatusTrustedWithoutChunks = (
   )
 }
 
+const requestFinalizedComponentSet = new Set<ReviewServingProjectionComponent>(requestFinalizedReviewServingComponents)
+
+// Summary rows reach the serving tables when the request that built them is finalized: its chunks write ledger buckets
+// that stay 'building' until finalization publishes them and the serving rows in one go, so completed chunks alone do
+// not make a request's summary readable. (The request's status turns completed with its last chunk, before that.)
+const getChunkGroupOutputPublishedSql = (input: {
+  componentSql: string
+  projectId: string
+  requestIdSql: string
+  snapshotId: string
+}) => {
+  return `(
+    ${input.componentSql} IN (${requestFinalizedReviewServingComponents.map(getSqlLiteral).join(', ')}) IS NOT TRUE
+    OR ${input.requestIdSql} IS NULL
+    OR NOT EXISTS (
+      SELECT 1
+      FROM ${reviewServingSummaryBucketTable} unpublished_bucket
+      WHERE unpublished_bucket.project_id = ${getSqlLiteral(input.projectId)}
+        AND unpublished_bucket.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND unpublished_bucket.request_id = ${input.requestIdSql}
+        AND unpublished_bucket.ledger_status <> 'published'
+    )
+  )`
+}
+
 const snapshotManifestAvailabilityResultRowLimit = 64
 
 const getSnapshotManifestAvailabilityWorkloadContext = (
@@ -339,6 +367,9 @@ const getAvailableSnapshotManifest = async (
   }
 
   const stateValuesSql = getSnapshotComponentStateValuesSql(validComponentStates)
+  const hasRequestFinalizedComponent = validComponentStates.some((state) => {
+    return requestFinalizedComponentSet.has(state.component)
+  })
   const availabilityWorkloadContext = getSnapshotManifestAvailabilityWorkloadContext(manifest, workloadContext)
   const projectionStatusRows = await database.queryJson<SnapshotComponentProjectionStatusRow>(
     `
@@ -404,9 +435,23 @@ const getAvailableSnapshotManifest = async (
         request.status,
         request.created_at,
         request.updated_at
-    ), ranked_chunk_group AS (
+    ), published_chunk_group AS (
       SELECT
         chunk_group.*,
+        ${
+          hasRequestFinalizedComponent
+            ? getChunkGroupOutputPublishedSql({
+                componentSql: 'chunk_group.component',
+                projectId: manifest.projectId,
+                requestIdSql: 'chunk_group.requestId',
+                snapshotId: manifest.snapshotId,
+              })
+            : 'TRUE'
+        } AS outputPublished
+      FROM chunk_group
+    ), ranked_chunk_group AS (
+      SELECT
+        published_chunk_group.*,
         ROW_NUMBER() OVER (
           PARTITION BY component, projectionIdentity, outputBaseGeneration
           ORDER BY
@@ -422,8 +467,8 @@ const getAvailableSnapshotManifest = async (
             END DESC,
             requestId DESC NULLS LAST
         ) AS availabilityRank
-      FROM chunk_group
-      WHERE refreshChunkCount = 0 OR completedChunkCount = totalChunkCount
+      FROM published_chunk_group
+      WHERE refreshChunkCount = 0 OR (completedChunkCount = totalChunkCount AND outputPublished)
     )
     SELECT
       component,
@@ -435,7 +480,8 @@ const getAvailableSnapshotManifest = async (
       requestUpdatedAt,
       maxChunkUpdatedAt,
       totalChunkCount,
-      completedChunkCount
+      completedChunkCount,
+      outputPublished
     FROM ranked_chunk_group
     WHERE availabilityRank = 1
   `,
@@ -510,7 +556,12 @@ const getAvailableSnapshotManifest = async (
     const totalChunkCount = getNonNegativeFiniteInteger(chunkAvailability.totalChunkCount)
     const completedChunkCount = getNonNegativeFiniteInteger(chunkAvailability.completedChunkCount)
 
-    return totalChunkCount !== null && totalChunkCount > 0 && totalChunkCount === completedChunkCount
+    return (
+      totalChunkCount !== null
+      && totalChunkCount > 0
+      && totalChunkCount === completedChunkCount
+      && chunkAvailability.outputPublished !== false
+    )
   }
 
   return {

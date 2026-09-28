@@ -663,6 +663,7 @@ test('payload claims fall back to a requested-only bootstrap when no snapshot ma
 
     return Effect.succeed({
       projectId: input.projectId,
+      requestedComponents: input.components ?? [],
       requestId: `bootstrap-${input.projectId}`,
       sourceWatermarksJson: {dirtySourceWatermarks: seedSourceWatermarks},
       status: 'admitted',
