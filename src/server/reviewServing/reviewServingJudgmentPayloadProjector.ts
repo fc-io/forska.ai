@@ -23,6 +23,7 @@ export type ProjectReviewServingJudgmentPayloadInput = {
   modelId: string
   projectId: string
   projectionIdentity?: string
+  replaceExistingRows?: boolean
   reviewConfigHash: string
   skipReplacementDeletes?: boolean
   snapshotId: string
@@ -251,6 +252,35 @@ const getPayloadProjectionManifests = (
   return getPayloadManifestInputs(input, claims)
 }
 
+// Rebuild chunks insert only the rows a snapshot lacks. A chunk that rebuilds a range the snapshot already holds rows
+// for (an in-place rebuild of an active snapshot) first drops the range, so its rows are replaced, not kept stale.
+const getReplacedArticleRangeDeleteStatements = (
+  ranges: readonly ProjectReviewServingJudgmentPayloadInput[],
+  payloadKinds: readonly JudgmentPayloadKind[],
+) => {
+  const [firstRange] = ranges
+  const replacedRanges = ranges.filter((range) => {
+    return range.replaceExistingRows === true && hasChunkArticleRange(range)
+  })
+
+  return firstRange === undefined || replacedRanges.length === 0 || payloadKinds.length === 0
+    ? []
+    : [
+        `
+          DELETE FROM mart.review_article_judgment_detail_serving_v4 detail
+          WHERE detail.project_id = ${getSqlLiteral(firstRange.projectId)}
+            AND detail.review_config_hash = ${getSqlLiteral(firstRange.reviewConfigHash)}
+            AND detail.snapshot_id = ${getSqlLiteral(firstRange.snapshotId)}
+            AND detail.payload_kind IN (${payloadKinds.map(getSqlLiteral).join(', ')})
+            AND (${replacedRanges
+              .map((range) => {
+                return `(TRUE ${getArticleRangePredicate({alias: 'detail', ...range})})`
+              })
+              .join(' OR ')})
+        `,
+      ]
+}
+
 const getReplacementDeleteStatements = (
   input: ProjectReviewServingJudgmentPayloadInput,
   payloadKinds: readonly JudgmentPayloadKind[],
@@ -260,7 +290,7 @@ const getReplacementDeleteStatements = (
   }
 
   if (hasChunkArticleRange(input)) {
-    return []
+    return getReplacedArticleRangeDeleteStatements([input], payloadKinds)
   }
 
   const claims = input.claims ?? []
@@ -783,6 +813,7 @@ export const projectReviewServingJudgmentPayloadArticleRanges = async (
 
   const statements = canUseSetBasedJudgmentPayloadRangeInsert(params.ranges)
     ? [
+        ...getReplacedArticleRangeDeleteStatements(params.ranges, getRequestedPayloadKinds(firstRange.listModeKeys)),
         getLlmJudgmentDirectInsertStatement(firstRange, {ranges: params.ranges}),
         getHumanJudgmentDirectInsertStatement(firstRange, {ranges: params.ranges}),
       ].filter((statement): statement is string => {

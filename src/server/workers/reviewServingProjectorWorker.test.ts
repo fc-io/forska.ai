@@ -3485,6 +3485,137 @@ test('worker batches a few small search rebuild ranges while preserving foregrou
   expect(joined).not.toContain('search_article.article_id >=')
 })
 
+const runSearchRebuildChunkBatchStatements = async (inputDigest: string) => {
+  const harness = createWorkerHarness({wakeStatus: 'completed'})
+  const statements: string[] = []
+  const chunkInputs = [1, 9].map((start) => {
+    return {
+      ...chunkInput,
+      chunkEndKey: `article-${(start + 7).toString().padStart(3, '0')}`,
+      chunkStartKey: `article-${start.toString().padStart(3, '0')}`,
+      estimatedInputRows: 64,
+      estimatedOutputRows: 64,
+      inputDigest,
+      projectionComponent: 'search' as const,
+      projectionIdentity: 'search:project-1',
+      requestId: 'request-search-in-place',
+    }
+  })
+  const chunks = chunkInputs.map((input, index) => {
+    return {
+      ...chunkManifest,
+      ...input,
+      chunkId: `chunk-search-in-place-${index + 1}`,
+      leaseExpiresAt: '2099-01-01T00:00:00.000Z',
+      parentChunkId: 'chunk-search-in-place-parent',
+      splitDepth: 1,
+    } satisfies ReviewServingRebuildChunkManifest
+  })
+  const componentState = {
+    optional: [{baseGeneration: '2', component: 'search', projectionIdentity: 'search:project-1'}],
+    required: [
+      {baseGeneration: '2', component: 'projectScope', projectionIdentity: 'projectScope:project-1'},
+      {baseGeneration: '2', component: 'selectedImport', projectionIdentity: 'selectedImport:project-1'},
+    ],
+  }
+  let nextIndex = 0
+
+  harness.database.queryJson = async <T>(statement: string) => {
+    statements.push(statement)
+
+    if (statement.includes('COUNT(*) AS pendingChunkCount')) {
+      return [{pendingChunkCount: 1}] as T[]
+    }
+
+    if (statement.includes('chunk_snapshot.snapshot_id AS snapshotId')) {
+      return [] as T[]
+    }
+
+    if (statement.includes('SELECT DISTINCT') && statement.includes('output_base_generation AS outputBaseGeneration')) {
+      return [] as T[]
+    }
+
+    if (statement.includes('FROM app.review_rebuild_chunk_manifest')) {
+      return [
+        chunks.find((chunk) => {
+          return statement.includes(chunk.chunkId)
+        }) ?? chunks[0],
+      ] as T[]
+    }
+
+    if (statement.includes('FROM app.review_serving_snapshot_manifest')) {
+      return [
+        {
+          componentStateJson: componentState,
+          reviewConfigHash: 'review-config-1',
+          selectedImportSnapshotId: 'selected-import-snapshot-1',
+          snapshotId: 'snapshot-search-in-place',
+        },
+      ] as T[]
+    }
+
+    if (statement.includes('FROM mart.review_title_search_serving_v4 search')) {
+      return [{actualChecksum: 'checksum-search-in-place', actualCount: 2}] as T[]
+    }
+
+    return [] as T[]
+  }
+  harness.database.run = async (statement: string) => {
+    statements.push(statement)
+  }
+  harness.dependencies.rebuildChunkService = {
+    ...harness.dependencies.rebuildChunkService,
+    claimChunk: async (claimInput) => {
+      return (
+        chunks.find((chunk) => {
+          return chunk.chunkStartKey === claimInput.chunkStartKey
+        }) ?? null
+      )
+    },
+    getNextChunk: async () => {
+      return chunkInputs[nextIndex++] ?? null
+    },
+    heartbeatChunk: async (heartbeatInput) => {
+      return (
+        chunks.find((chunk) => {
+          return chunk.chunkId === heartbeatInput.chunkId
+        }) ?? null
+      )
+    },
+    runClaimedChunk: async () => {
+      return {status: 'completed' as const}
+    },
+  } as ReviewServingProjectorWorkerDependencies['rebuildChunkService']
+
+  await runReviewServingProjectorWorkerOnce(
+    {
+      maxCompletedRebuildChunksPerRun: 128,
+      rebuildChunkBatchSize: 64,
+      searchRebuildChunkBatchSize: 8,
+      workerId: 'worker-1',
+    },
+    harness.dependencies,
+  )
+
+  return statements.join('\n')
+}
+
+test('in-place search rebuild chunks replace the title search rows of their ranges, fresh ones only insert, both count only overlapping rows', async () => {
+  const inPlace = await runSearchRebuildChunkBatchStatements('inPlaceReviewServingRefresh')
+  const fresh = await runSearchRebuildChunkBatchStatements('freshReviewServingSnapshot')
+
+  expect(inPlace).toContain('DELETE FROM mart.review_title_search_serving_v4')
+  expect(inPlace).toContain("list_extract(article_ids, 1) >= 'article-001'")
+  expect(inPlace).toContain("list_extract(article_ids, -1) <= 'article-016'")
+  expect(inPlace).toContain('UPDATE mart.review_title_search_serving_v4')
+  expect(inPlace).toContain('INSERT INTO mart.review_title_search_serving_v4')
+  expect(fresh).not.toContain('DELETE FROM mart.review_title_search_serving_v4')
+  expect(fresh).not.toContain('UPDATE mart.review_title_search_serving_v4')
+  expect(fresh).toContain('INSERT INTO mart.review_title_search_serving_v4')
+  expect(fresh).toContain("list_extract(search.article_ids, 1) <= 'article-016'")
+  expect(fresh).toContain("list_extract(search.article_ids, -1) >= 'article-001'")
+})
+
 test('search rebuild chunk batch size follows the DuckDB memory tier and never exceeds the run budget', () => {
   expect(getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({duckdbMemoryLimit: null})).toBe(8)
   expect(getReviewServingProjectorWorkerSearchRebuildChunkBatchSize({duckdbMemoryLimit: '6400MiB'})).toBe(8)

@@ -121,11 +121,17 @@ export type ReviewServingSelectedImportSnapshotCursorInput = {
   status: 'candidate' | 'completed'
 }
 
+export type ReviewServingTitleSearchReplacedArticleRange = {
+  chunkEndArticleId?: string | null
+  chunkStartArticleId?: string | null
+}
+
 export type WriteReviewServingTitleSearchRebuildRowsInput = {
   articleRangePredicateSql: string
   articleTitleSql: string
   projectId: string
   projectScopeIdentity: string
+  replacedArticleRange?: ReviewServingTitleSearchReplacedArticleRange
   searchIdentity: string
   selectedImportJoinSql: string
   snapshotId: string
@@ -1057,6 +1063,89 @@ const getReviewServingTitleSearchRebuildRowsCteSql = (input: WriteReviewServingT
   `
 }
 
+const getTitleSearchArticleRangeBoundsSql = (input: {
+  endSql: string
+  range: ReviewServingTitleSearchReplacedArticleRange
+  startSql: string
+}) => {
+  const bounds = [
+    input.range.chunkStartArticleId === null || input.range.chunkStartArticleId === undefined
+      ? null
+      : `${input.startSql} >= ${getSqlLiteral(input.range.chunkStartArticleId)}`,
+    input.range.chunkEndArticleId === null || input.range.chunkEndArticleId === undefined
+      ? null
+      : `${input.endSql} <= ${getSqlLiteral(input.range.chunkEndArticleId)}`,
+  ].filter((bound): bound is string => {
+    return bound !== null
+  })
+
+  return bounds.length === 0 ? 'TRUE' : `(${bounds.join(' AND ')})`
+}
+
+const getTitleSearchReplacedRangesSql = (
+  ranges: readonly ReviewServingTitleSearchReplacedArticleRange[],
+  getRangeSql: (range: ReviewServingTitleSearchReplacedArticleRange) => string,
+) => {
+  return `(${ranges.map(getRangeSql).join(' OR ')})`
+}
+
+const getTitleSearchRangeContainsRowSql = (range: ReviewServingTitleSearchReplacedArticleRange) => {
+  return getTitleSearchArticleRangeBoundsSql({
+    endSql: 'list_extract(article_ids, -1)',
+    range,
+    startSql: 'list_extract(article_ids, 1)',
+  })
+}
+
+const getTitleSearchRangeOverlapsRowSql = (range: ReviewServingTitleSearchReplacedArticleRange) => {
+  return getTitleSearchArticleRangeBoundsSql({
+    endSql: 'list_extract(article_ids, 1)',
+    range,
+    startSql: 'list_extract(article_ids, -1)',
+  })
+}
+
+const getTitleSearchRangeContainsArticleSql = (range: ReviewServingTitleSearchReplacedArticleRange) => {
+  return getTitleSearchArticleRangeBoundsSql({endSql: 'article_id', range, startSql: 'article_id'})
+}
+
+// Rows of a completed rebuild hold sorted article-id lists, so the first and last element bound each row. Rows that
+// lie inside a replaced range go, rows that straddle one lose the range's ids, and the range is then inserted afresh.
+const getReplaceReviewServingTitleSearchArticleRangesStatements = (
+  inputs: readonly WriteReviewServingTitleSearchRebuildRowsInput[],
+) => {
+  const [first] = inputs
+  const ranges = inputs.flatMap((input) => {
+    return input.replacedArticleRange === undefined ? [] : [input.replacedArticleRange]
+  })
+
+  if (first === undefined || ranges.length === 0) {
+    return []
+  }
+
+  const scopedPredicate = [
+    `project_id = ${getSqlLiteral(first.projectId)}`,
+    `search_identity = ${getSqlLiteral(first.searchIdentity)}`,
+    `snapshot_id = ${getSqlLiteral(first.snapshotId)}`,
+  ].join(' AND ')
+
+  return [
+    `DELETE FROM mart.review_title_search_serving_v4
+      WHERE ${scopedPredicate}
+        AND ${getTitleSearchReplacedRangesSql(ranges, getTitleSearchRangeContainsRowSql)}`,
+    `UPDATE mart.review_title_search_serving_v4
+      SET article_ids = list_filter(
+        article_ids,
+        lambda article_id: NOT ${getTitleSearchReplacedRangesSql(ranges, getTitleSearchRangeContainsArticleSql)}
+      )
+      WHERE ${scopedPredicate}
+        AND ${getTitleSearchReplacedRangesSql(ranges, getTitleSearchRangeOverlapsRowSql)}`,
+    `DELETE FROM mart.review_title_search_serving_v4
+      WHERE ${scopedPredicate}
+        AND length(article_ids) = 0`,
+  ]
+}
+
 const getReviewServingTitleSearchRebuildRowsStatements = (input: WriteReviewServingTitleSearchRebuildRowsInput) => {
   const finalRowsCteSql = getReviewServingTitleSearchRebuildRowsCteSql(input)
 
@@ -1117,8 +1206,12 @@ export const writeReviewServingTitleSearchRebuildRows = async (
   const [validation] = await database.queryJson<{actualChecksum: string; actualCount: number}>(
     getReviewServingTitleSearchRebuildRowsValidationSql(input),
   )
+  const statements = [
+    ...getReplaceReviewServingTitleSearchArticleRangesStatements([input]),
+    ...getReviewServingTitleSearchRebuildRowsStatements(input),
+  ]
 
-  await getReviewServingTitleSearchRebuildRowsStatements(input).reduce<Promise<void>>(async (previous, statement) => {
+  await statements.reduce<Promise<void>>(async (previous, statement) => {
     await previous
     await database.run(statement)
   }, Promise.resolve())
@@ -1143,9 +1236,17 @@ export const writeReviewServingTitleSearchRebuildRanges = async (
 ) => {
   const phaseTimings: Record<string, number> = {}
   const startedAtMs = Date.now()
-  const statements = input.ranges.flatMap((range) => {
-    return getReviewServingTitleSearchRebuildRowsStatements(range)
-  })
+  const rangesByTarget = input.ranges.reduce((grouped, range) => {
+    const key = [range.projectId, range.searchIdentity, range.snapshotId].join('\u0000')
+
+    return grouped.set(key, [...(grouped.get(key) ?? []), range])
+  }, new Map<string, WriteReviewServingTitleSearchRebuildRowsInput[]>())
+  const statements = [
+    ...[...rangesByTarget.values()].flatMap(getReplaceReviewServingTitleSearchArticleRangesStatements),
+    ...input.ranges.flatMap((range) => {
+      return getReviewServingTitleSearchRebuildRowsStatements(range)
+    }),
+  ]
 
   await statements.reduce<Promise<void>>(async (previous, statement) => {
     await previous

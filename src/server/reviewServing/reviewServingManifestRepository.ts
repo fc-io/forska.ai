@@ -15,6 +15,7 @@ import {
   type ReviewServingProjectionComponentIdentity,
   type ReviewServingSourcePartitionWatermarks,
 } from './reviewServingProjectorDomain.ts'
+import {getReviewServingRebuildChunkInPlaceRefreshPredicateSql} from './reviewServingRebuildChunkInputDigest.ts'
 import {
   getReviewServingRebuildChunkBuiltPredicateSql,
   getReviewServingRebuildChunkUnstartedSupersededPredicateSql,
@@ -376,7 +377,8 @@ const getAvailableSnapshotManifest = async (
         CAST(COUNT(*) FILTER (WHERE ${getReviewServingRebuildChunkBuiltPredicateSql('chunk')}) AS INTEGER) AS completedChunkCount,
         CAST(
           COUNT(*) FILTER (WHERE NOT ${getReviewServingRebuildChunkUnstartedSupersededPredicateSql('chunk')}) AS INTEGER
-        ) AS effectiveChunkCount
+        ) AS effectiveChunkCount,
+        CAST(COUNT(*) FILTER (WHERE ${getReviewServingRebuildChunkInPlaceRefreshPredicateSql('chunk')}) AS INTEGER) AS refreshChunkCount
       FROM requested_component requested
       INNER JOIN app.review_rebuild_chunk_manifest chunk
         ON chunk.project_id IS NOT DISTINCT FROM ${getSqlLiteral(manifest.projectId)}
@@ -421,6 +423,7 @@ const getAvailableSnapshotManifest = async (
             requestId DESC NULLS LAST
         ) AS availabilityRank
       FROM chunk_group
+      WHERE refreshChunkCount = 0 OR completedChunkCount = totalChunkCount
     )
     SELECT
       component,

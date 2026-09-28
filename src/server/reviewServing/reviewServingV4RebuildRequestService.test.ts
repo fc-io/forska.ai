@@ -699,6 +699,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       const optionalOnlyActiveEnabled = options.optionalOnlyActiveBootstrapSnapshotId === snapshotId
       const exactSnapshotEnabled = options.reusableBootstrapSourceSnapshotId === undefined
       const sourceSnapshotEnabled = options.reusableBootstrapSourceSnapshotId === snapshotId
+      const sourceSnapshotStatus = options.optionalOnlyActiveBootstrapSnapshotId === undefined ? 'active' : 'retired'
 
       if (optionalOnlyActiveEnabled) {
         return [getOptionalOnlyActiveBootstrapSnapshotRow(snapshotId)] as T[]
@@ -708,7 +709,10 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
         ? ([] as T[])
         : ([
             {
-              ...getReusableBootstrapSnapshotRow(snapshotId, sourceSnapshotEnabled ? 'retired' : 'candidate'),
+              ...getReusableBootstrapSnapshotRow(
+                snapshotId,
+                sourceSnapshotEnabled ? sourceSnapshotStatus : 'candidate',
+              ),
               projectId,
             },
           ] as T[])
@@ -1034,7 +1038,7 @@ test('V4 non-fresh dirty-work rebuild requests carry the dirty source watermarks
   expect(joined).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
 })
 
-test('V4 search dirty work bootstraps requested search when active snapshot lacks search state', async () => {
+test('V4 search dirty work bootstraps requested search when no active snapshot serves the count-ready components', async () => {
   const {database, statements} = createFakeRequestDatabase(
     {...baseStats, activeSnapshotCount: 1, snapshotCount: 1},
     {
@@ -1083,7 +1087,7 @@ test('V4 search dirty work bootstraps requested search when active snapshot lack
 })
 
 for (const component of ['payload', 'posting', 'summary'] as const) {
-  test(`V4 ${component} dirty work bootstraps requested optional component when active snapshot lacks it`, async () => {
+  test(`V4 ${component} dirty work bootstraps requested optional component when no active snapshot serves the count-ready components`, async () => {
     const {database, statements} = createFakeRequestDatabase(
       {...baseStats, activeSnapshotCount: 1, snapshotCount: 1},
       {snapshotComponents: countReadyReviewServingComponents},
@@ -1464,11 +1468,12 @@ test('V4 foreground bootstrap reuses selected-import state from retired LKG when
   expect(chunkInsertSql).toContain("'display'")
   expect(chunkInsertSql).toContain("'llmStatus'")
   expect(chunkInsertSql).toContain("'humanStatus'")
+  expect(chunkInsertSql).toContain("'payload'")
   expect(request.diagnosticsJson).toMatchObject({
     diagnostics: {
       componentReuse: {
         crossSnapshotComponents: ['projectScope', 'selectedImport', 'queue'],
-        rebuiltComponents: ['display', 'llmStatus', 'humanStatus'],
+        rebuiltComponents: ['display', 'llmStatus', 'humanStatus', 'payload'],
         reusedComponents: ['projectScope', 'selectedImport', 'queue'],
       },
     },
@@ -1488,7 +1493,7 @@ const getChunkInsertSql = (statements: readonly string[]) => {
     .join('\n')
 }
 
-test('V4 payload dirty-work bootstrap rebuilds the requested payload instead of cloning it from the active snapshot', async () => {
+test('V4 payload dirty work refreshes the payload of a serving active snapshot in place instead of bootstrapping one', async () => {
   const {database, statements} = createFakeRequestDatabase(
     {...baseStats, activeSnapshotCount: 0, snapshotCount: 1},
     {
@@ -1505,24 +1510,24 @@ test('V4 payload dirty-work bootstrap rebuilds the requested payload instead of 
     ),
   )
   const joined = statements.join('\n')
+  const chunkInsertSql = getChunkInsertSql(statements)
 
   expect(request.status).toBe('admitted')
   expect(request.requestedComponents).toEqual(['payload'])
   expect(request.sourceWatermarksJson).toMatchObject({
     dirtySourceWatermarks: {judgmentSqliteOutboxImport: 2, reviewChange: 1},
   })
-  expect(getChunkInsertSql(statements)).toContain("'payload'")
-  expect(joined).not.toContain('INSERT INTO mart.review_article_judgment_detail_serving_v4 BY NAME')
-  expect(joined).toContain('INSERT INTO mart.review_unassessed_queue_serving_v4 BY NAME')
+  expect(chunkInsertSql).toContain("'payload'")
+  expect(chunkInsertSql).toContain("'inPlaceReviewServingRefresh'")
+  expect(chunkInsertSql).toContain("'snapshot:active-reusable'")
+  expect(chunkInsertSql).not.toContain("'display'")
+  expect(chunkInsertSql).not.toContain('freshReviewServingSnapshot')
+  expect(joined).not.toContain('INSERT INTO app.review_serving_snapshot_manifest')
+  expect(joined).not.toContain('SELECT * REPLACE (')
   expect(request.diagnosticsJson).toMatchObject({
     diagnostics: {
-      componentReuse: {
-        clonedComponents: ['queue'],
-        crossSnapshotComponents: ['projectScope', 'selectedImport', 'queue'],
-        rebuiltComponents: ['display', 'llmStatus', 'humanStatus', 'payload'],
-        reusedComponents: ['projectScope', 'selectedImport', 'queue'],
-        sameSnapshotComponents: [],
-      },
+      bootstrapSnapshot: false,
+      inPlaceSnapshot: {addedComponents: [], refreshedComponents: ['payload'], snapshotId: 'snapshot:active-reusable'},
     },
   })
 })
@@ -1596,7 +1601,17 @@ test('V4 summary dirty-work bootstrap rebuilds cloneable payload and queue whose
     diagnostics: {
       componentReuse: {
         clonedComponents: [],
-        rebuiltComponents: ['display', 'llmStatus', 'humanStatus', 'queue', 'payload', 'summary'],
+        rebuiltComponents: [
+          'display',
+          'llmStatus',
+          'humanStatus',
+          'queue',
+          'payload',
+          'summary',
+          'search',
+          'judgmentInputContent',
+          'posting',
+        ],
         reusedComponents: ['projectScope', 'selectedImport'],
       },
     },
@@ -1632,7 +1647,15 @@ test('V4 summary dirty-work bootstrap keeps cloning payload and queue whose mani
     diagnostics: {
       componentReuse: {
         clonedComponents: ['queue', 'payload'],
-        rebuiltComponents: ['display', 'llmStatus', 'humanStatus', 'summary'],
+        rebuiltComponents: [
+          'display',
+          'llmStatus',
+          'humanStatus',
+          'summary',
+          'search',
+          'judgmentInputContent',
+          'posting',
+        ],
         reusedComponents: ['projectScope', 'selectedImport', 'queue', 'payload'],
       },
     },

@@ -1117,7 +1117,7 @@ test('available manifest state hides candidate rebuilt components without comple
   ).toEqual(['display'])
 })
 
-test('available manifest state in DuckDB ignores never-started superseded chunk groups and counts superseded chunks as unbuilt', async () => {
+test('available manifest state in DuckDB ignores never-started superseded and unfinished in-place refresh chunk groups and counts superseded chunks as unbuilt', async () => {
   const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
   const connection = await duckdbInstance.connect()
   const database: ReviewServingManifestRepositoryDatabase = {
@@ -1185,7 +1185,8 @@ test('available manifest state in DuckDB ignores never-started superseded chunk 
         status VARCHAR NOT NULL,
         last_error VARCHAR,
         started_at TIMESTAMPTZ,
-        updated_at TIMESTAMPTZ NOT NULL
+        updated_at TIMESTAMPTZ NOT NULL,
+        input_digest VARCHAR
       );
       CREATE TABLE app.review_rebuild_request (
         request_id VARCHAR NOT NULL,
@@ -1215,20 +1216,22 @@ test('available manifest state in DuckDB ignores never-started superseded chunk 
         ('request-built', 'completed', TIMESTAMPTZ '2026-09-20T10:00:00Z', TIMESTAMPTZ '2026-09-20T10:30:00Z'),
         ('request-superseded', 'admitted', TIMESTAMPTZ '2026-09-20T11:00:00Z', TIMESTAMPTZ '2026-09-20T11:00:00Z'),
         ('request-partly-run', 'admitted', TIMESTAMPTZ '2026-09-20T12:00:00Z', TIMESTAMPTZ '2026-09-20T12:00:00Z'),
-        ('request-in-progress', 'running', TIMESTAMPTZ '2026-09-20T13:00:00Z', TIMESTAMPTZ '2026-09-20T13:00:00Z');
+        ('request-in-progress', 'running', TIMESTAMPTZ '2026-09-20T13:00:00Z', TIMESTAMPTZ '2026-09-20T13:00:00Z'),
+        ('request-refresh', 'admitted', TIMESTAMPTZ '2026-09-20T14:00:00Z', TIMESTAMPTZ '2026-09-20T14:00:00Z');
       INSERT INTO app.review_rebuild_chunk_manifest VALUES
-        ('display-built-1', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z'),
-        ('display-built-2', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:02:00Z', TIMESTAMPTZ '2026-09-20T10:06:00Z'),
-        ('display-superseded-1', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z'),
-        ('display-superseded-2', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z'),
-        ('llm-superseded-1', 'project-1', 'snapshot-active', 'llmStatus', 'llmStatus:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z'),
-        ('llm-superseded-2', 'project-1', 'snapshot-active', 'llmStatus', 'llmStatus:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z'),
-        ('human-built-1', 'project-1', 'snapshot-active', 'humanStatus', 'humanStatus:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z'),
-        ('human-partly-run-built', 'project-1', 'snapshot-active', 'humanStatus', 'humanStatus:identity', 0, 'request-partly-run', 'completed', NULL, TIMESTAMPTZ '2026-09-20T12:01:00Z', TIMESTAMPTZ '2026-09-20T12:05:00Z'),
-        ('human-partly-run-superseded', 'project-1', 'snapshot-active', 'humanStatus', 'humanStatus:identity', 0, 'request-partly-run', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T12:05:00Z'),
-        ('queue-built-1', 'project-1', 'snapshot-active', 'queue', 'queue:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z'),
-        ('payload-built-1', 'project-1', 'snapshot-active', 'payload', 'payload:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z'),
-        ('payload-in-progress-1', 'project-1', 'snapshot-active', 'payload', 'payload:identity', 0, 'request-in-progress', 'pending', NULL, NULL, TIMESTAMPTZ '2026-09-20T13:00:00Z');
+        ('display-built-1', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z', NULL),
+        ('display-built-2', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:02:00Z', TIMESTAMPTZ '2026-09-20T10:06:00Z', NULL),
+        ('display-superseded-1', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z', NULL),
+        ('display-superseded-2', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z', NULL),
+        ('llm-superseded-1', 'project-1', 'snapshot-active', 'llmStatus', 'llmStatus:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z', NULL),
+        ('llm-superseded-2', 'project-1', 'snapshot-active', 'llmStatus', 'llmStatus:identity', 0, 'request-superseded', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T11:05:00Z', NULL),
+        ('human-built-1', 'project-1', 'snapshot-active', 'humanStatus', 'humanStatus:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z', NULL),
+        ('human-partly-run-built', 'project-1', 'snapshot-active', 'humanStatus', 'humanStatus:identity', 0, 'request-partly-run', 'completed', NULL, TIMESTAMPTZ '2026-09-20T12:01:00Z', TIMESTAMPTZ '2026-09-20T12:05:00Z', NULL),
+        ('human-partly-run-superseded', 'project-1', 'snapshot-active', 'humanStatus', 'humanStatus:identity', 0, 'request-partly-run', 'completed', ${superseded}, NULL, TIMESTAMPTZ '2026-09-20T12:05:00Z', NULL),
+        ('queue-built-1', 'project-1', 'snapshot-active', 'queue', 'queue:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z', NULL),
+        ('payload-built-1', 'project-1', 'snapshot-active', 'payload', 'payload:identity', 0, 'request-built', 'completed', NULL, TIMESTAMPTZ '2026-09-20T10:01:00Z', TIMESTAMPTZ '2026-09-20T10:05:00Z', NULL),
+        ('payload-in-progress-1', 'project-1', 'snapshot-active', 'payload', 'payload:identity', 0, 'request-in-progress', 'pending', NULL, NULL, TIMESTAMPTZ '2026-09-20T13:00:00Z', NULL),
+        ('display-refresh-1', 'project-1', 'snapshot-active', 'display', 'display:identity', 0, 'request-refresh', 'pending', NULL, NULL, TIMESTAMPTZ '2026-09-20T14:00:00Z', 'inPlaceReviewServingRefresh');
     `)
 
     const available = await getReviewServingSnapshotManifest(

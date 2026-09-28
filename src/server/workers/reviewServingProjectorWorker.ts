@@ -113,6 +113,10 @@ import {
   projectReviewServingQueueRebuildRanges,
   projectReviewServingQueueRebuildRows,
 } from '../reviewServing/reviewServingQueueProjector.ts'
+import {
+  freshReviewServingSnapshotRebuildChunkInputDigest,
+  isInPlaceReviewServingRebuildChunkInputDigest,
+} from '../reviewServing/reviewServingRebuildChunkInputDigest.ts'
 import {retireReviewServingDirtyWorkRebuiltByChunks} from '../reviewServing/reviewServingRebuiltDirtyWorkRetirement.ts'
 import {projectReviewServingSelectedImportDirty} from '../reviewServing/reviewServingSelectedImportDirtyProjector.ts'
 import {deleteReviewServingSelectedImportSnapshotRows} from '../reviewServing/reviewServingSelectedImportMaintenance.ts'
@@ -1424,6 +1428,15 @@ const getPayloadRebuildChunkOutputCount = async (
   return getJudgmentInputContentRebuildChunkOutputCount(input, database)
 }
 
+// Title-search rows hold sorted article-id lists, so a row can hold postings of a key range only when its first id is at
+// or before the range end and its last id at or after the range start. Checking that before unnesting keeps a chunk's
+// output count from unnesting every posting of the snapshot, which grew to ~2.7 s and ~5 GB of untracked memory per
+// batch once a snapshot held the whole component (an in-place refresh, or the tail of any search build).
+const getSearchRowOverlapsArticleRangeSql = (input: {alias: string; endKey: string; startKey: string}) => {
+  return `list_extract(${input.alias}.article_ids, 1) <= ${getSqlLiteral(input.endKey)}
+        AND list_extract(${input.alias}.article_ids, -1) >= ${getSqlLiteral(input.startKey)}`
+}
+
 const getSearchRebuildChunkOutputChecksum = async (
   input: {chunk: ReviewServingRebuildChunkManifest; snapshotIds: readonly string[]},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -1441,6 +1454,7 @@ const getSearchRebuildChunkOutputChecksum = async (
       WHERE search.project_id = ${getSqlLiteral(projectId)}
         AND search.search_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
         AND ${getAliasedSnapshotIdPredicate('search', input.snapshotIds)}
+        AND ${getSearchRowOverlapsArticleRangeSql({alias: 'search', endKey: input.chunk.chunkEndKey, startKey: input.chunk.chunkStartKey})}
         AND ${getChunkArticleRangePredicate({alias: 'search_article', chunk: input.chunk})}
     )
     SELECT
@@ -1473,6 +1487,7 @@ const getSearchRebuildChunkOutputCount = async (
       WHERE search.project_id = ${getSqlLiteral(projectId)}
         AND search.search_identity = ${getSqlLiteral(input.chunk.projectionIdentity)}
         AND ${getAliasedSnapshotIdPredicate('search', input.snapshotIds)}
+        AND ${getSearchRowOverlapsArticleRangeSql({alias: 'search', endKey: input.chunk.chunkEndKey, startKey: input.chunk.chunkStartKey})}
         AND ${getChunkArticleRangePredicate({alias: 'search_article', chunk: input.chunk})}
     )
     SELECT
@@ -1508,6 +1523,17 @@ const getSearchRebuildChunkBatchOutputCounts = async (
   // One filtered count per chunk over a single unnest: joining the postings to the chunk ranges sorted ~3M article ids
   // and took ~8 s for 32 ranges, the filtered counts take ~0.2 s.
   const projectId = requireRebuildChunkProjectId(firstChunk)
+  const [batchStartKey = firstChunk.chunkStartKey] = input.chunks
+    .map((chunk) => {
+      return chunk.chunkStartKey
+    })
+    .sort()
+  const [batchEndKey = firstChunk.chunkEndKey] = input.chunks
+    .map((chunk) => {
+      return chunk.chunkEndKey
+    })
+    .sort()
+    .reverse()
   const [row] = await database.queryJson<Record<string, number | string>>(`
     WITH search_posting AS (
       SELECT search_article.article_id
@@ -1516,6 +1542,7 @@ const getSearchRebuildChunkBatchOutputCounts = async (
       WHERE search.project_id = ${getSqlLiteral(projectId)}
         AND search.search_identity = ${getSqlLiteral(firstChunk.projectionIdentity)}
         AND ${getAliasedSnapshotIdPredicate('search', input.snapshotIds)}
+        AND ${getSearchRowOverlapsArticleRangeSql({alias: 'search', endKey: batchEndKey, startKey: batchStartKey})}
     )
     SELECT
       ${input.chunks
@@ -2091,6 +2118,7 @@ const runPayloadRebuildChunk = async (
                   modelId: project.modelId,
                   projectId,
                   projectionIdentity: input.chunk.projectionIdentity,
+                  replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(input.chunk.inputDigest),
                   reviewConfigHash: requireReviewConfigHash(snapshot),
                   snapshotId: snapshot.snapshotId,
                   useAbstract: project.useAbstract,
@@ -2156,6 +2184,7 @@ const runSearchRebuildChunk = async (
               chunkStartArticleId: input.chunk.chunkStartKey,
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(input.chunk.inputDigest),
               searchIdentity: input.chunk.projectionIdentity,
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
@@ -2880,6 +2909,7 @@ const runJudgmentInputContentRebuildChunk = async (
                     modelId: project.modelId,
                     projectId,
                     projectionIdentity: input.chunk.projectionIdentity,
+                    replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(input.chunk.inputDigest),
                     reviewConfigHash: requireReviewConfigHash(snapshot),
                     snapshotId: snapshot.snapshotId,
                     useAbstract: project.useAbstract,
@@ -2978,7 +3008,7 @@ const getRebuildChunkProjectClaims = (input: {
 }
 
 const isFreshReviewServingSnapshotRebuildChunk = (chunk: ReviewServingRebuildChunkManifest) => {
-  return chunk.inputDigest === 'freshReviewServingSnapshot'
+  return chunk.inputDigest === freshReviewServingSnapshotRebuildChunkInputDigest
 }
 
 const getProjectScopeRebuildChunkOutputChecksum = async (
@@ -3861,6 +3891,7 @@ const runPayloadRebuildChunkBatch = async (
               modelId: project.modelId,
               projectId,
               projectionIdentity: chunk.projectionIdentity,
+              replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(chunk.inputDigest),
               reviewConfigHash: requireReviewConfigHash(snapshot),
               snapshotId: snapshot.snapshotId,
               useAbstract: project.useAbstract,
@@ -3990,6 +4021,7 @@ const runSearchRebuildChunkBatch = async (
               chunkStartArticleId: chunk.chunkStartKey,
               projectId,
               projectScopeIdentity: requireSnapshotComponentIdentity(snapshot, 'projectScope'),
+              replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(chunk.inputDigest),
               searchIdentity: chunk.projectionIdentity,
               selectedImportSnapshotId: requireSelectedImportSnapshotId(snapshot),
               snapshotId: snapshot.snapshotId,
@@ -4257,6 +4289,7 @@ const runJudgmentInputContentRebuildChunkBatch = async (
               modelId: project.modelId,
               projectId,
               projectionIdentity: chunk.projectionIdentity,
+              replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(chunk.inputDigest),
               reviewConfigHash: requireReviewConfigHash(snapshot),
               snapshotId: snapshot.snapshotId,
               useAbstract: project.useAbstract,
