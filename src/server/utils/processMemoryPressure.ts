@@ -67,8 +67,8 @@ export const getProcessMemoryUsageSample = () => {
   return residentBytes > 0 && physFootprintBytes > 0 ? {physFootprintBytes, residentBytes} : null
 }
 
-// The memory figure caps should compare against: the physical footprint on macOS, RSS elsewhere.
-export const getProcessMemoryPressureBytes = (rssBytes: number = process.memoryUsage().rss) => {
+// The process's own memory figure: the physical footprint on macOS, RSS elsewhere.
+export const getProcessMemoryBytes = (rssBytes: number = process.memoryUsage().rss) => {
   const sample = getProcessMemoryUsageSample()
 
   if (sample === null) {
@@ -78,4 +78,89 @@ export const getProcessMemoryPressureBytes = (rssBytes: number = process.memoryU
   const tolerance = Math.max(residentAgreementToleranceBytes, sample.residentBytes * residentAgreementToleranceRatio)
 
   return Math.abs(rssBytes - sample.residentBytes) <= tolerance ? sample.physFootprintBytes : rssBytes
+}
+
+// The memory budget of a DuckDB owner is DuckDB's whole allowance, which DuckDB enforces itself, plus headroom for the
+// rest of the process. A cap is judged by the app's own memory (the process figure minus what DuckDB reports holding)
+// against the headroom next to that allowance, so DuckDB at its ceiling is normal and never throttles or recycles by
+// itself, while the app cannot grow into memory DuckDB is entitled to. Caps set below the allowance (low-memory
+// runtimes), or processes without a recent DuckDB sample, compare the whole process figure against the cap.
+const duckdbMemorySampleMaxAgeMs = 2 * 60_000
+
+type DuckdbMemorySample = {limitBytes: number; sampledAtMs: number; trackedBytes: number}
+
+let duckdbMemorySample: DuckdbMemorySample | null = null
+
+export const recordDuckdbMemoryUsage = (input: {limitBytes: number | null; nowMs?: number; trackedBytes: number}) => {
+  duckdbMemorySample =
+    input.limitBytes !== null && input.limitBytes > 0 && Number.isFinite(input.trackedBytes) && input.trackedBytes >= 0
+      ? {limitBytes: input.limitBytes, sampledAtMs: input.nowMs ?? Date.now(), trackedBytes: input.trackedBytes}
+      : null
+}
+
+// After DuckDB is closed its memory is released, so a sample taken before would hide the app's real share.
+export const markDuckdbMemoryReleased = (nowMs: number = Date.now()) => {
+  if (duckdbMemorySample !== null) {
+    duckdbMemorySample = {...duckdbMemorySample, sampledAtMs: nowMs, trackedBytes: 0}
+  }
+}
+
+export const getDuckdbMemoryUsageSampleAgeMs = (nowMs: number = Date.now()) => {
+  return duckdbMemorySample === null ? null : nowMs - duckdbMemorySample.sampledAtMs
+}
+
+export type ProcessMemoryBudgetUsage = {
+  appBytes: number | null
+  duckdbLimitBytes: number | null
+  duckdbTrackedBytes: number | null
+  processBytes: number
+}
+
+export const getProcessMemoryBudgetUsage = (
+  rssBytes: number = process.memoryUsage().rss,
+  nowMs: number = Date.now(),
+): ProcessMemoryBudgetUsage => {
+  const processBytes = getProcessMemoryBytes(rssBytes)
+  const sample =
+    duckdbMemorySample !== null && nowMs - duckdbMemorySample.sampledAtMs <= duckdbMemorySampleMaxAgeMs
+      ? duckdbMemorySample
+      : null
+
+  return sample === null
+    ? {appBytes: null, duckdbLimitBytes: null, duckdbTrackedBytes: null, processBytes}
+    : {
+        appBytes: Math.max(0, processBytes - Math.min(sample.trackedBytes, sample.limitBytes)),
+        duckdbLimitBytes: sample.limitBytes,
+        duckdbTrackedBytes: sample.trackedBytes,
+        processBytes,
+      }
+}
+
+// A single figure on the cap's scale: the app's memory plus DuckDB's whole allowance under the budget model, the
+// process figure otherwise. Differences between two readings track the app's own growth.
+export const getProcessMemoryPressureBytes = (usage: ProcessMemoryBudgetUsage = getProcessMemoryBudgetUsage()) => {
+  return usage.appBytes === null || usage.duckdbLimitBytes === null
+    ? usage.processBytes
+    : usage.appBytes + usage.duckdbLimitBytes
+}
+
+// Whether memory is at `fraction` of the cap: of the headroom above DuckDB's allowance under the budget model.
+export const isProcessMemoryAtCap = (
+  capBytes: number,
+  fraction = 1,
+  usage: ProcessMemoryBudgetUsage = getProcessMemoryBudgetUsage(),
+) => {
+  if (!(capBytes > 0)) {
+    return false
+  }
+
+  if (usage.appBytes !== null && usage.duckdbLimitBytes !== null && capBytes > usage.duckdbLimitBytes) {
+    return usage.appBytes >= fraction * (capBytes - usage.duckdbLimitBytes)
+  }
+
+  return usage.processBytes >= fraction * capBytes
+}
+
+export const resetDuckdbMemoryUsageForTests = () => {
+  duckdbMemorySample = null
 }

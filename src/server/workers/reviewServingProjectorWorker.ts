@@ -165,7 +165,13 @@ import {
 } from '../utils/duckdbService.ts'
 import {getClampedReviewServingSearchRebuildChunkBatchSize} from '../utils/env.ts'
 import {recordProcessActivityEvent} from '../utils/processActivityState.ts'
-import {getProcessMemoryPressureBytes} from '../utils/processMemoryPressure.ts'
+import {
+  getProcessMemoryBudgetUsage,
+  getProcessMemoryPressureBytes,
+  isProcessMemoryAtCap,
+  type ProcessMemoryBudgetUsage,
+  recordDuckdbMemoryUsage,
+} from '../utils/processMemoryPressure.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 
 type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorServiceDependencies['database']> & {
@@ -176,7 +182,7 @@ type ReviewServingProjectorWorkerDatabase = NonNullable<ReviewServingProjectorSe
 type ReviewServingProjectorWorkerCleanupTarget = ReviewServingRetentionCleanupInput
 
 type ReviewServingProjectorWorkerChunkInput = ReviewServingRebuildChunkIdentity & {checksum?: string | null}
-type ReviewServingProjectorWorkerMemoryUsage = {rss: number}
+type ReviewServingProjectorWorkerMemoryUsage = {budget?: ProcessMemoryBudgetUsage; rss: number}
 type ReviewServingProjectorWorkerRssDiagnostics = {rssAfterBytes: number; rssBeforeBytes: number; rssDeltaBytes: number}
 
 type ClaimedReviewServingProjectorWorkerRebuildChunk = {
@@ -5807,7 +5813,74 @@ export const getReviewServingProjectorWorkerSearchRebuildChunkBatchSize = (input
 const getReviewServingProjectorWorkerMemoryUsage = (
   dependencies: ReviewServingProjectorWorkerDependencies,
 ): ReviewServingProjectorWorkerMemoryUsage => {
-  return dependencies.getMemoryUsage?.() ?? {rss: getProcessMemoryPressureBytes()}
+  if (dependencies.getMemoryUsage !== undefined) {
+    return dependencies.getMemoryUsage()
+  }
+
+  const budget = getProcessMemoryBudgetUsage()
+
+  return {budget, rss: getProcessMemoryPressureBytes(budget)}
+}
+
+const isReviewServingProjectorWorkerMemoryAtCap = (
+  memoryUsage: ReviewServingProjectorWorkerMemoryUsage,
+  capBytes: number,
+  thresholdBytes: number = capBytes,
+) => {
+  if (!(capBytes > 0) || !(thresholdBytes > 0)) {
+    return false
+  }
+
+  return memoryUsage.budget === undefined
+    ? memoryUsage.rss >= thresholdBytes
+    : isProcessMemoryAtCap(capBytes, thresholdBytes / capBytes, memoryUsage.budget)
+}
+
+const duckdbMemorySampleIntervalMs = 5_000
+let lastDuckdbMemorySampleAtMs: number | null = null
+
+// Keeps the memory budget's view of what DuckDB holds current. The query waits behind owner work, so the cycle does not
+// wait for it; decisions use the latest sample and fall back to the whole process figure once it is two minutes old.
+// A sample that lags DuckDB's growth overstates the app's share, so staleness only ever errs towards throttling.
+const sampleReviewServingProjectorWorkerDuckdbMemory = (
+  database: ReviewServingProjectorWorkerDatabase,
+  dependencies: ReviewServingProjectorWorkerDependencies,
+) => {
+  const nowMs = Date.now()
+
+  if (
+    dependencies.getMemoryUsage !== undefined
+    || (lastDuckdbMemorySampleAtMs !== null && nowMs - lastDuckdbMemorySampleAtMs < duckdbMemorySampleIntervalMs)
+  ) {
+    return
+  }
+
+  lastDuckdbMemorySampleAtMs = nowMs
+  void database
+    .queryJson<{memoryLimit: string | null; trackedBytes: number | string | null}>(
+      `
+      SELECT
+        COALESCE(SUM(memory_usage_bytes), 0) AS trackedBytes,
+        current_setting('memory_limit') AS memoryLimit
+      FROM duckdb_memory()
+    `,
+    )
+    .then(([row]) => {
+      const limitMiB = parseDuckdbMemoryLimitToMiB(row?.memoryLimit ?? process.env.DUCKDB_MEMORY_LIMIT)
+
+      if (row !== undefined && row.trackedBytes !== null) {
+        recordDuckdbMemoryUsage({
+          limitBytes: limitMiB === null ? null : Math.floor(limitMiB * 1024 ** 2),
+          trackedBytes: Number(row.trackedBytes),
+        })
+        reviewServingProjectorWorkerCycleLogger.log(
+          'review-serving-projector-worker:memory-budget',
+          '[reviewServingProjectorWorker] memory budget',
+          {...getProcessMemoryBudgetUsage(), event: 'memoryBudget'},
+        )
+      }
+    })
+    .catch(() => {})
 }
 
 const getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes = (
@@ -5841,9 +5914,10 @@ const hasReviewServingProjectorWorkerReachedRssCap = (input: {
   dependencies: ReviewServingProjectorWorkerDependencies
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
-  const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(input.options)
-
-  return maxRssBytes > 0 && getReviewServingProjectorWorkerMemoryUsage(input.dependencies).rss >= maxRssBytes
+  return isReviewServingProjectorWorkerMemoryAtCap(
+    getReviewServingProjectorWorkerMemoryUsage(input.dependencies),
+    getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(input.options),
+  )
 }
 
 const hasReviewServingProjectorWorkerSoftMemoryPressure = (input: {
@@ -5851,12 +5925,17 @@ const hasReviewServingProjectorWorkerSoftMemoryPressure = (input: {
   options: ReviewServingProjectorWorkerCycleOptions
 }) => {
   const softRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchSoftRssBytes(input.options)
-  const rssBytes = getReviewServingProjectorWorkerMemoryUsage(input.dependencies).rss
+  const memoryUsage = getReviewServingProjectorWorkerMemoryUsage(input.dependencies)
+  const rssBytes = memoryUsage.rss
   const previousRssBytes = input.options.previousRssBytes ?? null
   const rssDeltaBytes = previousRssBytes === null ? 0 : rssBytes - previousRssBytes
 
   return (
-    (softRssBytes > 0 && rssBytes >= softRssBytes)
+    isReviewServingProjectorWorkerMemoryAtCap(
+      memoryUsage,
+      getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(input.options),
+      softRssBytes,
+    )
     || (previousRssBytes !== null && rssDeltaBytes >= defaultReviewServingProjectorWorkerRisingRssPressureBytes)
   )
 }
@@ -5871,13 +5950,22 @@ const getEffectiveReviewServingProjectorWorkerRebuildChunkBatchSize = (input: {
   )
   const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(input.options)
   const shouldApplyRssCap = batchSize > 1 && maxRssBytes > 0
-  const rssBytes = shouldApplyRssCap ? getReviewServingProjectorWorkerMemoryUsage(input.dependencies).rss : 0
+  const memoryUsage = shouldApplyRssCap ? getReviewServingProjectorWorkerMemoryUsage(input.dependencies) : null
 
-  if (shouldApplyRssCap && rssBytes >= maxRssBytes) {
+  if (memoryUsage !== null && isReviewServingProjectorWorkerMemoryAtCap(memoryUsage, maxRssBytes)) {
     reviewServingProjectorWorkerCycleLogger.warn(
       'review-serving-projector-worker:rebuild-chunk-batch-rss-cap',
       '[reviewServingProjectorWorker] limiting rebuild chunk batch size due to RSS cap',
-      {batchSize, effectiveBatchSize: 1, maxRssBytes, processRssBytes: process.memoryUsage().rss, rssBytes},
+      {
+        appBytes: memoryUsage.budget?.appBytes ?? null,
+        batchSize,
+        duckdbLimitBytes: memoryUsage.budget?.duckdbLimitBytes ?? null,
+        duckdbTrackedBytes: memoryUsage.budget?.duckdbTrackedBytes ?? null,
+        effectiveBatchSize: 1,
+        maxRssBytes,
+        processRssBytes: process.memoryUsage().rss,
+        rssBytes: memoryUsage.rss,
+      },
     )
 
     return 1
@@ -10905,6 +10993,7 @@ export const runReviewServingProjectorWorkerCycle = async (
 
   const workloadContext = getReviewServingProjectorWorkerWorkloadContext(workerId)
   const database = getReviewServingProjectorWorkerDatabase(dependencies, workloadContext)
+  sampleReviewServingProjectorWorkerDuckdbMemory(database, dependencies)
   await runReviewServingProjectorWorkerCyclePhase('resetExpiredRunningRebuildChunks', () => {
     return resetExpiredRunningReviewServingRebuildChunks(
       {now: getWorkerNow(options), projectId: options.rebuildProjectId},
