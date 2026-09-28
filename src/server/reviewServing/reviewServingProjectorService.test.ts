@@ -1,7 +1,11 @@
 import {expect, test} from 'bun:test'
 import {Effect} from 'effect'
 
-import {countReadyReviewServingComponents, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
+import {
+  countReadyReviewServingComponents,
+  type ReviewServingProjectionComponent,
+  reviewServingProjectionComponents,
+} from './reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim, ReviewServingDirtyWorkInput} from './reviewServingDirtyWorkService.ts'
 import {
   getReviewServingDirtyWorkScopeForChange,
@@ -67,9 +71,17 @@ const getClaim = (input: {
   } satisfies ReviewServingDirtyWorkClaim
 }
 
-const getAdmittedRebuildRequest = (input: {projectId?: string; sourceWatermark?: number} = {}) => {
+const getAdmittedRebuildRequest = (
+  input: {
+    projectId?: string
+    requestedComponents?: readonly ReviewServingProjectionComponent[]
+    sourceWatermark?: number
+  } = {},
+) => {
   return {
+    identityJson: {componentSet: []},
     projectId: input.projectId ?? 'project-1',
+    requestedComponents: input.requestedComponents ?? reviewServingProjectionComponents,
     requestId: 'rebuild-1',
     sourceWatermarksJson: {dirtySourceWatermarks: {reviewChange: input.sourceWatermark ?? 1}},
     status: 'admitted',
@@ -932,6 +944,7 @@ test('wake retains chunked dirty work when an older active rebuild is reused', a
   dependencies.requestRebuild = () => {
     return Effect.succeed({
       projectId: 'project-1',
+      requestedComponents: ['search'],
       sourceWatermarksJson: {reviewChange: 4},
       status: 'admitted',
     } as never)
@@ -956,6 +969,31 @@ test('wake retains chunked dirty work when an older active rebuild is reused', a
   expect(releasedClaimIds).toEqual(['search-article-1'])
 })
 
+test('wake does not complete dirty work with a rebuild request that does not build its component', async () => {
+  const {completedClaimIds, dependencies, releasedClaimIds} = createDependencyHarness({
+    search: [getClaim({component: 'search', dirtyWorkId: 'search-article-1', latestSourceHighWaterMark: 5})],
+  })
+
+  dependencies.requestRebuild = () => {
+    return Effect.succeed(
+      getAdmittedRebuildRequest({requestedComponents: ['judgmentInputContent'], sourceWatermark: 9}),
+    )
+  }
+  dependencies.runners = {
+    search: async () => {
+      return {processedCount: 1}
+    },
+  }
+
+  await wakeReviewServingProjectorService(
+    {batchSize: 1, componentOrder: ['search'], maxRowsPerWake: 1, maxWakeMs: 1_000, wakeId: 'wake-1'},
+    dependencies,
+  )
+
+  expect(completedClaimIds).toEqual([])
+  expect(releasedClaimIds).toEqual(['search-article-1'])
+})
+
 test('wake does not complete dirty work from another project with malformed rebuild watermarks', async () => {
   const {completedClaimIds, dependencies, failedClaimIds, releasedClaimIds} = createDependencyHarness({
     search: [
@@ -971,7 +1009,12 @@ test('wake does not complete dirty work from another project with malformed rebu
   let runnerCalled = false
 
   dependencies.requestRebuild = () => {
-    return Effect.succeed({projectId: 'project-1', sourceWatermarksJson: null, status: 'admitted'} as never)
+    return Effect.succeed({
+      projectId: 'project-1',
+      requestedComponents: ['search'],
+      sourceWatermarksJson: null,
+      status: 'admitted',
+    } as never)
   }
   dependencies.runners = {
     search: async () => {
@@ -1066,6 +1109,7 @@ const getProjectScopeLlmStatusClaim = () => {
 const getNonFreshRebuildRequest = (dirtySourceWatermarks: Record<string, number> | null) => {
   return {
     projectId: 'project-1',
+    requestedComponents: ['llmStatus'],
     sourceWatermarksJson: {
       ...(dirtySourceWatermarks === null ? {} : {dirtySourceWatermarks}),
       judgments: {count: 0, updatedAt: null},

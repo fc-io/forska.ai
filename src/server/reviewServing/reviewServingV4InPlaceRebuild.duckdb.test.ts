@@ -7,6 +7,10 @@ import {
   filterReadyReviewServingComponents,
   type ReviewServingProjectionComponent,
 } from './reviewServingContracts.ts'
+import {
+  getPublishReviewServingSummaryLedgerStatusStatements,
+  reviewServingSummaryBucketTable,
+} from './reviewServingSummaryLedger.ts'
 
 setDefaultTimeout(120_000)
 
@@ -75,6 +79,8 @@ const insertProject = async (projectId: string) => {
   `)
 }
 
+// Completes a request's chunks the way the worker does: summary chunks leave their ranges as 'building' ledger buckets,
+// and the request turns completed with its last chunk, before it is finalized.
 const completeRequestChunks = async (requestId: string, components?: readonly ReviewServingProjectionComponent[]) => {
   await getDatabase().run(`
     UPDATE app.review_rebuild_chunk_manifest
@@ -89,6 +95,87 @@ const completeRequestChunks = async (requestId: string, components?: readonly Re
               })
               .join(', ')})`
       }
+  `)
+  await getDatabase().run(`
+    INSERT INTO ${reviewServingSummaryBucketTable} (
+      project_id, review_config_hash, snapshot_id, bucket_id, request_id, bucket_start_key, bucket_end_key, ledger_status
+    )
+    SELECT
+      chunk.project_id, snapshot.review_config_hash, chunk.snapshot_id, chunk.chunk_id, chunk.request_id,
+      chunk.chunk_start_key, chunk.chunk_end_key, 'building'
+    FROM app.review_rebuild_chunk_manifest chunk
+    INNER JOIN app.review_serving_snapshot_manifest snapshot
+      ON snapshot.snapshot_id = chunk.snapshot_id
+    WHERE chunk.request_id = '${requestId}'
+      AND chunk.projection_component = 'summary'
+      AND chunk.status = 'completed'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ${reviewServingSummaryBucketTable} bucket
+        WHERE bucket.snapshot_id = chunk.snapshot_id
+          AND bucket.bucket_id = chunk.chunk_id
+      )
+  `)
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_request
+    SET status = 'completed', completed_at = current_timestamp
+    WHERE request_id = '${requestId}'
+      AND status IN ('admitted', 'running')
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest chunk
+        WHERE chunk.request_id = '${requestId}'
+          AND chunk.status <> 'completed'
+      )
+  `)
+}
+
+// Finalizes a request the way the worker does for summary: its ledger buckets are published, replacing other requests'.
+const finalizeRequest = async (requestId: string) => {
+  const snapshots = await getDatabase().queryJson<{projectId: string; reviewConfigHash: string; snapshotId: string}>(`
+    SELECT DISTINCT
+      chunk.project_id AS projectId,
+      snapshot.review_config_hash AS reviewConfigHash,
+      chunk.snapshot_id AS snapshotId
+    FROM app.review_rebuild_chunk_manifest chunk
+    INNER JOIN app.review_serving_snapshot_manifest snapshot
+      ON snapshot.snapshot_id = chunk.snapshot_id
+    WHERE chunk.request_id = '${requestId}'
+      AND chunk.projection_component = 'summary'
+  `)
+
+  await snapshots.reduce<Promise<void>>(async (previous, snapshot) => {
+    await previous
+    await getPublishReviewServingSummaryLedgerStatusStatements({...snapshot, requestId}).reduce<Promise<void>>(
+      async (previousStatement, statement) => {
+        await previousStatement
+        await getDatabase().run(statement)
+      },
+      Promise.resolve(),
+    )
+  }, Promise.resolve())
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_request
+    SET status = 'completed', completed_at = current_timestamp
+    WHERE request_id = '${requestId}'
+  `)
+}
+
+const getLedgerBuckets = (snapshotId: string) => {
+  return getDatabase().queryJson<{ledgerStatus: string; requestId: string}>(`
+    SELECT DISTINCT request_id AS requestId, ledger_status AS ledgerStatus
+    FROM ${reviewServingSummaryBucketTable}
+    WHERE snapshot_id = '${snapshotId}'
+    ORDER BY request_id
+  `)
+}
+
+// Makes a component of a snapshot unavailable, the way an unfinished rebuild of it does.
+const breakSnapshotComponent = async (snapshotId: string, component: ReviewServingProjectionComponent) => {
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET status = 'pending', completed_at = NULL
+    WHERE snapshot_id = '${snapshotId}' AND projection_component = '${component}'
   `)
 }
 
@@ -166,15 +253,11 @@ const buildActiveSnapshot = async (projectId: string, components: readonly Revie
   }
 
   await completeRequestChunks(request.requestId)
+  await finalizeRequest(request.requestId)
   await getDatabase().run(`
     UPDATE app.review_serving_snapshot_manifest
     SET snapshot_status = 'active', activated_at = current_timestamp
     WHERE snapshot_id = '${snapshot.snapshotId}'
-  `)
-  await getDatabase().run(`
-    UPDATE app.review_rebuild_request
-    SET status = 'completed', completed_at = current_timestamp
-    WHERE request_id = '${request.requestId}'
   `)
 
   return snapshot.snapshotId
@@ -263,6 +346,14 @@ test('filter enrichment extends the active snapshot in place and leaves its sear
   )
 
   await completeRequestChunks(request.requestId)
+
+  // Summary rows are published when the request is finalized, not when its chunks complete.
+  expect((await getRequestRows(projectId)).at(-1)?.status).toBe('completed')
+  expect(await getAvailableComponents(projectId, activeSnapshotId)).toEqual(
+    getSortedComponents(...countReadyReviewServingComponents, 'judgmentInputContent', 'search', 'posting', 'payload'),
+  )
+
+  await finalizeRequest(request.requestId)
 
   expect(await getAvailableComponents(projectId, activeSnapshotId)).toEqual(
     getSortedComponents(
@@ -415,6 +506,7 @@ test('a later enrichment request joins an in-place rebuild of the active snapsho
       return [chunk.component, chunk.inputDigest, chunk.snapshotId]
     }),
   ).toEqual([
+    ['payload', 'inPlaceReviewServingAddition', activeSnapshotId],
     ['posting', 'inPlaceReviewServingAddition', activeSnapshotId],
     ['search', 'inPlaceReviewServingAddition', activeSnapshotId],
     ['summary', 'inPlaceReviewServingAddition', activeSnapshotId],
@@ -435,13 +527,20 @@ test('a new bootstrap carries every component of the active snapshot it replaces
     'search',
     'summary',
   ])
+
+  // The active snapshot no longer serves a count-ready component, so enrichment builds a new snapshot.
+  await breakSnapshotComponent(activeSnapshotId, 'display')
+
   const request = await requestReviewServingV4Rebuild({
-    components: ['summary'],
-    priority: 50,
+    components: warningFilterEnrichmentComponents,
+    priority: 500,
     projectId,
-    reason: 'summaryDirtyWork',
+    reason: 'filterReadinessEnrichment',
   })
   const snapshots = await getSnapshots(projectId)
+  const active = snapshots.find((snapshot) => {
+    return snapshot.snapshotId === activeSnapshotId
+  })
   const candidate = snapshots.find((snapshot) => {
     return snapshot.status === 'candidate'
   })
@@ -450,22 +549,10 @@ test('a new bootstrap carries every component of the active snapshot it replaces
   })
 
   expect(request.status).toBe('admitted')
-  expect(
-    snapshots.find((snapshot) => {
-      return snapshot.snapshotId === activeSnapshotId
-    })?.status,
-  ).toBe('active')
-  expect(getListedComponents(candidate)).toEqual(
-    getListedComponents(
-      snapshots.find((s) => {
-        return s.status === 'active'
-      }),
-    ),
-  )
-  expect(JSON.parse(candidate?.optionalComponents ?? '[]')).toEqual(
-    expect.arrayContaining(['judgmentInputContent', 'payload', 'posting', 'search', 'summary']),
-  )
-  expect(rebuiltComponents).toContain('summary')
+  expect(active?.status).toBe('active')
+  expect(candidate?.snapshotId).not.toBe(activeSnapshotId)
+  expect(getListedComponents(candidate)).toEqual(getListedComponents(active))
+  expect(rebuiltComponents).toContain('display')
   expect(rebuiltComponents).toContain('posting')
   expect(rebuiltComponents).toContain('judgmentInputContent')
 })
@@ -473,8 +560,13 @@ test('a new bootstrap carries every component of the active snapshot it replaces
 test('a bootstrap that lands on the active snapshot id never reseeds the active snapshot', async () => {
   const {requestReviewServingV4Rebuild} = await loadService()
   const projectId = 'project-in-place-same-id'
-  const requestSummaryDirtyWork = () => {
-    return requestReviewServingV4Rebuild({components: ['summary'], priority: 50, projectId, reason: 'summaryDirtyWork'})
+  const requestEnrichment = () => {
+    return requestReviewServingV4Rebuild({
+      components: warningFilterEnrichmentComponents,
+      priority: 500,
+      projectId,
+      reason: 'filterReadinessEnrichment',
+    })
   }
   const getActiveSnapshotRow = async () => {
     const [row] = await getDatabase().queryJson<{activatedAt: string; snapshotId: string; status: string}>(`
@@ -488,23 +580,19 @@ test('a bootstrap that lands on the active snapshot id never reseeds the active 
 
   await insertProject(projectId)
 
-  const first = await requestSummaryDirtyWork()
+  const first = await requestEnrichment()
   const [built] = await getSnapshots(projectId)
 
   await completeRequestChunks(first.requestId)
+  await finalizeRequest(first.requestId)
   await getDatabase().run(`
     UPDATE app.review_serving_snapshot_manifest
     SET snapshot_status = 'active', activated_at = current_timestamp
     WHERE snapshot_id = '${built?.snapshotId}'
   `)
-  await getDatabase().run(`
-    UPDATE app.review_rebuild_request
-    SET status = 'completed', completed_at = current_timestamp
-    WHERE request_id = '${first.requestId}'
-  `)
 
   const activeBefore = await getActiveSnapshotRow()
-  const repeated = await requestSummaryDirtyWork()
+  const repeated = await requestEnrichment()
 
   expect(repeated.status).toBe('completed')
   expect(repeated.diagnosticsJson).toMatchObject({
@@ -513,13 +601,9 @@ test('a bootstrap that lands on the active snapshot id never reseeds the active 
   expect(await getActiveSnapshotRow()).toEqual(activeBefore)
   expect(await getSnapshots(projectId)).toHaveLength(1)
 
-  await getDatabase().run(`
-    UPDATE app.review_rebuild_chunk_manifest
-    SET status = 'pending', completed_at = NULL
-    WHERE request_id = '${first.requestId}' AND projection_component = 'display'
-  `)
+  await breakSnapshotComponent(built?.snapshotId ?? '', 'display')
 
-  const rebuilt = await requestSummaryDirtyWork()
+  const rebuilt = await requestEnrichment()
   const snapshots = await getSnapshots(projectId)
 
   expect(rebuilt.status).toBe('admitted')
@@ -534,6 +618,252 @@ test('a bootstrap that lands on the active snapshot id never reseeds the active 
       return chunk.snapshotId !== built?.snapshotId
     }),
   ).toBe(true)
+})
+
+test('dirty work joining an in-place train gets refresh chunks for components the train does not build', async () => {
+  const {requestReviewServingV4Rebuild} = await loadService()
+  const projectId = 'project-in-place-train-dirty-work'
+
+  await insertProject(projectId)
+
+  const activeSnapshotId = await buildActiveSnapshot(projectId, [
+    ...countReadyReviewServingComponents,
+    'judgmentInputContent',
+    'payload',
+    'posting',
+    'summary',
+  ])
+  const train = await requestReviewServingV4Rebuild({
+    components: ['search'],
+    priority: 75,
+    projectId,
+    reason: 'searchDirtyWork',
+  })
+  const getTrainComponentSet = async () => {
+    const [row] = await getDatabase().queryJson<{componentSet: string}>(`
+      SELECT json_extract(identity_json, '$.componentSet')::VARCHAR AS componentSet
+      FROM app.review_rebuild_request
+      WHERE request_id = '${train.requestId}'
+    `)
+
+    return (JSON.parse(row?.componentSet ?? '[]') as string[]).sort()
+  }
+
+  expect(await getTrainComponentSet()).toEqual(['search'])
+
+  const judgmentInput = await requestReviewServingV4Rebuild({
+    components: ['judgmentInputContent'],
+    priority: 100,
+    projectId,
+    reason: 'judgmentInputContentDirtyWork',
+  })
+  const summary = await requestReviewServingV4Rebuild({
+    components: ['summary'],
+    priority: 50,
+    projectId,
+    reason: 'summaryDirtyWork',
+  })
+
+  expect(judgmentInput.requestId).toBe(train.requestId)
+  expect(summary.requestId).toBe(train.requestId)
+  expect(await getSnapshots(projectId)).toHaveLength(1)
+  expect(await getRequestChunks(train.requestId)).toEqual([
+    {
+      component: 'judgmentInputContent',
+      inputDigest: 'inPlaceReviewServingRefresh',
+      snapshotId: activeSnapshotId,
+      status: 'pending',
+    },
+    {component: 'search', inputDigest: 'inPlaceReviewServingAddition', snapshotId: activeSnapshotId, status: 'pending'},
+    {component: 'summary', inputDigest: 'inPlaceReviewServingRefresh', snapshotId: activeSnapshotId, status: 'pending'},
+  ])
+  // The train's watermarks only cover the components it rebuilds, never the rest of the snapshot it builds into.
+  expect(await getTrainComponentSet()).toEqual(['judgmentInputContent', 'search', 'summary'])
+  expect(await getAvailableComponents(projectId, activeSnapshotId)).toEqual(
+    getSortedComponents(...countReadyReviewServingComponents, 'judgmentInputContent', 'payload', 'posting', 'summary'),
+  )
+
+  // Enrichment the snapshot already serves needs nothing from the train and leaves its priority alone.
+  const served = await requestReviewServingV4Rebuild({
+    components: warningFilterEnrichmentComponents,
+    priority: 500,
+    projectId,
+    reason: 'filterReadinessEnrichment',
+  })
+  const [trainRow] = await getDatabase().queryJson<{priority: number}>(`
+    SELECT priority FROM app.review_rebuild_request WHERE request_id = '${train.requestId}'
+  `)
+
+  expect(served.status).toBe('completed')
+  expect(served.diagnosticsJson).toMatchObject({inPlaceSnapshot: {alreadyServed: true, snapshotId: activeSnapshotId}})
+  expect(Number(trainRow?.priority)).toBe(100)
+})
+
+test('a repair bootstrap neither joins nor is folded into an in-place train', async () => {
+  const {coalesceReviewServingV4BootstrapTrains, requestReviewServingV4Rebuild} = await loadService()
+  const projectId = 'project-in-place-train-repair'
+
+  await insertProject(projectId)
+
+  const activeSnapshotId = await buildActiveSnapshot(projectId, [...countReadyReviewServingComponents])
+  const train = await requestReviewServingV4Rebuild({
+    components: ['search'],
+    priority: 75,
+    projectId,
+    reason: 'searchDirtyWork',
+  })
+
+  await breakSnapshotComponent(activeSnapshotId, 'display')
+
+  const repair = await requestReviewServingV4Rebuild({
+    components: warningFilterEnrichmentComponents,
+    priority: 500,
+    projectId,
+    reason: 'filterReadinessEnrichment',
+  })
+  const candidate = (await getSnapshots(projectId)).find((snapshot) => {
+    return snapshot.status === 'candidate'
+  })
+
+  expect(repair.requestId).not.toBe(train.requestId)
+  expect(candidate).toBeDefined()
+  expect(
+    (await getRequestChunks(repair.requestId)).some((chunk) => {
+      return chunk.component === 'display' && chunk.snapshotId === candidate?.snapshotId
+    }),
+  ).toBe(true)
+
+  // The active snapshot serves display again, so the in-place train would now answer the repair's components.
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET status = 'completed', completed_at = current_timestamp
+    WHERE snapshot_id = '${activeSnapshotId}' AND projection_component = 'display'
+  `)
+
+  const coalesced = await coalesceReviewServingV4BootstrapTrains({nowMs: Date.now() + 3_600_000, projectId})
+  const requests = await getRequestRows(projectId)
+
+  expect(coalesced).toEqual([])
+  expect(
+    requests
+      .filter((request) => {
+        return request.requestId === train.requestId || request.requestId === repair.requestId
+      })
+      .map((request) => {
+        return request.status
+      }),
+  ).toEqual(['admitted', 'admitted'])
+  expect(
+    (await getSnapshots(projectId)).map((snapshot) => {
+      return snapshot.status
+    }),
+  ).toEqual(['active', 'candidate'])
+})
+
+test('a listed component another request still builds is waited on, not rebuilt', async () => {
+  const {requestReviewServingV4Rebuild} = await loadService()
+  const projectId = 'project-in-place-building'
+  const requestEnrichment = () => {
+    return requestReviewServingV4Rebuild({
+      components: warningFilterEnrichmentComponents,
+      priority: 500,
+      projectId,
+      reason: 'filterReadinessEnrichment',
+    })
+  }
+
+  await insertProject(projectId)
+
+  const activeSnapshotId = await buildActiveSnapshot(projectId, [...countReadyReviewServingComponents])
+  const enrichment = await requestEnrichment()
+
+  // The enrichment's summary chunks failed and wait for readmission; the rest of its chunks completed.
+  await completeRequestChunks(enrichment.requestId, ['payload', 'posting'])
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET status = 'failed', last_error = 'transient'
+    WHERE request_id = '${enrichment.requestId}' AND projection_component = 'summary'
+  `)
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_request
+    SET status = 'failed', last_error = 'transient', failed_at = current_timestamp
+    WHERE request_id = '${enrichment.requestId}'
+  `)
+
+  const waiting = await requestEnrichment()
+
+  expect(waiting.requestId).toBe(enrichment.requestId)
+  expect(await getRequestRows(projectId)).toHaveLength(2)
+  expect(await getSnapshots(projectId)).toHaveLength(1)
+
+  // Once the enrichment can no longer finish its summary, the summary is rebuilt in place, and only it.
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET status = 'quarantined'
+    WHERE request_id = '${enrichment.requestId}' AND projection_component = 'summary'
+  `)
+
+  const rebuilt = await requestEnrichment()
+
+  expect(rebuilt.requestId).not.toBe(enrichment.requestId)
+  expect(rebuilt.status).toBe('admitted')
+  expect(await getSnapshots(projectId)).toHaveLength(1)
+  expect(await getRequestChunks(rebuilt.requestId)).toEqual([
+    {component: 'summary', inputDigest: 'inPlaceReviewServingRefresh', snapshotId: activeSnapshotId, status: 'pending'},
+  ])
+})
+
+test('summary dirty work rebuilds the served summary in place and serves the old one until the new one is published', async () => {
+  const {requestReviewServingV4Rebuild} = await loadService()
+  const projectId = 'project-in-place-summary-refresh'
+  const requestSummaryDirtyWork = () => {
+    return requestReviewServingV4Rebuild({components: ['summary'], priority: 50, projectId, reason: 'summaryDirtyWork'})
+  }
+
+  await insertProject(projectId)
+
+  const activeSnapshotId = await buildActiveSnapshot(projectId, [
+    ...countReadyReviewServingComponents,
+    'judgmentInputContent',
+    'payload',
+    'posting',
+    'summary',
+  ])
+  const [builtLedger] = await getLedgerBuckets(activeSnapshotId)
+  const servedComponents = getSortedComponents(
+    ...countReadyReviewServingComponents,
+    'judgmentInputContent',
+    'payload',
+    'posting',
+    'summary',
+  )
+  const request = await requestSummaryDirtyWork()
+
+  expect(request.status).toBe('admitted')
+  expect(await getSnapshots(projectId)).toHaveLength(1)
+  expect(await getRequestChunks(request.requestId)).toEqual([
+    {component: 'summary', inputDigest: 'inPlaceReviewServingRefresh', snapshotId: activeSnapshotId, status: 'pending'},
+  ])
+  expect(await getAvailableComponents(projectId, activeSnapshotId)).toEqual(servedComponents)
+  expect((await requestSummaryDirtyWork()).requestId).toBe(request.requestId)
+
+  await completeRequestChunks(request.requestId)
+
+  expect(await getAvailableComponents(projectId, activeSnapshotId)).toEqual(servedComponents)
+  expect(await getLedgerBuckets(activeSnapshotId)).toEqual(
+    [
+      {ledgerStatus: 'published', requestId: builtLedger?.requestId ?? ''},
+      {ledgerStatus: 'building', requestId: request.requestId},
+    ].sort((left, right) => {
+      return left.requestId.localeCompare(right.requestId)
+    }),
+  )
+
+  await finalizeRequest(request.requestId)
+
+  expect(await getAvailableComponents(projectId, activeSnapshotId)).toEqual(servedComponents)
+  expect(await getLedgerBuckets(activeSnapshotId)).toEqual([{ledgerStatus: 'published', requestId: request.requestId}])
+  expect(await getSnapshots(projectId)).toHaveLength(1)
 })
 
 test('title search rebuild ranges replace the rows a snapshot already holds for them', async () => {

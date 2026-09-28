@@ -691,6 +691,7 @@ test('posting claims take a requested-only bootstrap when no snapshot carries po
 
     return Effect.succeed({
       projectId: input.projectId,
+      requestedComponents: input.components ?? [],
       requestId: `bootstrap-${input.projectId}`,
       sourceWatermarksJson: {dirtySourceWatermarks: seedSourceWatermarks},
       status: 'admitted',

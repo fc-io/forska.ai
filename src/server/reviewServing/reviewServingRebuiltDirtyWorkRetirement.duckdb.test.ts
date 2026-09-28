@@ -433,3 +433,66 @@ test('a row the projector claimed and released after its chunk started is retire
     },
   ])
 })
+
+test('posting dirty work is retired only when its article inputs had reached the snapshot before the chunk started', async () => {
+  const {resetReviewServingRebuiltDirtyWorkRetirementForTests, retireReviewServingDirtyWorkRebuiltByChunks} =
+    await import('./reviewServingRebuiltDirtyWorkRetirement.ts')
+  const projectId = 'project-derived-inputs'
+
+  await insertSnapshot({
+    components: ['payload', 'posting'],
+    projectId,
+    snapshotId: 'snapshot-derived',
+    status: 'active',
+  })
+  await insertCompletedChunk({
+    chunkId: 'chunk-derived-posting',
+    component: 'posting',
+    endKey: 'article-m',
+    projectId,
+    snapshotId: 'snapshot-derived',
+    startKey: 'article-a',
+  })
+
+  const postingCases = [
+    ['article-b', 'posting-payload-pending', 'pending', 30],
+    ['article-c', 'posting-payload-completed-after-chunk', 'completed', 1],
+    ['article-d', 'posting-payload-completed-before-chunk', 'completed', 10],
+  ] as const
+
+  await postingCases.reduce<Promise<void>>(async (previous, [articleId, dirtyWorkId, payloadStatus, payloadAge]) => {
+    await previous
+    await insertDirtyWork({
+      articleId,
+      component: 'posting',
+      dirtyWorkId,
+      projectId,
+      status: 'pending',
+      updatedMinutesAgo: 30,
+    })
+    await insertDirtyWork({
+      articleId,
+      component: 'payload',
+      dirtyWorkId: `${dirtyWorkId}-input`,
+      projectId,
+      status: payloadStatus,
+      updatedMinutesAgo: payloadAge,
+    })
+  }, Promise.resolve())
+
+  resetReviewServingRebuiltDirtyWorkRetirementForTests()
+  await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: Date.now(), projectId})
+
+  expect(
+    await getDatabase().queryJson<{dirtyWorkId: string; status: string}>(`
+      SELECT dirty_work_id AS dirtyWorkId, status
+      FROM app.review_serving_dirty_work
+      WHERE project_id = '${projectId}' AND projection_component = 'posting'
+      ORDER BY dirty_work_id
+    `),
+  ).toEqual([
+    {dirtyWorkId: 'posting-payload-completed-after-chunk', status: 'pending'},
+    {dirtyWorkId: 'posting-payload-completed-before-chunk', status: 'completed'},
+    {dirtyWorkId: 'posting-payload-pending', status: 'pending'},
+  ])
+})

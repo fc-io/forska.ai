@@ -737,6 +737,7 @@ test('summary claims take a requested-only bootstrap when no snapshot has a buck
 
     return Effect.succeed({
       projectId: input.projectId,
+      requestedComponents: input.components ?? [],
       requestId: `bootstrap-${input.projectId}`,
       sourceWatermarksJson: {dirtySourceWatermarks: seedSourceWatermarks},
       status: 'admitted',
