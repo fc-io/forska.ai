@@ -1278,6 +1278,7 @@ export const upsertReviewServingDirtyWork = async (
       END,
       status = 'pending',
       lifecycle_reason = NULL,
+      source_changed_at = current_timestamp,
       updated_at = current_timestamp
     WHERE dirty_work_id = ${getSqlLiteral(dirtyWorkId)}
     RETURNING
@@ -1338,6 +1339,7 @@ export const upsertReviewServingDirtyWork = async (
       dirty_range_end,
       status,
       lifecycle_reason,
+      source_changed_at,
       updated_at
     )
     VALUES (
@@ -1358,6 +1360,7 @@ export const upsertReviewServingDirtyWork = async (
       ${getSqlLiteral(input.scope.dirtyRangeEnd)},
       'pending',
       NULL,
+      current_timestamp,
       current_timestamp
     )
   `)
@@ -1685,6 +1688,7 @@ const updateReservedDirtyWorkBatch = async (
       END,
       status = 'pending',
       lifecycle_reason = NULL,
+      source_changed_at = current_timestamp,
       updated_at = current_timestamp
     FROM ${tableName} changed
     WHERE existing.dirty_work_id = changed.dirty_work_id
@@ -1736,12 +1740,14 @@ const insertNewDirtyWorkBatch = async (tableName: string, database: ReviewServin
       ${dirtyWorkBatchInsertColumns.join(',\n      ')},
       status,
       lifecycle_reason,
+      source_changed_at,
       updated_at
     )
     SELECT
       ${dirtyWorkBatchInsertColumns.join(',\n      ')},
       'pending',
       NULL,
+      current_timestamp,
       current_timestamp
     FROM ${tableName}
     ORDER BY input_index
