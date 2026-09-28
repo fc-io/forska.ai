@@ -8,7 +8,11 @@ import {
   getDuckdbQueueRuntimeMetricsSnapshot,
 } from './duckdbService.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
-import {getProcessMemoryPressureBytes} from './processMemoryPressure.ts'
+import {
+  getProcessMemoryBudgetUsage,
+  getProcessMemoryPressureBytes,
+  isProcessMemoryAtCap,
+} from './processMemoryPressure.ts'
 import {startReviewBulkOperationWorkerHeartbeat} from './reviewBulkOperationWorkerHeartbeat.ts'
 import {
   clearReviewServingProjectorPauseMarker,
@@ -169,10 +173,11 @@ const shouldRecoverReviewServingProjectorPause = async () => {
     }
   }
 
-  const rssBytes = getProcessMemoryPressureBytes()
+  const memoryUsage = getProcessMemoryBudgetUsage()
+  const rssBytes = getProcessMemoryPressureBytes(memoryUsage)
   const maxRssBytes = getReviewServingProjectorPauseRecoveryMaxRssBytes()
 
-  if (rssBytes >= maxRssBytes) {
+  if (isProcessMemoryAtCap(maxRssBytes, 1, memoryUsage)) {
     return {maxRssBytes, pauseMarkerState, reason: 'rss-above-cap' as const, recover: false as const, rssBytes}
   }
 

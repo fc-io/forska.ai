@@ -10,7 +10,12 @@ import {getActiveDuckdbExclusiveWorkSnapshot, hasActiveDuckdbExclusiveWork} from
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {recordProcessActivityEvent} from './processActivityState.ts'
-import {getProcessMemoryPressureBytes} from './processMemoryPressure.ts'
+import {
+  getProcessMemoryBudgetUsage,
+  getProcessMemoryPressureBytes,
+  isProcessMemoryAtCap,
+  markDuckdbMemoryReleased,
+} from './processMemoryPressure.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {pauseReviewServingProjector} from './reviewServingProjectorPause.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
@@ -204,7 +209,7 @@ const shouldRecycleDuckdbBeforeReviewServingProjectorRestart = (
 ) => {
   const maxRssBytes = getReviewServingProjectorWorkerRebuildChunkBatchMaxRssBytes(options)
 
-  return maxRssBytes > 0 && getProcessMemoryPressureBytes() >= maxRssBytes
+  return isProcessMemoryAtCap(maxRssBytes)
 }
 
 const shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle = () => {
@@ -324,11 +329,16 @@ const recycleDuckdbBeforeReviewServingProjectorRestart = async (
   await closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
   globalThis.Bun.gc(true)
   resetForegroundWorkRecycleDeferral()
+  markDuckdbMemoryReleased()
 
-  const rssBytesAfterRecycle = getProcessMemoryPressureBytes()
+  const memoryAfterRecycle = getProcessMemoryBudgetUsage()
+  const rssBytesAfterRecycle = getProcessMemoryPressureBytes(memoryAfterRecycle)
   const hardRestartRssBytes = getReviewServingProjectorWorkerHardRestartRssBytes(maxRssBytes)
 
-  if (rssBytesAfterRecycle < hardRestartRssBytes || !shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle()) {
+  if (
+    !isProcessMemoryAtCap(hardRestartRssBytes, 1, memoryAfterRecycle)
+    || !shouldRestartMaintenanceWorkerAfterHighRssDuckdbRecycle()
+  ) {
     return
   }
 
