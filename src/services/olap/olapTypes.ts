@@ -64,6 +64,7 @@ export type ArticleReviewResult = {
   judgments: OlapJudgmentRow[]
   judgedPromptIds: string[]
   isFullyJudged: boolean
+  hasLlmJudgment?: boolean
   journalTitle: string | null
 }
 

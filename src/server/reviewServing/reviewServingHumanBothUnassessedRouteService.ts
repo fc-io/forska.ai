@@ -65,6 +65,8 @@ type ReviewServingArticleRow = {
   fullTextPDF?: string | null
   journal_title?: string | null
   journalTitle?: string | null
+  llm_has_judgment?: boolean | null
+  llmHasJudgment?: boolean | null
   medrxiv_id?: string | null
   medrxivId?: string | null
   original_data?: unknown
@@ -946,6 +948,10 @@ const readRowsPage = async <T>(input: ReviewServingRowsPageInput): Promise<Revie
   }
 }
 
+const getRowHasLlmJudgment = (row: ReviewServingArticleRow) => {
+  return (row.llm_has_judgment ?? row.llmHasJudgment) === true
+}
+
 const getArticleResponseBase = (row: ReviewServingArticleRow, detailReadiness?: ReviewDetailReadiness) => {
   return {
     id: getArticleId(row),
@@ -1140,7 +1146,13 @@ export const getUnassessedReviewArticlesFromServing = async (
   const pageRows = pageResult.rows
   const totalCount = await getOptionalCountValue(effectiveParams, manifest, 'unassessed', routeDependencies)
   const data = pageRows.map((row) => {
-    return {...getArticleResponseBase(row), judgments: [], judgedPromptIds: [], isFullyJudged: false}
+    return {
+      ...getArticleResponseBase(row),
+      judgments: [],
+      judgedPromptIds: [],
+      isFullyJudged: false,
+      hasLlmJudgment: getRowHasLlmJudgment(row),
+    }
   })
 
   return {

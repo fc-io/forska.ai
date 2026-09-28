@@ -58,7 +58,9 @@ type ReviewServingArticleRow = {
   fullTextPDF?: string | null
   journal_title?: string | null
   journalTitle?: string | null
+  llm_has_judgment?: boolean | null
   llm_status?: string | null
+  llmHasJudgment?: boolean | null
   llmStatus?: string | null
   medrxiv_id?: string | null
   medrxivId?: string | null
@@ -627,6 +629,10 @@ const getIsFullyJudged = (
   return enabledPromptCount > 0 && new Set(judgedPromptIds).size >= enabledPromptCount
 }
 
+const getHasLlmJudgment = (row: ReviewServingArticleRow, judgedPromptIds: readonly string[]) => {
+  return row.llm_has_judgment ?? row.llmHasJudgment ?? judgedPromptIds.length > 0
+}
+
 const getResponseRows = (
   rows: readonly ReviewServingArticleRow[],
   judgmentRows: readonly ReviewServingJudgmentRow[],
@@ -668,6 +674,7 @@ const getResponseRows = (
       judgments,
       judgedPromptIds,
       isFullyJudged: getIsFullyJudged(row, judgedPromptIds, enabledPromptCount),
+      hasLlmJudgment: getHasLlmJudgment(row, judgedPromptIds),
     }
   })
 }
