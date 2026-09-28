@@ -4839,7 +4839,10 @@ test('worker splits oversized foreground status rebuild chunks before execution'
   expect(joined).not.toContain("oom_category = 'duckdb_oom_split'")
 })
 
-const runOversizedStatusChunkWithScopeCount = async (scopeArticleCount: number) => {
+const runOversizedStatusChunkWithScopeCount = async (
+  scopeArticleCount: number,
+  projectionComponent: 'llmStatus' | 'search' = 'llmStatus',
+) => {
   const statements: string[] = []
   const harness = createWorkerHarness({wakeStatus: 'completed'})
   const oversizedChunkInput = {
@@ -4848,8 +4851,8 @@ const runOversizedStatusChunkWithScopeCount = async (scopeArticleCount: number) 
     chunkStartKey: '00000000-0000-0000-0000-000000000001',
     estimatedInputRows: 214_148,
     estimatedOutputRows: 214_148,
-    projectionComponent: 'llmStatus' as const,
-    projectionIdentity: 'llmStatus:project-1',
+    projectionComponent,
+    projectionIdentity: `${projectionComponent}:project-1`,
     requestId: 'rebuild:request-wide-estimate',
   }
   const oversizedChunk = {
@@ -4921,6 +4924,14 @@ test('worker splits an oversized status chunk by its real scope count', async ()
 
   expect(result.runChunkInputs).toEqual([])
   expect(childRows).toHaveLength(Math.ceil(5_000 / 512))
+})
+
+test('worker splits an oversized chunk by its real scope count straight to children within the row limit', async () => {
+  const result = await runOversizedStatusChunkWithScopeCount(15_000, 'search')
+  const childRows = result.childInserts.join('\n').match(/"splitReason":"admitted_oversized"/gu) ?? []
+
+  expect(result.runChunkInputs).toEqual([])
+  expect(childRows).toHaveLength(Math.ceil(15_000 / 64))
 })
 
 test('worker splits an oversized chunk alone and still batch-writes the rest of its claimed batch', async () => {
@@ -11191,12 +11202,13 @@ test('worker splits already-admitted oversized high-fanout chunks before executi
       || component === 'llmStatus'
       || component === 'selectedImport'
       || component === 'summary'
+      || component === 'posting'
         ? 485
         : component === 'payload'
           ? 25
           : component === 'queue'
             ? 50
-            : 64
+            : 512
 
     expect(result.chunk).toMatchObject({chunkId: oversizedChunk.chunkId, status: 'completed'})
     expect(prepared).toBe(false)

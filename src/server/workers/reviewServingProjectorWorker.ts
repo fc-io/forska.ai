@@ -815,6 +815,7 @@ const searchArticleRangeRebuildRuntimeRowLimit = 64
 const articleRangeRebuildChunkPresplitMaxBucketCount = 16
 const highFanoutArticleRangeRebuildChunkPresplitMaxBucketCount = 64
 const summaryArticleRangeRebuildChunkPresplitMaxBucketCount = 512
+const admittedOversizedSplitMaxBucketCount = 512
 const statusArticleRangeRebuildChunkPresplitMaxBucketCount = 512
 const admittedOversizedRebuildChunkInputRowLimits: Partial<Record<ReviewServingProjectionComponent, number>> = {
   humanStatus: statusArticleRangeRebuildChunkPresplitRowLimit,
@@ -999,7 +1000,15 @@ const getArticleRangeRebuildChunkSplitBucketCount = (
     return 2
   }
 
-  return Math.min(maxBucketCount, Math.max(2, Math.ceil(estimatedRows / presplitRowLimit)))
+  // An admitted oversized chunk is split from its real scope count, so it can go straight to children within the
+  // component's row limit. Capping it at the presplit bucket count split a ~15k-article search parent (64-row limit)
+  // into 64 children of ~234 rows that each had to split again, one split per worker cycle.
+  const bucketCountCap =
+    input.splitReason === 'admitted_oversized'
+      ? Math.max(maxBucketCount, admittedOversizedSplitMaxBucketCount)
+      : maxBucketCount
+
+  return Math.min(bucketCountCap, Math.max(2, Math.ceil(estimatedRows / presplitRowLimit)))
 }
 
 const uuidArticleIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
