@@ -156,7 +156,7 @@ test('display routine updates write component-narrow patches for only claimed ar
   expect(selectStatement).not.toContain('json_merge_patch')
   expect(selectStatement).not.toContain('sourceMetadata')
   expect(joined).not.toContain('mart.review_article_display_patch_v4')
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain("SET status = 'completed', lifecycle_reason = 'projected'")
   expect(joined).toContain('UPDATE mart.review_article_serving_base_v4')
   expect(joined).not.toContain("article_external_id = 'NCT-1'")
   expect(joined).toContain("article_created_at = '2026-01-01T00:00:00.000Z'")
@@ -201,7 +201,7 @@ test('display no-ack snapshot passes do not publish shared manifests or watermar
 
   expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('display base rows flow through writer with display fields and selected import hot projection', async () => {

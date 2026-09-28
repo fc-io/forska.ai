@@ -204,7 +204,7 @@ test('posting no-ack snapshot passes do not publish shared manifests or watermar
 
   expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('full posting rebuilds write serving state without derived stats refresh', async () => {
@@ -481,7 +481,7 @@ test('deletes write tombstones and remove serving rows without derived stats wri
   expect(joined).not.toContain('DELETE FROM mart.review_article_filter_posting_serving_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_filter_posting_patch_v4')
   expect(joined).not.toContain('mart.review_filter_posting_stats_v4')
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain("SET status = 'completed', lifecycle_reason = 'projected'")
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain('WHERE NOT EXISTS')
 })

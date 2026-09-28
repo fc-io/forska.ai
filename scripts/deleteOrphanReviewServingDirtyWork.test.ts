@@ -178,7 +178,7 @@ test('orphan dirty work CLI dry-run reports per-table counts without a transacti
   expect(statements.join('\n')).not.toContain('CREATE TEMP TABLE')
 })
 
-test('orphan dirty work CLI apply deletes companions then rows inside one transaction and leaves acks alone', async () => {
+test('orphan dirty work CLI apply deletes companions then rows inside one transaction and leaves the watermark alone', async () => {
   const counts = {claimStateRows: 3, dirtyWorkRows: 5, idLookupRows: 5}
   const {database, statements, transactions} = createFakeDatabase(counts)
   const result = await runDeleteOrphanReviewServingDirtyWork(
@@ -224,7 +224,6 @@ test('orphan dirty work CLI apply deletes companions then rows inside one transa
   ).toBeLessThan(statements.indexOf(deletes[0] ?? ''))
   expect(statements.at(-1)).toContain(`DROP TABLE IF EXISTS ${orphanDirtyWorkTempTable}`)
 
-  expect(joined).not.toContain('review_serving_dirty_work_ack')
   expect(joined).not.toContain('watermark')
   expect(joined).not.toContain('UPDATE ')
 })

@@ -595,7 +595,7 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
   expect(snapshotManifestStatements.join('\n')).not.toContain('ON CONFLICT(project_id, snapshot_id)')
   expect(
     statements.some((statement) => {
-      return statement.includes('INSERT INTO app.review_serving_dirty_work_ack')
+      return statement.includes("SET status = 'completed', lifecycle_reason = 'projected'")
     }),
   ).toBe(true)
   expect(
@@ -612,7 +612,7 @@ test('projector writer updates rows, manifests, acknowledgements, watermarks, an
     }),
   ).toBeLessThan(
     statements.findIndex((statement) => {
-      return statement.includes('INSERT INTO app.review_serving_dirty_work_ack')
+      return statement.includes("SET status = 'completed', lifecycle_reason = 'projected'")
     }),
   )
   expect(

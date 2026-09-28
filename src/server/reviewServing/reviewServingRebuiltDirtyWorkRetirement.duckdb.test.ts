@@ -301,12 +301,16 @@ test('unheld dirty work that a completed rebuild chunk re-read is completed, the
     {claimStatus: 'pending', dirtyWorkId: 'dirty-superseded-chunk', lifecycleReason: null, status: 'pending'},
   ])
   expect(
-    await getDatabase().queryJson<{count: number}>(`
-      SELECT COUNT(*)::INTEGER AS count
-      FROM app.review_serving_dirty_work_ack
-      WHERE dirty_work_id IN ('dirty-before-chunk', 'dirty-parked-before-chunk', 'dirty-stale-claim')
+    await getDatabase().queryJson<{projectId: string; sourceHighWaterMark: number; sourcePartition: string}>(`
+      SELECT
+        project_id AS projectId,
+        source_partition AS sourcePartition,
+        source_high_water_mark::INTEGER AS sourceHighWaterMark
+      FROM app.review_serving_project_dirty_source_watermark
+      WHERE project_id IN ('project-rebuilt', 'project-with-candidate')
+      ORDER BY project_id, source_partition
     `),
-  ).toEqual([{count: 3}])
+  ).toEqual([{projectId: 'project-rebuilt', sourceHighWaterMark: 7, sourcePartition: 'article:all'}])
   expect(await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: startedAtMs + 10_000})).toEqual({
     retiredCount: 0,
     scanned: true,

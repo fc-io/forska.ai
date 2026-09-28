@@ -13,8 +13,8 @@ import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbSer
  * activation time of the project's active full-coverage snapshot). Such rows predate the snapshot,
  * can never drain usefully, and draining them after a lane repair would trigger full component
  * rebuilds. The script deletes the rows together with their `review_serving_dirty_work_claim_state`
- * and `review_serving_dirty_work_id_lookup` companions in one transaction. Acknowledgement and
- * watermark tables are never touched.
+ * and `review_serving_dirty_work_id_lookup` companions in one transaction. The watermark table is
+ * never touched.
  *
  * Usage (dry-run is the default and only counts):
  *   bun scripts/deleteOrphanReviewServingDirtyWork.ts --project-id=<project-id> --created-before=<ISO timestamp> [--limit=<n>]

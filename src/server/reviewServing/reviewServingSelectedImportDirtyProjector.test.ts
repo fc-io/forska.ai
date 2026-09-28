@@ -327,7 +327,7 @@ test('selected-import no-ack snapshot passes do not publish shared manifests or 
   const joined = statements.join('\n')
 
   expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
   expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
 })
 
@@ -848,7 +848,7 @@ test('selected-import dirty projection promotes manifest and watermark atomicall
 
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain("'selectedImport'")
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain("SET status = 'completed', lifecycle_reason = 'projected'")
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).not.toContain("'display'")

@@ -634,10 +634,6 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return [] as T[]
     }
 
-    if (statement.includes('FROM app.review_serving_dirty_work_ack_id_lookup')) {
-      return [] as T[]
-    }
-
     if (statement.includes('FROM app.review_serving_dirty_work')) {
       return (options.dirtyWatermarks ?? []) as T[]
     }
@@ -1695,7 +1691,6 @@ test('V4 bootstrap rebuild promotes all-reused candidates and completes covered 
   expect(joined).not.toContain('INSERT INTO app.review_rebuild_chunk_manifest')
   expect(joined).toContain("snapshot_status = 'active'")
   expect(joined).toContain('validation_result_json =')
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
   expect(joined).toContain('FROM app.review_serving_dirty_work_claim_state')
   expect(joined).toContain("lifecycle_reason = 'covered_by_rebuild'")
   expect(joined).toContain('UPDATE app.review_serving_project_dirty_source_watermark')
