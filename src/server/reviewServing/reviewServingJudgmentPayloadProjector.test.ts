@@ -190,7 +190,7 @@ test('judgment payload projection replaces only dirty article detail rows', asyn
   expect(llmDeleteStatement).not.toContain('list_mode_key')
   expect(humanDeleteStatement).toContain("article_id IN ('article-1')")
   expect(humanDeleteStatement).not.toContain('list_mode_key')
-  expect(statements.join('\n')).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(statements.join('\n')).toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('both-mode judgment payload projection stores canonical llm and human physical list modes only', async () => {
@@ -263,7 +263,7 @@ test('judgment payload projection writes payload manifest when acknowledging cla
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain('review-serving-judgment-payload-projector')
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('claimless article-range judgment payload rebuild writes detail rows with SQL-native statements', async () => {
@@ -401,6 +401,6 @@ test('lazy article-set judgment payload ensure builds only requested visible art
   expect(joined).toContain("('article-2'), ('article-1')")
   expect(joined).toContain('DELETE FROM mart.review_article_judgment_detail_serving_v4')
   expect(joined).toContain("article_id IN ('article-2', 'article-1')")
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
   expect(joined).toContain('WHERE NOT EXISTS')
 })

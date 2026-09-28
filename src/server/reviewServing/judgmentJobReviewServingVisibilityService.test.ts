@@ -25,7 +25,6 @@ test('visibility publication waits for V4 result detail visibility before acking
   expect(completedJudgmentJobVisibilitySql).toContain('ELSE candidate.source_high_water_mark')
   expect(completedJudgmentJobVisibilitySql).not.toContain('project_mart_refresh_state')
   expect(completedJudgmentJobVisibilitySql).not.toContain('THEN 0')
-  expect(completedJudgmentJobVisibilitySql).not.toContain('review_serving_dirty_work_ack')
 })
 
 test('visibility publication rotates past a full candidate batch without publishing incomplete jobs', async () => {

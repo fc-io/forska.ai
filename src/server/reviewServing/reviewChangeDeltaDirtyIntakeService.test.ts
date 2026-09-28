@@ -181,10 +181,6 @@ const createFakeIntakeDatabase = (
   const queryJson = async <T>(statement: string) => {
     statements.push(statement)
 
-    if (statement.includes('FROM app.review_serving_dirty_work_ack')) {
-      return [] as T[]
-    }
-
     if (statement.includes('FROM app.review_change_delta')) {
       return rows.slice(0, getLimit(statement)) as T[]
     }

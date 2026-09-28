@@ -434,7 +434,7 @@ test('Phase 3 intake, projector wake, writer transactions, promotion, and recove
   expect(joined).not.toContain('INSERT INTO mart.review_selected_article_import_current_v4')
   expect(joined).not.toContain('_patch_v4')
   expect(joined).not.toContain('INSERT INTO mart.review_article_count_serving_v4')
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('required route components share one logical snapshot while optional components expose availability', () => {

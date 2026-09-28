@@ -121,6 +121,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0222_rebuildReviewServingDirtyWorkWithoutIndexes.sql',
   '../../db/duckdbMigrations/0224_reviewServingDirtyWorkLifecycleReason.sql',
   '../../db/duckdbMigrations/0234_reviewServingComponentRevision.sql',
+  '../../db/duckdbMigrations/0248_retainOpenReviewServingDirtyWork.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -328,6 +329,8 @@ const reviewDirtyWorkNoIndexForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath[
     '../../db/duckdbMigrations/0222_rebuildReviewServingDirtyWorkWithoutIndexes.sql'
   ]
+const reviewDirtyWorkRetentionForwardMigrationSql =
+  reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0248_retainOpenReviewServingDirtyWork.sql']
 const reviewRemainingHotTableIndexDropForwardMigrationSql =
   reviewServingPhase1MigrationSqlByPath['../../db/duckdbMigrations/0213_dropRemainingReviewServingHotTableIndexes.sql']
 const hotServingTables = [
@@ -350,8 +353,8 @@ const reviewServingPhase1Tables = [
   'app.review_delta_reconciliation_cursor',
   'app.review_import_article_hot_field',
   'app.review_serving_dirty_work',
-  'app.review_serving_dirty_work_ack',
   'app.review_serving_dirty_work_claim_state',
+  'app.review_serving_dirty_work_id_lookup',
   'app.review_serving_component_revision',
   'app.review_serving_project_dirty_source_watermark',
   'app.review_serving_projector_watermark',
@@ -400,6 +403,8 @@ const retiredReviewServingTables = new Set<string>([
   'mart.review_article_filter_member',
   'mart.review_article_serving_detail',
   'app.review_rebuild_partial_cleanup_authorization',
+  'app.review_serving_dirty_work_ack',
+  'app.review_serving_dirty_work_ack_id_lookup',
 ])
 const reviewServingTablesConvertedToViews = new Set<string>(['app.review_selected_article_import_v4'])
 
@@ -1505,6 +1510,20 @@ test('filter state serving table is retired into list-mode state', () => {
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_review_article_filter_state_serving_v4_pk',
   )
   expect(retiredReviewServingTables.has('mart.review_article_filter_state_serving_v4')).toBe(true)
+})
+
+test('dirty-work retention keeps only open rows and drops the acknowledgement tables', () => {
+  expect(reviewDirtyWorkRetentionForwardMigrationSql).toContain("WHERE status <> 'completed'")
+  expect(reviewDirtyWorkRetentionForwardMigrationSql).toContain(
+    'ALTER TABLE app.review_serving_dirty_work_claim_state_retained_0248\nRENAME TO review_serving_dirty_work_claim_state;',
+  )
+  expect(reviewDirtyWorkRetentionForwardMigrationSql).toContain(
+    'ALTER TABLE app.review_serving_dirty_work_id_lookup_retained_0248\nRENAME TO review_serving_dirty_work_id_lookup;',
+  )
+  expect(getTableSql('app.review_serving_dirty_work_claim_state')).toContain('dirty_work_id VARCHAR PRIMARY KEY')
+  expect(getTableSql('app.review_serving_dirty_work_id_lookup')).toContain('dirty_work_id VARCHAR PRIMARY KEY')
+  expect(getTableSql('app.review_serving_dirty_work_ack')).toBe('')
+  expect(getTableSql('app.review_serving_dirty_work_ack_id_lookup')).toBe('')
 })
 
 test('legacy V3 review marts are retired from the final schema', () => {

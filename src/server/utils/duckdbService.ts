@@ -991,64 +991,6 @@ const duckdbStartupIndexedTableRepairSpecs: DuckdbStartupIndexedTableRepairSpec[
     duplicateKeySelectSql: `
       SELECT COUNT(*) AS duplicateCount
       FROM (
-        SELECT dirty_ack_id
-        FROM app.review_serving_dirty_work_ack
-        GROUP BY dirty_ack_id
-        HAVING COUNT(*) > 1
-      )
-    `,
-    mutationProbeSql: `
-      DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work_ack;
-      CREATE TEMP TABLE startup_probe_review_serving_dirty_work_ack AS
-      SELECT
-        dirty_ack_id,
-        status,
-        completed_at
-      FROM app.review_serving_dirty_work_ack
-      ORDER BY completed_at DESC, dirty_ack_id ASC
-      LIMIT 1;
-      BEGIN;
-      UPDATE app.review_serving_dirty_work_ack
-      SET
-        status = 'completed',
-        completed_at = current_timestamp
-      WHERE dirty_ack_id = (
-        SELECT dirty_ack_id
-        FROM startup_probe_review_serving_dirty_work_ack
-        LIMIT 1
-      );
-      COMMIT;
-      BEGIN;
-      UPDATE app.review_serving_dirty_work_ack
-      SET
-        status = (
-          SELECT status
-          FROM startup_probe_review_serving_dirty_work_ack
-          LIMIT 1
-        ),
-        completed_at = (
-          SELECT completed_at
-          FROM startup_probe_review_serving_dirty_work_ack
-          LIMIT 1
-        )
-      WHERE dirty_ack_id = (
-        SELECT dirty_ack_id
-        FROM startup_probe_review_serving_dirty_work_ack
-        LIMIT 1
-      );
-      COMMIT;
-      DROP TABLE IF EXISTS startup_probe_review_serving_dirty_work_ack;
-    `,
-    recreateRepairPrimaryKeyIndex: false,
-    recreateSecondaryIndexes: false,
-    repairPrimaryKeyColumns: ['dirty_ack_id'],
-    schemaName: 'app',
-    tableName: 'review_serving_dirty_work_ack',
-  },
-  {
-    duplicateKeySelectSql: `
-      SELECT COUNT(*) AS duplicateCount
-      FROM (
         SELECT selected_import_snapshot_id
         FROM app.review_selected_import_snapshot
         GROUP BY selected_import_snapshot_id

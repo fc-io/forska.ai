@@ -255,7 +255,7 @@ test('filter-option no-ack snapshot passes do not publish shared manifests or wa
 
   expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('filter option refresh can insert rows idempotently without deleting existing scoped options', async () => {

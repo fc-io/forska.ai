@@ -141,7 +141,7 @@ test('title search no-ack snapshot passes do not publish shared manifests or wat
 
   expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('title search direct projection reads selected import base rows without patch overlay', async () => {

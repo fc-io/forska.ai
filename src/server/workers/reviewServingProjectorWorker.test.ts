@@ -218,12 +218,7 @@ const createWorkerHarness = (input?: {
     cleanupDirtyWorkRetention: async (cleanupInput) => {
       dirtyWorkRetentionCleanupInputs.push(cleanupInput)
 
-      return {
-        compactedAcknowledgements: [],
-        compactedLaneCount: 2,
-        deletedAcknowledgementCount: 3,
-        deletedDirtyWorkCount: 5,
-      }
+      return {deletedDirtyWorkCount: 5}
     },
     cleanupRetentionState: async (cleanupInput: {
       batchSize?: number
@@ -1788,12 +1783,7 @@ test('starved cycles under continuous foreground pressure skip the chunk batch a
     harness.dirtyWorkRetentionCleanupInputs.push(cleanupInput)
     clockMs += 6_000
 
-    return {
-      compactedAcknowledgements: [],
-      compactedLaneCount: 0,
-      deletedAcknowledgementCount: 0,
-      deletedDirtyWorkCount: 0,
-    }
+    return {deletedDirtyWorkCount: 0}
   }
   harness.dependencies.wakeProjectors = async (wakeInput) => {
     harness.wakeInputs.push(wakeInput)
@@ -7791,12 +7781,7 @@ test('worker schedules dirty-work cleanup after its cleanup interval and skips r
     expect(skippedHarness.dirtyWorkRetentionCleanupInputs).toEqual([])
     expect(skippedHarness.staleCandidateCleanupInputs).toEqual([])
     expect(completed.cleanup).toEqual({
-      dirtyWorkRetentionCleanup: {
-        compactedAcknowledgements: [],
-        compactedLaneCount: 2,
-        deletedAcknowledgementCount: 3,
-        deletedDirtyWorkCount: 5,
-      },
+      dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
       retentionCleanups: [],
       retentionScopes: [],
       staleCandidateCleanup: {...fakeStaleCandidateCleanupResult, status: 'completed'},
@@ -7837,12 +7822,7 @@ test('worker runs retention cleanup when the review-serving retention cleanup ga
     )
 
     expect(completed.cleanup).toEqual({
-      dirtyWorkRetentionCleanup: {
-        compactedAcknowledgements: [],
-        compactedLaneCount: 2,
-        deletedAcknowledgementCount: 3,
-        deletedDirtyWorkCount: 5,
-      },
+      dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
       retentionCleanups: [
         {
           cleanupBatchSize: 10,
@@ -7890,12 +7870,7 @@ test('worker contains stale candidate cleanup failures and still completes the r
     )
 
     expect(result.cleanup).toEqual({
-      dirtyWorkRetentionCleanup: {
-        compactedAcknowledgements: [],
-        compactedLaneCount: 2,
-        deletedAcknowledgementCount: 3,
-        deletedDirtyWorkCount: 5,
-      },
+      dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
       retentionCleanups: [],
       retentionScopes: [],
       staleCandidateCleanup: {error: 'stale candidate cleanup failed', status: 'failed'},
@@ -11596,7 +11571,7 @@ test('queue rebuild chunk writes serving rows with SQL-native article range stat
   expect(joined).not.toContain('queue_identity')
   expect(joined).toContain("checksum = 'checksum-queue-range'")
   expect(joined).not.toContain('INSERT INTO mart.review_queue_patch_v4')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('base rebuild chunks regenerate project scope and selected import state before completion', async () => {

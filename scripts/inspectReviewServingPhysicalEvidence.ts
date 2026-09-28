@@ -3,6 +3,7 @@ import {writeFileSync} from 'node:fs'
 import {DuckDBInstance} from '@duckdb/node-api'
 import {Effect} from 'effect'
 
+import {defaultCompletedDirtyWorkRetentionSeconds} from '../src/server/reviewServing/reviewServingDirtyWorkService.ts'
 import {type AppDatabaseSnapshot, getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {createDuckdbInstance} from '../src/server/utils/createDuckdbInstance.ts'
@@ -148,7 +149,6 @@ type RetentionCleanupEligibilityAggregateRow = Omit<
   'blockerCounts' | 'error' | 'table'
 >
 type RetentionCleanupEligibilityReport = {note: string; projectId: string; tables: RetentionCleanupEligibilityTable[]}
-type DirtyWorkAckKindCount = {ackKind: 'point' | 'synthetic_high_water'; rows: number}
 type DirtyWorkBlockerCount = {category: string; rows: number}
 type DirtyWorkLaneCount = {
   dirtyKind: string
@@ -167,10 +167,9 @@ type DirtyWorkLifecycleCounts = {
   total: number | null
 }
 type DirtyWorkRetentionEvidenceReport = {
-  ackCounts: DirtyWorkAckKindCount[]
-  ackTable: 'app.review_serving_dirty_work_ack'
   blockerCounts: DirtyWorkBlockerCount[]
-  completedRowsCoveredByAckAndProjectWatermark: number | null
+  completedRowsCoveredByProjectWatermark: number | null
+  completedRowsPastRetentionWindow: number | null
   dirtyWorkTable: 'app.review_serving_dirty_work'
   error: string | null
   laneCounts: DirtyWorkLaneCount[]
@@ -1544,34 +1543,8 @@ const getRequiredColumnStatus = async (runtime: QueryRuntime, table: string, req
   return {missingColumns, tableExists: true}
 }
 
-const getDirtyWorkAckCoveragePredicate = (dirtyWorkSql: string) => {
-  const projectionComponentSql = `json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionComponent')`
-  const projectionIdentitySql = `json_extract_string(${dirtyWorkSql}.projection_key, '$.projectionIdentity')`
-
-  return `EXISTS (
-            SELECT 1
-            FROM app.review_serving_dirty_work_ack ack
-            WHERE ack.projection_component = ${projectionComponentSql}
-              AND ack.projection_identity = ${projectionIdentitySql}
-              AND ack.source_partition = ${dirtyWorkSql}.source_partition
-              AND ack.status = 'completed'
-              AND ack.completed_source_high_water_mark >= ${dirtyWorkSql}.latest_source_high_water_mark
-              AND (
-                ack.dirty_work_id = ${dirtyWorkSql}.dirty_work_id
-                OR (
-                  ack.dirty_work_id IS NULL
-                  AND (
-                    (ack.dirty_range_start IS NULL AND ack.dirty_range_end IS NULL)
-                    OR (
-                      ${dirtyWorkSql}.dirty_range_start IS NOT NULL
-                      AND ${dirtyWorkSql}.dirty_range_end IS NOT NULL
-                      AND ack.dirty_range_start <= ${dirtyWorkSql}.dirty_range_start
-                      AND ack.dirty_range_end >= ${dirtyWorkSql}.dirty_range_end
-                    )
-                  )
-                )
-              )
-          )`
+const getDirtyWorkPastRetentionWindowPredicate = () => {
+  return `dirty_work.updated_at <= current_timestamp - INTERVAL '${defaultCompletedDirtyWorkRetentionSeconds} seconds'`
 }
 
 const getDirtyWorkProjectWatermarkCoveragePredicate = () => {
@@ -1587,19 +1560,15 @@ const getDirtyWorkProjectWatermarkCoveragePredicate = () => {
 
 const getDirtyWorkBlockerCategorySql = (projectId: string) => {
   const projectPredicate = `dirty_work.project_id = ${getSqlLiteral(projectId)}`
-  const ackCoveragePredicate = getDirtyWorkAckCoveragePredicate('dirty_work')
-  const watermarkCoveragePredicate = getDirtyWorkProjectWatermarkCoveragePredicate()
+  const pastRetentionWindowPredicate = getDirtyWorkPastRetentionWindowPredicate()
 
   return `
     WITH classified AS (
       SELECT
         CASE
           WHEN dirty_work.status IS DISTINCT FROM 'completed' THEN 'non_completed_status'
-          WHEN dirty_work.project_id IS NULL THEN 'missing_project_dirty_source_watermark'
-          WHEN NOT (${watermarkCoveragePredicate}) THEN 'missing_or_stale_project_dirty_source_watermark'
-          WHEN dirty_work.projection_key IS NULL THEN 'missing_projection_key'
-          WHEN NOT (${ackCoveragePredicate}) THEN 'missing_completed_ack_or_high_water_coverage'
-          ELSE 'eligible_completed_ack_and_project_watermark_covered'
+          WHEN NOT (${pastRetentionWindowPredicate}) THEN 'completed_within_retention_window'
+          ELSE 'eligible_completed_past_retention_window'
         END AS category
       FROM app.review_serving_dirty_work dirty_work
       WHERE ${projectPredicate}
@@ -1617,7 +1586,6 @@ const getDirtyWorkRetentionEvidenceReport = async (
   limit: number,
 ): Promise<DirtyWorkRetentionEvidenceReport> => {
   const dirtyWorkTable = 'app.review_serving_dirty_work' as const
-  const ackTable = 'app.review_serving_dirty_work_ack' as const
   const watermarkTable = 'app.review_serving_project_dirty_source_watermark' as const
   const projectPredicate = `project_id = ${getSqlLiteral(projectId)}`
 
@@ -1627,29 +1595,15 @@ const getDirtyWorkRetentionEvidenceReport = async (
         columns: [
           'dirty_work_id',
           'project_id',
-          'projection_key',
+          'projection_component',
+          'projection_identity',
           'dirty_kind',
           'source_partition',
           'latest_source_high_water_mark',
-          'dirty_range_start',
-          'dirty_range_end',
           'status',
+          'updated_at',
         ],
         table: dirtyWorkTable,
-      },
-      {
-        columns: [
-          'dirty_ack_id',
-          'dirty_work_id',
-          'projection_component',
-          'projection_identity',
-          'source_partition',
-          'completed_source_high_water_mark',
-          'dirty_range_start',
-          'dirty_range_end',
-          'status',
-        ],
-        table: ackTable,
       },
       {columns: ['project_id', 'source_partition', 'source_high_water_mark'], table: watermarkTable},
     ] as const
@@ -1669,16 +1623,17 @@ const getDirtyWorkRetentionEvidenceReport = async (
       throw new Error(tableProblems.join('; '))
     }
 
-    const ackCoveragePredicate = getDirtyWorkAckCoveragePredicate('dirty_work')
+    const pastRetentionWindowPredicate = getDirtyWorkPastRetentionWindowPredicate()
     const watermarkCoveragePredicate = getDirtyWorkProjectWatermarkCoveragePredicate()
     const lifecycleRows = await runReadonlyQuery<{
       completed: number | string
+      completedRowsCoveredByProjectWatermark: number | string
+      completedRowsPastRetentionWindow: number | string
       failed: number | string
       pending: number | string
       protectedNonCompletedRows: number | string
       running: number | string
       total: number | string
-      completedRowsCoveredByAckAndProjectWatermark: number | string
     }>(
       runtime,
       `
@@ -1691,40 +1646,14 @@ const getDirtyWorkRetentionEvidenceReport = async (
           CAST(COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'completed') AS BIGINT) AS protectedNonCompletedRows,
           CAST(COUNT(*) FILTER (
             WHERE status = 'completed'
-              AND (${ackCoveragePredicate})
+              AND (${pastRetentionWindowPredicate})
+          ) AS BIGINT) AS completedRowsPastRetentionWindow,
+          CAST(COUNT(*) FILTER (
+            WHERE status = 'completed'
               AND (${watermarkCoveragePredicate})
-          ) AS BIGINT) AS completedRowsCoveredByAckAndProjectWatermark
+          ) AS BIGINT) AS completedRowsCoveredByProjectWatermark
         FROM ${dirtyWorkTable} dirty_work
         WHERE dirty_work.${projectPredicate}
-      `,
-    )
-    const ackCounts = await runReadonlyQuery<{ackKind: 'point' | 'synthetic_high_water'; rows: number | string}>(
-      runtime,
-      `
-        WITH project_lanes AS (
-          SELECT DISTINCT
-            projection_component,
-            projection_identity,
-            source_partition
-          FROM ${dirtyWorkTable}
-          WHERE ${projectPredicate}
-            AND projection_component IS NOT NULL
-            AND projection_identity IS NOT NULL
-        )
-        SELECT
-          CASE WHEN ack.dirty_work_id IS NULL THEN 'synthetic_high_water' ELSE 'point' END AS ackKind,
-          CAST(COUNT(*) AS BIGINT) AS rows
-        FROM ${ackTable} ack
-        WHERE ack.status = 'completed'
-          AND EXISTS (
-            SELECT 1
-            FROM project_lanes lane
-            WHERE lane.projection_component = ack.projection_component
-              AND lane.projection_identity = ack.projection_identity
-              AND lane.source_partition = ack.source_partition
-          )
-        GROUP BY ackKind
-        ORDER BY ackKind
       `,
     )
     const laneCounts = await runReadonlyQuery<{
@@ -1760,14 +1689,11 @@ const getDirtyWorkRetentionEvidenceReport = async (
     const row = lifecycleRows[0]
 
     return {
-      ackCounts: ackCounts.map((ack) => {
-        return {ackKind: ack.ackKind, rows: Number(ack.rows ?? 0)}
-      }),
-      ackTable,
       blockerCounts: blockerCounts.map((blocker) => {
         return {category: blocker.category, rows: Number(blocker.rows ?? 0)}
       }),
-      completedRowsCoveredByAckAndProjectWatermark: getNumberOrNull(row?.completedRowsCoveredByAckAndProjectWatermark),
+      completedRowsCoveredByProjectWatermark: getNumberOrNull(row?.completedRowsCoveredByProjectWatermark),
+      completedRowsPastRetentionWindow: getNumberOrNull(row?.completedRowsPastRetentionWindow),
       dirtyWorkTable,
       error: null,
       laneCounts: laneCounts.map((lane) => {
@@ -1788,7 +1714,7 @@ const getDirtyWorkRetentionEvidenceReport = async (
         running: getNumberOrNull(row?.running),
         total: getNumberOrNull(row?.total),
       },
-      note: 'Read-only dirty-work retention evidence. Completed dirty-work rows are counted as retention candidates only when covered by a completed point ACK or synthetic high-water ACK and by the project/source dirty watermark; non-completed rows are protected diagnostic/work rows. This section does not perform cleanup or authorize runtime deletion.',
+      note: 'Read-only dirty-work retention evidence. The projector worker deletes each completed dirty-work row together with its claim state and id reservation one hour after completion (by updated_at, in bounded batches per cleanup pass); non-completed rows are protected work rows and are never deleted. Once completed rows are gone, the project/source dirty watermark is the durable record of completed source progress. This section does not perform cleanup or authorize runtime deletion.',
       projectId,
       protectedNonCompletedRows: getNumberOrNull(row?.protectedNonCompletedRows),
       verdict: 'not-authorized',
@@ -1796,10 +1722,9 @@ const getDirtyWorkRetentionEvidenceReport = async (
     }
   } catch (error) {
     return {
-      ackCounts: [],
-      ackTable,
       blockerCounts: [],
-      completedRowsCoveredByAckAndProjectWatermark: null,
+      completedRowsCoveredByProjectWatermark: null,
+      completedRowsPastRetentionWindow: null,
       dirtyWorkTable,
       error: error instanceof Error ? error.message : String(error),
       laneCounts: [],
@@ -4734,13 +4659,14 @@ const renderMarkdown = (report: EvidenceReport) => {
     ['Completed', formatValue(report.dirtyWorkRetentionEvidence.lifecycleCounts.completed)],
     ['Protected non-completed rows', formatValue(report.dirtyWorkRetentionEvidence.protectedNonCompletedRows)],
     [
-      'Completed rows covered by ACK + project/source watermark',
-      formatValue(report.dirtyWorkRetentionEvidence.completedRowsCoveredByAckAndProjectWatermark),
+      'Completed rows past the one-hour retention window',
+      formatValue(report.dirtyWorkRetentionEvidence.completedRowsPastRetentionWindow),
+    ],
+    [
+      'Completed rows covered by project/source watermark',
+      formatValue(report.dirtyWorkRetentionEvidence.completedRowsCoveredByProjectWatermark),
     ],
   ]
-  const dirtyWorkAckRows = report.dirtyWorkRetentionEvidence.ackCounts.map((row) => {
-    return [`\`${row.ackKind}\``, formatValue(row.rows)]
-  })
   const dirtyWorkLaneRows = report.dirtyWorkRetentionEvidence.laneCounts.map((row) => {
     return [
       `\`${row.projectId}\``,
@@ -5294,8 +5220,6 @@ const renderMarkdown = (report: EvidenceReport) => {
     '',
     `Dirty-work table: \`${report.dirtyWorkRetentionEvidence.dirtyWorkTable}\``,
     '',
-    `ACK table: \`${report.dirtyWorkRetentionEvidence.ackTable}\``,
-    '',
     `Project/source watermark table: \`${report.dirtyWorkRetentionEvidence.watermarkTable}\``,
     '',
     report.dirtyWorkRetentionEvidence.error
@@ -5303,10 +5227,6 @@ const renderMarkdown = (report: EvidenceReport) => {
       : 'Status: ok',
     '',
     formatMarkdownTable(['Lifecycle field', 'Rows'], dirtyWorkLifecycleRows),
-    '',
-    dirtyWorkAckRows.length > 0
-      ? formatMarkdownTable(['ACK kind', 'Rows'], dirtyWorkAckRows)
-      : '_No completed dirty-work ACK rows were collected._',
     '',
     dirtyWorkLaneRows.length > 0
       ? formatMarkdownTable(

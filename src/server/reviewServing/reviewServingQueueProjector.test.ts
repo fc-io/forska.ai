@@ -1,6 +1,5 @@
 import {expect, test} from 'bun:test'
 
-import {decodeReviewServingJsonRows} from '../test/decodeReviewServingJsonRows.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingQueuePatches,
@@ -161,7 +160,7 @@ test('queue no-ack snapshot passes do not publish shared manifests or watermarks
 
   expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('human status changes write related review queue patches without raw human judgment reads', async () => {
@@ -403,12 +402,10 @@ test('project-scoped queue dirty work runs bounded article chunks before acknowl
   const articleRankDeletes = statements.filter((statement) => {
     return statement.includes('DELETE FROM mart.review_unassessed_queue_article_rank_serving_v4')
   })
-  const acknowledgements = statements.filter((statement) => {
+  const completions = statements.filter((statement) => {
     return (
-      statement.includes('INSERT INTO app.review_serving_dirty_work_ack (')
-      && decodeReviewServingJsonRows(statement).some((row) => {
-        return row.dirty_work_id === 'dirty-work-1'
-      })
+      statement.includes("SET status = 'completed', lifecycle_reason = 'projected'")
+      && statement.includes("dirty_work_id IN ('dirty-work-1')")
     )
   })
 
@@ -427,7 +424,7 @@ test('project-scoped queue dirty work runs bounded article chunks before acknowl
   expect(articleRankDeletes[0]).toContain("article_id <= 'article-050'")
   expect(articleRankDeletes[1]).toContain("article_id >= 'article-050 '")
   expect(articleRankDeletes[1]).toContain("article_id <= 'article-100'")
-  expect(acknowledgements).toHaveLength(1)
+  expect(completions).toHaveLength(1)
   expect(phaseEvents).toEqual([
     {chunkIndex: 0, phase: 'sourceQuery', sourceRowLimit: 50_000},
     {chunkIndex: 0, phase: 'writer', sourceRowLimit: 50_000},
@@ -469,7 +466,7 @@ test('project-scoped queue dirty work without a snapshot skips project-scope chu
   expect(result).toEqual({patchRowCount: 0, patchWatermark: 14, servingRowCount: 0})
   expect(joined).not.toContain('queue_source_budget AS')
   expect(joined).not.toContain('FROM queue_union queue')
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })
 
 test('queue rebuild rows do not let selected-import tombstones suppress scoped articles', async () => {
@@ -507,7 +504,7 @@ test('membership removals write tombstones and keep queue projection component n
   const joined = statements.join('\n')
 
   expect(joined).not.toContain('mart.review_queue_patch_v4')
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain("SET status = 'completed', lifecycle_reason = 'projected'")
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).toContain("'queue'")

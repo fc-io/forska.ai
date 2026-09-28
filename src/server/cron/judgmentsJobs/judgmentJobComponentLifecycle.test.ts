@@ -458,13 +458,11 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     }
   }
 
-  const projectionAcks = await queryDatabase<{count: number}>(`
-    SELECT COUNT(*) AS count FROM app.review_serving_dirty_work_ack
-    WHERE dirty_work_id IN (
-      SELECT dirty_work_id FROM app.review_serving_dirty_work WHERE project_id = '${projectId}'
-    )
+  const completedDirtyWork = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count FROM app.review_serving_dirty_work
+    WHERE project_id = '${projectId}' AND status = 'completed'
   `)
-  expect(Number(projectionAcks[0]?.count ?? 0)).toBeGreaterThan(0)
+  expect(Number(completedDirtyWork[0]?.count ?? 0)).toBeGreaterThan(0)
   const [servingAfterProjection] = await queryDatabase<{llmHasJudgment: boolean}>(`
     SELECT state.llm_has_judgment AS llmHasJudgment
     FROM mart.review_article_serving_list_mode_state_v4 state
@@ -548,17 +546,16 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
       SELECT * FROM app.project_mart_refresh_state WHERE project_id = '${projectId}'
     `)
     const dirty = await queryDatabase<unknown>(`
-      SELECT dirty_work_id, projection_component, latest_source_high_water_mark FROM app.review_serving_dirty_work
+      SELECT dirty_work_id, projection_component, latest_source_high_water_mark, status
+      FROM app.review_serving_dirty_work
       WHERE project_id = '${projectId}'
     `)
-    const acks = await queryDatabase<unknown>(`
-      SELECT dirty_work_id, projection_component, completed_source_high_water_mark, status
-      FROM app.review_serving_dirty_work_ack
-      WHERE dirty_work_id IN (
-        SELECT dirty_work_id FROM app.review_serving_dirty_work WHERE project_id = '${projectId}'
-      )
+    const watermarks = await queryDatabase<unknown>(`
+      SELECT source_partition, source_high_water_mark
+      FROM app.review_serving_project_dirty_source_watermark
+      WHERE project_id = '${projectId}'
     `)
-    throw new Error(JSON.stringify({acks, dirty, health: await sqliteService.getHealthSnapshot(jobId), refresh}))
+    throw new Error(JSON.stringify({dirty, health: await sqliteService.getHealthSnapshot(jobId), refresh, watermarks}))
   }
   expect(drainStates.at(-1)).toBe('drained')
 

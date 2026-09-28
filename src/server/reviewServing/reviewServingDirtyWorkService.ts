@@ -75,35 +75,20 @@ export type RequeueReviewServingDirtyWorkBlockedByRebuildParams = {
   now?: Date
 }
 
-export type CompactReviewServingDirtyWorkAcknowledgementsParams = {
-  completedSourceHighWaterMark: number
-  projectionComponent: ReviewServingProjectionComponent
-  projectionIdentity: string
-  sourcePartition: string
-}
-
 export type CleanupReviewServingDirtyWorkRetentionParams = {
-  acknowledgementDeleteLimit?: number
   blockedByRebuildRequeueLimit?: number
   coalesceDirtyWorkLimit?: number
+  completedRetentionSeconds?: number
   dirtyWorkDeleteLimit?: number
-  laneCompactionLimit?: number
   laneRepairLimit?: number
   laneStateRepairLimit?: number
   now?: Date
   orphanCompletionLimit?: number
 }
 
-export type CleanupReviewServingDirtyWorkRetentionCompaction = CompactReviewServingDirtyWorkAcknowledgementsParams & {
-  dirtyAckId: string
-}
-
 export type CleanupReviewServingDirtyWorkRetentionResult = {
   coalescedDirtyWorkCount?: number
-  compactedAcknowledgements: CleanupReviewServingDirtyWorkRetentionCompaction[]
-  compactedLaneCount: number
   completedOrphanDirtyWorkCount?: number
-  deletedAcknowledgementCount: number
   deletedDirtyWorkCount: number
   repairedLaneColumnCount?: number
   repairedLaneStateCount?: number
@@ -289,25 +274,6 @@ const getDirtyWorkId = (input: ReviewServingDirtyWorkInput) => {
   }).slice(0, 32)}`
 }
 
-const getDirtyAckId = (claim: ReviewServingDirtyWorkClaim) => {
-  return `dirtyAck:${getReviewServingHash('review-serving-dirty-work-ack', {
-    dirtyWorkId: claim.dirtyWorkId,
-    projectionComponent: claim.projectionComponent,
-    projectionIdentity: claim.projectionIdentity,
-    sourcePartition: claim.sourcePartition,
-    sourceHighWaterMark: claim.latestSourceHighWaterMark,
-  }).slice(0, 32)}`
-}
-
-const getDirtyAckHighWaterId = (input: CompactReviewServingDirtyWorkAcknowledgementsParams) => {
-  return `dirtyAck:${getReviewServingHash('review-serving-dirty-work-ack-high-water', {
-    completedSourceHighWaterMark: input.completedSourceHighWaterMark,
-    projectionComponent: input.projectionComponent,
-    projectionIdentity: input.projectionIdentity,
-    sourcePartition: input.sourcePartition,
-  }).slice(0, 32)}`
-}
-
 const getNormalizedLimit = (params: {limit: number; maxWakeCount?: number}) => {
   const limit = Math.max(0, Math.floor(params.limit))
   const maxWakeCount = params.maxWakeCount === undefined ? limit : Math.max(0, Math.floor(params.maxWakeCount))
@@ -322,6 +288,11 @@ const defaultCoalesceDirtyWorkLimit = 2_000
 const defaultOrphanCompletionLimit = 2_000
 const orphanDirtyWorkMinAgeSeconds = 60 * 60
 const servedDirtyWorkLookbackDays = 7
+// Completed rows are deleted together with their claim state and id reservation after this long; a later change to
+// the same projection inserts a fresh row. Diagnostics look back 10 minutes, and fair project rotation only needs to
+// know who was served within the hour.
+export const defaultCompletedDirtyWorkRetentionSeconds = 60 * 60
+const defaultCompletedDirtyWorkDeleteLimit = 20_000
 
 const getNormalizedCleanupLimit = (value: number | undefined, fallback: number) => {
   return Math.max(0, Math.floor(value ?? fallback))
@@ -537,26 +508,6 @@ const reserveReviewServingDirtyWorkId = async (dirtyWorkId: string, database: Re
   return true
 }
 
-const reserveReviewServingDirtyAckId = async (dirtyAckId: string, database: ReviewServingDirtyWorkTransaction) => {
-  const rows = await database.queryJson<{dirtyAckId: string}>(`
-    SELECT dirty_ack_id AS dirtyAckId
-    FROM app.review_serving_dirty_work_ack_id_lookup
-    WHERE dirty_ack_id = ${getSqlLiteral(dirtyAckId)}
-    LIMIT 1
-  `)
-
-  if (rows.length > 0) {
-    return false
-  }
-
-  await database.run(`
-    INSERT INTO app.review_serving_dirty_work_ack_id_lookup (dirty_ack_id)
-    VALUES (${getSqlLiteral(dirtyAckId)})
-  `)
-
-  return true
-}
-
 const getProjectionFromKey = (projectionKey: string | null) => {
   if (projectionKey === null) {
     return null
@@ -652,127 +603,6 @@ const getQualifiedDirtyWorkSelect = (dirtyWorkSql: string) => {
       ${dirtyWorkSql}.updated_at AS updatedAt
     FROM app.review_serving_dirty_work ${dirtyWorkSql}
   `
-}
-
-type DirtyWorkClaimAcknowledgement = {claim: ReviewServingDirtyWorkClaim; dirtyAckId: string}
-
-const getDirtyWorkClaimAcknowledgements = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
-  return [
-    ...new Map(
-      claims.map((claim) => {
-        return [getDirtyAckId(claim), claim] as const
-      }),
-    ).entries(),
-  ].map(([dirtyAckId, claim]): DirtyWorkClaimAcknowledgement => {
-    return {claim, dirtyAckId}
-  })
-}
-
-const getReservedDirtyAckIds = async (dirtyAckIds: readonly string[], database: ReviewServingDirtyWorkTransaction) => {
-  const rows = await database.queryJson<{dirtyAckId: string}>(`
-    SELECT dirty_ack_id AS dirtyAckId
-    FROM app.review_serving_dirty_work_ack_id_lookup
-    WHERE dirty_ack_id IN (${dirtyAckIds.map(getSqlLiteral).join(', ')})
-  `)
-
-  return new Set(
-    rows.map((row) => {
-      return row.dirtyAckId
-    }),
-  )
-}
-
-const dirtyWorkClaimAcknowledgementRowColumns = [
-  {name: 'dirty_ack_id', type: 'VARCHAR'},
-  {name: 'dirty_work_id', type: 'VARCHAR'},
-  {name: 'projection_component', type: 'VARCHAR'},
-  {name: 'projection_identity', type: 'VARCHAR'},
-  {name: 'source_partition', type: 'VARCHAR'},
-  {name: 'completed_source_high_water_mark', type: 'BIGINT'},
-  {name: 'dirty_range_start', type: 'VARCHAR'},
-  {name: 'dirty_range_end', type: 'VARCHAR'},
-] as const
-
-const insertDirtyWorkClaimAcknowledgements = async (
-  acknowledgements: readonly DirtyWorkClaimAcknowledgement[],
-  database: ReviewServingDirtyWorkTransaction,
-) => {
-  const acknowledgementRowsSql = getReviewServingJsonRowsSql({
-    columns: dirtyWorkClaimAcknowledgementRowColumns,
-    rows: acknowledgements.map(({claim, dirtyAckId}) => {
-      return [
-        dirtyAckId,
-        claim.dirtyWorkId,
-        claim.projectionComponent,
-        claim.projectionIdentity,
-        claim.sourcePartition,
-        claim.latestSourceHighWaterMark,
-        claim.dirtyRangeStart,
-        claim.dirtyRangeEnd,
-      ]
-    }),
-  })
-
-  await database.run(`
-    INSERT INTO app.review_serving_dirty_work_ack_id_lookup (dirty_ack_id)
-    SELECT acknowledgement.dirty_ack_id
-    FROM (
-      ${acknowledgementRowsSql}
-    ) AS acknowledgement
-  `)
-  await database.run(`
-    INSERT INTO app.review_serving_dirty_work_ack (
-      dirty_ack_id,
-      dirty_work_id,
-      projection_component,
-      projection_identity,
-      source_partition,
-      completed_source_high_water_mark,
-      dirty_range_start,
-      dirty_range_end,
-      status,
-      completed_at
-    )
-    SELECT
-      acknowledgement.dirty_ack_id,
-      acknowledgement.dirty_work_id,
-      acknowledgement.projection_component,
-      acknowledgement.projection_identity,
-      acknowledgement.source_partition,
-      acknowledgement.completed_source_high_water_mark,
-      acknowledgement.dirty_range_start,
-      acknowledgement.dirty_range_end,
-      'completed',
-      current_timestamp
-    FROM (
-      ${acknowledgementRowsSql}
-    ) AS acknowledgement
-  `)
-}
-
-const acknowledgeReviewServingDirtyWorkClaims = async (
-  claims: readonly ReviewServingDirtyWorkClaim[],
-  database: ReviewServingDirtyWorkTransaction,
-) => {
-  const acknowledgements = getDirtyWorkClaimAcknowledgements(claims)
-  const reservedDirtyAckIds =
-    acknowledgements.length === 0
-      ? new Set<string>()
-      : await getReservedDirtyAckIds(
-          acknowledgements.map(({dirtyAckId}) => {
-            return dirtyAckId
-          }),
-          database,
-        )
-  const newAcknowledgements = acknowledgements.filter(({dirtyAckId}) => {
-    return !reservedDirtyAckIds.has(dirtyAckId)
-  })
-
-  if (newAcknowledgements.length === 0) {
-    return
-  }
-
-  await insertDirtyWorkClaimAcknowledgements(newAcknowledgements, database)
 }
 
 const advanceReviewServingDirtySourceWatermarkEntries = async (
@@ -940,15 +770,15 @@ const getDirtyWorkCoverageMatchSql = (dirtyWorkSql: string) => {
   `
 }
 
-const getHighWaterAckCoverages = (coverages: readonly ReviewServingDirtyWorkCoverage[]) => {
+const getWatermarkAdvancingCoverages = (coverages: readonly ReviewServingDirtyWorkCoverage[]) => {
   return coverages.filter((coverage) => {
     return coverage.sourcePartition.includes(':')
   })
 }
 
-const getDirtyWorkUpdatePredicate = (
-  claims: readonly Pick<ReviewServingDirtyWorkClaim, 'dirtyWorkId' | 'storageRowId'>[],
-) => {
+// Rows are matched by id only. DuckDB renumbers rowids when a checkpoint vacuums deleted rows, so a stored rowid
+// can point at a different row once completed work has been deleted.
+const getDirtyWorkUpdatePredicate = (claims: readonly Pick<ReviewServingDirtyWorkClaim, 'dirtyWorkId'>[]) => {
   const dirtyWorkIds = [
     ...new Set(
       claims.map((claim) => {
@@ -956,28 +786,6 @@ const getDirtyWorkUpdatePredicate = (
       }),
     ),
   ]
-  const rowIds = [
-    ...new Set(
-      claims
-        .map((claim) => {
-          return claim.storageRowId
-        })
-        .filter((rowId): rowId is number | string => {
-          return rowId !== null && rowId !== undefined && String(rowId).trim().length > 0
-        }),
-    ),
-  ]
-
-  if (rowIds.length > 0) {
-    return `(
-      rowid IN (${rowIds
-        .map((rowId) => {
-          return getStorageRowIdSql(rowId)
-        })
-        .join(', ')})
-      OR dirty_work_id IN (${dirtyWorkIds.map(getSqlLiteral).join(', ')})
-    )`
-  }
 
   return `dirty_work_id IN (${dirtyWorkIds.map(getSqlLiteral).join(', ')})`
 }
@@ -1033,13 +841,15 @@ const dirtyWorkClaimStateRowColumns = [
   {name: 'dirty_range_end', type: 'VARCHAR'},
 ] as const
 
+// storage_row_id stays NULL: DuckDB renumbers rowids when a checkpoint vacuums deleted rows, so claim state never
+// points at dirty work by rowid.
 const getDirtyWorkClaimStateRowsSql = (claims: readonly DirtyWorkClaimStateInput[]) => {
   return getReviewServingJsonRowsSql({
     columns: dirtyWorkClaimStateRowColumns,
     rows: claims.map((claim) => {
       return [
         claim.dirtyWorkId,
-        claim.storageRowId ?? null,
+        null,
         getDirtyWorkLaneProjectId(claim.projectId),
         claim.projectionComponent,
         claim.projectionIdentity,
@@ -1077,7 +887,7 @@ const maintainReviewServingDirtyWorkClaimStates = async (
   await database.run(`
     UPDATE app.review_serving_dirty_work_claim_state existing
     SET
-      storage_row_id = COALESCE(changed.storage_row_id, existing.storage_row_id),
+      storage_row_id = NULL,
       project_id = changed.project_id,
       projection_component = changed.projection_component,
       projection_identity = changed.projection_identity,
@@ -1163,83 +973,6 @@ const getDirtyWorkClaimWatermarkPredicate = (
     .join(', ')})`
 }
 
-const isClaimCoveredByHighWaterAckCoverage = (
-  claim: ReviewServingDirtyWorkClaim,
-  coverages: readonly ReviewServingDirtyWorkCoverage[],
-) => {
-  return coverages.some((coverage) => {
-    return (
-      claim.projectId === coverage.projectId
-      && claim.projectionComponent === coverage.projectionComponent
-      && claim.projectionIdentity === coverage.projectionIdentity
-      && claim.sourcePartition === coverage.sourcePartition
-      && claim.latestSourceHighWaterMark <= coverage.completedSourceHighWaterMark
-    )
-  })
-}
-
-const insertReviewServingDirtyWorkCoverageAcknowledgements = async (
-  coverages: readonly ReviewServingDirtyWorkCoverage[],
-  database: ReviewServingDirtyWorkTransaction,
-) => {
-  if (coverages.length === 0) {
-    return
-  }
-
-  const reservedCoverages: Array<ReviewServingDirtyWorkCoverage & {dirtyAckId: string}> = []
-
-  for (const coverage of coverages) {
-    const dirtyAckId = getDirtyAckHighWaterId({
-      completedSourceHighWaterMark: coverage.completedSourceHighWaterMark,
-      projectionComponent: coverage.projectionComponent,
-      projectionIdentity: coverage.projectionIdentity,
-      sourcePartition: coverage.sourcePartition,
-    })
-
-    if (await reserveReviewServingDirtyAckId(dirtyAckId, database)) {
-      reservedCoverages.push({...coverage, dirtyAckId})
-    }
-  }
-
-  if (reservedCoverages.length === 0) {
-    return
-  }
-
-  const valuesSql = reservedCoverages
-    .map((coverage) => {
-      return `(
-        ${getSqlLiteral(coverage.dirtyAckId)},
-        NULL,
-        ${getSqlLiteral(coverage.projectionComponent)},
-        ${getSqlLiteral(coverage.projectionIdentity)},
-        ${getSqlLiteral(coverage.sourcePartition)},
-        ${coverage.completedSourceHighWaterMark},
-        NULL,
-        NULL,
-        'completed',
-        current_timestamp
-      )`
-    })
-    .join(',\n      ')
-
-  await database.run(`
-    INSERT INTO app.review_serving_dirty_work_ack (
-      dirty_ack_id,
-      dirty_work_id,
-      projection_component,
-      projection_identity,
-      source_partition,
-      completed_source_high_water_mark,
-      dirty_range_start,
-      dirty_range_end,
-      status,
-      completed_at
-    )
-    VALUES
-      ${valuesSql}
-  `)
-}
-
 export const upsertReviewServingDirtyWork = async (
   input: ReviewServingDirtyWorkInput,
   database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),
@@ -1315,9 +1048,11 @@ export const upsertReviewServingDirtyWork = async (
 
     if (existing !== null) {
       await maintainReviewServingDirtyWorkClaimStates([existing], database)
+
+      return {dirtyWorkId, skipped}
     }
 
-    return {dirtyWorkId, skipped}
+    // A reservation without its row must not swallow the change: fall through and insert the row.
   }
 
   await database.run(`
@@ -1664,7 +1399,7 @@ const updateReservedDirtyWorkBatch = async (
   database: ReviewServingDirtyWorkTransaction,
 ) => {
   if (reservedIds.length === 0) {
-    return
+    return 0
   }
 
   const reservedIdsSql = getDirtyWorkIdListSql(reservedIds)
@@ -1717,23 +1452,46 @@ const updateReservedDirtyWorkBatch = async (
   `)
 
   await maintainReviewServingDirtyWorkClaimStates(updatedRows.map(getDirtyWorkRecordFromRow), database)
-  await database.run(`
-    DELETE FROM ${tableName}
-    WHERE dirty_work_id IN (${reservedIdsSql})
-  `)
+
+  const updatedIds = new Set(
+    updatedRows.map((row) => {
+      return row.dirtyWorkId
+    }),
+  )
+  const orphanedIds = reservedIds.filter((dirtyWorkId) => {
+    return !updatedIds.has(dirtyWorkId)
+  })
+
+  if (updatedIds.size > 0) {
+    await database.run(`
+      DELETE FROM ${tableName}
+      WHERE dirty_work_id IN (${getDirtyWorkIdListSql([...updatedIds])})
+    `)
+  }
+
+  // A reserved id whose row is missing stays staged, so insertNewDirtyWorkBatch re-creates the row instead of the
+  // change being dropped. Any claim state left for it is replaced by the new row's.
+  if (orphanedIds.length > 0) {
+    await database.run(`
+      DELETE FROM app.review_serving_dirty_work_claim_state
+      WHERE dirty_work_id IN (${getDirtyWorkIdListSql(orphanedIds)})
+    `)
+  }
+
+  return updatedIds.size
 }
 
 const insertNewDirtyWorkBatch = async (tableName: string, database: ReviewServingDirtyWorkTransaction) => {
-  const [storageCursor] = await database.queryJson<{maxStorageRowId: number | string}>(`
-    SELECT COALESCE(MAX(rowid), -1) AS maxStorageRowId
-    FROM app.review_serving_dirty_work
-  `)
-
   await database.run(`
     INSERT INTO app.review_serving_dirty_work_id_lookup (dirty_work_id)
-    SELECT dirty_work_id
-    FROM ${tableName}
-    ORDER BY input_index
+    SELECT staged.dirty_work_id
+    FROM ${tableName} staged
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM app.review_serving_dirty_work_id_lookup lookup
+      WHERE lookup.dirty_work_id = staged.dirty_work_id
+    )
+    ORDER BY staged.input_index
   `)
   await database.run(`
     INSERT INTO app.review_serving_dirty_work (
@@ -1769,7 +1527,7 @@ const insertNewDirtyWorkBatch = async (tableName: string, database: ReviewServin
     )
     SELECT
       staged.dirty_work_id,
-      stored.storage_row_id,
+      NULL,
       COALESCE(staged.project_id, ''),
       staged.projection_component,
       staged.projection_identity,
@@ -1781,12 +1539,6 @@ const insertNewDirtyWorkBatch = async (tableName: string, database: ReviewServin
       staged.dirty_range_end,
       current_timestamp
     FROM ${tableName} staged
-    INNER JOIN (
-      SELECT rowid AS storage_row_id, dirty_work_id
-      FROM app.review_serving_dirty_work
-      WHERE rowid > ${getStorageRowIdSql(storageCursor?.maxStorageRowId ?? -1)}
-    ) stored
-      ON stored.dirty_work_id = staged.dirty_work_id
     WHERE staged.claim_state_maintainable
     ORDER BY staged.input_index
   `)
@@ -1802,10 +1554,9 @@ const upsertReviewServingDirtyWorkBatchChunk = async (
   await database.run(getStageDirtyWorkBatchSql(tableName, entries))
 
   const reservedIds = await getReservedDirtyWorkBatchIds(tableName, database)
+  const updatedCount = await updateReservedDirtyWorkBatch(tableName, reservedIds, database)
 
-  await updateReservedDirtyWorkBatch(tableName, reservedIds, database)
-
-  if (reservedIds.length < entries.length) {
+  if (updatedCount < entries.length) {
     await insertNewDirtyWorkBatch(tableName, database)
   }
 
@@ -2329,8 +2080,6 @@ const completeReviewServingDirtyWorkClaimsInTransaction = async (
     ).values(),
   ]
 
-  await acknowledgeReviewServingDirtyWorkClaims(uniqueClaims, database)
-
   if (uniqueClaims.length > 0) {
     await advanceReviewServingDirtySourceWatermark(uniqueClaims, database)
 
@@ -2373,11 +2122,9 @@ export const completeReviewServingDirtyWorkCoveredByRebuild = async (
   }
 
   const coverageCteSql = getDirtyWorkCoverageCteSql(normalizedCoverages)
-  const highWaterAckCoverages = getHighWaterAckCoverages(normalizedCoverages)
+  const watermarkAdvancingCoverages = getWatermarkAdvancingCoverages(normalizedCoverages)
 
   let completedCount = 0
-
-  await insertReviewServingDirtyWorkCoverageAcknowledgements(highWaterAckCoverages, database)
 
   while (true) {
     const rows = await database.queryJson<DirtyWorkRow>(`
@@ -2407,12 +2154,6 @@ export const completeReviewServingDirtyWorkCoveredByRebuild = async (
     if (coveredClaims.length === 0) {
       break
     }
-
-    const pointAckClaims = coveredClaims.filter((claim) => {
-      return !isClaimCoveredByHighWaterAckCoverage(claim, highWaterAckCoverages)
-    })
-
-    await acknowledgeReviewServingDirtyWorkClaims(pointAckClaims, database)
 
     await advanceReviewServingDirtySourceWatermarkEntries(
       coveredClaims.map((claim) => {
@@ -2446,7 +2187,7 @@ export const completeReviewServingDirtyWorkCoveredByRebuild = async (
   }
 
   await advanceReviewServingDirtySourceWatermarkEntries(
-    highWaterAckCoverages.map((coverage) => {
+    watermarkAdvancingCoverages.map((coverage) => {
       return {
         projectId: coverage.projectId,
         sourceHighWaterMark: coverage.completedSourceHighWaterMark,
@@ -2476,8 +2217,8 @@ export const getReviewServingDirtyWorkUnheldPredicate = (dirtyWorkSql: string | 
 }
 
 // Unheld dirty work whose article a completed rebuild chunk re-read after the change arrived needs no patch: the chunk
-// wrote that article from newer source state. It completes and is acknowledged like projected work. Rows that changed
-// or were claimed since they were selected are left alone.
+// wrote that article from newer source state. It completes and advances the watermark like projected work. Rows that
+// changed or were claimed since they were selected are left alone.
 export const completeReviewServingDirtyWorkRebuiltByChunks = async (
   claims: readonly ReviewServingDirtyWorkClaim[],
   database: ReviewServingDirtyWorkTransaction,
@@ -2515,7 +2256,6 @@ export const completeReviewServingDirtyWorkRebuiltByChunks = async (
     return {completedCount: 0}
   }
 
-  await acknowledgeReviewServingDirtyWorkClaims(completedClaims, database)
   await advanceReviewServingDirtySourceWatermarkEntries(
     [
       ...completedClaims
@@ -2567,283 +2307,52 @@ export const completeReviewServingDirtyWorkClaimsAndAdvanceWatermark = async (
   })
 }
 
-export const compactReviewServingDirtyWorkAcknowledgements = async (
-  input: CompactReviewServingDirtyWorkAcknowledgementsParams,
-  database: ReviewServingDirtyWorkTransaction = getAppDatabaseService(),
+// Completed rows are only history once nothing reads them. Each batch deletes the row, its claim state and its id
+// reservation together: a reservation left behind would make the next upsert of that id update nothing and insert
+// nothing. The owner runs each transaction alone, so the selected rows cannot change before they are deleted.
+const deleteRetainedCompletedReviewServingDirtyWork = async (
+  params: {limit: number; now?: Date; retentionSeconds: number},
+  database: ReviewServingDirtyWorkTransaction,
 ) => {
-  const dirtyAckId = getDirtyAckHighWaterId(input)
+  if (params.limit === 0) {
+    return 0
+  }
 
-  if (await reserveReviewServingDirtyAckId(dirtyAckId, database)) {
+  const tableName = `temp_review_serving_dirty_work_retention_${randomUUID().replaceAll('-', '_')}`
+
+  await database.run(`
+    CREATE TEMP TABLE ${tableName} AS
+    SELECT dirty_work_id
+    FROM app.review_serving_dirty_work
+    WHERE status = 'completed'
+      AND updated_at <= ${getNowSql(params.now)} - INTERVAL '${params.retentionSeconds} seconds'
+    LIMIT ${params.limit}
+  `)
+
+  const [selection] = await database.queryJson<{selectedCount: number | string}>(`
+    SELECT COUNT(*) AS selectedCount
+    FROM ${tableName}
+  `)
+  const selectedCount = Number(selection?.selectedCount ?? 0)
+
+  if (selectedCount > 0) {
     await database.run(`
-      INSERT INTO app.review_serving_dirty_work_ack (
-        dirty_ack_id,
-        dirty_work_id,
-        projection_component,
-        projection_identity,
-        source_partition,
-        completed_source_high_water_mark,
-        dirty_range_start,
-        dirty_range_end,
-        status,
-        completed_at
-      )
-      VALUES (
-        ${getSqlLiteral(dirtyAckId)},
-        NULL,
-        ${getSqlLiteral(input.projectionComponent)},
-        ${getSqlLiteral(input.projectionIdentity)},
-        ${getSqlLiteral(input.sourcePartition)},
-        ${input.completedSourceHighWaterMark},
-        NULL,
-        NULL,
-        'completed',
-        current_timestamp
-      )
+      DELETE FROM app.review_serving_dirty_work_claim_state
+      WHERE dirty_work_id IN (SELECT dirty_work_id FROM ${tableName})
+    `)
+    await database.run(`
+      DELETE FROM app.review_serving_dirty_work_id_lookup
+      WHERE dirty_work_id IN (SELECT dirty_work_id FROM ${tableName})
+    `)
+    await database.run(`
+      DELETE FROM app.review_serving_dirty_work
+      WHERE dirty_work_id IN (SELECT dirty_work_id FROM ${tableName})
     `)
   }
 
-  const compactedDirtyAckIds = await database.queryJson<{dirtyAckId: string}>(`
-    SELECT dirty_ack_id AS dirtyAckId
-    FROM app.review_serving_dirty_work_ack
-    WHERE dirty_ack_id <> ${getSqlLiteral(dirtyAckId)}
-      AND dirty_work_id IS NOT NULL
-      AND projection_component = ${getSqlLiteral(input.projectionComponent)}
-      AND projection_identity = ${getSqlLiteral(input.projectionIdentity)}
-      AND source_partition = ${getSqlLiteral(input.sourcePartition)}
-      AND status = 'completed'
-      AND completed_source_high_water_mark <= ${input.completedSourceHighWaterMark}
-  `)
+  await database.run(`DROP TABLE IF EXISTS ${tableName}`)
 
-  await deleteReviewServingDirtyWorkAcknowledgementsByIds(
-    compactedDirtyAckIds.map((row) => {
-      return row.dirtyAckId
-    }),
-    database,
-  )
-
-  return {compactedThroughHighWaterMark: input.completedSourceHighWaterMark, dirtyAckId}
-}
-
-const getCompletedDirtyWorkCoveredByAckPredicate = (dirtyWorkSql: string) => {
-  const projectionComponentSql = getProjectionComponentSql(dirtyWorkSql)
-  const projectionIdentitySql = getProjectionIdentitySql(dirtyWorkSql)
-
-  return `EXISTS (
-      SELECT 1
-      FROM app.review_serving_dirty_work_ack ack
-      WHERE ack.projection_component = ${projectionComponentSql}
-        AND ack.projection_identity = ${projectionIdentitySql}
-        AND ack.source_partition = ${dirtyWorkSql}.source_partition
-        AND ack.status = 'completed'
-        AND ack.completed_source_high_water_mark >= ${dirtyWorkSql}.latest_source_high_water_mark
-        AND (
-          ack.dirty_work_id = ${dirtyWorkSql}.dirty_work_id
-          OR (
-            ack.dirty_work_id IS NULL
-            AND (
-              (ack.dirty_range_start IS NULL AND ack.dirty_range_end IS NULL)
-              OR (
-                ${dirtyWorkSql}.dirty_range_start IS NOT NULL
-                AND ${dirtyWorkSql}.dirty_range_end IS NOT NULL
-                AND ack.dirty_range_start <= ${dirtyWorkSql}.dirty_range_start
-                AND ack.dirty_range_end >= ${dirtyWorkSql}.dirty_range_end
-              )
-            )
-          )
-        )
-    )`
-}
-
-const getDirtyWorkSourceWatermarkAdvancedPredicate = (dirtyWorkSql: string) => {
-  return `${dirtyWorkSql}.project_id IS NOT NULL
-    AND EXISTS (
-      SELECT 1
-      FROM app.review_serving_project_dirty_source_watermark watermark
-      WHERE watermark.project_id = ${dirtyWorkSql}.project_id
-        AND watermark.source_partition = ${dirtyWorkSql}.source_partition
-        AND watermark.source_high_water_mark >= ${dirtyWorkSql}.latest_source_high_water_mark
-    )`
-}
-
-const getNoLowerRetentionBlockerPredicate = (dirtyWorkSql: string, highWaterMarkSql: string) => {
-  return `NOT EXISTS (
-      SELECT 1
-      FROM app.review_serving_dirty_work blocker
-      WHERE ${getProjectionComponentSql('blocker')} = ${getProjectionComponentSql(dirtyWorkSql)}
-        AND ${getProjectionIdentitySql('blocker')} = ${getProjectionIdentitySql(dirtyWorkSql)}
-        AND blocker.source_partition = ${dirtyWorkSql}.source_partition
-        AND blocker.status <> 'completed'
-        AND blocker.latest_source_high_water_mark <= ${highWaterMarkSql}
-    )`
-}
-
-const getReviewServingDirtyWorkRetentionLanes = async (
-  params: {limit: number},
-  database: ReviewServingDirtyWorkTransaction,
-) => {
-  if (params.limit === 0) {
-    return []
-  }
-
-  return database.queryJson<{
-    completedSourceHighWaterMark: number
-    projectionComponent: ReviewServingProjectionComponent
-    projectionIdentity: string
-    sourcePartition: string
-  }>(`
-    WITH retention_ready_dirty_work AS (
-      SELECT
-        ${getProjectionComponentSql('dirty_work')} AS projectionComponent,
-        ${getProjectionIdentitySql('dirty_work')} AS projectionIdentity,
-        dirty_work.source_partition AS sourcePartition,
-        MAX(dirty_work.latest_source_high_water_mark) AS completedSourceHighWaterMark
-      FROM app.review_serving_dirty_work dirty_work
-      WHERE dirty_work.status = 'completed'
-        AND ${getProjectionComponentSql('dirty_work')} IS NOT NULL
-        AND ${getProjectionIdentitySql('dirty_work')} IS NOT NULL
-        AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('dirty_work')}
-        AND ${getCompletedDirtyWorkCoveredByAckPredicate('dirty_work')}
-        AND ${getNoLowerRetentionBlockerPredicate('dirty_work', 'dirty_work.latest_source_high_water_mark')}
-      GROUP BY
-        projectionComponent,
-        projectionIdentity,
-        dirty_work.source_partition
-    )
-    SELECT
-      projectionComponent,
-      projectionIdentity,
-      sourcePartition,
-      completedSourceHighWaterMark
-    FROM retention_ready_dirty_work retention_lane
-    WHERE projectionComponent IS NOT NULL
-      AND projectionIdentity IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.review_serving_dirty_work blocker
-        WHERE ${getProjectionComponentSql('blocker')} = retention_lane.projectionComponent
-          AND ${getProjectionIdentitySql('blocker')} = retention_lane.projectionIdentity
-          AND blocker.source_partition = retention_lane.sourcePartition
-          AND blocker.status <> 'completed'
-          AND blocker.latest_source_high_water_mark <= retention_lane.completedSourceHighWaterMark
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.review_serving_dirty_work uncovered_completed
-        WHERE ${getProjectionComponentSql('uncovered_completed')} = retention_lane.projectionComponent
-          AND ${getProjectionIdentitySql('uncovered_completed')} = retention_lane.projectionIdentity
-          AND uncovered_completed.source_partition = retention_lane.sourcePartition
-          AND uncovered_completed.status = 'completed'
-          AND uncovered_completed.latest_source_high_water_mark <= retention_lane.completedSourceHighWaterMark
-          AND NOT (
-            ${getProjectionComponentSql('uncovered_completed')} IS NOT NULL
-            AND ${getProjectionIdentitySql('uncovered_completed')} IS NOT NULL
-            AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('uncovered_completed')}
-            AND ${getCompletedDirtyWorkCoveredByAckPredicate('uncovered_completed')}
-          )
-      )
-    ORDER BY projectionComponent ASC, projectionIdentity ASC, sourcePartition ASC
-    LIMIT ${params.limit}
-  `)
-}
-
-const deleteReviewServingDirtyWorkAcknowledgementsForRetention = async (
-  params: {compactions: readonly CleanupReviewServingDirtyWorkRetentionCompaction[]; limit: number},
-  database: ReviewServingDirtyWorkTransaction,
-) => {
-  if (params.limit === 0 || params.compactions.length === 0) {
-    return 0
-  }
-
-  const lanePredicate = params.compactions
-    .map((compaction) => {
-      return `(
-          dirty_ack_id <> ${getSqlLiteral(compaction.dirtyAckId)}
-          AND projection_component = ${getSqlLiteral(compaction.projectionComponent)}
-          AND projection_identity = ${getSqlLiteral(compaction.projectionIdentity)}
-          AND source_partition = ${getSqlLiteral(compaction.sourcePartition)}
-          AND completed_source_high_water_mark <= ${getSqlLiteral(compaction.completedSourceHighWaterMark)}
-        )`
-    })
-    .join('\n        OR ')
-
-  const rows = await database.queryJson<{dirtyAckId: string}>(`
-    SELECT dirty_ack_id AS dirtyAckId
-    FROM app.review_serving_dirty_work_ack
-    WHERE status = 'completed'
-      AND (
-        ${lanePredicate}
-      )
-    ORDER BY completed_source_high_water_mark ASC, dirty_ack_id ASC
-    LIMIT ${params.limit}
-  `)
-
-  return deleteReviewServingDirtyWorkAcknowledgementsByIds(
-    rows.map((row) => {
-      return row.dirtyAckId
-    }),
-    database,
-  )
-}
-
-const deleteReviewServingDirtyWorkAcknowledgementsByIds = async (
-  dirtyAckIds: readonly string[],
-  database: ReviewServingDirtyWorkTransaction,
-) => {
-  const uniqueDirtyAckIds = [...new Set(dirtyAckIds)]
-
-  if (uniqueDirtyAckIds.length === 0) {
-    return 0
-  }
-
-  const rows = await database.queryJson<{dirtyAckId: string}>(`
-    DELETE FROM app.review_serving_dirty_work_ack
-    WHERE dirty_ack_id IN (
-      ${uniqueDirtyAckIds.map(getSqlLiteral).join(', ')}
-    )
-    RETURNING dirty_ack_id AS dirtyAckId
-  `)
-
-  return rows.length
-}
-
-const deleteReviewServingDirtyWorkRowsForRetention = async (
-  params: {limit: number},
-  database: ReviewServingDirtyWorkTransaction,
-) => {
-  if (params.limit === 0) {
-    return 0
-  }
-
-  const rows = await database.queryJson<{dirtyWorkId: string}>(`
-    SELECT dirty_work.dirty_work_id AS dirtyWorkId
-    FROM app.review_serving_dirty_work dirty_work
-    WHERE dirty_work.status = 'completed'
-      AND ${getProjectionComponentSql('dirty_work')} IS NOT NULL
-      AND ${getProjectionIdentitySql('dirty_work')} IS NOT NULL
-      AND ${getDirtyWorkSourceWatermarkAdvancedPredicate('dirty_work')}
-      AND ${getCompletedDirtyWorkCoveredByAckPredicate('dirty_work')}
-      AND ${getNoLowerRetentionBlockerPredicate('dirty_work', 'dirty_work.latest_source_high_water_mark')}
-    ORDER BY dirty_work.updated_at ASC, dirty_work.latest_source_high_water_mark ASC, dirty_work.dirty_work_id ASC
-    LIMIT ${params.limit}
-  `)
-
-  const dirtyWorkIds = rows.map((row) => {
-    return row.dirtyWorkId
-  })
-
-  if (dirtyWorkIds.length === 0) {
-    return 0
-  }
-
-  const deletedRows = await database.queryJson<{dirtyWorkId: string}>(`
-    DELETE FROM app.review_serving_dirty_work
-    WHERE dirty_work_id IN (
-      ${dirtyWorkIds.map(getSqlLiteral).join(', ')}
-    )
-    RETURNING dirty_work_id AS dirtyWorkId
-  `)
-
-  return deletedRows.length
+  return selectedCount
 }
 
 const repairReviewServingDirtyWorkLaneColumns = async (
@@ -2916,12 +2425,9 @@ const repairReviewServingDirtyWorkLaneState = async (
     return 0
   }
 
+  // Open rows without claim state are invisible to claims. Find them by id: a rowid cursor stops working once a
+  // checkpoint renumbers rows after completed work is deleted.
   const rows = await database.queryJson<DirtyWorkRow>(`
-    WITH repair_cursor AS (
-      SELECT COALESCE(MAX(storage_row_id), -1) AS max_storage_row_id
-      FROM app.review_serving_dirty_work_claim_state
-      WHERE storage_row_id IS NOT NULL
-    )
     SELECT
       rowid AS storageRowId,
       dirty_work_id AS dirtyWorkId,
@@ -2943,10 +2449,16 @@ const repairReviewServingDirtyWorkLaneState = async (
       status,
       created_at AS createdAt,
       updated_at AS updatedAt
-    FROM app.review_serving_dirty_work dirty_work, repair_cursor
-    WHERE dirty_work.rowid > repair_cursor.max_storage_row_id
-      AND status IN ('pending', 'running', 'failed')
-    ORDER BY dirty_work.rowid ASC
+    FROM app.review_serving_dirty_work dirty_work
+    WHERE status IN ('pending', 'running', 'failed')
+      AND length(trim(COALESCE(projection_identity, ''))) > 0
+      AND length(trim(source_partition)) > 0
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_serving_dirty_work_claim_state claim_state
+        WHERE claim_state.dirty_work_id = dirty_work.dirty_work_id
+      )
+    ORDER BY dirty_work.updated_at ASC, dirty_work.dirty_work_id ASC
     LIMIT ${params.limit}
   `)
 
@@ -3115,10 +2627,15 @@ export const cleanupReviewServingDirtyWorkRetention = async (
   params: CleanupReviewServingDirtyWorkRetentionParams = {},
   database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,
 ): Promise<CleanupReviewServingDirtyWorkRetentionResult> => {
-  const laneCompactionLimit = getNormalizedCleanupLimit(params.laneCompactionLimit, 0)
-  const acknowledgementDeleteLimit = getNormalizedCleanupLimit(params.acknowledgementDeleteLimit, 0)
   const coalesceDirtyWorkLimit = getNormalizedCleanupLimit(params.coalesceDirtyWorkLimit, defaultCoalesceDirtyWorkLimit)
-  const dirtyWorkDeleteLimit = getNormalizedCleanupLimit(params.dirtyWorkDeleteLimit, 0)
+  const dirtyWorkDeleteLimit = getNormalizedCleanupLimit(
+    params.dirtyWorkDeleteLimit,
+    defaultCompletedDirtyWorkDeleteLimit,
+  )
+  const completedRetentionSeconds = getNormalizedCleanupLimit(
+    params.completedRetentionSeconds,
+    defaultCompletedDirtyWorkRetentionSeconds,
+  )
   // Lane column repair backfills projection_component/projection_identity from projection_key for
   // legacy rows. It must run by default (the worker calls cleanup with {}), bounded per cycle like
   // lane state repair; a 0 default meant production rows were never repaired.
@@ -3145,58 +2662,14 @@ export const cleanupReviewServingDirtyWorkRetention = async (
       {limit: coalesceDirtyWorkLimit},
       tx,
     )
-    const lanes = await getReviewServingDirtyWorkRetentionLanes({limit: laneCompactionLimit}, tx)
-    const deletedDirtyWorkCount = await deleteReviewServingDirtyWorkRowsForRetention({limit: dirtyWorkDeleteLimit}, tx)
-    const compactedAcknowledgements = await lanes.reduce<Promise<CleanupReviewServingDirtyWorkRetentionCompaction[]>>(
-      async (previousCompactions, lane) => {
-        const compactions = await previousCompactions
-        const dirtyAckId = getDirtyAckHighWaterId(lane)
-
-        if (await reserveReviewServingDirtyAckId(dirtyAckId, tx)) {
-          await tx.run(`
-            INSERT INTO app.review_serving_dirty_work_ack (
-              dirty_ack_id,
-              dirty_work_id,
-              projection_component,
-              projection_identity,
-              source_partition,
-              completed_source_high_water_mark,
-              dirty_range_start,
-              dirty_range_end,
-              status,
-              completed_at
-            )
-            VALUES (
-              ${getSqlLiteral(dirtyAckId)},
-              NULL,
-              ${getSqlLiteral(lane.projectionComponent)},
-              ${getSqlLiteral(lane.projectionIdentity)},
-              ${getSqlLiteral(lane.sourcePartition)},
-              ${getSqlLiteral(lane.completedSourceHighWaterMark)},
-              NULL,
-              NULL,
-              'completed',
-              current_timestamp
-            )
-          `)
-        }
-
-        return [...compactions, {...lane, dirtyAckId}]
-      },
-      Promise.resolve([]),
-    )
-
-    const deletedAcknowledgementCount = await deleteReviewServingDirtyWorkAcknowledgementsForRetention(
-      {compactions: compactedAcknowledgements, limit: acknowledgementDeleteLimit},
+    const deletedDirtyWorkCount = await deleteRetainedCompletedReviewServingDirtyWork(
+      {limit: dirtyWorkDeleteLimit, now: params.now, retentionSeconds: completedRetentionSeconds},
       tx,
     )
 
     return {
       coalescedDirtyWorkCount,
-      compactedAcknowledgements,
-      compactedLaneCount: compactedAcknowledgements.length,
       completedOrphanDirtyWorkCount,
-      deletedAcknowledgementCount,
       deletedDirtyWorkCount,
       repairedLaneColumnCount,
       repairedLaneStateCount,

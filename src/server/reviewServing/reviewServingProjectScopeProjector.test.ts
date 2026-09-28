@@ -55,7 +55,7 @@ test('project scope projector writes manifest and acknowledges scoped article wo
   expect(result).toEqual({patchWatermark: 14})
   expect(joined).toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).toContain("'projectScope'")
-  expect(joined).toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).toContain("SET status = 'completed', lifecycle_reason = 'projected'")
   expect(joined).toContain('INSERT INTO app.review_serving_projector_watermark')
   expect(joined).toContain('WHERE NOT EXISTS')
   expect(joined).toContain('DELETE FROM mart.project_scope_article')
@@ -120,5 +120,5 @@ test('project scope no-ack snapshot passes do not publish shared manifests or wa
 
   expect(joined).not.toContain('INSERT INTO app.review_projection_identity_manifest')
   expect(joined).not.toContain('INSERT INTO app.review_serving_projector_watermark')
-  expect(joined).not.toContain('INSERT INTO app.review_serving_dirty_work_ack')
+  expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
 })

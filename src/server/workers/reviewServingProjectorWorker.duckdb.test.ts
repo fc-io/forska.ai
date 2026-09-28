@@ -439,12 +439,7 @@ const getFinalizationCycleDependencies = (): ReviewServingProjectorWorkerDepende
 
   return {
     cleanupDirtyWorkRetention: async () => {
-      return {
-        compactedAcknowledgements: [],
-        compactedLaneCount: 0,
-        deletedAcknowledgementCount: 0,
-        deletedDirtyWorkCount: 0,
-      }
+      return {deletedDirtyWorkCount: 0}
     },
     cleanupStaleCandidateSnapshots: async () => {
       return {failedSnapshots: [], projectIds: [], remainingStaleCandidateCount: 0, skippedSnapshotCount: 0}
