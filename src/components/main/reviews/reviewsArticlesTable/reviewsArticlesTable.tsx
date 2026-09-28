@@ -48,6 +48,7 @@ export type ArticleWithJudgments = ArticleUrlInput & {
   llmSummaryAnswer?: string | null
   judgedPromptIds?: string[]
   isFullyJudged?: boolean
+  hasLlmJudgment?: boolean
   selectedExternalArticleId?: string | null
   selectedImportRecordId?: string | null
   selectedImportRouteId?: string | null
@@ -250,18 +251,32 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
       const isFullyJudged = info.row.original.isFullyJudged
       const judgedCount = info.row.original.judgedPromptIds?.length ?? 0
       const totalJudgments = info.row.original.judgments?.length ?? 0
+      const hasLlmJudgment = info.row.original.hasLlmJudgment ?? judgedCount > 0
 
       return (
         <Show when={isFullyJudged !== undefined} fallback={<span class="text-gray-400">—</span>}>
           <Show
             when={isFullyJudged}
             fallback={
-              <span
-                class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800"
-                title={`${judgedCount} prompt(s) judged, ${totalJudgments} judgment(s)`}
+              <Show
+                when={hasLlmJudgment}
+                fallback={
+                  <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-700" title="No prompts judged yet">
+                    Not judged
+                  </span>
+                }
               >
-                Partial
-              </span>
+                <span
+                  class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800"
+                  title={
+                    judgedCount > 0
+                      ? `${judgedCount} prompt(s) judged, ${totalJudgments} judgment(s)`
+                      : 'Some prompts judged'
+                  }
+                >
+                  Partial
+                </span>
+              </Show>
             }
           >
             <span class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800" title="All prompts judged">

@@ -119,6 +119,7 @@ const createManifestDatabase = (
 
 const createReaderDatabase = (input?: {
   humanRows?: readonly Record<string, unknown>[]
+  llmHasJudgment?: boolean
   llmRows?: readonly Record<string, unknown>[]
   projectHumanJudgmentMode?: 'prompt' | 'summary'
   promptCount?: number
@@ -142,7 +143,14 @@ const createReaderDatabase = (input?: {
       }
 
       if (statement.includes('FROM mart.review_unassessed_queue_article_rank_serving_v4')) {
-        return [{activity_sort_at: '2026-01-04T00:00:00.000Z', article_id: 'article-1', priority_bucket: 1}] as T[]
+        return [
+          {
+            activity_sort_at: '2026-01-04T00:00:00.000Z',
+            article_id: 'article-1',
+            llm_has_judgment: input?.llmHasJudgment ?? false,
+            priority_bucket: 1,
+          },
+        ] as T[]
       }
 
       if (hasArticleServingRowSource(statement)) {
@@ -158,6 +166,7 @@ const createReaderDatabase = (input?: {
             article_id: 'article-1',
             article_title: 'Article 1',
             journal_title: 'Journal',
+            llm_has_judgment: input?.llmHasJudgment ?? false,
             source_metadata: JSON.stringify({covidence: {studyId: 'study-1'}}),
             sort_key: '2026-01-01T00:00:00.000Z',
             url: 'https://example.test/article-1',
@@ -1115,6 +1124,31 @@ test('unassessed review route service pages filtered distinct article rows and q
   forbiddenSqlFragments.forEach((fragment) => {
     expect(sql).not.toContain(fragment)
   })
+})
+
+test('unassessed rows report whether the article has any LLM judgment', async () => {
+  const read = async (llmHasJudgment: boolean) => {
+    const reader = createReaderDatabase({llmHasJudgment})
+    const result = await getUnassessedReviewArticlesFromServing(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: reader.database,
+        manifestDatabase: createManifestDatabase('active'),
+      },
+    )
+    const servingStatement = reader.statements.find((statement) => {
+      return statement.includes('unassessed_queue_page AS')
+    })
+
+    return {row: result.data[0] as Record<string, unknown>, servingStatement}
+  }
+  const unjudged = await read(false)
+  const partial = await read(true)
+
+  expect(unjudged.servingStatement).toContain('list_mode_state.llm_has_judgment')
+  expect(unjudged.row).toMatchObject({hasLlmJudgment: false, isFullyJudged: false, judgedPromptIds: []})
+  expect(partial.row).toMatchObject({hasLlmJudgment: true, isFullyJudged: false})
 })
 
 test('unassessed filtered count cache identity includes LLM status generation', async () => {

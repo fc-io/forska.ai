@@ -104,4 +104,29 @@ describe('ReviewsArticlesTable', () => {
       container.remove()
     }
   })
+
+  test('labels rows without any LLM judgment as not judged instead of partial', () => {
+    const {container, dispose} = renderTable([
+      getArticle({id: 'unjudged', hasLlmJudgment: false, isFullyJudged: false, judgedPromptIds: []}),
+      getArticle({id: 'partial-unloaded', hasLlmJudgment: true, isFullyJudged: false, judgedPromptIds: []}),
+      getArticle({
+        id: 'partial-loaded',
+        isFullyJudged: false,
+        judgedPromptIds: ['prompt-1'],
+        judgments: [{id: 'judgment-1', promptId: 'prompt-1', answeredOriginal: 'yes'}],
+      }),
+      getArticle({id: 'legacy-unjudged', isFullyJudged: false, judgedPromptIds: []}),
+    ])
+
+    try {
+      const statuses = [...container.querySelectorAll('tbody tr')].map((row) => {
+        return row.querySelector('td:nth-child(2) span')?.textContent
+      })
+
+      expect(statuses).toEqual(['Not judged', 'Partial', 'Partial', 'Not judged'])
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
 })
