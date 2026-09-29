@@ -137,6 +137,10 @@ import {
   type ReviewServingSnapshotPurgeResult,
 } from '../reviewServing/reviewServingSnapshotPurge.ts'
 import {
+  closeStaleReviewServingRebuildRequests,
+  type CloseStaleReviewServingRebuildRequestsResult,
+} from '../reviewServing/reviewServingStaleRebuildRequestCleanup.ts'
+import {
   getDropUnpublishedReviewServingSummaryLedgerBucketsStatements,
   planReviewServingSummaryLedgerPatches,
   reviewServingSummaryBucketTable,
@@ -147,6 +151,7 @@ import {
   projectReviewServingSummaries,
   reduceReviewServingSummaryRebuildPartialsForRequestSnapshots,
 } from '../reviewServing/reviewServingSummaryProjector.ts'
+import {getReviewServingClosedRebuildRequestLastErrorSql} from '../reviewServing/reviewServingSupersededRebuildChunk.ts'
 import {
   projectReviewServingTitleSearchRebuildRanges,
   projectReviewServingTitleSearchRebuildRows,
@@ -260,6 +265,7 @@ type ReviewServingProjectorWorkerDependencies = {
   coalesceBootstrapRebuildTrains?: typeof coalesceReviewServingV4BootstrapTrains
   retireRebuiltDirtyWork?: typeof retireReviewServingDirtyWorkRebuiltByChunks
   cleanupStaleCandidateSnapshots?: typeof cleanupStaleCandidateReviewServingSnapshotManifests
+  closeStaleRebuildRequests?: typeof closeStaleReviewServingRebuildRequests
   getDatabase?: () => ReviewServingProjectorWorkerDatabase
     & ReviewServingChunkManifestRepositoryDatabase
     & ReviewServingSnapshotPurgeDatabase
@@ -442,17 +448,23 @@ type ReviewServingProjectorWorkerSnapshotPurgeResult =
   | (ReviewServingSnapshotPurgeResult & {status: 'completed'})
   | {error: string; status: 'failed'}
 
+type ReviewServingProjectorWorkerStaleRequestCleanupResult =
+  | (CloseStaleReviewServingRebuildRequestsResult & {status: 'completed'})
+  | {error: string; status: 'failed'}
+
 type ReviewServingProjectorWorkerCleanupResult =
   | {
       dirtyWorkRetentionCleanup: CleanupReviewServingDirtyWorkRetentionResult | null
       snapshotPurge: ReviewServingProjectorWorkerSnapshotPurgeResult | null
       staleCandidateCleanup: ReviewServingProjectorWorkerStaleCandidateCleanupResult | null
+      staleRequestCleanup: ReviewServingProjectorWorkerStaleRequestCleanupResult | null
       status: 'completed'
     }
   | {
       dirtyWorkRetentionCleanup: CleanupReviewServingDirtyWorkRetentionResult | null
       snapshotPurge: ReviewServingProjectorWorkerSnapshotPurgeResult | null
       staleCandidateCleanup: ReviewServingProjectorWorkerStaleCandidateCleanupResult | null
+      staleRequestCleanup: ReviewServingProjectorWorkerStaleRequestCleanupResult | null
       status: 'skipped'
     }
 
@@ -5780,6 +5792,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   collectGarbageAfterCompletedRebuildChunk,
   cleanupDirtyWorkRetention: cleanupReviewServingDirtyWorkRetention,
   cleanupStaleCandidateSnapshots: cleanupStaleCandidateReviewServingSnapshotManifests,
+  closeStaleRebuildRequests: closeStaleReviewServingRebuildRequests,
   getDatabase: getAppDatabaseService as ReviewServingProjectorWorkerDependencies['getDatabase'],
   getAppendQueueDepth: () => {
     return getDuckdbAppendRuntimeMetrics().queueDepth
@@ -6238,7 +6251,8 @@ const getErrorText = (error: unknown) => {
 // A request superseded by a newer one with the same reason and components is finished for good: the newer request
 // rebuilds the same components from later source state. Its leftover chunks are closed when it is superseded, and
 // it is never readmitted; otherwise every superseded request of a project came back at once as soon as the project
-// had no active request (465 selectedImport requests with 235k pending chunks on one project).
+// had no active request (465 selectedImport requests with 235k pending chunks on one project). The same holds for
+// every other request failed as superseded or coalesced (see getReviewServingClosedRebuildRequestLastErrorSql).
 const supersededForegroundRebuildRequestError = 'superseded by newer foreground rebuild request'
 
 const readmitRetryableFailedRebuildRequests = async (input: {
@@ -6259,7 +6273,7 @@ const readmitRetryableFailedRebuildRequests = async (input: {
       updated_at = current_timestamp
     WHERE request.status = 'failed'
       AND request.admission_state = 'admitted'
-      AND COALESCE(request.last_error, '') <> ${getSqlLiteral(supersededForegroundRebuildRequestError)}
+      AND NOT ${getReviewServingClosedRebuildRequestLastErrorSql('request')}
       ${projectCondition}
       AND ${getReviewServingRebuildRequestReadmittableChunksSql('request')}
       AND NOT EXISTS (
@@ -8255,6 +8269,7 @@ export const getReviewServingProjectorWorkerCycleLogAttrs = (result: ReviewServi
     chunkStatus: result.chunk.status,
     cleanupSnapshotPurge: getSnapshotPurgeLogAttrs(result.cleanup.snapshotPurge),
     cleanupStaleCandidateCleanup: result.cleanup.staleCandidateCleanup,
+    cleanupStaleRequestCleanup: getStaleRequestCleanupLogAttrs(result.cleanup.staleRequestCleanup),
     cleanupStatus: result.cleanup.status,
     dirtyWorkRetentionCleanup: result.cleanup.dirtyWorkRetentionCleanup,
     component: 'reviewServingProjectorWorker',
@@ -10532,6 +10547,103 @@ const runReviewServingProjectorWorkerStaleCandidateCleanup = async ({
   }
 }
 
+const isForegroundDuckdbWorkWaitingForReviewServingProjectorWorker = (
+  dependencies: ReviewServingProjectorWorkerDependencies,
+  options: ReviewServingProjectorWorkerCycleOptions,
+) => {
+  return (
+    options.signal?.aborted === true
+    || hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker(dependencies)
+    || hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
+  )
+}
+
+const getStaleRequestCleanupCloseReasonCounts = (result: CloseStaleReviewServingRebuildRequestsResult) => {
+  return result.closedRequests.reduce<Record<string, number>>((counts, request) => {
+    return {...counts, [request.reason]: (counts[request.reason] ?? 0) + 1}
+  }, {})
+}
+
+const getStaleRequestCleanupLogAttrs = (result: ReviewServingProjectorWorkerStaleRequestCleanupResult | null) => {
+  if (result === null || result.status === 'failed') {
+    return result
+  }
+
+  return {
+    closedRequestCount: result.closedRequests.length,
+    closedRequestReasons: getStaleRequestCleanupCloseReasonCounts(result),
+    deletedChunkRows: result.deletedChunkRows,
+    elapsedMs: result.elapsedMs,
+    failedChunkRows: result.failedChunkRows,
+    failedSnapshotCount: result.failedSnapshots.length,
+    keptRequestCount: result.keptRequestIds.length,
+    status: result.status,
+    stopReason: result.stopReason,
+  }
+}
+
+const logReviewServingProjectorWorkerStaleRequestCleanup = (result: CloseStaleReviewServingRebuildRequestsResult) => {
+  reviewServingProjectorWorkerCycleLogger.log(
+    'review-serving-projector-worker:stale-request-cleanup',
+    '[reviewServingProjectorWorker] closed rebuild requests that can never do useful work',
+    {
+      ...getStaleRequestCleanupLogAttrs({...result, status: 'completed'}),
+      closedRequests: result.closedRequests,
+      component: 'reviewServingProjectorWorker',
+      event: 'staleRequestCleanup',
+      failedSnapshots: result.failedSnapshots,
+    },
+  )
+}
+
+const runReviewServingProjectorWorkerStaleRequestCleanup = async ({
+  database,
+  dependencies,
+  options,
+}: {
+  database: ReviewServingSnapshotPurgeDatabase
+  dependencies: ReviewServingProjectorWorkerDependencies
+  options: ReviewServingProjectorWorkerCycleOptions
+}): Promise<ReviewServingProjectorWorkerStaleRequestCleanupResult | null> => {
+  const closeStaleRebuildRequests = dependencies.closeStaleRebuildRequests
+
+  if (closeStaleRebuildRequests === undefined) {
+    return null
+  }
+
+  try {
+    const result = await closeStaleRebuildRequests(
+      {
+        nowMs: dependencies.nowMs ?? Date.now,
+        projectId: options.rebuildProjectId,
+        shouldYield: () => {
+          return isForegroundDuckdbWorkWaitingForReviewServingProjectorWorker(dependencies, options)
+        },
+      },
+      database,
+    )
+
+    if (
+      result.closedRequests.length > 0
+      || result.failedSnapshots.length > 0
+      || result.deletedChunkRows > 0
+      || result.failedChunkRows > 0
+    ) {
+      logReviewServingProjectorWorkerStaleRequestCleanup(result)
+    }
+
+    return {...result, status: 'completed'}
+  } catch (error) {
+    reviewServingProjectorWorkerCycleLogger.warn(
+      'review-serving-projector-worker:stale-request-cleanup:failed',
+      '[reviewServingProjectorWorker] stale rebuild request cleanup failed',
+      {component: 'reviewServingProjectorWorker', error, event: 'staleRequestCleanupFailed'},
+    )
+
+    return {error: getErrorText(error), status: 'failed'}
+  }
+}
+
 const getSnapshotPurgeOutcomeCount = (
   result: ReviewServingSnapshotPurgeResult,
   outcome: ReviewServingSnapshotPurgeResult['snapshots'][number]['outcome'],
@@ -10592,11 +10704,7 @@ const runReviewServingProjectorWorkerSnapshotPurge = async ({
         nowMs: dependencies.nowMs ?? Date.now,
         projectId: options.rebuildProjectId,
         shouldYield: () => {
-          return (
-            options.signal?.aborted === true
-            || hasActiveDuckdbExclusiveWorkForReviewServingProjectorWorker(dependencies)
-            || hasForegroundDuckdbWorkQueuedForReviewServingProjectorWorker(dependencies)
-          )
+          return isForegroundDuckdbWorkWaitingForReviewServingProjectorWorker(dependencies, options)
         },
       },
       database,
@@ -10640,13 +10748,21 @@ const runReviewServingProjectorWorkerCleanup = async ({
 
   const dirtyWorkRetentionCleanup = (await dependencies.cleanupDirtyWorkRetention?.({}, database)) ?? null
   const staleCandidateCleanup = await runReviewServingProjectorWorkerStaleCandidateCleanup({database, dependencies})
+  const staleRequestCleanup = await runReviewServingProjectorWorkerStaleRequestCleanup({
+    database,
+    dependencies,
+    options,
+  })
   const snapshotPurge = await runReviewServingProjectorWorkerSnapshotPurge({database, dependencies, options})
   const status =
-    dirtyWorkRetentionCleanup === null && staleCandidateCleanup === null && snapshotPurge === null
+    dirtyWorkRetentionCleanup === null
+    && staleCandidateCleanup === null
+    && staleRequestCleanup === null
+    && snapshotPurge === null
       ? 'skipped'
       : 'completed'
 
-  return {dirtyWorkRetentionCleanup, snapshotPurge, staleCandidateCleanup, status}
+  return {dirtyWorkRetentionCleanup, snapshotPurge, staleCandidateCleanup, staleRequestCleanup, status}
 }
 
 const getDeltaIntakePartitionSample = async (
@@ -11125,7 +11241,13 @@ type ReviewServingProjectorWorkerCycleWork = {
 }
 
 const getSkippedReviewServingProjectorWorkerCleanupResult = (): ReviewServingProjectorWorkerCleanupResult => {
-  return {dirtyWorkRetentionCleanup: null, snapshotPurge: null, staleCandidateCleanup: null, status: 'skipped'}
+  return {
+    dirtyWorkRetentionCleanup: null,
+    snapshotPurge: null,
+    staleCandidateCleanup: null,
+    staleRequestCleanup: null,
+    status: 'skipped',
+  }
 }
 
 const runReviewServingProjectorWorkerChunkBatchPhase = async (context: ReviewServingProjectorWorkerCycleContext) => {
@@ -11337,12 +11459,7 @@ export const runReviewServingProjectorWorkerCycle = async (
 
   if (cycleAdmission.blockedReason !== null) {
     const chunk = getIdleReviewServingProjectorWorkerCycleChunkResult()
-    const cleanup = {
-      dirtyWorkRetentionCleanup: null,
-      snapshotPurge: null,
-      staleCandidateCleanup: null,
-      status: 'skipped' as const,
-    }
+    const cleanup = getSkippedReviewServingProjectorWorkerCleanupResult()
     const deltaIntake = getIdleReviewServingProjectorWorkerDeltaIntakeResult()
     const projector = getBlockedReviewServingProjectorWakeResult(cycleAdmission.blockedReason)
 

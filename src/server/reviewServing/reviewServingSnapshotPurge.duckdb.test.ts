@@ -563,6 +563,97 @@ test('keeps snapshots that live pins, jobs and open rebuild requests name', asyn
   )
 })
 
+test('snapshots only closed requests name are purged, whatever their leftover chunks look like', async () => {
+  const projectId = 'project-closed-requests'
+  const snapshots = {
+    closedBlocked: {projectId, snapshotId: 'snapshot-closed-blocked'},
+    closedSuperseded: {projectId, snapshotId: 'snapshot-closed-superseded'},
+    retryable: {projectId, snapshotId: 'snapshot-still-retryable'},
+    terminalChunk: {projectId, snapshotId: 'snapshot-terminal-chunk'},
+  }
+  const insertFailedRequest = async (input: {admissionState: string; lastError: string; requestId: string}) => {
+    await insertGeneratedRows({
+      count: 1,
+      overrides: {
+        admission_state: `'${input.admissionState}'`,
+        identity_json: `'{}'::JSON`,
+        last_error: `'${input.lastError}'`,
+        request_id: `'${input.requestId}'`,
+        requested_components_json: `'["display"]'::JSON`,
+        retry_policy_json: `'{"maxAttempts":3}'::JSON`,
+        status: `'failed'`,
+      },
+      projectId,
+      snapshotId: input.requestId,
+      table: 'app.review_rebuild_request',
+    })
+  }
+  const insertChunk = async (input: SnapshotKey & {requestId: string; status: string; tag: string}) => {
+    await insertGeneratedRows({
+      count: 1,
+      overrides: {
+        admission_state: `'admitted'`,
+        request_id: `'${input.requestId}'`,
+        retry_count: '0',
+        status: `'${input.status}'`,
+      },
+      projectId,
+      snapshotId: input.snapshotId,
+      table: 'app.review_rebuild_chunk_manifest',
+      tag: input.tag,
+    })
+  }
+
+  await Object.values(snapshots).reduce<Promise<void>>(async (previous, snapshot) => {
+    await previous
+    await insertSnapshot({...snapshot, failedHoursAgo: 3, status: 'failed', updatedHoursAgo: 3})
+  }, Promise.resolve())
+  await insertFailedRequest({
+    admissionState: 'admitted',
+    lastError: 'superseded: project archived',
+    requestId: 'request-closed-superseded',
+  })
+  await insertChunk({...snapshots.closedSuperseded, requestId: 'request-closed-superseded', status: 'failed', tag: 'a'})
+  await insertFailedRequest({
+    admissionState: 'blocked_over_budget',
+    lastError: 'superseded: review config changed',
+    requestId: 'request-closed-blocked',
+  })
+  await insertChunk({
+    ...snapshots.closedBlocked,
+    requestId: 'request-closed-blocked',
+    status: 'blocked_over_budget',
+    tag: 'a',
+  })
+  await insertFailedRequest({
+    admissionState: 'admitted',
+    lastError: 'Out of Memory',
+    requestId: 'request-terminal-chunk',
+  })
+  await insertChunk({...snapshots.terminalChunk, requestId: 'request-terminal-chunk', status: 'failed', tag: 'a'})
+  await insertChunk({...snapshots.terminalChunk, requestId: 'request-terminal-chunk', status: 'quarantined', tag: 'b'})
+  await insertFailedRequest({admissionState: 'admitted', lastError: 'Out of Memory', requestId: 'request-retryable'})
+  await insertChunk({...snapshots.retryable, requestId: 'request-retryable', status: 'failed', tag: 'a'})
+
+  const result = await purgeProject(projectId, {maxSnapshots: 20})
+
+  expect(
+    result.snapshots
+      .map((snapshot) => {
+        return snapshot.snapshotId
+      })
+      .sort(),
+  ).toEqual(
+    [snapshots.closedBlocked, snapshots.closedSuperseded, snapshots.terminalChunk].map((snapshot) => {
+      return snapshot.snapshotId
+    }),
+  )
+  await expectSnapshotPurged(snapshots.closedBlocked)
+  await expectSnapshotPurged(snapshots.closedSuperseded)
+  await expectSnapshotPurged(snapshots.terminalChunk)
+  expect(await getSnapshotStatus(snapshots.retryable)).toBe('failed')
+})
+
 test('a snapshot id a rebuild re-creates while it is purged keeps every row written for the new candidate', async () => {
   const projectId = 'project-recreated'
   const snapshot = {projectId, snapshotId: 'snapshot-recreated'}

@@ -31,6 +31,7 @@ const sqlGuardExcludedFiles = new Set([
   join(reviewServingSourceRoot, 'reviewServingChunkManifestRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingRebuildRequestRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingSnapshotPurge.ts'),
+  join(reviewServingSourceRoot, 'reviewServingStaleRebuildRequestCleanup.ts'),
   join(reviewServingSourceRoot, 'reviewServingReviewConfig.ts'),
   join(reviewServingSourceRoot, 'reviewServingDiagnosticsRepository.ts'),
   join(reviewServingSourceRoot, 'reviewServingDirtyWorkService.ts'),
@@ -57,6 +58,7 @@ const reviewServingMaintenanceAdmissionFiles = [
   'reviewServingProjectorDomain.ts',
   'reviewServingProjectorWriter.ts',
   'reviewServingRebuildRequestRepository.ts',
+  'reviewServingStaleRebuildRequestCleanup.ts',
   'reviewServingV4RebuildRequestService.ts',
 ] as const
 const reviewServingBoundedForegroundAggregationFiles = [
