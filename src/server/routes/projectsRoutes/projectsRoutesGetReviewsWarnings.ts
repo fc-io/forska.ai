@@ -59,6 +59,7 @@ const foregroundReviewServingRepairPriority = 1_000
 const stalledForegroundReviewServingRepairPriority = 10_000
 const filterEnrichmentReviewServingRepairPriority = 500
 const detailEnrichmentReviewServingRepairPriority = 500
+const searchEnrichmentReviewServingRepairPriority = 500
 const warningFilterEnrichmentReviewServingComponents = [
   ...filterReadyReviewServingComponents,
   'queue',
@@ -777,6 +778,28 @@ const getReviewsWarningsPayload = async (input: {
       priority: detailEnrichmentReviewServingRepairPriority,
       projectId,
       reason: 'detailReadinessDirtyWork',
+    }).catch(() => {
+      return undefined
+    })
+  }
+
+  // A served snapshot without search (one built before search was carried forward, or a search build that was given
+  // up) only regains it from search dirty work, which a quiet project never produces. Ask for it here like the other
+  // enrichments; the planner adds it to the active snapshot in place.
+  const shouldRequestSearchEnrichment =
+    !isServerMutationWorkDisabled
+    && !reviewServingProjectorPaused
+    && hasReadableReviewServingRows
+    && coverage.filterReadyArticleCount !== null
+    && coverage.detailReadyArticleCount !== null
+    && coverage.searchReadyArticleCount === null
+
+  if (shouldRequestSearchEnrichment) {
+    await requestReviewServingV4Rebuild({
+      components: ['search'],
+      priority: searchEnrichmentReviewServingRepairPriority,
+      projectId,
+      reason: 'searchReadinessDirtyWork',
     }).catch(() => {
       return undefined
     })
