@@ -1022,7 +1022,7 @@ test('next claimable chunk discovery returns maintained identity and checksum', 
     /candidate\.projection_component = 'search'[\s\S]*prerequisite\.projection_component IN \('projectScope', 'selectedImport'\)/,
   )
   expect(statements.join('\n')).toContain(
-    "prerequisite.projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload')",
+    "prerequisite.projection_component IN ('projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload', 'posting')",
   )
   expect(statements.join('\n')).toContain("prerequisite.status <> 'completed'")
   expect(statements.join('\n')).not.toContain("prerequisite.status IN ('failed', 'blocked_over_budget', 'quarantined')")

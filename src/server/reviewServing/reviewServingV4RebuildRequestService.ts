@@ -2608,23 +2608,36 @@ const getReviewServingV4ActiveTrainAnswer = async (
   return {answers, needsTrain}
 }
 
-// The components a request has chunks for in one snapshot, i.e. the ones it builds there.
+// The components a request has chunks for in one snapshot, i.e. the ones it builds there, and those of them it already
+// started reading inputs for (a chunk ran or completed; split parents never read).
 const getReviewServingV4RequestSnapshotComponents = async (
   input: {requestId: string; snapshotId: string},
   database: ReviewServingChunkManifestRepositoryTransaction,
 ) => {
-  const rows = await database.queryJson<{component: ReviewServingProjectionComponent}>(`
-    SELECT DISTINCT projection_component AS component
+  const rows = await database.queryJson<{component: ReviewServingProjectionComponent; started: boolean}>(`
+    SELECT
+      projection_component AS component,
+      bool_or(
+        status = 'running' OR (status = 'completed' AND COALESCE(checksum, '') NOT LIKE 'split:%')
+      ) AS started
     FROM app.review_rebuild_chunk_manifest
     WHERE request_id = ${getSqlLiteral(input.requestId)}
       AND snapshot_id = ${getSqlLiteral(input.snapshotId)}
+    GROUP BY projection_component
   `)
 
-  return new Set(
-    rows.map((row) => {
-      return row.component
-    }),
-  )
+  return {
+    components: new Set(
+      rows.map((row) => {
+        return row.component
+      }),
+    ),
+    startedComponents: new Set(
+      rows.flatMap((row) => {
+        return row.started ? [row.component] : []
+      }),
+    ),
+  }
 }
 
 // Adds components to a live snapshot's lists and state in place, after seeding their identity manifests. Recreating
@@ -2748,12 +2761,13 @@ const extendReviewServingV4BootstrapTrain = async (
     return null
   }
 
-  const trainComponents = isActiveTrain
+  const trainSnapshotComponents = isActiveTrain
     ? await getReviewServingV4RequestSnapshotComponents(
         {requestId: input.requestId, snapshotId: input.snapshotId},
         database,
       )
-    : snapshotComponentSet
+    : null
+  const trainComponents = trainSnapshotComponents?.components ?? snapshotComponentSet
   const refreshedComponents = getCanonicalReviewServingComponents(
     isActiveTrain
       ? getReviewServingV4DirtyWorkRebuiltComponents(input).filter((component) => {
@@ -2787,6 +2801,11 @@ const extendReviewServingV4BootstrapTrain = async (
       return isReviewServingV4InPlaceRefreshable(snapshot, {component, projectId: input.projectId})
     })
     || activeTrainAnswer?.answers === false
+    // Chunks of a dirty-work component the train already ran may have read the rows before the change: the request
+    // waits for the train to finish that component instead of being handed to it.
+    || getReviewServingV4DirtyWorkRebuiltComponents(input).some((component) => {
+      return trainSnapshotComponents?.startedComponents.has(component) === true
+    })
     || (refreshedComponents.length > 0
       && (
         await getReviewServingV4OpenRequestsBuildingSnapshotComponents(
@@ -3335,9 +3354,12 @@ const getReviewServingV4ServedOrBuildingDecision = (input: {
     : {buildingRequestId: input.buildingRequestId, kind: 'building', snapshot: input.snapshot}
 }
 
-// Requests that still build a component of the snapshot: admitted ones, and failed ones that readmission brings back
-// (not superseded or coalesced, no terminal chunk). Such a component is waited on, not rebuilt by a second request at
-// the same time: two summary builds of one snapshot would each drop the other's ledger buckets when they publish.
+// Requests that still build a component of the snapshot: ones with unfinished chunks of that very component (a retried
+// failed chunk counts until it runs out of attempts), and, for summary, ones that built it but have not published it
+// yet. Admitted requests count, and failed ones readmission would bring back (not superseded or coalesced, no terminal
+// chunk); the caller readmits those rather than waiting for the project to go idle. Such a component is waited on, not
+// rebuilt by a second request at the same time: two summary builds of one snapshot would each drop the other's ledger
+// buckets when they publish.
 const getReviewServingV4OpenRequestsBuildingSnapshotComponents = async (
   input: {
     components: readonly ReviewServingProjectionComponent[]
@@ -3353,7 +3375,14 @@ const getReviewServingV4OpenRequestsBuildingSnapshotComponents = async (
 
   const rows = await database.queryJson<{component: ReviewServingProjectionComponent; requestId: string}>(`
     WITH open_request AS (
-      SELECT request.request_id, request.priority
+      SELECT
+        request.request_id,
+        request.priority,
+        request.status,
+        COALESCE(
+          GREATEST(1, TRY_CAST(json_extract_string(request.retry_policy_json, '$.maxAttempts') AS INTEGER)),
+          3
+        ) AS max_attempts
       FROM app.review_rebuild_request request
       WHERE request.project_id = ${getSqlLiteral(input.projectId)}
         ${input.excludedRequestId === undefined ? '' : `AND request.request_id <> ${getSqlLiteral(input.excludedRequestId)}`}
@@ -3362,29 +3391,42 @@ const getReviewServingV4OpenRequestsBuildingSnapshotComponents = async (
           request.status IN ('admitted', 'running')
           OR (request.status = 'failed' AND ${getReviewServingV4ReadmittableFailedRequestSql('request')})
         )
-        AND EXISTS (
-          SELECT 1
-          FROM app.review_rebuild_chunk_manifest open_chunk
-          WHERE open_chunk.request_id = request.request_id
-            AND open_chunk.status IN ('pending', 'running', 'failed')
-        )
         AND NOT EXISTS (
           SELECT 1
           FROM app.review_rebuild_chunk_manifest terminal_chunk
           WHERE terminal_chunk.request_id = request.request_id
             AND terminal_chunk.status IN ('blocked_over_budget', 'quarantined')
         )
+    ),
+    building AS (
+      SELECT chunk.projection_component AS component, open_request.request_id, open_request.priority
+      FROM app.review_rebuild_chunk_manifest chunk
+      INNER JOIN open_request
+        ON open_request.request_id = chunk.request_id
+      WHERE chunk.project_id = ${getSqlLiteral(input.projectId)}
+        AND chunk.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND chunk.projection_component IN (${input.components.map(getSqlLiteral).join(', ')})
+        AND (
+          chunk.status IN ('pending', 'running')
+          OR (chunk.status = 'failed' AND COALESCE(chunk.retry_count, 0) < open_request.max_attempts)
+        )
+      ${
+        input.components.includes('summary')
+          ? `UNION ALL
+      SELECT 'summary' AS component, open_request.request_id, open_request.priority
+      FROM ${reviewServingSummaryBucketTable} bucket
+      INNER JOIN open_request
+        ON open_request.request_id = bucket.request_id
+      WHERE bucket.project_id = ${getSqlLiteral(input.projectId)}
+        AND bucket.snapshot_id = ${getSqlLiteral(input.snapshotId)}
+        AND bucket.ledger_status = 'building'
+        AND open_request.status IN ('admitted', 'running')`
+          : ''
+      }
     )
-    SELECT
-      chunk.projection_component AS component,
-      arg_max(open_request.request_id, open_request.priority) AS requestId
-    FROM app.review_rebuild_chunk_manifest chunk
-    INNER JOIN open_request
-      ON open_request.request_id = chunk.request_id
-    WHERE chunk.project_id = ${getSqlLiteral(input.projectId)}
-      AND chunk.snapshot_id = ${getSqlLiteral(input.snapshotId)}
-      AND chunk.projection_component IN (${input.components.map(getSqlLiteral).join(', ')})
-    GROUP BY chunk.projection_component
+    SELECT component, arg_max(request_id, priority) AS requestId
+    FROM building
+    GROUP BY component
   `)
 
   return new Map(
@@ -3392,6 +3434,31 @@ const getReviewServingV4OpenRequestsBuildingSnapshotComponents = async (
       return [row.component, row.requestId] as const
     }),
   )
+}
+
+// A failed request that still builds a component another request waits on is brought back now: the worker only
+// readmits failed requests once their project has no other admitted request, which a busy project may never reach.
+const readmitReviewServingV4FailedBuildingRequest = async (
+  input: {requestId: string},
+  database: ReviewServingChunkManifestRepositoryTransaction,
+) => {
+  await database.run(`
+    UPDATE app.review_rebuild_request AS request
+    SET
+      status = 'admitted',
+      retry_after = NULL,
+      failed_at = NULL,
+      last_error = NULL,
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      updated_at = current_timestamp
+    WHERE request.request_id = ${getSqlLiteral(input.requestId)}
+      AND request.status = 'failed'
+      AND request.admission_state = 'admitted'
+      AND ${getReviewServingV4ReadmittableFailedRequestSql('request')}
+  `)
+
+  return getReviewServingRebuildRequest({requestId: input.requestId}, database)
 }
 
 const hasSameReviewServingV4SnapshotComponents = (
@@ -3752,365 +3819,419 @@ const getReviewServingV4ReplacedSnapshot = async (
       }
 }
 
-export const requestReviewServingV4RebuildEffect = (
+const planReviewServingV4Rebuild = async (
   input: RequestReviewServingV4RebuildInput,
-  database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase,
-) => {
-  return Effect.tryPromise(async () => {
-    const workloadContext = getReviewServingV4RebuildRequestWorkloadContext(input.projectId)
-    const requestDatabase = getContextualReviewServingV4RebuildRequestDatabase(database, workloadContext)
-    const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(
-      input.projectId,
-      requestDatabase,
-      workloadContext,
-    )
-    const hasExplicitComponents = input.components !== undefined
-    const shouldUsePageFirstBootstrapDependencies =
-      input.reason === 'missingReviewServingSnapshot'
-      && (input.pageFirstOnly === true || (!hasExplicitComponents && input.pageFirstOnly !== false))
-    const requestedComponents =
-      input.components
-      ?? (shouldUsePageFirstBootstrapDependencies
-        ? pageFirstReviewServingV4RebuildComponents
-        : defaultReviewServingV4RebuildComponents)
-    const requestPriority =
-      input.priority
-      ?? (input.reason === 'missingReviewServingSnapshot' && shouldUsePageFirstBootstrapDependencies
-        ? coldMissingSnapshotBootstrapPriority
-        : undefined)
-    const isRequestedOptionalDirtyWorkBootstrap =
-      input.reason.endsWith('DirtyWork')
-      && requestedComponents.length > 0
-      && requestedComponents.every((component) => {
-        return bootstrapOptionalComponentSet.has(component)
-      })
-    const isRequestedComponentBootstrap =
-      input.reason === 'filterReadinessEnrichment' || isRequestedOptionalDirtyWorkBootstrap
-    const shouldReuseActiveRequest = input.reason === 'missingReviewServingSnapshot' || isRequestedComponentBootstrap
-    const activeRequest = shouldReuseActiveRequest
-      ? await getActiveReviewServingRebuildRequestForProject(
-          {projectId: input.projectId, reason: input.reason, requestedComponents, reviewConfigHash},
-          requestDatabase,
-        )
-      : null
+  database: ReviewServingChunkManifestRepositoryDatabase,
+): Promise<ReviewServingRebuildRequest> => {
+  const workloadContext = getReviewServingV4RebuildRequestWorkloadContext(input.projectId)
+  const requestDatabase = getContextualReviewServingV4RebuildRequestDatabase(database, workloadContext)
+  const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(
+    input.projectId,
+    requestDatabase,
+    workloadContext,
+  )
+  const hasExplicitComponents = input.components !== undefined
+  const shouldUsePageFirstBootstrapDependencies =
+    input.reason === 'missingReviewServingSnapshot'
+    && (input.pageFirstOnly === true || (!hasExplicitComponents && input.pageFirstOnly !== false))
+  const requestedComponents =
+    input.components
+    ?? (shouldUsePageFirstBootstrapDependencies
+      ? pageFirstReviewServingV4RebuildComponents
+      : defaultReviewServingV4RebuildComponents)
+  const requestPriority =
+    input.priority
+    ?? (input.reason === 'missingReviewServingSnapshot' && shouldUsePageFirstBootstrapDependencies
+      ? coldMissingSnapshotBootstrapPriority
+      : undefined)
+  const isRequestedOptionalDirtyWorkBootstrap =
+    input.reason.endsWith('DirtyWork')
+    && requestedComponents.length > 0
+    && requestedComponents.every((component) => {
+      return bootstrapOptionalComponentSet.has(component)
+    })
+  const isRequestedComponentBootstrap =
+    input.reason === 'filterReadinessEnrichment' || isRequestedOptionalDirtyWorkBootstrap
+  const shouldReuseActiveRequest = input.reason === 'missingReviewServingSnapshot' || isRequestedComponentBootstrap
+  const activeRequest = shouldReuseActiveRequest
+    ? await getActiveReviewServingRebuildRequestForProject(
+        {projectId: input.projectId, reason: input.reason, requestedComponents, reviewConfigHash},
+        requestDatabase,
+      )
+    : null
 
-    const activeRequestUsesLegacyRequiredEnrichmentBootstrap =
-      activeRequest !== null && input.reason === 'missingReviewServingSnapshot'
-        ? await hasLegacyRequiredEnrichmentBootstrapCandidate(
-            {projectId: input.projectId, reviewConfigHash},
-            requestDatabase,
-          )
-        : false
-
-    if (activeRequest !== null && !activeRequestUsesLegacyRequiredEnrichmentBootstrap) {
-      if (requestPriority !== undefined && activeRequest.priority <= requestPriority) {
-        return (
-          (await boostReviewServingRebuildRequestPriority(
-            {priority: requestPriority, requestId: activeRequest.requestId},
-            requestDatabase,
-          )) ?? activeRequest
-        )
-      }
-
-      return activeRequest
-    }
-
-    const canJoinBootstrapTrain =
-      shouldReuseActiveRequest
-      && (input.reason !== 'missingReviewServingSnapshot'
-        || !(await hasLegacyRequiredEnrichmentBootstrapCandidate(
+  const activeRequestUsesLegacyRequiredEnrichmentBootstrap =
+    activeRequest !== null && input.reason === 'missingReviewServingSnapshot'
+      ? await hasLegacyRequiredEnrichmentBootstrapCandidate(
           {projectId: input.projectId, reviewConfigHash},
           requestDatabase,
-        )))
-    const bootstrapComponents = getReviewServingV4BootstrapComponents({
-      components: isRequestedOptionalDirtyWorkBootstrap
-        ? getOptionalDirtyWorkBootstrapComponents(requestedComponents)
-        : requestedComponents,
-      pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
-      requestedOnly: isRequestedComponentBootstrap,
-    })
-    const joinedTrain = canJoinBootstrapTrain
-      ? await joinReviewServingV4BootstrapTrain(
-          {
-            components: bootstrapComponents,
-            priority: requestPriority,
-            projectId: input.projectId,
-            reason: input.reason,
-            requestedComponents,
-            reviewConfigHash,
-          },
-          requestDatabase,
         )
-      : null
+      : false
 
-    if (joinedTrain !== null) {
-      return joinedTrain
-    }
-
-    const inPlaceRebuild = canJoinBootstrapTrain
-      ? await getReviewServingV4InPlaceRebuild(
-          {
-            components: bootstrapComponents,
-            priority: requestPriority,
-            projectId: input.projectId,
-            reason: input.reason,
-            requestedComponents,
-            reviewConfigHash,
-          },
+  if (activeRequest !== null && !activeRequestUsesLegacyRequiredEnrichmentBootstrap) {
+    if (requestPriority !== undefined && activeRequest.priority <= requestPriority) {
+      return (
+        (await boostReviewServingRebuildRequestPriority(
+          {priority: requestPriority, requestId: activeRequest.requestId},
           requestDatabase,
-        )
-      : ({kind: 'none'} as const)
-
-    if ('requestId' in inPlaceRebuild) {
-      return inPlaceRebuild
+        )) ?? activeRequest
+      )
     }
 
-    const buildingRequest =
-      inPlaceRebuild.kind === 'building'
-        ? await getReviewServingRebuildRequest({requestId: inPlaceRebuild.buildingRequestId}, requestDatabase)
-        : null
+    return activeRequest
+  }
 
-    if (buildingRequest !== null) {
-      return buildingRequest
-    }
-
-    // A building request that vanished since the decision leaves nothing to wait on; the next request plans again.
-    if (
-      (inPlaceRebuild.kind === 'served' || inPlaceRebuild.kind === 'building')
-      && input.reason !== 'missingReviewServingSnapshot'
-    ) {
-      return getReviewServingV4ServedInPlaceRequest({
-        components: bootstrapComponents,
-        priority: requestPriority,
-        projectId: input.projectId,
-        reason: input.reason,
-        snapshot: inPlaceRebuild.snapshot,
-      })
-    }
-
-    const blockedRequest =
-      input.reuseBlockedRequestWithinMs !== undefined && input.reuseBlockedRequestWithinMs > 0
-        ? await getBlockedOverBudgetReviewServingRebuildRequestForProject(
-            {
-              blockedWithinMs: input.reuseBlockedRequestWithinMs,
-              projectId: input.projectId,
-              reason: input.reason,
-              requestedComponents,
-              reviewConfigHash,
-            },
-            requestDatabase,
-          )
-        : null
-
-    if (blockedRequest !== null) {
-      return blockedRequest
-    }
-
-    const stats = await getReviewServingV4RebuildStats({projectId: input.projectId, reviewConfigHash}, requestDatabase)
-    const hasQueuedSnapshot = getSafeCount(stats.snapshotCount) > 0
-    const hasActiveSnapshot = getSafeCount(stats.activeSnapshotCount) > 0
-    const isFreshBootstrap =
-      !hasQueuedSnapshot
-      || (input.reason === 'missingReviewServingSnapshot'
-        && (!hasActiveSnapshot || shouldUsePageFirstBootstrapDependencies))
-      || isRequestedComponentBootstrap
-    const replacedSnapshot = isFreshBootstrap
-      ? await getReviewServingV4ReplacedSnapshot({projectId: input.projectId, reviewConfigHash}, requestDatabase)
-      : null
-    const components = isFreshBootstrap
-      ? [...new Set([...bootstrapComponents, ...(replacedSnapshot?.components ?? [])])]
-      : requestedComponents
-    const estimateStats = isFreshBootstrap ? {...stats, snapshotCount: 1} : stats
-    const totalEstimate = getReviewServingV4RebuildEstimate(estimateStats, components)
-    const articleRangeBootstrapComponents = getArticleRangeBootstrapComponents(components)
-    const fullProjectBootstrapComponents = getFullProjectBootstrapComponents(components)
-    const fullProjectBootstrapEstimate = getReviewServingV4RebuildEstimate(
-      estimateStats,
-      fullProjectBootstrapComponents,
-    )
-    const articleRangeBootstrapEstimate = getReviewServingV4RebuildEstimate(
-      estimateStats,
-      articleRangeBootstrapComponents,
-    )
-    const bootstrapChunkCount = isFreshBootstrap
-      ? getReviewServingV4BootstrapChunkCount({
-          articleCount: getSafeCount(stats.scopedArticleCount),
-          budget: defaultRequestBudget,
-          fixedEstimate: fullProjectBootstrapEstimate,
-          scalableEstimate: articleRangeBootstrapEstimate,
-        })
-      : 1
-    const bootstrapArticleRanges = isFreshBootstrap
-      ? await runReviewServingV4RebuildStatsPhase('bootstrapArticleRanges', () => {
-          return getReviewServingV4BootstrapArticleRanges(
-            {chunkCount: bootstrapChunkCount, projectId: input.projectId},
-            requestDatabase,
-          )
-        })
-      : []
-    const dirtySourceWatermarks = await runReviewServingV4RebuildStatsPhase('dirtySourceWatermarks', () => {
-      return getReviewServingV4DirtySourceWatermarks(input, requestDatabase)
-    })
-    const sourceWatermarks = getReviewServingV4RebuildSourceWatermarks(stats)
-    const requestSourceWatermarks = getReviewServingV4RebuildRequestSourceWatermarks({
-      dirtySourceWatermarks,
-      sourceWatermarks,
-    })
-    const prepareBootstrap = (distinctFromSnapshotId?: string) => {
-      return runReviewServingV4RebuildStatsPhase('prepareBootstrap', () => {
-        return prepareReviewServingV4Bootstrap(
-          {
-            articleRanges: bootstrapArticleRanges,
-            components,
-            dirtyWorkComponents: isRequestedOptionalDirtyWorkBootstrap ? requestedComponents : [],
-            distinctFromSnapshotId,
-            pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
-            requestedOnly: isRequestedComponentBootstrap,
-            projectId: input.projectId,
-            reviewConfigHash,
-            sourceWatermarks: dirtySourceWatermarks,
-          },
-          requestDatabase,
-        )
-      })
-    }
-    const deterministicBootstrap = isFreshBootstrap ? await prepareBootstrap() : null
-    const targetsReplacedSnapshot =
-      deterministicBootstrap !== null && deterministicBootstrap.snapshotId === replacedSnapshot?.snapshotId
-
-    // Snapshot ids are deterministic, so a bootstrap can land on the id of the active snapshot it would replace.
-    // Reseeding that id would recreate the active manifest as a candidate; when the active snapshot already holds every
-    // component there is nothing to build, otherwise the bootstrap gets an id of its own.
-    if (targetsReplacedSnapshot && deterministicBootstrap.chunks.length === 0) {
-      return getNoopReviewServingV4RebuildRequest({
-        components,
-        diagnostics: {
-          bootstrapSnapshot: false,
-          componentReuse: deterministicBootstrap.reuseDiagnostics,
-          inPlaceSnapshot: {alreadyServed: true, snapshotId: deterministicBootstrap.snapshotId},
-        },
-        projectId: input.projectId,
-        priority: requestPriority,
-        reason: input.reason,
-        requestEstimate: getReviewServingV4BootstrapZeroEstimate(),
-        sourceWatermarks: requestSourceWatermarks,
-        totalEstimate,
-      })
-    }
-
-    const bootstrap = targetsReplacedSnapshot
-      ? await prepareBootstrap(deterministicBootstrap.snapshotId)
-      : deterministicBootstrap
-    const requestComponents = bootstrap?.rebuiltComponents ?? components
-    const requestArticleRangeBootstrapComponents = getArticleRangeBootstrapComponents(requestComponents)
-    const requestFullProjectBootstrapComponents = getFullProjectBootstrapComponents(requestComponents)
-    const requestWorkEstimate =
-      requestComponents.length === 0
-        ? getReviewServingV4BootstrapZeroEstimate()
-        : bootstrapChunkCount === 1
-          ? getReviewServingV4RebuildEstimate(estimateStats, requestComponents)
-          : getCombinedBootstrapRebuildEstimate({
-              articleRanges: bootstrapArticleRanges,
-              articleRangeComponents: requestArticleRangeBootstrapComponents,
-              fullProjectComponents: requestFullProjectBootstrapComponents,
-              stats: estimateStats,
-            })
-    const requestEstimate = getReviewServingV4RebuildAdmissionEstimate({
-      estimate: requestWorkEstimate,
-      isFreshBootstrap,
-    })
-    const snapshotCounts = getReviewServingV4RebuildSnapshotCounts({admissionEstimate: requestEstimate, stats})
-    const admissionSplit = isFreshBootstrap
-      ? getReviewServingV4BootstrapAdmissionSplit({
-          chunkCount: bootstrapChunkCount,
-          chunkEstimate: requestEstimate,
-          singleChunkOverBudgetReason: getReviewServingV4RebuildOverBudgetReason(
-            getReviewServingV4RebuildAdmissionEstimate({estimate: totalEstimate, isFreshBootstrap}),
-            defaultRequestBudget,
-          ),
-        })
-      : getReviewServingV4DefaultAdmissionSplit({
-          articleCount: getSafeCount(stats.scopedArticleCount),
-          budget: defaultRequestBudget,
-          components: requestComponents,
-          estimate: requestEstimate,
-        })
-    const requestOverBudgetReason = getReviewServingV4RebuildOverBudgetReason(requestEstimate, defaultRequestBudget)
-
-    if (isFreshBootstrap && requestOverBudgetReason === null && bootstrap === null) {
-      return getNoopReviewServingV4RebuildRequest({
-        components,
-        noScopedArticles: true,
-        projectId: input.projectId,
-        priority: requestPriority,
-        reason: input.reason,
-        requestEstimate,
-        sourceWatermarks: requestSourceWatermarks,
-        totalEstimate,
-      })
-    }
-
-    if (bootstrap !== null && requestOverBudgetReason === null) {
-      await runReviewServingV4RebuildStatsPhase('seedBootstrap', () => {
-        return seedReviewServingV4Bootstrap(bootstrap, requestDatabase)
-      })
-    }
-
-    if (bootstrap !== null && requestOverBudgetReason === null && bootstrap.chunks.length === 0) {
-      const promotion = await runReviewServingV4RebuildStatsPhase('promoteReusedBootstrap', () => {
-        return promoteSeededReviewServingV4BootstrapCandidate(
-          {projectId: bootstrap.projectId, snapshotId: bootstrap.snapshotId},
-          requestDatabase,
-        )
-      })
-
-      return getNoopReviewServingV4RebuildRequest({
-        components,
-        diagnostics: {componentReuse: bootstrap.reuseDiagnostics, promotion},
-        projectId: input.projectId,
-        priority: requestPriority,
-        reason: input.reason,
-        requestEstimate,
-        sourceWatermarks: requestSourceWatermarks,
-        totalEstimate,
-      })
-    }
-
-    const chunks = bootstrap?.chunks
-
-    return runReviewServingV4RebuildStatsPhase('createRequest', () => {
-      return createReviewServingRebuildRequest(
+  const canJoinBootstrapTrain =
+    shouldReuseActiveRequest
+    && (input.reason !== 'missingReviewServingSnapshot'
+      || !(await hasLegacyRequiredEnrichmentBootstrapCandidate(
+        {projectId: input.projectId, reviewConfigHash},
+        requestDatabase,
+      )))
+  const bootstrapComponents = getReviewServingV4BootstrapComponents({
+    components: isRequestedOptionalDirtyWorkBootstrap
+      ? getOptionalDirtyWorkBootstrapComponents(requestedComponents)
+      : requestedComponents,
+    pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
+    requestedOnly: isRequestedComponentBootstrap,
+  })
+  const joinedTrain = canJoinBootstrapTrain
+    ? await joinReviewServingV4BootstrapTrain(
         {
-          articleRangeChunkCount:
-            admissionSplit?.mode === 'defaultArticleRange' ? admissionSplit.requestedChunkCount : undefined,
-          budget: defaultRequestBudget,
-          chunks,
-          diagnostics: {
-            admissionSplit,
-            bootstrapSnapshot: isFreshBootstrap,
-            childAdmissionBudget: defaultRequestBudget,
-            childAdmissionEstimate: requestEstimate,
-            coldBootstrap: isFreshBootstrap && input.reason === 'missingReviewServingSnapshot',
-            componentReuse: bootstrap?.reuseDiagnostics ?? null,
-            bootstrapChunkCount: bootstrap?.chunkCount ?? null,
-            bootstrapExecutableChunkCount: chunks?.length ?? null,
-            snapshotCounts,
-            source: 'phase5b-v4-rebuild-request-service',
-            totalEstimate,
-            v4Cutover: true,
-          },
-          estimate: requestEstimate,
-          identity: {componentSet: components, requestKind: 'v4-review-serving-rebuild', reviewConfigHash},
+          components: bootstrapComponents,
           priority: requestPriority,
           projectId: input.projectId,
           reason: input.reason,
           requestedComponents,
-          retryPolicy: {maxAttempts: 3, retryAfterMs: 60_000, terminalState: 'blocked_over_budget'},
-          sourceWatermarks: requestSourceWatermarks,
+          reviewConfigHash,
+        },
+        requestDatabase,
+      )
+    : null
+
+  if (joinedTrain !== null) {
+    return joinedTrain
+  }
+
+  const inPlaceRebuild = canJoinBootstrapTrain
+    ? await getReviewServingV4InPlaceRebuild(
+        {
+          components: bootstrapComponents,
+          priority: requestPriority,
+          projectId: input.projectId,
+          reason: input.reason,
+          requestedComponents,
+          reviewConfigHash,
+        },
+        requestDatabase,
+      )
+    : ({kind: 'none'} as const)
+
+  if ('requestId' in inPlaceRebuild) {
+    return inPlaceRebuild
+  }
+
+  const buildingRequest =
+    inPlaceRebuild.kind === 'building'
+      ? await readmitReviewServingV4FailedBuildingRequest(
+          {requestId: inPlaceRebuild.buildingRequestId},
+          requestDatabase,
+        )
+      : null
+
+  if (buildingRequest !== null) {
+    return buildingRequest
+  }
+
+  // A building request that vanished since the decision leaves nothing to wait on; the next request plans again.
+  if (
+    (inPlaceRebuild.kind === 'served' || inPlaceRebuild.kind === 'building')
+    && input.reason !== 'missingReviewServingSnapshot'
+  ) {
+    return getReviewServingV4ServedInPlaceRequest({
+      components: bootstrapComponents,
+      priority: requestPriority,
+      projectId: input.projectId,
+      reason: input.reason,
+      snapshot: inPlaceRebuild.snapshot,
+    })
+  }
+
+  const blockedRequest =
+    input.reuseBlockedRequestWithinMs !== undefined && input.reuseBlockedRequestWithinMs > 0
+      ? await getBlockedOverBudgetReviewServingRebuildRequestForProject(
+          {
+            blockedWithinMs: input.reuseBlockedRequestWithinMs,
+            projectId: input.projectId,
+            reason: input.reason,
+            requestedComponents,
+            reviewConfigHash,
+          },
+          requestDatabase,
+        )
+      : null
+
+  if (blockedRequest !== null) {
+    return blockedRequest
+  }
+
+  const stats = await getReviewServingV4RebuildStats({projectId: input.projectId, reviewConfigHash}, requestDatabase)
+  const hasQueuedSnapshot = getSafeCount(stats.snapshotCount) > 0
+  const hasActiveSnapshot = getSafeCount(stats.activeSnapshotCount) > 0
+  const isFreshBootstrap =
+    !hasQueuedSnapshot
+    || (input.reason === 'missingReviewServingSnapshot'
+      && (!hasActiveSnapshot || shouldUsePageFirstBootstrapDependencies))
+    || isRequestedComponentBootstrap
+  const replacedSnapshot = isFreshBootstrap
+    ? await getReviewServingV4ReplacedSnapshot({projectId: input.projectId, reviewConfigHash}, requestDatabase)
+    : null
+  const components = isFreshBootstrap
+    ? [...new Set([...bootstrapComponents, ...(replacedSnapshot?.components ?? [])])]
+    : requestedComponents
+  const estimateStats = isFreshBootstrap ? {...stats, snapshotCount: 1} : stats
+  const totalEstimate = getReviewServingV4RebuildEstimate(estimateStats, components)
+  const articleRangeBootstrapComponents = getArticleRangeBootstrapComponents(components)
+  const fullProjectBootstrapComponents = getFullProjectBootstrapComponents(components)
+  const fullProjectBootstrapEstimate = getReviewServingV4RebuildEstimate(estimateStats, fullProjectBootstrapComponents)
+  const articleRangeBootstrapEstimate = getReviewServingV4RebuildEstimate(
+    estimateStats,
+    articleRangeBootstrapComponents,
+  )
+  const bootstrapChunkCount = isFreshBootstrap
+    ? getReviewServingV4BootstrapChunkCount({
+        articleCount: getSafeCount(stats.scopedArticleCount),
+        budget: defaultRequestBudget,
+        fixedEstimate: fullProjectBootstrapEstimate,
+        scalableEstimate: articleRangeBootstrapEstimate,
+      })
+    : 1
+  const bootstrapArticleRanges = isFreshBootstrap
+    ? await runReviewServingV4RebuildStatsPhase('bootstrapArticleRanges', () => {
+        return getReviewServingV4BootstrapArticleRanges(
+          {chunkCount: bootstrapChunkCount, projectId: input.projectId},
+          requestDatabase,
+        )
+      })
+    : []
+  const dirtySourceWatermarks = await runReviewServingV4RebuildStatsPhase('dirtySourceWatermarks', () => {
+    return getReviewServingV4DirtySourceWatermarks(input, requestDatabase)
+  })
+  const sourceWatermarks = getReviewServingV4RebuildSourceWatermarks(stats)
+  const requestSourceWatermarks = getReviewServingV4RebuildRequestSourceWatermarks({
+    dirtySourceWatermarks,
+    sourceWatermarks,
+  })
+  const prepareBootstrap = (distinctFromSnapshotId?: string) => {
+    return runReviewServingV4RebuildStatsPhase('prepareBootstrap', () => {
+      return prepareReviewServingV4Bootstrap(
+        {
+          articleRanges: bootstrapArticleRanges,
+          components,
+          dirtyWorkComponents: isRequestedOptionalDirtyWorkBootstrap ? requestedComponents : [],
+          distinctFromSnapshotId,
+          pageFirstOnly: shouldUsePageFirstBootstrapDependencies,
+          requestedOnly: isRequestedComponentBootstrap,
+          projectId: input.projectId,
+          reviewConfigHash,
+          sourceWatermarks: dirtySourceWatermarks,
         },
         requestDatabase,
       )
     })
+  }
+  const deterministicBootstrap = isFreshBootstrap ? await prepareBootstrap() : null
+  const targetsReplacedSnapshot =
+    deterministicBootstrap !== null && deterministicBootstrap.snapshotId === replacedSnapshot?.snapshotId
+
+  // Snapshot ids are deterministic, so a bootstrap can land on the id of the active snapshot it would replace.
+  // Reseeding that id would recreate the active manifest as a candidate; when the active snapshot already holds every
+  // component there is nothing to build, otherwise the bootstrap gets an id of its own.
+  if (targetsReplacedSnapshot && deterministicBootstrap.chunks.length === 0) {
+    return getNoopReviewServingV4RebuildRequest({
+      components,
+      diagnostics: {
+        bootstrapSnapshot: false,
+        componentReuse: deterministicBootstrap.reuseDiagnostics,
+        inPlaceSnapshot: {alreadyServed: true, snapshotId: deterministicBootstrap.snapshotId},
+      },
+      projectId: input.projectId,
+      priority: requestPriority,
+      reason: input.reason,
+      requestEstimate: getReviewServingV4BootstrapZeroEstimate(),
+      sourceWatermarks: requestSourceWatermarks,
+      totalEstimate,
+    })
+  }
+
+  const bootstrap = targetsReplacedSnapshot
+    ? await prepareBootstrap(deterministicBootstrap.snapshotId)
+    : deterministicBootstrap
+  const requestComponents = bootstrap?.rebuiltComponents ?? components
+  const requestArticleRangeBootstrapComponents = getArticleRangeBootstrapComponents(requestComponents)
+  const requestFullProjectBootstrapComponents = getFullProjectBootstrapComponents(requestComponents)
+  const requestWorkEstimate =
+    requestComponents.length === 0
+      ? getReviewServingV4BootstrapZeroEstimate()
+      : bootstrapChunkCount === 1
+        ? getReviewServingV4RebuildEstimate(estimateStats, requestComponents)
+        : getCombinedBootstrapRebuildEstimate({
+            articleRanges: bootstrapArticleRanges,
+            articleRangeComponents: requestArticleRangeBootstrapComponents,
+            fullProjectComponents: requestFullProjectBootstrapComponents,
+            stats: estimateStats,
+          })
+  const requestEstimate = getReviewServingV4RebuildAdmissionEstimate({estimate: requestWorkEstimate, isFreshBootstrap})
+  const snapshotCounts = getReviewServingV4RebuildSnapshotCounts({admissionEstimate: requestEstimate, stats})
+  const admissionSplit = isFreshBootstrap
+    ? getReviewServingV4BootstrapAdmissionSplit({
+        chunkCount: bootstrapChunkCount,
+        chunkEstimate: requestEstimate,
+        singleChunkOverBudgetReason: getReviewServingV4RebuildOverBudgetReason(
+          getReviewServingV4RebuildAdmissionEstimate({estimate: totalEstimate, isFreshBootstrap}),
+          defaultRequestBudget,
+        ),
+      })
+    : getReviewServingV4DefaultAdmissionSplit({
+        articleCount: getSafeCount(stats.scopedArticleCount),
+        budget: defaultRequestBudget,
+        components: requestComponents,
+        estimate: requestEstimate,
+      })
+  const requestOverBudgetReason = getReviewServingV4RebuildOverBudgetReason(requestEstimate, defaultRequestBudget)
+
+  if (isFreshBootstrap && requestOverBudgetReason === null && bootstrap === null) {
+    return getNoopReviewServingV4RebuildRequest({
+      components,
+      noScopedArticles: true,
+      projectId: input.projectId,
+      priority: requestPriority,
+      reason: input.reason,
+      requestEstimate,
+      sourceWatermarks: requestSourceWatermarks,
+      totalEstimate,
+    })
+  }
+
+  if (bootstrap !== null && requestOverBudgetReason === null) {
+    await runReviewServingV4RebuildStatsPhase('seedBootstrap', () => {
+      return seedReviewServingV4Bootstrap(bootstrap, requestDatabase)
+    })
+  }
+
+  if (bootstrap !== null && requestOverBudgetReason === null && bootstrap.chunks.length === 0) {
+    const promotion = await runReviewServingV4RebuildStatsPhase('promoteReusedBootstrap', () => {
+      return promoteSeededReviewServingV4BootstrapCandidate(
+        {projectId: bootstrap.projectId, snapshotId: bootstrap.snapshotId},
+        requestDatabase,
+      )
+    })
+
+    return getNoopReviewServingV4RebuildRequest({
+      components,
+      diagnostics: {componentReuse: bootstrap.reuseDiagnostics, promotion},
+      projectId: input.projectId,
+      priority: requestPriority,
+      reason: input.reason,
+      requestEstimate,
+      sourceWatermarks: requestSourceWatermarks,
+      totalEstimate,
+    })
+  }
+
+  const chunks = bootstrap?.chunks
+
+  return runReviewServingV4RebuildStatsPhase('createRequest', () => {
+    return createReviewServingRebuildRequest(
+      {
+        articleRangeChunkCount:
+          admissionSplit?.mode === 'defaultArticleRange' ? admissionSplit.requestedChunkCount : undefined,
+        budget: defaultRequestBudget,
+        chunks,
+        diagnostics: {
+          admissionSplit,
+          bootstrapSnapshot: isFreshBootstrap,
+          childAdmissionBudget: defaultRequestBudget,
+          childAdmissionEstimate: requestEstimate,
+          coldBootstrap: isFreshBootstrap && input.reason === 'missingReviewServingSnapshot',
+          componentReuse: bootstrap?.reuseDiagnostics ?? null,
+          bootstrapChunkCount: bootstrap?.chunkCount ?? null,
+          bootstrapExecutableChunkCount: chunks?.length ?? null,
+          snapshotCounts,
+          source: 'phase5b-v4-rebuild-request-service',
+          totalEstimate,
+          v4Cutover: true,
+        },
+        estimate: requestEstimate,
+        identity: {componentSet: components, requestKind: 'v4-review-serving-rebuild', reviewConfigHash},
+        priority: requestPriority,
+        projectId: input.projectId,
+        reason: input.reason,
+        requestedComponents,
+        retryPolicy: {maxAttempts: 3, retryAfterMs: 60_000, terminalState: 'blocked_over_budget'},
+        sourceWatermarks: requestSourceWatermarks,
+      },
+      requestDatabase,
+    )
+  })
+}
+
+// Dirty-work wakes ask again on every pass while their claims wait for a request that does not cover them yet. For a
+// short while the same open request is handed back without re-running the join and in-place planning queries.
+const reviewServingV4DirtyWorkRequestReuseMs = 30_000
+let recentReviewServingV4DirtyWorkRequests = new WeakMap<object, Map<string, {atMs: number; requestId: string}>>()
+
+export const resetReviewServingV4DirtyWorkRequestReuseForTests = () => {
+  recentReviewServingV4DirtyWorkRequests = new WeakMap()
+}
+
+const getReviewServingV4DirtyWorkRequestKey = (input: RequestReviewServingV4RebuildInput) => {
+  return input.reason.endsWith('DirtyWork')
+    ? [input.projectId, input.reason, ...getCanonicalReviewServingComponents(input.components ?? [])].join('\u0000')
+    : null
+}
+
+const isOpenReviewServingV4Request = (request: ReviewServingRebuildRequest | null) => {
+  return request !== null && request.admissionState === 'admitted' && request.status === 'admitted'
+}
+
+const requestReviewServingV4RebuildWithDirtyWorkReuse = async (
+  input: RequestReviewServingV4RebuildInput,
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const key = getReviewServingV4DirtyWorkRequestKey(input)
+  const recentRequests =
+    recentReviewServingV4DirtyWorkRequests.get(database) ?? new Map<string, {atMs: number; requestId: string}>()
+  const recent = key === null ? undefined : recentRequests.get(key)
+  const nowMs = Date.now()
+  const reused =
+    recent !== undefined && nowMs - recent.atMs < reviewServingV4DirtyWorkRequestReuseMs
+      ? await getReviewServingRebuildRequest({requestId: recent.requestId}, database)
+      : null
+
+  if (reused !== null && isOpenReviewServingV4Request(reused)) {
+    return reused
+  }
+
+  const request = await planReviewServingV4Rebuild(input, database)
+
+  if (key !== null && isOpenReviewServingV4Request(request)) {
+    recentRequests.set(key, {
+      atMs: recent?.requestId === request.requestId ? recent.atMs : nowMs,
+      requestId: request.requestId,
+    })
+    recentReviewServingV4DirtyWorkRequests.set(database, recentRequests)
+  }
+
+  return request
+}
+
+export const requestReviewServingV4RebuildEffect = (
+  input: RequestReviewServingV4RebuildInput,
+  database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  return Effect.tryPromise(() => {
+    return requestReviewServingV4RebuildWithDirtyWorkReuse(input, database)
   })
 }
 

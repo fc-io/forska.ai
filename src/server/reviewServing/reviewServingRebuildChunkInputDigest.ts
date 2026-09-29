@@ -20,3 +20,12 @@ export const isInPlaceReviewServingRebuildChunkInputDigest = (inputDigest: strin
 export const getReviewServingRebuildChunkInPlaceRefreshPredicateSql = (tableAlias?: string) => {
   return `${tableAlias ? `${tableAlias}.` : ''}input_digest = ${getSqlLiteral(inPlaceRefreshReviewServingRebuildChunkInputDigest)}`
 }
+
+export const getReviewServingRebuildChunkInPlacePredicateSql = (tableAlias?: string) => {
+  return `COALESCE(${tableAlias ? `${tableAlias}.` : ''}input_digest, '') IN (${[
+    inPlaceAdditionReviewServingRebuildChunkInputDigest,
+    inPlaceRefreshReviewServingRebuildChunkInputDigest,
+  ]
+    .map(getSqlLiteral)
+    .join(', ')})`
+}

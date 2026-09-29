@@ -7,12 +7,14 @@ import {
 } from './reviewServingContracts.ts'
 import {
   completeReviewServingDirtyWorkRebuiltByChunks,
+  defaultCompletedDirtyWorkRetentionSeconds,
   getReviewServingDirtyWorkRecordFromRow,
   getReviewServingDirtyWorkRecordSelectSql,
   getReviewServingDirtyWorkUnheldPredicate,
   type ReviewServingDirtyWorkDatabase,
 } from './reviewServingDirtyWorkService.ts'
 import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
+import {getReviewServingRebuildChunkInPlacePredicateSql} from './reviewServingRebuildChunkInputDigest.ts'
 
 // A bootstrap rebuild re-reads every article of a component from source, but per-article dirty work queued before the
 // rebuild ran stays pending, because rebuild watermarks only cover the source partitions the request knew about. On
@@ -154,7 +156,26 @@ const getRetirementTargets = async (
     })
 }
 
-const getRebuiltRangeCteSql = (targets: readonly RetirementTarget[]) => {
+// Posting and summary chunks read their own snapshot's rows of their input components, so whether a chunk rebuilt an
+// article from current inputs depends on the input dirty work of that article (see below). That evidence is only
+// reliable while it cannot have been deleted yet: completed dirty work is deleted an hour after it completed, and the
+// per-target cursor is lost on restart, so derived chunks are only considered while they started within half that
+// window. Derived chunks of an in-place rebuild of the active snapshot never retire dirty work: they may run next to
+// patches of their own inputs, so their rows patch incrementally, where inputs are checked claim by claim.
+const derivedRetirementWindowMs = (defaultCompletedDirtyWorkRetentionSeconds * 1000) / 2
+const derivedReviewServingComponents = ['posting', 'summary'] as const
+
+const getDerivedRebuiltRangePredicateSql = (nowMs: number) => {
+  return `(
+          chunk.projection_component NOT IN (${derivedReviewServingComponents.map(getSqlLiteral).join(', ')})
+          OR (
+            NOT ${getReviewServingRebuildChunkInPlacePredicateSql('chunk')}
+            AND chunk.started_at >= ${getSqlLiteral(new Date(nowMs - derivedRetirementWindowMs).toISOString())}::TIMESTAMPTZ
+          )
+        )`
+}
+
+const getRebuiltRangeCteSql = (targets: readonly RetirementTarget[], nowMs: number) => {
   return `
     retirement_target AS (
       ${getReviewServingJsonRowsSql({
@@ -203,6 +224,7 @@ const getRebuiltRangeCteSql = (targets: readonly RetirementTarget[]) => {
         AND COALESCE(chunk.checksum, '') NOT LIKE 'split:%'
         AND COALESCE(chunk.last_error, '') NOT LIKE 'superseded%'
         AND COALESCE(chunk.last_error, '') NOT LIKE 'coalesced%'
+        AND ${getDerivedRebuiltRangePredicateSql(nowMs)}
     )
   `
 }
@@ -210,6 +232,7 @@ const getRebuiltRangeCteSql = (targets: readonly RetirementTarget[]) => {
 // Targets with chunks completed since their cursor; only those need a dirty-work scan.
 const getTargetsWithRebuiltRanges = async (
   targets: readonly RetirementTarget[],
+  nowMs: number,
   database: ReviewServingRetirementDatabase,
 ) => {
   if (targets.length === 0) {
@@ -223,7 +246,7 @@ const getTargetsWithRebuiltRanges = async (
     projectionIdentity: string
     snapshotId: string
   }>(`
-    WITH ${getRebuiltRangeCteSql(targets)}
+    WITH ${getRebuiltRangeCteSql(targets, nowMs)}
     SELECT DISTINCT
       project_id AS projectId,
       snapshot_id AS snapshotId,
@@ -270,9 +293,9 @@ const getDerivedComponentUpstreamCteSql = () => {
 
 // Rows older than the newest covering chunk of their component are narrowed first, then matched to a chunk range that
 // started after them, and, for derived components, after the inputs it read had caught up with them.
-const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[]) => {
+const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[], nowMs: number) => {
   return `
-    WITH ${getRebuiltRangeCteSql(targets)},
+    WITH ${getRebuiltRangeCteSql(targets, nowMs)},
     ${getDerivedComponentUpstreamCteSql()},
     rebuilt_component AS (
       SELECT project_id, projection_component, projection_identity, MAX(started_at) AS latest_started_at
@@ -341,9 +364,11 @@ export const retireReviewServingDirtyWorkRebuiltByChunks = async (
   }
 
   const targets = await getRetirementTargets(input, database)
-  const rebuiltTargets = await getTargetsWithRebuiltRanges(targets, database)
+  const rebuiltTargets = await getTargetsWithRebuiltRanges(targets, nowMs, database)
   const rows =
-    rebuiltTargets.length === 0 ? [] : await database.queryJson<unknown>(getRetirableDirtyWorkSql(rebuiltTargets))
+    rebuiltTargets.length === 0
+      ? []
+      : await database.queryJson<unknown>(getRetirableDirtyWorkSql(rebuiltTargets, nowMs))
   const claims = rows.map(getReviewServingDirtyWorkRecordFromRow)
 
   if (claims.length < retirementSelectLimit) {

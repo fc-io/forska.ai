@@ -171,6 +171,7 @@ const insertRequest = async (input: {
 const insertChunk = async (input: {
   chunkId: string
   component: string
+  inputDigest?: string
   leaseExpiresAt?: string | null
   leaseOwner?: string | null
   projectId: string
@@ -181,7 +182,8 @@ const insertChunk = async (input: {
   await getDatabase().run(`
     INSERT INTO app.review_rebuild_chunk_manifest (
       chunk_id, request_id, project_id, snapshot_id, projection_component, projection_identity, chunk_start_key,
-      chunk_end_key, status, admission_state, lease_owner, lease_expires_at, started_at, created_at, updated_at
+      chunk_end_key, status, admission_state, lease_owner, lease_expires_at, started_at, created_at, updated_at,
+      input_digest
     ) VALUES (
       '${input.chunkId}',
       '${input.requestId}',
@@ -197,7 +199,8 @@ const insertChunk = async (input: {
       ${getTimestampSql(input.leaseExpiresAt)},
       ${getTimestampSql(input.startedAt)},
       TIMESTAMPTZ '2026-09-23T08:00:00Z',
-      TIMESTAMPTZ '2026-09-23T08:00:00Z'
+      TIMESTAMPTZ '2026-09-23T08:00:00Z',
+      ${input.inputDigest === undefined ? 'NULL' : `'${input.inputDigest}'`}
     )
   `)
 }
@@ -653,5 +656,196 @@ test('batched rebuild chunk heartbeats in DuckDB extend only the leases the owne
     {chunkId: 'chunk-heartbeat-2', leaseExpiresAt: '11:30'},
     {chunkId: 'chunk-heartbeat-done', leaseExpiresAt: '10:30'},
     {chunkId: 'chunk-heartbeat-stolen', leaseExpiresAt: '10:30'},
+  ])
+})
+
+test('an in-place chunk waits for unfinished input chunks another in-flight request builds into the same snapshot', async () => {
+  const {getReviewServingRebuildChunkClaimWhere} = await import('./reviewServingChunkManifestRepository.ts')
+  const projectId = 'project-in-place-prerequisite'
+  const getClaimableChunkIds = async () => {
+    const rows = await getDatabase().queryJson<{chunkId: string}>(`
+      SELECT candidate.chunk_id AS chunkId
+      FROM app.review_rebuild_chunk_manifest candidate
+      WHERE ${getReviewServingRebuildChunkClaimWhere({now: '2026-09-23T12:00:00.000Z', projectId}, 'candidate')}
+      ORDER BY candidate.chunk_id
+    `)
+
+    return rows.map((row) => {
+      return row.chunkId
+    })
+  }
+
+  await clearRebuildState()
+  await insertProject(projectId)
+  await insertSnapshot({components: ['payload', 'posting'], projectId, snapshotStatus: 'active'})
+
+  // A payload refresh of the active snapshot, and two later requests building posting into it: one in place, one as
+  // a fresh bootstrap (whose own request orders its inputs).
+  const requests = [
+    ['request-payload-refresh', 'payload', 50],
+    ['request-posting-in-place', 'posting', 100],
+    ['request-posting-fresh', 'posting', 100],
+  ] as const
+
+  await requests.reduce<Promise<void>>(async (previous, [requestId, component, priority]) => {
+    await previous
+    await insertRequest({admittedAt: '2026-09-23T09:00:00Z', component, priority, projectId, requestId})
+  }, Promise.resolve())
+
+  const chunks = [
+    ['chunk-payload-refresh', 'payload', 'request-payload-refresh', 'inPlaceReviewServingRefresh'],
+    ['chunk-posting-fresh', 'posting', 'request-posting-fresh', 'freshReviewServingSnapshot'],
+    ['chunk-posting-in-place', 'posting', 'request-posting-in-place', 'inPlaceReviewServingAddition'],
+  ] as const
+
+  await chunks.reduce<Promise<void>>(async (previous, [chunkId, component, requestId, inputDigest]) => {
+    await previous
+    await insertChunk({chunkId, component, inputDigest, projectId, requestId, status: 'pending'})
+  }, Promise.resolve())
+
+  expect(await getClaimableChunkIds()).toEqual(['chunk-payload-refresh', 'chunk-posting-fresh'])
+
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_request SET status = 'failed' WHERE request_id = 'request-payload-refresh'
+  `)
+
+  expect(await getClaimableChunkIds()).toEqual(['chunk-posting-fresh', 'chunk-posting-in-place'])
+
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_request SET status = 'admitted' WHERE request_id = 'request-payload-refresh'
+  `)
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_chunk_manifest SET status = 'completed' WHERE chunk_id = 'chunk-payload-refresh'
+  `)
+
+  expect(await getClaimableChunkIds()).toEqual(['chunk-posting-fresh', 'chunk-posting-in-place'])
+})
+
+test('a summary chunk waits for the posting chunks of its request, whose flags it reads', async () => {
+  const {getReviewServingRebuildChunkClaimWhere} = await import('./reviewServingChunkManifestRepository.ts')
+  const projectId = 'project-summary-after-posting'
+  const getClaimableChunkIds = async () => {
+    const rows = await getDatabase().queryJson<{chunkId: string}>(`
+      SELECT candidate.chunk_id AS chunkId
+      FROM app.review_rebuild_chunk_manifest candidate
+      WHERE ${getReviewServingRebuildChunkClaimWhere({now: '2026-09-23T12:00:00.000Z', projectId}, 'candidate')}
+      ORDER BY candidate.chunk_id
+    `)
+
+    return rows.map((row) => {
+      return row.chunkId
+    })
+  }
+
+  await clearRebuildState()
+  await insertProject(projectId)
+  await insertSnapshot({components: ['posting', 'summary'], projectId})
+  await insertRequest({
+    admittedAt: '2026-09-23T09:00:00Z',
+    component: 'summary',
+    priority: 100,
+    projectId,
+    requestId: 'request-summary',
+  })
+  await insertChunk({
+    chunkId: 'chunk-posting',
+    component: 'posting',
+    projectId,
+    requestId: 'request-summary',
+    status: 'pending',
+  })
+  await insertChunk({
+    chunkId: 'chunk-summary',
+    component: 'summary',
+    projectId,
+    requestId: 'request-summary',
+    status: 'pending',
+  })
+
+  expect(await getClaimableChunkIds()).toEqual(['chunk-posting'])
+
+  await getDatabase().run(
+    `UPDATE app.review_rebuild_chunk_manifest SET status = 'completed' WHERE chunk_id = 'chunk-posting'`,
+  )
+
+  expect(await getClaimableChunkIds()).toEqual(['chunk-summary'])
+})
+
+test('a request whose summary buckets are unpublished stays admitted when its last chunk completes', async () => {
+  const {writeReviewServingRebuildChunkOutput} = await import('./reviewServingChunkManifestRepository.ts')
+  const projectId = 'project-summary-unpublished'
+  const completeLastChunk = async (input: {
+    component: 'display' | 'summary'
+    requestId: string
+    writeOutput: (database: {run: (statement: string) => Promise<unknown>}) => Promise<void>
+  }) => {
+    await insertRequest({
+      admittedAt: '2026-09-23T09:00:00Z',
+      component: input.component,
+      priority: 100,
+      projectId,
+      requestId: input.requestId,
+    })
+    await insertChunk({
+      chunkId: `chunk-${input.requestId}`,
+      component: input.component,
+      leaseExpiresAt: '2099-01-01T00:00:00Z',
+      leaseOwner: 'worker-summary',
+      projectId,
+      requestId: input.requestId,
+      startedAt: '2026-09-23T11:00:00Z',
+      status: 'running',
+    })
+    await writeReviewServingRebuildChunkOutput(
+      {
+        chunkEndKey: `chunk-${input.requestId}:z`,
+        chunkId: `chunk-${input.requestId}`,
+        chunkStartKey: `chunk-${input.requestId}:a`,
+        inputDigest: null,
+        inputWatermark: 0,
+        leaseOwner: 'worker-summary',
+        outputBaseGeneration: 0,
+        projectId,
+        projectionComponent: input.component,
+        projectionIdentity: `${input.component}:identity`,
+        requestId: input.requestId,
+        validateOutput: async () => {
+          return {actualChecksum: 'checksum', actualCount: 0, expectedChecksum: 'checksum', expectedCount: 0}
+        },
+        writeOutput: input.writeOutput,
+      },
+      getDatabase() as never,
+    )
+  }
+
+  await clearRebuildState()
+  await insertProject(projectId)
+  await insertSnapshot({components: ['display', 'summary'], projectId, snapshotStatus: 'active'})
+  await completeLastChunk({
+    component: 'summary',
+    requestId: 'request-summary-unpublished',
+    writeOutput: async (database) => {
+      await database.run(`
+        INSERT INTO mart.review_article_summary_bucket_v4 (
+          project_id, review_config_hash, snapshot_id, bucket_id, request_id, ledger_status
+        ) VALUES (
+          '${projectId}', 'review-config-claim-lane', 'snapshot-${projectId}', 'chunk-request-summary-unpublished',
+          'request-summary-unpublished', 'building'
+        )
+      `)
+    },
+  })
+  await completeLastChunk({component: 'display', requestId: 'request-display', writeOutput: async () => {}})
+
+  expect(
+    await getDatabase().queryJson<{requestId: string; status: string}>(`
+      SELECT request_id AS requestId, status
+      FROM app.review_rebuild_request
+      WHERE project_id = '${projectId}'
+      ORDER BY request_id
+    `),
+  ).toEqual([
+    {requestId: 'request-display', status: 'completed'},
+    {requestId: 'request-summary-unpublished', status: 'admitted'},
   ])
 })

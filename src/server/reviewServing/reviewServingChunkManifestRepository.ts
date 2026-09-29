@@ -11,6 +11,8 @@ import {
   type ReviewServingProjectionComponent,
 } from './reviewServingContracts.ts'
 import {promoteReviewServingProjectorSnapshot} from './reviewServingProjectorWriter.ts'
+import {getReviewServingRebuildChunkInPlacePredicateSql} from './reviewServingRebuildChunkInputDigest.ts'
+import {reviewServingSummaryBucketTable} from './reviewServingSummaryLedger.ts'
 import {supersededRetiredSnapshotRebuildChunkLastError} from './reviewServingSupersededRebuildChunk.ts'
 
 export type ReviewServingChunkManifestRepositoryTransaction = {
@@ -470,7 +472,7 @@ const rebuildChunkPrerequisitesByComponent = {
   queue: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus'],
   search: ['projectScope', 'selectedImport'],
   selectedImport: ['projectScope'],
-  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload'],
+  summary: ['projectScope', 'selectedImport', 'llmStatus', 'humanStatus', 'queue', 'payload', 'posting'],
 } as const satisfies Record<ReviewServingProjectionComponent, readonly ReviewServingProjectionComponent[]>
 const rebuildChunkCriticalLaneComponents = [
   'projectScope',
@@ -810,6 +812,42 @@ export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
   await releaseInactiveRequestRebuildChunkManifests(database, chunkIds)
 }
 
+// A chunk reads the rows its snapshot holds for its prerequisite components, so it waits for its own request's chunks
+// of them. A chunk that builds into the active snapshot in place also waits for unfinished ones any other in-flight
+// request builds into that snapshot: in-place rebuilds of one snapshot run side by side, and one may be refreshing an
+// input of another's component.
+const getRebuildChunkPrerequisitesPendingSql = (
+  prerequisites: readonly ReviewServingProjectionComponent[],
+  tableAlias?: string,
+) => {
+  const source = tableAlias ? `${tableAlias}.` : ''
+  const outer = tableAlias ? `${tableAlias}.` : 'app.review_rebuild_chunk_manifest.'
+
+  return `NOT EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_chunk_manifest prerequisite
+            WHERE prerequisite.request_id IS NOT DISTINCT FROM ${source}request_id
+              AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
+              AND prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
+              AND prerequisite.status <> 'completed'
+          )
+          AND (
+            NOT ${getReviewServingRebuildChunkInPlacePredicateSql(outer.slice(0, -1))}
+            OR NOT EXISTS (
+            SELECT 1
+            FROM app.review_rebuild_chunk_manifest shared_prerequisite
+            INNER JOIN app.review_rebuild_request shared_request
+              ON shared_request.request_id = shared_prerequisite.request_id
+            WHERE shared_prerequisite.project_id IS NOT DISTINCT FROM ${outer}project_id
+              AND shared_prerequisite.snapshot_id = ${outer}snapshot_id
+              AND shared_prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
+              AND shared_prerequisite.status IN ('pending', 'running', 'failed')
+              AND shared_request.status IN ('admitted', 'running')
+              AND shared_request.admission_state = 'admitted'
+            )
+          )`
+}
+
 const getRebuildChunkComponentPrerequisitePredicate = (tableAlias?: string) => {
   const source = tableAlias ? `${tableAlias}.` : ''
 
@@ -819,14 +857,7 @@ const getRebuildChunkComponentPrerequisitePredicate = (tableAlias?: string) => {
         ? `${source}projection_component = ${getSqlLiteral(component)}`
         : `(
           ${source}projection_component = ${getSqlLiteral(component)}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM app.review_rebuild_chunk_manifest prerequisite
-            WHERE prerequisite.request_id IS NOT DISTINCT FROM ${source}request_id
-              AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
-              AND prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
-              AND prerequisite.status <> 'completed'
-            )
+          AND ${getRebuildChunkPrerequisitesPendingSql(prerequisites, tableAlias)}
         )`
     })
     .join('\n      OR ')
@@ -843,14 +874,7 @@ const getRebuildChunkSingleComponentPrerequisitePredicate = (
     ? `${source}projection_component = ${getSqlLiteral(component)}`
     : `
       ${source}projection_component = ${getSqlLiteral(component)}
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.review_rebuild_chunk_manifest prerequisite
-        WHERE prerequisite.request_id IS NOT DISTINCT FROM ${source}request_id
-          AND prerequisite.project_id IS NOT DISTINCT FROM ${source}project_id
-          AND prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
-          AND prerequisite.status <> 'completed'
-      )
+      AND ${getRebuildChunkPrerequisitesPendingSql(prerequisites, tableAlias)}
     `
 }
 
@@ -1517,6 +1541,8 @@ const getReviewServingRebuildChunkIdPredicate = (chunkId: string, tableAlias?: s
   return `(${source}chunk_id || '') = ${getSqlLiteral(chunkId)}`
 }
 
+// A request whose summary ledger buckets are still unpublished stays admitted until finalization publishes them: the
+// ledger keeps patching the buckets of admitted requests, and the idle finalizer retries a publication that failed.
 const completeFinishedReviewServingRebuildRequest = async (
   input: {requestId: string | null | undefined},
   database: ReviewServingChunkManifestRepositoryTransaction,
@@ -1548,6 +1574,12 @@ const completeFinishedReviewServingRebuildRequest = async (
             chunk.status <> 'completed'
             OR chunk.project_id IS DISTINCT FROM app.review_rebuild_request.project_id
           )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ${reviewServingSummaryBucketTable} unpublished_bucket
+        WHERE unpublished_bucket.request_id = ${getSqlLiteral(input.requestId)}
+          AND unpublished_bucket.ledger_status = 'building'
       )
   `)
 }

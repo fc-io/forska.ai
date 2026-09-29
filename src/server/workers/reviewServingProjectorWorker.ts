@@ -136,6 +136,7 @@ import {
 } from '../reviewServing/reviewServingSnapshotPurge.ts'
 import {
   planReviewServingSummaryLedgerPatches,
+  reviewServingSummaryBucketTable,
   type ReviewServingSummaryLedgerSnapshotPatch,
 } from '../reviewServing/reviewServingSummaryLedger.ts'
 import {
@@ -6516,6 +6517,9 @@ const getRebuildRequestPendingChunkCount = async (
   return Number(row?.pendingChunkCount ?? 0)
 }
 
+const summaryPublicationFailedRebuildRequestErrorPrefix = 'summary publication failed'
+const summaryPublicationRetryDelaySeconds = 300
+
 const getNextCompletedUnfinalizedRebuildRequestChunk = async (input: {
   database: ReviewServingChunkManifestRepositoryDatabase
   projectId?: string | null
@@ -6529,6 +6533,10 @@ const getNextCompletedUnfinalizedRebuildRequestChunk = async (input: {
       WHERE request.status IN ('admitted', 'running')
         AND request.admission_state = 'admitted'
         AND request.reason <> 'requestless_bootstrap_rebuild'
+        AND NOT (
+          COALESCE(request.last_error, '') LIKE ${getSqlLiteral(`${summaryPublicationFailedRebuildRequestErrorPrefix}%`)}
+          AND request.updated_at > current_timestamp - INTERVAL '${summaryPublicationRetryDelaySeconds} seconds'
+        )
         ${projectCondition}
     ),
     request_chunk_state AS (
@@ -7019,11 +7027,42 @@ const finalizeTerminalFailedRebuildRequests = async (input: {
   return firstFinalizedResult
 }
 
+// A request whose summary buckets finalization did not publish stays admitted, so the ledger keeps patching them and
+// the idle finalizer retries the publication after a pause; failing it would leave them unpublished for good.
+const deferUnpublishedRebuildRequestFinalization = async (
+  input: {error: unknown; requestId: string},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const [row] = await database.queryJson<{deferred: boolean}>(`
+    UPDATE app.review_rebuild_request AS request
+    SET
+      last_error = ${getSqlLiteral(`${summaryPublicationFailedRebuildRequestErrorPrefix}: ${getErrorText(input.error)}`)},
+      updated_at = current_timestamp
+    WHERE request.request_id = ${getSqlLiteral(input.requestId)}
+      AND request.status IN ('admitted', 'running')
+      AND EXISTS (
+        SELECT 1
+        FROM ${reviewServingSummaryBucketTable} unpublished_bucket
+        WHERE unpublished_bucket.request_id = request.request_id
+          AND unpublished_bucket.ledger_status = 'building'
+      )
+    RETURNING TRUE AS deferred
+  `)
+
+  return row?.deferred === true
+}
+
 const finalizeErroredCompletedReviewServingRebuildRequest = async (
   input: {chunk: ReviewServingRebuildChunkManifest; error: unknown},
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   if (input.chunk.requestId === null) {
+    return
+  }
+
+  if (
+    await deferUnpublishedRebuildRequestFinalization({error: input.error, requestId: input.chunk.requestId}, database)
+  ) {
     return
   }
 
