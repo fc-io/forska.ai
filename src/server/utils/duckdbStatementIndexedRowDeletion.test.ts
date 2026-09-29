@@ -159,7 +159,11 @@ const adversarialTimingScript = (modulePath: string) => {
   `
 }
 
-test('five megabyte adversarial statements classify in under 50 ms each', () => {
+// A linear pass over 5 MB takes 10-30 ms on a fast core and a few times that on a slow runner. The old regex needed
+// hours, so the bound only has to separate those two.
+const adversarialStatementMaxMs = 2_000
+
+test('five megabyte adversarial statements classify in linear time', () => {
   const child = globalThis.Bun.spawnSync(
     [
       process.execPath,
@@ -185,7 +189,9 @@ test('five megabyte adversarial statements classify in under 50 ms each', () => 
   expect(results).toHaveLength(6)
   expect(
     results.filter((result) => {
-      return result.length < 4_900_000 || result.result !== result.expected || result.durationMs >= 50
+      return (
+        result.length < 4_900_000 || result.result !== result.expected || result.durationMs >= adversarialStatementMaxMs
+      )
     }),
   ).toEqual([])
 }, 45_000)

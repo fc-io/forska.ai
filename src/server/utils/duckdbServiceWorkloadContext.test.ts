@@ -219,14 +219,23 @@ test('duckdb workload context rejects over-budget query results and records metr
   }
 })
 
-test('committed transaction over its duration budget returns and records the breach', async () => {
+test.each([
+  {method: 'runDuckdbTransaction' as const, operation: 'transaction'},
+  {method: 'runDuckdbBackgroundTransaction' as const, operation: 'backgroundTransaction'},
+  {method: 'runDuckdbAppendTransaction' as const, operation: 'appendTransaction'},
+])('committed $operation over its duration budget returns and warns about the breach', async ({method, operation}) => {
+  const previousAppendTransactionEnabled = process.env.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
   const previousDuckdbPath = process.env.DUCKDB_PATH
   const previousServerRole = process.env.SERVER_ROLE
   const clock = {now: Date.now()}
   const statements: string[] = []
+  const warnings: string[] = []
   const nowSpy = spyOn(Date, 'now').mockImplementation(() => {
     return clock.now
+  })
+  const warnSpy = spyOn(console, 'warn').mockImplementation((message: unknown) => {
+    warnings.push(String(message))
   })
 
   void mock.module(new URL('./serverRuntimeRole.ts', import.meta.url).href, () => {
@@ -275,47 +284,53 @@ test('committed transaction over its duration budget returns and records the bre
     }
   })
 
+  process.env.FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED = 'true'
   process.env.DUCKDB_MEMORY_LIMIT = '20GB'
   process.env.DUCKDB_PATH = ':memory:'
   process.env.SERVER_ROLE = 'maintenance-worker'
-  const duckdbService = await getImportedDuckdbService('committed-transaction-budget')
+  const duckdbService = await getImportedDuckdbService(`committed-${operation}-budget`)
 
   try {
-    const result = await duckdbService
-      .runDuckdbTransaction(
-        async (tx) => {
-          await tx.run('INSERT INTO app.slow_store VALUES (1)')
-          return 'stored'
-        },
-        {
-          allowsTempSpill: true,
-          fallbackIntent: 'reject',
-          routeOrJobKey: 'import.storeArticles',
-          timeoutMs: 5_000,
-          workloadClass: 'background.importStore',
-        },
-      )
-      .then(
-        (value) => {
-          return {error: null, value}
-        },
-        (error: unknown) => {
-          return {error: error instanceof Error ? error.message : String(error), value: null}
-        },
-      )
+    const result = await duckdbService[method](
+      async (tx) => {
+        await tx.run('INSERT INTO app.slow_store VALUES (1)')
+        return 'stored'
+      },
+      {
+        allowsTempSpill: true,
+        fallbackIntent: 'reject',
+        routeOrJobKey: 'import.storeArticles',
+        timeoutMs: 5_000,
+        workloadClass: 'background.importStore',
+      },
+    ).then(
+      (value) => {
+        return {error: null, value}
+      },
+      (error: unknown) => {
+        return {error: error instanceof Error ? error.message : String(error), value: null}
+      },
+    )
 
     expect(result).toEqual({error: null, value: 'stored'})
     expect(statements.slice(-3)).toEqual(['BEGIN TRANSACTION', 'INSERT INTO app.slow_store VALUES (1)', 'COMMIT'])
     expect(duckdbService.getDuckdbWorkloadRuntimeMetricsSnapshot().at(-1)).toMatchObject({
       durationMs: 5_001,
       error: null,
-      operation: 'transaction',
+      operation,
       routeOrJobKey: 'import.storeArticles',
       timeoutMs: 5_000,
     })
+    expect(
+      warnings.filter((warning) => {
+        return warning.includes('committed import.storeArticles exceeded its workload budget')
+      }),
+    ).toHaveLength(1)
   } finally {
     await duckdbService.closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+    warnSpy.mockRestore()
     nowSpy.mockRestore()
+    restoreEnvValue('FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED', previousAppendTransactionEnabled)
     restoreEnvValue('DUCKDB_MEMORY_LIMIT', previousDuckdbMemoryLimit)
     restoreEnvValue('DUCKDB_PATH', previousDuckdbPath)
     restoreEnvValue('SERVER_ROLE', previousServerRole)
