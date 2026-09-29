@@ -30,6 +30,7 @@ import {
   startServerRuntimeRoleMonitor,
 } from './serverRuntimeRole.ts'
 import {registerServerShutdownHandler} from './serverShutdownState.ts'
+import {installSlowRegexDiagnostic} from './slowRegexDiagnostic.ts'
 import {startRequestAttemptCloseoutBackfillScheduler} from './startRequestAttemptCloseoutBackfillScheduler.ts'
 
 let maintenanceBackgroundWorkStops: Array<() => void> | null = null
@@ -333,6 +334,8 @@ const startMaintenanceBackgroundWork = () => {
   if (maintenanceBackgroundWorkStops !== null) {
     return
   }
+
+  installSlowRegexDiagnostic()
 
   const reviewServingProjectorPaused = isReviewServingProjectorPaused()
 
