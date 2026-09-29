@@ -7953,12 +7953,45 @@ const getDuckdbWorkloadRuntimeMetric = ({
   }
 }
 
+const duckdbCommittedWorkloadOperations = new Set<DuckdbWorkloadOperation>([
+  'appendTransaction',
+  'backgroundTransaction',
+  'transaction',
+])
+
+const logDuckdbCommittedWorkloadBudgetFailure = (
+  context: DuckdbWorkloadContext,
+  metric: DuckdbWorkloadRuntimeMetric,
+  budgetFailure: string,
+) => {
+  writeRuntimeOperatorLogEvent({
+    attrs: {
+      budgetFailure,
+      durationMs: metric.durationMs,
+      operation: metric.operation,
+      queueDepthAtStart: metric.queueDepthAtStart,
+      routeOrJobKey: context.routeOrJobKey,
+      timeoutMs: context.timeoutMs ?? null,
+    },
+    event: 'duckdb.workload-budget-exceeded-after-commit',
+    message: `[duckdb] committed ${context.routeOrJobKey} exceeded its workload budget: ${budgetFailure}`,
+    severity: 'WARN',
+  })
+}
+
 const assertDuckdbWorkloadBudget = (context: DuckdbWorkloadContext, metric: DuckdbWorkloadRuntimeMetric) => {
   const budgetFailure = getDuckdbWorkloadBudgetFailure(context, metric)
 
-  if (budgetFailure !== null) {
-    throw new Error(`DuckDB workload budget exceeded for ${context.routeOrJobKey}: ${budgetFailure}`)
+  if (budgetFailure === null) {
+    return
   }
+
+  if (duckdbCommittedWorkloadOperations.has(metric.operation)) {
+    logDuckdbCommittedWorkloadBudgetFailure(context, metric, budgetFailure)
+    return
+  }
+
+  throw new Error(`DuckDB workload budget exceeded for ${context.routeOrJobKey}: ${budgetFailure}`)
 }
 
 const withDuckdbWorkloadContext = <T>({

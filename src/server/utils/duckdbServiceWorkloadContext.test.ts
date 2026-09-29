@@ -219,6 +219,110 @@ test('duckdb workload context rejects over-budget query results and records metr
   }
 })
 
+test('committed transaction over its duration budget returns and records the breach', async () => {
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+  const previousDuckdbPath = process.env.DUCKDB_PATH
+  const previousServerRole = process.env.SERVER_ROLE
+  const clock = {now: Date.now()}
+  const statements: string[] = []
+  const nowSpy = spyOn(Date, 'now').mockImplementation(() => {
+    return clock.now
+  })
+
+  void mock.module(new URL('./serverRuntimeRole.ts', import.meta.url).href, () => {
+    return getServerRuntimeRoleMock({canOwnDuckdb: true, currentRole: 'maintenance-worker', shouldProxyToOwner: false})
+  })
+  void mock.module('@duckdb/node-api', () => {
+    const connection = {
+      closeSync: () => {},
+      interrupt: () => {},
+      run: async (statement: string) => {
+        statements.push(statement)
+
+        if (statement === 'INSERT INTO app.slow_store VALUES (1)') {
+          clock.now += 5_001
+        }
+      },
+      runAndReadAll: async () => {
+        return {
+          getRowObjectsJson: () => {
+            return [
+              {
+                library_version: duckdbDistributionManifest.engine.version,
+                source_id: duckdbDistributionManifest.engine.sourceId,
+              },
+            ]
+          },
+        }
+      },
+    }
+
+    return {
+      DuckDBConnection: {},
+      DuckDBInstance: {
+        create: async () => {
+          return {
+            closeSync: () => {},
+            connect: async () => {
+              return connection
+            },
+          }
+        },
+      },
+      version: () => {
+        return duckdbDistributionManifest.engine.version
+      },
+    }
+  })
+
+  process.env.DUCKDB_MEMORY_LIMIT = '20GB'
+  process.env.DUCKDB_PATH = ':memory:'
+  process.env.SERVER_ROLE = 'maintenance-worker'
+  const duckdbService = await getImportedDuckdbService('committed-transaction-budget')
+
+  try {
+    const result = await duckdbService
+      .runDuckdbTransaction(
+        async (tx) => {
+          await tx.run('INSERT INTO app.slow_store VALUES (1)')
+          return 'stored'
+        },
+        {
+          allowsTempSpill: true,
+          fallbackIntent: 'reject',
+          routeOrJobKey: 'import.storeArticles',
+          timeoutMs: 5_000,
+          workloadClass: 'background.importStore',
+        },
+      )
+      .then(
+        (value) => {
+          return {error: null, value}
+        },
+        (error: unknown) => {
+          return {error: error instanceof Error ? error.message : String(error), value: null}
+        },
+      )
+
+    expect(result).toEqual({error: null, value: 'stored'})
+    expect(statements.slice(-3)).toEqual(['BEGIN TRANSACTION', 'INSERT INTO app.slow_store VALUES (1)', 'COMMIT'])
+    expect(duckdbService.getDuckdbWorkloadRuntimeMetricsSnapshot().at(-1)).toMatchObject({
+      durationMs: 5_001,
+      error: null,
+      operation: 'transaction',
+      routeOrJobKey: 'import.storeArticles',
+      timeoutMs: 5_000,
+    })
+  } finally {
+    await duckdbService.closeDuckdbService({checkpointBeforeClose: false, releaseOwnerLease: false})
+    nowSpy.mockRestore()
+    restoreEnvValue('DUCKDB_MEMORY_LIMIT', previousDuckdbMemoryLimit)
+    restoreEnvValue('DUCKDB_PATH', previousDuckdbPath)
+    restoreEnvValue('SERVER_ROLE', previousServerRole)
+    mock.restore()
+  }
+})
+
 test.each(
   (['runDuckdbJsonQuery', 'runDuckdbBackgroundJsonQuery'] as const).flatMap((queryMethod) => {
     return (['startup', 'queue'] as const).flatMap((delayPhase) => {
