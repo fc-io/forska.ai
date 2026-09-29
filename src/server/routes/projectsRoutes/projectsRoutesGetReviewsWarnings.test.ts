@@ -2479,6 +2479,53 @@ test('reviews warnings request detail enrichment when filter-ready serving lacks
   expect(await getReviewRebuildRequestCount(projectId, 'detailReadinessDirtyWork')).toBe(1)
 })
 
+test('reviews warnings request search enrichment when filter- and detail-ready serving lacks search', async () => {
+  const projectId = 'project-detail-ready-search-missing-warning'
+  const articleId = `article-${projectId}`
+  const reviewConfigHash = getFixtureReviewConfigHash(projectId)
+  const snapshotId = 'snapshot-detail-ready-search-missing-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, articleId)
+  await insertActiveReviewServingManifest({
+    components: [
+      'projectScope',
+      'selectedImport',
+      'display',
+      'llmStatus',
+      'humanStatus',
+      'queue',
+      'posting',
+      'summary',
+      'payload',
+    ],
+    includeSearchState: false,
+    optionalComponents: [],
+    projectId,
+    snapshotId,
+  })
+  await insertReviewArticleServingBaseRow({articleId, projectId, reviewConfigHash, snapshotId})
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.coverage).toMatchObject({
+    filterReadyArticleCount: 1,
+    searchReadyArticleCount: null,
+    totalArticleCount: 1,
+  })
+  expect(body.data.indexing.coverage.detailReadyArticleCount).not.toBeNull()
+  expect(await getReviewRebuildRequestCount(projectId, 'detailReadinessDirtyWork')).toBe(0)
+  expect(await getReviewRebuildRequestCount(projectId, 'searchReadinessDirtyWork')).toBe(1)
+  expect(await getReviewRebuildRequestComponents(projectId, 'searchReadinessDirtyWork')).toEqual(['search'])
+
+  const {response: secondResponse} = await postWarningsRequest(projectId)
+
+  expect(secondResponse.status).toBe(200)
+  expect(await getReviewRebuildRequestCount(projectId, 'searchReadinessDirtyWork')).toBe(1)
+})
+
 test('reviews warnings exposes component readiness for details and search readiness', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
