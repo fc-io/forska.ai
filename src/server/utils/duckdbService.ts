@@ -42,6 +42,7 @@ import {
   getEscalatedDuckdbStartupRepairRungs,
   getInitialDuckdbStartupRepairRungs,
 } from './duckdbStartupRepairLadder.ts'
+import {canDuckdbStatementDeleteIndexedRows} from './duckdbStatementIndexedRowDeletion.ts'
 import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
 import {
@@ -7330,12 +7331,10 @@ const getDuckdbMutatingStatementTarget = (statement: string) => {
   )
 }
 
-const canDuckdbStatementDeleteIndexedRows = (statement: string) => {
-  return (
-    /\b(?:DELETE\s+FROM|MERGE\s+INTO|UPDATE)\b/iu.test(statement)
-    || /\bINSERT\s+OR\s+IGNORE\s+INTO\b/iu.test(statement)
-    || (/\bINSERT\s+INTO\b/iu.test(statement) && /\bON\s+CONFLICT\b[\s\S]*\bDO\s+UPDATE\b/iu.test(statement))
-  )
+const isDuckdbIndexedMutationRepairTarget = (targetTable: string) => {
+  const repairSpec = getDuckdbStartupRepairSpecForTableName(targetTable)
+
+  return (repairSpec?.repairPrimaryKeyColumns?.length ?? 0) > 0 || repairSpec?.matchByMutationTargetOnly === true
 }
 
 const recordDuckdbMutatingStatementTarget = (duckdbConnection: DuckDBConnection, statement: string) => {
@@ -7354,18 +7353,15 @@ const recordDuckdbMutatingStatementTarget = (duckdbConnection: DuckDBConnection,
     targetTable === null
     || duckdbConnection !== duckdbServiceState.controlConnection
     || duckdbServiceState.controlTransactionDepth === 0
+    || !isDuckdbIndexedMutationRepairTarget(targetTable)
     || !canDuckdbStatementDeleteIndexedRows(statement)
   ) {
     return
   }
 
-  const repairSpec = getDuckdbStartupRepairSpecForTableName(targetTable)
-
-  if ((repairSpec?.repairPrimaryKeyColumns?.length ?? 0) > 0 || repairSpec?.matchByMutationTargetOnly === true) {
-    duckdbServiceState.controlTransactionIndexedMutationTarget = targetTable
-    if (!duckdbServiceState.controlTransactionIndexedMutationTargets.includes(targetTable)) {
-      duckdbServiceState.controlTransactionIndexedMutationTargets.push(targetTable)
-    }
+  duckdbServiceState.controlTransactionIndexedMutationTarget = targetTable
+  if (!duckdbServiceState.controlTransactionIndexedMutationTargets.includes(targetTable)) {
+    duckdbServiceState.controlTransactionIndexedMutationTargets.push(targetTable)
   }
 }
 
