@@ -2911,9 +2911,10 @@ test('pending rebuild chunks are claimed activation first, then search, then enr
     expect(Number(genericDefaultRequest?.priority)).toBe(100)
     expect(await claimNextChunk()).toBe('rebuild:activation')
     expect(await claimNextChunk()).toBe('rebuild:detail-readiness')
-    expect(await claimNextChunk()).toBe('rebuild:generic-default')
     expect(await claimNextChunk()).toBe('rebuild:search')
     expect(await claimNextChunk()).toBe('rebuild:facet-enrichment')
+    // Summary reads posting flags, so on the active snapshot it waits for the posting rebuild another request runs.
+    expect(await claimNextChunk()).toBe('rebuild:generic-default')
     expect(await claimNextChunk()).toBeNull()
   } finally {
     connection.closeSync()

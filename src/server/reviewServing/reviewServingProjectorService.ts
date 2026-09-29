@@ -6,9 +6,7 @@ import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {
   countReadyReviewServingComponents,
   enrichmentReviewServingProjectionComponents,
-  postingUpstreamReviewServingComponents,
   type ReviewServingProjectionComponent,
-  summaryUpstreamReviewServingComponents,
   visibilityReviewServingProjectionComponents,
 } from './reviewServingContracts.ts'
 import {
@@ -18,7 +16,6 @@ import {
   completeReviewServingDirtyWorkClaims,
   defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds,
   failReviewServingDirtyWorkClaims,
-  getReviewServingDirtyWorkClaimIdsAwaitingUpstream,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
   type ReviewServingDirtyWorkClaimOrder,
@@ -379,39 +376,22 @@ const getRebuildRequestComponents = (request: ReviewServingRebuildRequest) => {
   ])
 }
 
-const derivedComponentUpstreamComponents: Partial<
-  Record<ReviewServingProjectionComponent, readonly ReviewServingProjectionComponent[]>
-> = {posting: postingUpstreamReviewServingComponents, summary: summaryUpstreamReviewServingComponents}
-
-// Requests that build a derived component into an active snapshot, and the claims they must not cover.
-type ActiveSnapshotDerivedCoverage = {
-  awaitingClaimIds: ReadonlySet<string>
-  requestIds: ReadonlySet<string>
-  startedRequestIds: ReadonlySet<string>
-}
-
-// Posting and summary rebuilt into an active snapshot read that snapshot's rows of their inputs, not the source, and
-// those rows only catch up with a change once its input dirty work is done. Such a request covers a claim only while
-// it has not started building the component and the claim's inputs have caught up; otherwise the claim waits (article
-// claims then patch incrementally, where inputs are checked claim by claim, other claims ask again later).
-const getActiveSnapshotDerivedCoverage = async (input: {
-  claims: readonly ReviewServingDirtyWorkClaim[]
+// Requests that build a component into an active snapshot (in place, or a bootstrap train whose snapshot was promoted
+// meanwhile). Their chunks rewrite rows the snapshot is serving range by range, from inputs that may still be catching
+// up, so a claim of that component is never completed just because such a request's watermarks reach it: the claim
+// stays pending and is patched incrementally, or retired once a chunk that started after its change has completed.
+// Only requests building fresh candidates, which nothing reads before activation, cover claims when they are created.
+const getActiveSnapshotBuildingRequestIds = async (input: {
   component: ReviewServingProjectionComponent
   database: ReviewServingProjectorServiceDatabase
   requests: readonly ReviewServingRebuildRequest[]
-}): Promise<ActiveSnapshotDerivedCoverage | null> => {
-  const upstreamComponents = derivedComponentUpstreamComponents[input.component]
-
-  if (upstreamComponents === undefined || input.claims.length === 0 || input.requests.length === 0) {
-    return null
+}) => {
+  if (input.requests.length === 0) {
+    return new Set<string>()
   }
 
-  const rows = await input.database.queryJson<{requestId: string; started: boolean}>(`
-    SELECT
-      chunk.request_id AS requestId,
-      bool_or(
-        chunk.status = 'running' OR (chunk.status = 'completed' AND COALESCE(chunk.checksum, '') NOT LIKE 'split:%')
-      ) AS started
+  const rows = await input.database.queryJson<{requestId: string}>(`
+    SELECT DISTINCT chunk.request_id AS requestId
     FROM app.review_rebuild_chunk_manifest chunk
     INNER JOIN app.review_serving_snapshot_manifest snapshot
       ON snapshot.project_id = chunk.project_id
@@ -423,63 +403,25 @@ const getActiveSnapshotDerivedCoverage = async (input: {
       .join(', ')})
       AND chunk.projection_component = ${getSqlLiteral(input.component)}
       AND snapshot.snapshot_status = 'active'
-    GROUP BY chunk.request_id
   `)
 
-  if (rows.length === 0) {
-    return null
-  }
-
-  const claimsByProject = input.claims.reduce((grouped, claim) => {
-    return claim.projectId === null
-      ? grouped
-      : grouped.set(claim.projectId, [...(grouped.get(claim.projectId) ?? []), claim])
-  }, new Map<string, ReviewServingDirtyWorkClaim[]>())
-  const awaitingClaimIds = await [...claimsByProject.entries()].reduce<Promise<Set<string>>>(
-    async (previous, [projectId, claims]) => {
-      const awaiting = await previous
-      const projectAwaiting = await getReviewServingDirtyWorkClaimIdsAwaitingUpstream(
-        {claims, projectId, upstreamComponents},
-        input.database,
-      )
-
-      return new Set([...awaiting, ...projectAwaiting])
-    },
-    Promise.resolve(new Set<string>()),
+  return new Set(
+    rows.map((row) => {
+      return row.requestId
+    }),
   )
-
-  return {
-    awaitingClaimIds,
-    requestIds: new Set(
-      rows.map((row) => {
-        return row.requestId
-      }),
-    ),
-    startedRequestIds: new Set(
-      rows.flatMap((row) => {
-        return row.started ? [row.requestId] : []
-      }),
-    ),
-  }
 }
 
 const isClaimCoveredByRebuildRequest = (
   claim: ReviewServingDirtyWorkClaim,
   request: ReviewServingRebuildRequest,
-  derivedCoverage: ActiveSnapshotDerivedCoverage | null = null,
+  activeSnapshotBuildingRequestIds: ReadonlySet<string> = new Set(),
 ) => {
   if (
     claim.projectId === null
     || request.projectId !== claim.projectId
     || !getRebuildRequestComponents(request).has(claim.projectionComponent)
-  ) {
-    return false
-  }
-
-  if (
-    derivedCoverage?.requestIds.has(request.requestId) === true
-    && (derivedCoverage.startedRequestIds.has(request.requestId)
-      || derivedCoverage.awaitingClaimIds.has(claim.dirtyWorkId))
+    || activeSnapshotBuildingRequestIds.has(request.requestId)
   ) {
     return false
   }
@@ -504,10 +446,10 @@ const isClaimCoveredByRebuildRequest = (
 const isClaimCoveredByRebuildRequests = (
   claim: ReviewServingDirtyWorkClaim,
   requests: readonly ReviewServingRebuildRequest[],
-  derivedCoverage: ActiveSnapshotDerivedCoverage | null,
+  activeSnapshotBuildingRequestIds: ReadonlySet<string>,
 ) => {
   return requests.some((request) => {
-    return isClaimCoveredByRebuildRequest(claim, request, derivedCoverage)
+    return isClaimCoveredByRebuildRequest(claim, request, activeSnapshotBuildingRequestIds)
   })
 }
 
@@ -781,35 +723,52 @@ const getAwaitedRebuildRequestDiagnostic = (requests: readonly ReviewServingRebu
     .join(', ')} to activate`
 }
 
+// Claims a fresh candidate build covers are complete; claims waiting for a build of the active snapshot go back to
+// pending, since that snapshot now carries the component and their next pass patches it incrementally; other claims
+// wait parked until the build they wait for is done.
 const settleBootstrapRoutedArticleDirtyWork = async (input: {
+  activeSnapshotBuildingRequestIds: ReadonlySet<string>
   blockDirtyWorkForRebuild: typeof blockReviewServingDirtyWorkClaimsForRebuild
   claims: readonly ReviewServingDirtyWorkClaim[]
   completeDirtyWork: typeof completeReviewServingDirtyWorkClaims
   component: ReviewServingProjectionComponent
   database: ReviewServingProjectorServiceDatabase
-  derivedCoverage: ActiveSnapshotDerivedCoverage | null
+  releaseDirtyWork: typeof releaseReviewServingDirtyWorkClaims
   requests: readonly ReviewServingRebuildRequest[]
   state: WakeReviewServingProjectorState
 }): Promise<WakeReviewServingProjectorState> => {
   const coveredClaims = input.claims.filter((claim) => {
-    return isClaimCoveredByRebuildRequests(claim, input.requests, input.derivedCoverage)
+    return isClaimCoveredByRebuildRequests(claim, input.requests, input.activeSnapshotBuildingRequestIds)
   })
-  const waitingClaims = input.claims.filter((claim) => {
+  const buildsActiveSnapshot = input.requests.some((request) => {
+    return input.activeSnapshotBuildingRequestIds.has(request.requestId)
+  })
+  const uncoveredClaims = input.claims.filter((claim) => {
     return !coveredClaims.includes(claim)
   })
+  const releasedClaims = buildsActiveSnapshot ? uncoveredClaims : []
+  const waitingClaims = buildsActiveSnapshot ? [] : uncoveredClaims
 
   if (coveredClaims.length > 0) {
     await input.completeDirtyWork(coveredClaims, input.database)
   }
 
+  if (releasedClaims.length > 0) {
+    await input.releaseDirtyWork(getDirtyWorkIds(releasedClaims), input.database)
+  }
+
+  const releasedState =
+    releasedClaims.length === 0
+      ? input.state
+      : {...input.state, releasedClaimIds: [...input.state.releasedClaimIds, ...getDirtyWorkIds(releasedClaims)]}
   const completedState =
     coveredClaims.length === 0
-      ? input.state
+      ? releasedState
       : {
-          ...input.state,
-          processedRows: input.state.processedRows + coveredClaims.length,
+          ...releasedState,
+          processedRows: releasedState.processedRows + coveredClaims.length,
           runs: [
-            ...input.state.runs,
+            ...releasedState.runs,
             {
               attempts: 1,
               claimCount: coveredClaims.length,
@@ -836,6 +795,85 @@ export const getChunkedDirtyWorkRebuildPriority = (component: ReviewServingProje
   return countReadyRepairComponents.has(component)
     ? activationReviewServingRebuildPriority
     : getOptionalComponentRebuildPriority(component)
+}
+
+// Components whose rebuild chunks read the source, so a chunk that started after a row's change rebuilt it (posting and
+// summary read their snapshot's own input rows and patch incrementally instead).
+const sourceReadingChunkedComponents = new Set<ReviewServingProjectionComponent>([
+  'judgmentInputContent',
+  'payload',
+  'search',
+])
+
+// Article claims whose article a completed chunk of the active snapshot rebuilt after the claim's change: the same test
+// chunk-based retirement applies, run for the claims in hand so that they are not taken for a reason to rebuild again.
+const getClaimsRebuiltByActiveSnapshotChunks = async (input: {
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  component: ReviewServingProjectionComponent
+  database: ReviewServingProjectorServiceDatabase
+}) => {
+  const articleClaims = input.claims.filter((claim) => {
+    return claim.articleId !== null && claim.projectId !== null
+  })
+
+  if (!sourceReadingChunkedComponents.has(input.component) || articleClaims.length === 0) {
+    return []
+  }
+
+  const rows = await input.database.queryJson<{dirtyWorkId: string}>(`
+    WITH claimed(dirty_work_id) AS (
+      VALUES ${articleClaims
+        .map((claim) => {
+          return `(${getSqlLiteral(claim.dirtyWorkId)})`
+        })
+        .join(', ')}
+    )
+    SELECT DISTINCT dirty_work.dirty_work_id AS dirtyWorkId
+    FROM claimed
+    INNER JOIN app.review_serving_dirty_work dirty_work
+      ON dirty_work.dirty_work_id = claimed.dirty_work_id
+    INNER JOIN app.review_rebuild_chunk_manifest chunk
+      ON chunk.project_id = dirty_work.project_id
+      AND chunk.projection_component = dirty_work.projection_component
+      AND chunk.projection_identity = dirty_work.projection_identity
+      AND dirty_work.article_id >= chunk.chunk_start_key
+      AND dirty_work.article_id <= chunk.chunk_end_key
+    INNER JOIN app.review_serving_snapshot_manifest snapshot
+      ON snapshot.project_id = chunk.project_id
+      AND snapshot.snapshot_id = chunk.snapshot_id
+    WHERE snapshot.snapshot_status = 'active'
+      AND chunk.status = 'completed'
+      AND chunk.started_at IS NOT NULL
+      AND COALESCE(chunk.checksum, '') NOT LIKE 'split:%'
+      AND COALESCE(chunk.last_error, '') NOT LIKE 'superseded%'
+      AND COALESCE(chunk.last_error, '') NOT LIKE 'coalesced%'
+      AND COALESCE(dirty_work.source_changed_at, dirty_work.updated_at) < chunk.started_at
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_serving_snapshot_manifest candidate
+        WHERE candidate.project_id = dirty_work.project_id
+          AND candidate.snapshot_status = 'candidate'
+          AND (
+            json_contains(candidate.required_components_json, to_json(dirty_work.projection_component))
+            OR json_contains(candidate.optional_components_json, to_json(dirty_work.projection_component))
+          )
+      )
+  `)
+  const rebuiltClaimIds = new Set(
+    rows.map((row) => {
+      return row.dirtyWorkId
+    }),
+  )
+
+  return articleClaims.filter((claim) => {
+    return rebuiltClaimIds.has(claim.dirtyWorkId)
+  })
+}
+
+const hasProjectWideClaim = (claims: readonly ReviewServingDirtyWorkClaim[], projectId: string) => {
+  return claims.some((claim) => {
+    return claim.projectId === projectId && claim.scopeKind !== 'article'
+  })
 }
 
 const getChunkedDirtyWorkRebuildReason = (component: ReviewServingProjectionComponent) => {
@@ -1122,14 +1160,55 @@ export const wakeReviewServingProjectorService = async (
       articleDirtyWorkRoute === 'incremental' ? [] : getChunkedDirtyWorkProjectIds(component, claims)
 
     if (chunkedDirtyWorkProjectIds.length > 0) {
+      // Claims a completed chunk of the active snapshot already rebuilt are complete; only the rest need a rebuild.
+      const rebuiltClaims = await getClaimsRebuiltByActiveSnapshotChunks({claims, component, database})
+      const openClaims = claims.filter((claim) => {
+        return !rebuiltClaims.includes(claim)
+      })
+      const openClaimIds = getDirtyWorkIds(openClaims)
+      const openProjectIds = chunkedDirtyWorkProjectIds.filter((projectId) => {
+        return openClaims.some((claim) => {
+          return claim.projectId === projectId
+        })
+      })
+
+      if (rebuiltClaims.length > 0) {
+        await completeDirtyWork(rebuiltClaims, database)
+      }
+
+      const openState =
+        rebuiltClaims.length === 0
+          ? state
+          : {
+              ...state,
+              processedRows: state.processedRows + rebuiltClaims.length,
+              runs: [
+                ...state.runs,
+                {
+                  attempts: 1,
+                  claimCount: rebuiltClaims.length,
+                  component,
+                  processedCount: 0,
+                  status: 'completed' as const,
+                },
+              ],
+            }
+
+      if (openClaims.length === 0) {
+        return openState
+      }
+
       const rebuildResult = await Effect.runPromise(
         Effect.either(
           Effect.forEach(
-            chunkedDirtyWorkProjectIds,
+            openProjectIds,
             (projectId) => {
               return requestRebuild(
                 {
                   components: [component],
+                  // Claims not scoped to one article can neither patch incrementally nor be retired by the chunk
+                  // that rebuilt their article, so they take a fresh snapshot, whose request covers them.
+                  ...(hasProjectWideClaim(openClaims, projectId) ? {inPlace: false} : {}),
                   priority: getChunkedDirtyWorkRebuildPriority(component),
                   projectId,
                   reason: getChunkedDirtyWorkRebuildReason(component),
@@ -1145,16 +1224,21 @@ export const wakeReviewServingProjectorService = async (
 
       if (rebuildResult._tag === 'Left') {
         const rebuildDiagnostic = getDiagnostic(rebuildResult.left)
-        await failDirtyWork(claimIds, database)
-        logDirtyWorkProjectorFailure({claimIds, claims, component, diagnostic: rebuildDiagnostic})
+        await failDirtyWork(openClaimIds, database)
+        logDirtyWorkProjectorFailure({
+          claimIds: openClaimIds,
+          claims: openClaims,
+          component,
+          diagnostic: rebuildDiagnostic,
+        })
 
         return {
-          ...state,
+          ...openState,
           failures: [
-            ...state.failures,
-            {attempts: 1, claimIds, component, diagnostic: rebuildDiagnostic, status: 'failed' as const},
+            ...openState.failures,
+            {attempts: 1, claimIds: openClaimIds, component, diagnostic: rebuildDiagnostic, status: 'failed' as const},
           ],
-          processedRows: state.processedRows + claims.length,
+          processedRows: openState.processedRows + openClaims.length,
         }
       }
 
@@ -1163,16 +1247,15 @@ export const wakeReviewServingProjectorService = async (
       if (blockedRebuildRequests.length > 0) {
         return parkDirtyWorkClaimsBlockedByRebuild({
           blockDirtyWorkForRebuild,
-          claims,
+          claims: openClaims,
           component,
           database,
           diagnostic: getBlockedRebuildRequestDiagnostic(blockedRebuildRequests),
-          state,
+          state: openState,
         })
       }
 
-      const derivedCoverage = await getActiveSnapshotDerivedCoverage({
-        claims,
+      const activeSnapshotBuildingRequestIds = await getActiveSnapshotBuildingRequestIds({
         component,
         database,
         requests: rebuildResult.right,
@@ -1180,22 +1263,23 @@ export const wakeReviewServingProjectorService = async (
 
       if (articleDirtyWorkRoute === 'bootstrap') {
         return settleBootstrapRoutedArticleDirtyWork({
+          activeSnapshotBuildingRequestIds,
           blockDirtyWorkForRebuild,
-          claims,
+          claims: openClaims,
           completeDirtyWork,
           component,
           database,
-          derivedCoverage,
+          releaseDirtyWork,
           requests: rebuildResult.right,
-          state,
+          state: openState,
         })
       }
 
-      const coveredClaims = claims.filter((claim) => {
-        return isClaimCoveredByRebuildRequests(claim, rebuildResult.right, derivedCoverage)
+      const coveredClaims = openClaims.filter((claim) => {
+        return isClaimCoveredByRebuildRequests(claim, rebuildResult.right, activeSnapshotBuildingRequestIds)
       })
       const uncoveredClaimIds = getDirtyWorkIds(
-        claims.filter((claim) => {
+        openClaims.filter((claim) => {
           return !coveredClaims.includes(claim)
         }),
       )
@@ -1210,8 +1294,8 @@ export const wakeReviewServingProjectorService = async (
 
       const releasedState =
         uncoveredClaimIds.length === 0
-          ? state
-          : {...state, releasedClaimIds: [...state.releasedClaimIds, ...uncoveredClaimIds]}
+          ? openState
+          : {...openState, releasedClaimIds: [...openState.releasedClaimIds, ...uncoveredClaimIds]}
 
       return coveredClaims.length === 0
         ? releasedState

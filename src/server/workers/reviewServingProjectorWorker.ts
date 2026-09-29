@@ -135,6 +135,7 @@ import {
   type ReviewServingSnapshotPurgeResult,
 } from '../reviewServing/reviewServingSnapshotPurge.ts'
 import {
+  getDropUnpublishedReviewServingSummaryLedgerBucketsStatements,
   planReviewServingSummaryLedgerPatches,
   reviewServingSummaryBucketTable,
   type ReviewServingSummaryLedgerSnapshotPatch,
@@ -6519,6 +6520,7 @@ const getRebuildRequestPendingChunkCount = async (
 
 const summaryPublicationFailedRebuildRequestErrorPrefix = 'summary publication failed'
 const summaryPublicationRetryDelaySeconds = 300
+const maxSummaryPublicationAttempts = 5
 
 const getNextCompletedUnfinalizedRebuildRequestChunk = async (input: {
   database: ReviewServingChunkManifestRepositoryDatabase
@@ -7027,17 +7029,53 @@ const finalizeTerminalFailedRebuildRequests = async (input: {
   return firstFinalizedResult
 }
 
+const getSummaryPublicationAttempt = (lastError: string | null) => {
+  const match = lastError?.match(/^summary publication failed \(attempt (\d+)\)/u)
+
+  return match?.[1] === undefined ? 0 : Number(match[1])
+}
+
+// Gives up a summary publication: the request's unpublished buckets are dropped so the snapshot keeps serving its
+// published ledger, and its summary chunks are quarantined, so the request is never readmitted or waited on and its
+// summary is not read as built. A later dirty-work or enrichment request rebuilds summary afresh.
+const abandonRebuildRequestSummaryPublication = async (
+  input: {lastError: string; requestId: string},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  await database.transaction(async (tx) => {
+    await getDropUnpublishedReviewServingSummaryLedgerBucketsStatements({requestId: input.requestId}).reduce<
+      Promise<void>
+    >(async (previous, statement) => {
+      await previous
+      await tx.run(statement)
+    }, Promise.resolve())
+    await tx.run(`
+      UPDATE app.review_rebuild_chunk_manifest
+      SET status = 'quarantined', last_error = ${getSqlLiteral(input.lastError)}, updated_at = current_timestamp
+      WHERE request_id = ${getSqlLiteral(input.requestId)}
+        AND projection_component = 'summary'
+        AND status = 'completed'
+        AND COALESCE(checksum, '') NOT LIKE 'split:%'
+    `)
+  })
+  reviewServingProjectorWorkerCycleLogger.error(
+    `review-serving-projector-worker:summary-publication-abandoned:${input.requestId}`,
+    '[reviewServingProjectorWorker] gave up publishing a rebuild request summary; its buckets were dropped',
+    {event: 'summaryPublicationAbandoned', lastError: input.lastError, requestId: input.requestId},
+  )
+}
+
 // A request whose summary buckets finalization did not publish stays admitted, so the ledger keeps patching them and
-// the idle finalizer retries the publication after a pause; failing it would leave them unpublished for good.
+// the idle finalizer retries the publication after a pause; failing it at once would leave them unpublished for good.
+// After a few failed attempts the publication is abandoned and the request fails, so a publication that always fails
+// cannot hold the project's other work (readmission of failed requests waits for no request to be admitted).
 const deferUnpublishedRebuildRequestFinalization = async (
   input: {error: unknown; requestId: string},
   database: ReviewServingChunkManifestRepositoryDatabase,
-) => {
-  const [row] = await database.queryJson<{deferred: boolean}>(`
-    UPDATE app.review_rebuild_request AS request
-    SET
-      last_error = ${getSqlLiteral(`${summaryPublicationFailedRebuildRequestErrorPrefix}: ${getErrorText(input.error)}`)},
-      updated_at = current_timestamp
+): Promise<{kind: 'abandoned'; lastError: string} | {kind: 'deferred'} | {kind: 'none'}> => {
+  const [row] = await database.queryJson<{lastError: string | null}>(`
+    SELECT request.last_error AS lastError
+    FROM app.review_rebuild_request request
     WHERE request.request_id = ${getSqlLiteral(input.requestId)}
       AND request.status IN ('admitted', 'running')
       AND EXISTS (
@@ -7046,10 +7084,33 @@ const deferUnpublishedRebuildRequestFinalization = async (
         WHERE unpublished_bucket.request_id = request.request_id
           AND unpublished_bucket.ledger_status = 'building'
       )
-    RETURNING TRUE AS deferred
   `)
 
-  return row?.deferred === true
+  if (row === undefined) {
+    return {kind: 'none'}
+  }
+
+  const attempt = getSummaryPublicationAttempt(row.lastError) + 1
+  const errorText = getErrorText(input.error)
+
+  if (attempt >= maxSummaryPublicationAttempts) {
+    const lastError = `summary publication abandoned after ${attempt} attempts: ${errorText}`
+
+    await abandonRebuildRequestSummaryPublication({lastError, requestId: input.requestId}, database)
+
+    return {kind: 'abandoned', lastError}
+  }
+
+  await database.run(`
+    UPDATE app.review_rebuild_request
+    SET
+      last_error = ${getSqlLiteral(`${summaryPublicationFailedRebuildRequestErrorPrefix} (attempt ${attempt}): ${errorText}`)},
+      updated_at = current_timestamp
+    WHERE request_id = ${getSqlLiteral(input.requestId)}
+      AND status IN ('admitted', 'running')
+  `)
+
+  return {kind: 'deferred'}
 }
 
 const finalizeErroredCompletedReviewServingRebuildRequest = async (
@@ -7060,16 +7121,19 @@ const finalizeErroredCompletedReviewServingRebuildRequest = async (
     return
   }
 
-  if (
-    await deferUnpublishedRebuildRequestFinalization({error: input.error, requestId: input.chunk.requestId}, database)
-  ) {
+  const deferral = await deferUnpublishedRebuildRequestFinalization(
+    {error: input.error, requestId: input.chunk.requestId},
+    database,
+  )
+
+  if (deferral.kind === 'deferred') {
     return
   }
 
   await markFailedRebuildRequestFinalized(
     {
       chunkId: input.chunk.chunkId,
-      lastError: getErrorText(input.error),
+      lastError: deferral.kind === 'abandoned' ? deferral.lastError : getErrorText(input.error),
       requestId: input.chunk.requestId,
       status: 'finalization_failed',
     },

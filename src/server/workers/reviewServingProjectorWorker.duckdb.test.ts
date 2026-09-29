@@ -876,25 +876,27 @@ test('the worker cleanup purges an unreferenced failed snapshot through its back
   expect(await countSnapshotRows()).toEqual({manifests: 0, rows: 0})
 })
 
-test('a request whose summary publication failed stays admitted and a later finalization publishes it', async () => {
+const summaryRetryReviewConfigHash = 'review-config-summary-retry'
+const summaryRetryRequiredComponents = [
+  'projectScope',
+  'selectedImport',
+  'display',
+  'llmStatus',
+  'humanStatus',
+  'queue',
+  'payload',
+  'posting',
+] as const
+
+// An active snapshot without a review config hash, whose summary partials therefore cannot be reduced, and a request
+// that built its summary and only has to publish it.
+const insertUnpublishableSummaryRequest = async (projectId: string) => {
   const {runReviewServingProjectorWorkerOnce} = await import('./reviewServingProjectorWorker.ts')
   const {upsertReviewServingProjectionIdentityManifest} =
     await import('../reviewServing/reviewServingManifestRepository.ts')
-  const projectId = 'project-summary-retry'
-  const snapshotId = 'snapshot-summary-retry'
-  const requestId = 'rebuild:summary-retry'
-  const chunkId = 'chunk:summary-retry'
-  const summaryReviewConfigHash = 'review-config-summary-retry'
-  const summaryRetryRequiredComponents = [
-    'projectScope',
-    'selectedImport',
-    'display',
-    'llmStatus',
-    'humanStatus',
-    'queue',
-    'payload',
-    'posting',
-  ] as const
+  const snapshotId = `snapshot-${projectId}`
+  const requestId = `rebuild:${projectId}`
+  const chunkId = `chunk:${projectId}`
   const componentState = {
     optional: [
       {
@@ -915,22 +917,6 @@ test('a request whose summary publication failed stays admitted and a later fina
       }
     }),
   }
-  const runFinalizationCycle = () => {
-    return runReviewServingProjectorWorkerOnce(
-      {rebuildProjectId: projectId, workerId: 'worker-summary-retry'},
-      getFinalizationCycleDependencies(),
-    )
-  }
-  const getState = async () => {
-    const [request] = await getDatabase().queryJson<{lastError: string | null; status: string}>(`
-      SELECT status, last_error AS lastError FROM app.review_rebuild_request WHERE request_id = '${requestId}'
-    `)
-    const [bucket] = await getDatabase().queryJson<{ledgerStatus: string}>(`
-      SELECT ledger_status AS ledgerStatus FROM mart.review_article_summary_bucket_v4 WHERE bucket_id = '${chunkId}'
-    `)
-
-    return {bucket: bucket?.ledgerStatus, lastError: request?.lastError?.split(':')[0] ?? null, status: request?.status}
-  }
 
   await getDatabase().run(`
     INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
@@ -947,13 +933,12 @@ test('a request whose summary publication failed stays admitted and a later fina
         projectId,
         projectionComponent: component,
         projectionIdentity: `${component}:${projectId}`,
-        reviewConfigHash: summaryReviewConfigHash,
+        reviewConfigHash: summaryRetryReviewConfigHash,
         status: 'active',
       },
       getDatabase(),
     )
   }, Promise.resolve())
-  // Without a review config hash the snapshot's summary partials cannot be reduced, so publication fails.
   await getDatabase().run(`
     INSERT INTO app.review_serving_snapshot_manifest (
       project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
@@ -982,31 +967,102 @@ test('a request whose summary publication failed stays admitted and a later fina
     INSERT INTO mart.review_article_summary_bucket_v4 (
       project_id, review_config_hash, snapshot_id, bucket_id, request_id, bucket_start_key, bucket_end_key, ledger_status
     ) VALUES (
-      '${projectId}', '${summaryReviewConfigHash}', '${snapshotId}', '${chunkId}', '${requestId}', 'article-00',
+      '${projectId}', '${summaryRetryReviewConfigHash}', '${snapshotId}', '${chunkId}', '${requestId}', 'article-00',
       'article-99', 'building'
     )
   `)
 
+  return {
+    getState: async () => {
+      const [request] = await getDatabase().queryJson<{lastError: string | null; status: string}>(`
+        SELECT status, last_error AS lastError FROM app.review_rebuild_request WHERE request_id = '${requestId}'
+      `)
+      const [bucket] = await getDatabase().queryJson<{ledgerStatus: string}>(`
+        SELECT ledger_status AS ledgerStatus FROM mart.review_article_summary_bucket_v4 WHERE bucket_id = '${chunkId}'
+      `)
+      const [chunk] = await getDatabase().queryJson<{status: string}>(`
+        SELECT status FROM app.review_rebuild_chunk_manifest WHERE chunk_id = '${chunkId}'
+      `)
+
+      return {
+        bucket: bucket?.ledgerStatus ?? null,
+        chunk: chunk?.status,
+        lastError: request?.lastError?.split(':')[0] ?? null,
+        status: request?.status,
+      }
+    },
+    // Lets the next cycle retry at once instead of after the pause that follows a failed publication.
+    passRetryDelay: async () => {
+      await getDatabase().run(`
+        UPDATE app.review_rebuild_request
+        SET updated_at = current_timestamp - INTERVAL '10 minutes'
+        WHERE request_id = '${requestId}'
+      `)
+    },
+    runFinalizationCycle: () => {
+      return runReviewServingProjectorWorkerOnce(
+        {rebuildProjectId: projectId, workerId: `worker-${projectId}`},
+        getFinalizationCycleDependencies(),
+      )
+    },
+    snapshotId,
+  }
+}
+
+test('a request whose summary publication failed stays admitted and a later finalization publishes it', async () => {
+  const {getState, passRetryDelay, runFinalizationCycle, snapshotId} =
+    await insertUnpublishableSummaryRequest('project-summary-retry')
+
   await runFinalizationCycle()
 
-  expect(await getState()).toEqual({bucket: 'building', lastError: 'summary publication failed', status: 'admitted'})
+  expect(await getState()).toEqual({
+    bucket: 'building',
+    chunk: 'completed',
+    lastError: 'summary publication failed (attempt 1)',
+    status: 'admitted',
+  })
 
   await getDatabase().run(`
     UPDATE app.review_serving_snapshot_manifest
-    SET review_config_hash = '${summaryReviewConfigHash}'
+    SET review_config_hash = '${summaryRetryReviewConfigHash}'
     WHERE snapshot_id = '${snapshotId}'
   `)
   await runFinalizationCycle()
 
   // The retry waits a few minutes after a failed publication.
-  expect(await getState()).toEqual({bucket: 'building', lastError: 'summary publication failed', status: 'admitted'})
+  expect(await getState()).toEqual({
+    bucket: 'building',
+    chunk: 'completed',
+    lastError: 'summary publication failed (attempt 1)',
+    status: 'admitted',
+  })
 
-  await getDatabase().run(`
-    UPDATE app.review_rebuild_request
-    SET updated_at = current_timestamp - INTERVAL '10 minutes'
-    WHERE request_id = '${requestId}'
-  `)
+  await passRetryDelay()
   await runFinalizationCycle()
 
-  expect(await getState()).toEqual({bucket: 'published', lastError: null, status: 'completed'})
+  expect(await getState()).toEqual({bucket: 'published', chunk: 'completed', lastError: null, status: 'completed'})
+})
+
+test('a summary publication that keeps failing is given up after five attempts and its request fails', async () => {
+  const {getState, passRetryDelay, runFinalizationCycle} =
+    await insertUnpublishableSummaryRequest('project-summary-abandoned')
+  const runAttempt = async () => {
+    await passRetryDelay()
+    await runFinalizationCycle()
+
+    return getState()
+  }
+
+  expect(await runAttempt()).toMatchObject({lastError: 'summary publication failed (attempt 1)', status: 'admitted'})
+  expect(await runAttempt()).toMatchObject({lastError: 'summary publication failed (attempt 2)', status: 'admitted'})
+  expect(await runAttempt()).toMatchObject({lastError: 'summary publication failed (attempt 3)', status: 'admitted'})
+  expect(await runAttempt()).toMatchObject({lastError: 'summary publication failed (attempt 4)', status: 'admitted'})
+  // The buckets are dropped (the published ledger keeps serving) and the summary chunk is quarantined, so the request
+  // is neither readmitted nor waited on and a later request rebuilds summary.
+  expect(await runAttempt()).toEqual({
+    bucket: null,
+    chunk: 'quarantined',
+    lastError: 'summary publication abandoned after 5 attempts',
+    status: 'failed',
+  })
 })
