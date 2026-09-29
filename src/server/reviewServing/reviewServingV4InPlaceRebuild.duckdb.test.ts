@@ -374,11 +374,22 @@ const getDirtyWorkStatuses = (projectId: string, component: ReviewServingProject
   `)
 }
 
-const wakeProjector = async (component: ReviewServingProjectionComponent) => {
+// Wakes the projector for one component of one project: dirty work other tests left behind is settled first, since a
+// wake claims one project's rows at a time.
+const wakeProjector = async (component: ReviewServingProjectionComponent, projectId: string) => {
   const [{wakeReviewServingProjectorService}, {getDefaultReviewServingProjectorRunners}] = await Promise.all([
     import('./reviewServingProjectorService.ts'),
     import('../workers/reviewServingProjectorWorker.ts'),
   ])
+
+  await getDatabase().run(`
+    UPDATE app.review_serving_dirty_work_claim_state SET status = 'completed'
+    WHERE project_id <> '${projectId}' AND status <> 'completed'
+  `)
+  await getDatabase().run(`
+    UPDATE app.review_serving_dirty_work SET status = 'completed'
+    WHERE project_id <> '${projectId}' AND status <> 'completed'
+  `)
 
   return wakeReviewServingProjectorService(
     {batchSize: 64, componentOrder: [component], maxRowsPerWake: 64, maxWakeMs: 600_000, wakeId: `wake-${component}`},
@@ -1025,8 +1036,8 @@ test('a rebuild of the active snapshot completes no dirty work when it is create
   })
   await upsertDirtyWork({articleId: 'article-b', components: ['posting'], projectId, sourceHighWaterMark: 6})
   await upsertDirtyWork({articleId: 'article-c', components: ['search'], projectId, sourceHighWaterMark: 7})
-  await wakeProjector('posting')
-  await wakeProjector('search')
+  await wakeProjector('posting', projectId)
+  await wakeProjector('search', projectId)
 
   const [request] = (await getRequestRows(projectId)).filter((row) => {
     return row.reason === 'postingDirtyWork'
@@ -1051,7 +1062,7 @@ test('a rebuild of the active snapshot completes no dirty work when it is create
   expect(await getDirtyWorkStatuses(projectId, 'search')).toEqual([{articleId: 'article-c', status: 'pending'}])
 
   await completeRequestChunks(request?.requestId ?? '')
-  await wakeProjector('search')
+  await wakeProjector('search', projectId)
 
   // The search chunk that started after article-c changed rebuilt it, so its claim completes instead of asking for
   // another rebuild; posting, read from the snapshot's own inputs, is left to its patches.
@@ -1071,6 +1082,164 @@ test('a rebuild of the active snapshot completes no dirty work when it is create
   ])
 })
 
+test('a search claim is not completed by a chunk that ran before its article reached the project scope', async () => {
+  const projectId = 'project-in-place-search-scope'
+
+  await insertProject(projectId)
+  await buildActiveSnapshot(projectId, [...countReadyReviewServingComponents])
+
+  // article-a's search change arrived with a scope change that is still pending, so its chunk found no scope row.
+  await upsertDirtyWork({
+    articleId: 'article-a',
+    components: ['projectScope', 'search'],
+    projectId,
+    sourceHighWaterMark: 5,
+  })
+  await upsertDirtyWork({articleId: 'article-b', components: ['search'], projectId, sourceHighWaterMark: 6})
+  await wakeProjector('search', projectId)
+
+  const [request] = (await getRequestRows(projectId)).filter((row) => {
+    return row.reason === 'searchDirtyWork'
+  })
+
+  await completeRequestChunks(request?.requestId ?? '')
+  await wakeProjector('search', projectId)
+
+  expect(await getDirtyWorkStatuses(projectId, 'search')).toEqual([
+    {articleId: 'article-a', status: 'pending'},
+    {articleId: 'article-b', status: 'completed'},
+  ])
+  // article-a waits for its scope row instead of starting a rebuild that would read the same missing row again.
+  expect(
+    (await getRequestRows(projectId)).filter((row) => {
+      return row.reason === 'searchDirtyWork'
+    }),
+  ).toHaveLength(1)
+})
+
+test('a candidate whose rebuild stopped for good does not keep chunk-rebuilt claims pending', async () => {
+  const projectId = 'project-in-place-stopped-candidate'
+
+  await insertProject(projectId)
+
+  const activeSnapshotId = await buildActiveSnapshot(projectId, [...countReadyReviewServingComponents])
+
+  // A candidate of the same config that also lists search, whose train went terminal.
+  await getDatabase().run(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
+      required_components_json, optional_components_json, source_watermarks_json
+    )
+    SELECT project_id, 'snapshot-stopped-candidate', 'candidate', review_config_hash, '{}', '{"optional":[],"required":[]}',
+      '[]', '["search"]', '{}'
+    FROM app.review_serving_snapshot_manifest
+    WHERE snapshot_id = '${activeSnapshotId}'
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_request (
+      request_id, project_id, reason, requested_components_json, priority, status, admission_state
+    ) VALUES ('rebuild:stopped-candidate', '${projectId}', 'searchDirtyWork', '["search"]', 75, 'failed', 'admitted')
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_chunk_manifest (
+      chunk_id, project_id, snapshot_id, request_id, projection_component, projection_identity, chunk_start_key,
+      chunk_end_key, output_base_generation, status, admission_state
+    ) VALUES (
+      'chunk:stopped-candidate', '${projectId}', 'snapshot-stopped-candidate', 'rebuild:stopped-candidate', 'search',
+      'search:stopped', 'a', 'z', 0, 'blocked_over_budget', 'admitted'
+    )
+  `)
+  await upsertDirtyWork({articleId: 'article-a', components: ['search'], projectId, sourceHighWaterMark: 5})
+  await wakeProjector('search', projectId)
+
+  const [request] = (await getRequestRows(projectId)).filter((row) => {
+    return row.reason === 'searchDirtyWork' && row.status === 'admitted'
+  })
+
+  await completeRequestChunks(request?.requestId ?? '')
+  await wakeProjector('search', projectId)
+
+  expect(await getDirtyWorkStatuses(projectId, 'search')).toEqual([{articleId: 'article-a', status: 'completed'}])
+})
+
+test('chunks of a snapshot of an older review config do not complete claims of the current one', async () => {
+  const projectId = 'project-in-place-old-config'
+
+  await insertProject(projectId)
+
+  const activeSnapshotId = await buildActiveSnapshot(projectId, [...countReadyReviewServingComponents])
+
+  await upsertDirtyWork({articleId: 'article-a', components: ['search'], projectId, sourceHighWaterMark: 5})
+  await wakeProjector('search', projectId)
+
+  const [request] = (await getRequestRows(projectId)).filter((row) => {
+    return row.reason === 'searchDirtyWork'
+  })
+
+  await completeRequestChunks(request?.requestId ?? '')
+  // The review config changed meanwhile: the snapshot the chunks rebuilt is not what the project serves anymore.
+  await getDatabase().run(`
+    UPDATE app.review_serving_snapshot_manifest
+    SET review_config_hash = 'review-config-before-edit'
+    WHERE snapshot_id = '${activeSnapshotId}'
+  `)
+  await wakeProjector('search', projectId)
+
+  // The claim is not taken as rebuilt: it asks for a rebuild, a fresh snapshot of the current config, which covers it.
+  expect(
+    (await getSnapshots(projectId)).map((snapshot) => {
+      return snapshot.status
+    }),
+  ).toEqual(['active', 'candidate'])
+  expect(await getDirtyWorkStatuses(projectId, 'search')).toEqual([{articleId: 'article-a', status: 'completed'}])
+})
+
+test('an in-place request whose snapshot was replaced does not cover claims either', async () => {
+  const projectId = 'project-in-place-replaced'
+
+  await insertProject(projectId)
+
+  const activeSnapshotId = await buildActiveSnapshot(projectId, [...countReadyReviewServingComponents])
+
+  await upsertDirtyWork({articleId: 'article-a', components: ['search'], projectId, sourceHighWaterMark: 5})
+  await wakeProjector('search', projectId)
+  // Another snapshot replaced the one the in-place request builds; the still-admitted request is handed back.
+  await getDatabase().run(`
+    UPDATE app.review_serving_snapshot_manifest SET snapshot_status = 'retired' WHERE snapshot_id = '${activeSnapshotId}'
+  `)
+  await wakeProjector('search', projectId)
+
+  expect(await getDirtyWorkStatuses(projectId, 'search')).toEqual([{articleId: 'article-a', status: 'pending'}])
+})
+
+test('components an in-place request added stay unavailable when that request is cancelled', async () => {
+  const {requestReviewServingV4Rebuild} = await loadService()
+  const projectId = 'project-in-place-cancelled'
+
+  await insertProject(projectId)
+
+  const activeSnapshotId = await buildActiveSnapshot(projectId, [...countReadyReviewServingComponents])
+  const request = await requestReviewServingV4Rebuild({
+    components: ['search'],
+    priority: 75,
+    projectId,
+    reason: 'searchDirtyWork',
+  })
+
+  // Cancelled the way coalescing cancels requests: the request and its unfinished chunks.
+  await getDatabase().run(
+    `UPDATE app.review_rebuild_request SET status = 'cancelled' WHERE request_id = '${request.requestId}'`,
+  )
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_chunk_manifest SET status = 'failed' WHERE request_id = '${request.requestId}'
+  `)
+
+  expect(getListedComponents((await getSnapshots(projectId))[0])).toContain('search')
+  expect(await getAvailableComponents(projectId, activeSnapshotId)).toEqual(
+    getSortedComponents(...countReadyReviewServingComponents),
+  )
+})
+
 test('project-wide dirty work takes a fresh snapshot, whose request covers it', async () => {
   const projectId = 'project-fresh-for-project-wide'
 
@@ -1084,7 +1253,7 @@ test('project-wide dirty work takes a fresh snapshot, whose request covers it', 
     projectId,
     values: {tokenizerVersion: 'tokenizer-v2'},
   })
-  await wakeProjector('search')
+  await wakeProjector('search', projectId)
 
   const snapshots = await getSnapshots(projectId)
   const candidate = snapshots.find((snapshot) => {

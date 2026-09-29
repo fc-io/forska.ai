@@ -119,6 +119,7 @@ import {
   isInPlaceReviewServingRebuildChunkInputDigest,
 } from '../reviewServing/reviewServingRebuildChunkInputDigest.ts'
 import {retireReviewServingDirtyWorkRebuiltByChunks} from '../reviewServing/reviewServingRebuiltDirtyWorkRetirement.ts'
+import {getCurrentReviewServingReviewConfigHash} from '../reviewServing/reviewServingReviewConfig.ts'
 import {projectReviewServingSelectedImportDirty} from '../reviewServing/reviewServingSelectedImportDirtyProjector.ts'
 import {deleteReviewServingSelectedImportSnapshotRows} from '../reviewServing/reviewServingSelectedImportMaintenance.ts'
 import {
@@ -6383,6 +6384,87 @@ const failInconsistentAndSupersededForegroundRebuildRequests = async (input: {
   `)
 }
 
+const staleInPlaceRebuildRequestError =
+  'superseded: its in-place snapshot is no longer the active snapshot of the current review config'
+
+// An in-place rebuild only makes sense while its snapshot is what the project serves: once another snapshot replaced
+// it, or the review config changed (activation only retires actives of the same config), its chunks would rebuild, and
+// complete dirty work for, a snapshot nobody reads. It fails as superseded, so it is neither readmitted nor waited on.
+const failStaleInPlaceRebuildRequests = async (input: {
+  database: ReviewServingChunkManifestRepositoryDatabase
+  projectId?: string | null
+}) => {
+  const projectCondition = input.projectId ? `AND request.project_id = ${getSqlLiteral(input.projectId)}` : ''
+  const rows = await input.database.queryJson<{
+    projectId: string
+    requestId: string
+    snapshotReviewConfigHash: string | null
+    snapshotStatus: string | null
+  }>(`
+    SELECT
+      request.project_id AS projectId,
+      request.request_id AS requestId,
+      snapshot.review_config_hash AS snapshotReviewConfigHash,
+      snapshot.snapshot_status AS snapshotStatus
+    FROM app.review_rebuild_request request
+    LEFT JOIN app.review_serving_snapshot_manifest snapshot
+      ON snapshot.project_id = request.project_id
+      AND snapshot.snapshot_id = json_extract_string(request.identity_json, '$.inPlaceSnapshotId')
+    WHERE request.status IN ('admitted', 'running', 'failed')
+      AND request.admission_state = 'admitted'
+      AND json_extract_string(request.identity_json, '$.inPlaceSnapshotId') IS NOT NULL
+      AND COALESCE(request.last_error, '') NOT LIKE 'superseded%'
+      ${projectCondition}
+  `)
+  const currentHashes = new Map(
+    await Promise.all(
+      [
+        ...new Set(
+          rows.map((row) => {
+            return row.projectId
+          }),
+        ),
+      ].map(async (projectId) => {
+        return [projectId, await getCurrentReviewServingReviewConfigHash(projectId, input.database as never)] as const
+      }),
+    ),
+  )
+  const staleRequestIds = rows.flatMap((row) => {
+    return row.snapshotStatus === 'active' && row.snapshotReviewConfigHash === currentHashes.get(row.projectId)
+      ? []
+      : [row.requestId]
+  })
+
+  if (staleRequestIds.length === 0) {
+    return
+  }
+
+  const requestIdList = staleRequestIds.map(getSqlLiteral).join(', ')
+
+  await input.database.run(`
+    UPDATE app.review_rebuild_request
+    SET
+      status = 'failed',
+      failed_at = COALESCE(failed_at, current_timestamp),
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      last_error = ${getSqlLiteral(staleInPlaceRebuildRequestError)},
+      updated_at = current_timestamp
+    WHERE request_id IN (${requestIdList})
+  `)
+  await input.database.run(`
+    UPDATE app.review_rebuild_chunk_manifest
+    SET
+      status = 'failed',
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      last_error = ${getSqlLiteral(staleInPlaceRebuildRequestError)},
+      updated_at = current_timestamp
+    WHERE request_id IN (${requestIdList})
+      AND status IN ('pending', 'failed')
+  `)
+}
+
 const failSupersededRequestlessBootstrapRebuildRequests = async (input: {
   database: ReviewServingChunkManifestRepositoryDatabase
   projectId?: string | null
@@ -6919,6 +7001,53 @@ const markCompletedRebuildRequestFinalized = async (
   `)
 }
 
+// Once a request finished rebuilding a component of the active snapshot, the chunk rows older finished requests left
+// for the same component state are dead weight: availability reads the newest group, and dirty work a chunk of an older
+// group rebuilt, a chunk of the newest one (started later) rebuilt too. In-place refreshes write a full chunk set each
+// time, so without this the active snapshot's chunk rows grow with every refresh until the snapshot is purged.
+const deleteSupersededActiveSnapshotChunkGroups = async (
+  input: {requestId: string},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  await database.run(`
+    DELETE FROM app.review_rebuild_chunk_manifest superseded
+    WHERE superseded.request_id IS NOT NULL
+      AND superseded.request_id <> ${getSqlLiteral(input.requestId)}
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest current_chunk
+        INNER JOIN app.review_serving_snapshot_manifest snapshot
+          ON snapshot.project_id = current_chunk.project_id
+          AND snapshot.snapshot_id = current_chunk.snapshot_id
+        WHERE current_chunk.request_id = ${getSqlLiteral(input.requestId)}
+          AND snapshot.snapshot_status = 'active'
+          AND current_chunk.project_id = superseded.project_id
+          AND current_chunk.snapshot_id = superseded.snapshot_id
+          AND current_chunk.projection_component = superseded.projection_component
+          AND current_chunk.projection_identity = superseded.projection_identity
+          AND current_chunk.output_base_generation = superseded.output_base_generation
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_request older_request
+        INNER JOIN app.review_rebuild_request current_request
+          ON current_request.request_id = ${getSqlLiteral(input.requestId)}
+        WHERE older_request.request_id = superseded.request_id
+          AND older_request.created_at <= current_request.created_at
+          AND (
+            older_request.status IN ('completed', 'cancelled')
+            OR (
+              older_request.status = 'failed'
+              AND (
+                COALESCE(older_request.last_error, '') LIKE 'superseded%'
+                OR COALESCE(older_request.last_error, '') LIKE 'coalesced%'
+              )
+            )
+          )
+      )
+  `)
+}
+
 const markCompletedRebuildRequestMetadataFinalized = async (
   input: {requestId: string},
   database: ReviewServingChunkManifestRepositoryDatabase,
@@ -6959,6 +7088,39 @@ const markFailedRebuildRequestFinalized = async (
   `)
 }
 
+// A candidate whose train went terminal is never promoted by it; unless another rebuild still builds it, it fails too,
+// instead of lingering as a candidate that patches and dirty-work completion keep deferring to.
+const failCandidatesOfTerminalRebuildRequest = async (
+  input: {lastError: string; requestId: string},
+  database: ReviewServingChunkManifestRepositoryDatabase,
+) => {
+  const candidates = await database.queryJson<{projectId: string; snapshotId: string}>(`
+    SELECT DISTINCT snapshot.project_id AS projectId, snapshot.snapshot_id AS snapshotId
+    FROM app.review_rebuild_chunk_manifest chunk
+    INNER JOIN app.review_serving_snapshot_manifest snapshot
+      ON snapshot.project_id = chunk.project_id
+      AND snapshot.snapshot_id = chunk.snapshot_id
+    WHERE chunk.request_id = ${getSqlLiteral(input.requestId)}
+      AND snapshot.snapshot_status = 'candidate'
+  `)
+
+  await candidates.reduce<Promise<void>>(async (previous, candidate) => {
+    await previous
+
+    if (
+      !(await hasOtherInFlightRebuildForCandidateSnapshot(
+        {excludedRequestId: input.requestId, projectId: candidate.projectId, snapshotId: candidate.snapshotId},
+        database,
+      ))
+    ) {
+      await markCandidateReviewServingSnapshotManifestFailed(
+        {lastError: input.lastError, projectId: candidate.projectId, snapshotId: candidate.snapshotId},
+        database,
+      )
+    }
+  }, Promise.resolve())
+}
+
 const finalizeFailedReviewServingRebuildRequest = async (
   chunk: ReviewServingRebuildChunkManifest | null,
   database: ReviewServingChunkManifestRepositoryDatabase,
@@ -6969,6 +7131,15 @@ const finalizeFailedReviewServingRebuildRequest = async (
 
   await markFailedRebuildRequestFinalized(
     {chunkId: chunk.chunkId, lastError: chunk.lastError, requestId: chunk.requestId, status: chunk.status},
+    database,
+  )
+  await failCandidatesOfTerminalRebuildRequest(
+    {
+      lastError:
+        chunk.lastError
+        ?? `review rebuild chunk ${chunk.chunkId} of its rebuild reached terminal status ${chunk.status}`,
+      requestId: chunk.requestId,
+    },
     database,
   )
 }
@@ -7228,6 +7399,10 @@ const finalizeCompletedReviewServingRebuildRequest = async (
     },
     database,
   )
+
+  if (failedPromotion === undefined) {
+    await deleteSupersededActiveSnapshotChunkGroups({requestId: chunk.requestId}, database)
+  }
 
   // The rebuild request is terminal now; a candidate snapshot that failed validation can never be
   // promoted by this request, so mark it failed instead of leaving it as a stuck candidate that
@@ -11221,6 +11396,9 @@ export const runReviewServingProjectorWorkerCycle = async (
   })
   await runReviewServingProjectorWorkerCyclePhase('failInconsistentForegroundRequests', () => {
     return failInconsistentAndSupersededForegroundRebuildRequests({database, projectId: options.rebuildProjectId})
+  })
+  await runReviewServingProjectorWorkerCyclePhase('failStaleInPlaceRequests', () => {
+    return failStaleInPlaceRebuildRequests({database, projectId: options.rebuildProjectId})
   })
   await runReviewServingProjectorWorkerCyclePhase('coalesceBootstrapRebuildTrains', async () => {
     const coalesced = await (dependencies.coalesceBootstrapRebuildTrains ?? coalesceReviewServingV4BootstrapTrains)(

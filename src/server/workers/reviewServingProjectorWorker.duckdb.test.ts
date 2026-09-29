@@ -1066,3 +1066,215 @@ test('a summary publication that keeps failing is given up after five attempts a
     status: 'failed',
   })
 })
+
+test('a candidate fails with the train building it once that train went terminal', async () => {
+  const {runReviewServingProjectorWorkerOnce} = await import('./reviewServingProjectorWorker.ts')
+  const projectId = 'project-terminal-train'
+  const getStates = async () => {
+    return getDatabase().queryJson<{id: string; status: string}>(`
+      SELECT snapshot_id AS id, snapshot_status AS status
+      FROM app.review_serving_snapshot_manifest
+      WHERE project_id = '${projectId}'
+      UNION ALL
+      SELECT request_id AS id, status FROM app.review_rebuild_request WHERE project_id = '${projectId}'
+      ORDER BY id
+    `)
+  }
+
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', '${projectId}', 'model-queue', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await (['snapshot-terminal-train', 'snapshot-shared-train'] as const).reduce<Promise<void>>(
+    async (previous, snapshotId) => {
+      await previous
+      await getDatabase().run(`
+        INSERT INTO app.review_serving_snapshot_manifest (
+          project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
+          required_components_json, optional_components_json, source_watermarks_json
+        ) VALUES (
+          '${projectId}', '${snapshotId}', 'candidate', '${reviewConfigHash}', '{}', '{"optional":[],"required":[]}',
+          '[]', '["search"]', '{}'
+        )
+      `)
+    },
+    Promise.resolve(),
+  )
+
+  // The terminal train builds both candidates; another admitted rebuild still builds the second one.
+  const chunks = [
+    ['rebuild:terminal-train', 'snapshot-terminal-train', 'blocked_over_budget'],
+    ['rebuild:terminal-train', 'snapshot-shared-train', 'completed'],
+    ['rebuild:shared-train', 'snapshot-shared-train', 'pending'],
+  ] as const
+
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_request (
+      request_id, project_id, reason, requested_components_json, priority, status, admission_state
+    ) VALUES
+      ('rebuild:terminal-train', '${projectId}', 'searchDirtyWork', '["search"]', 75, 'admitted', 'admitted'),
+      ('rebuild:shared-train', '${projectId}', 'searchDirtyWork', '["search"]', 75, 'admitted', 'admitted')
+  `)
+  await chunks.reduce<Promise<void>>(async (previous, [requestId, snapshotId, status], index) => {
+    await previous
+    await getDatabase().run(`
+      INSERT INTO app.review_rebuild_chunk_manifest (
+        chunk_id, request_id, project_id, snapshot_id, projection_component, projection_identity, chunk_start_key,
+        chunk_end_key, output_base_generation, status, admission_state
+      ) VALUES (
+        'chunk:terminal-train-${index}', '${requestId}', '${projectId}', '${snapshotId}', 'search', 'search:terminal',
+        'article-00', 'article-99', 0, '${status}', 'admitted'
+      )
+    `)
+  }, Promise.resolve())
+
+  await runReviewServingProjectorWorkerOnce(
+    {rebuildProjectId: projectId, workerId: 'worker-terminal-train'},
+    getFinalizationCycleDependencies(),
+  )
+
+  expect(await getStates()).toEqual([
+    {id: 'rebuild:shared-train', status: 'admitted'},
+    {id: 'rebuild:terminal-train', status: 'failed'},
+    {id: 'snapshot-shared-train', status: 'candidate'},
+    {id: 'snapshot-terminal-train', status: 'failed'},
+  ])
+})
+
+test('an in-place rebuild of a snapshot the project no longer serves under its current review config fails', async () => {
+  const {runReviewServingProjectorWorkerOnce} = await import('./reviewServingProjectorWorker.ts')
+  const {getCurrentReviewServingReviewConfigHash} = await import('../reviewServing/reviewServingReviewConfig.ts')
+  const projectId = 'project-stale-in-place'
+
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', '${projectId}', 'model-queue', TRUE, TRUE, FALSE, FALSE)
+  `)
+
+  const currentReviewConfigHash = await getCurrentReviewServingReviewConfigHash(projectId, getDatabase() as never)
+  const snapshots = [
+    ['snapshot-current-config', currentReviewConfigHash],
+    ['snapshot-before-config-edit', 'review-config-before-edit'],
+  ] as const
+
+  await snapshots.reduce<Promise<void>>(async (previous, [snapshotId, snapshotReviewConfigHash], index) => {
+    await previous
+    await getDatabase().run(`
+      INSERT INTO app.review_serving_snapshot_manifest (
+        project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
+        required_components_json, optional_components_json, source_watermarks_json
+      ) VALUES (
+        '${projectId}', '${snapshotId}', 'active', '${snapshotReviewConfigHash}', '{}', '{"optional":[],"required":[]}',
+        '[]', '["search"]', '{}'
+      )
+    `)
+    await getDatabase().run(`
+      INSERT INTO app.review_rebuild_request (
+        request_id, project_id, reason, requested_components_json, identity_json, priority, status, admission_state
+      ) VALUES (
+        'rebuild:in-place-${index}', '${projectId}', 'searchDirtyWork${index}', '["search"]',
+        '{"inPlaceSnapshotId":"${snapshotId}"}', 75, 'admitted', 'admitted'
+      )
+    `)
+    await getDatabase().run(`
+      INSERT INTO app.review_rebuild_chunk_manifest (
+        chunk_id, request_id, project_id, snapshot_id, projection_component, projection_identity, chunk_start_key,
+        chunk_end_key, output_base_generation, status, admission_state, input_digest
+      ) VALUES (
+        'chunk:in-place-${index}', 'rebuild:in-place-${index}', '${projectId}', '${snapshotId}', 'search',
+        'search:in-place', 'article-00', 'article-99', 0, 'pending', 'admitted', 'inPlaceReviewServingAddition'
+      )
+    `)
+  }, Promise.resolve())
+
+  await runReviewServingProjectorWorkerOnce(
+    {rebuildProjectId: projectId, workerId: 'worker-stale-in-place'},
+    getFinalizationCycleDependencies(),
+  )
+
+  expect(
+    await getDatabase().queryJson<{id: string; lastError: string | null; status: string}>(`
+      SELECT request_id AS id, status, split_part(last_error, ':', 1) AS lastError
+      FROM app.review_rebuild_request
+      WHERE project_id = '${projectId}'
+      UNION ALL
+      SELECT chunk_id AS id, status, split_part(last_error, ':', 1) AS lastError
+      FROM app.review_rebuild_chunk_manifest
+      WHERE project_id = '${projectId}'
+      ORDER BY id
+    `),
+  ).toEqual([
+    {id: 'chunk:in-place-0', lastError: null, status: 'pending'},
+    {id: 'chunk:in-place-1', lastError: 'superseded', status: 'failed'},
+    {id: 'rebuild:in-place-0', lastError: null, status: 'admitted'},
+    {id: 'rebuild:in-place-1', lastError: 'superseded', status: 'failed'},
+  ])
+})
+
+test('a finished rebuild of the active snapshot deletes the chunk rows older finished rebuilds left for it', async () => {
+  const {runReviewServingProjectorWorkerOnce} = await import('./reviewServingProjectorWorker.ts')
+  const projectId = 'project-chunk-groups'
+  const snapshotId = 'snapshot-chunk-groups'
+
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', '${projectId}', 'model-queue', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
+      required_components_json, optional_components_json, source_watermarks_json
+    ) VALUES (
+      '${projectId}', '${snapshotId}', 'active', '${reviewConfigHash}', '{}', '{"optional":[],"required":[]}', '[]',
+      '["search"]', '{}'
+    )
+  `)
+
+  // [request, request status, created minutes ago, chunk status]: two older finished builds of search, an older build
+  // that failed but may be readmitted, and the refresh that just finished.
+  const requests = [
+    ['rebuild:search-bootstrap', 'completed', 90, 'completed'],
+    ['rebuild:search-refresh-old', 'completed', 60, 'completed'],
+    ['rebuild:search-readmittable', 'failed', 45, 'failed'],
+    ['rebuild:search-refresh-new', 'admitted', 30, 'completed'],
+  ] as const
+
+  await requests.reduce<Promise<void>>(async (previous, [requestId, status, createdMinutesAgo, chunkStatus]) => {
+    await previous
+    await getDatabase().run(`
+      INSERT INTO app.review_rebuild_request (
+        request_id, project_id, reason, requested_components_json, priority, status, admission_state, created_at
+      ) VALUES (
+        '${requestId}', '${projectId}', 'searchDirtyWork', '["search"]', 75, '${status}', 'admitted',
+        current_timestamp - INTERVAL '${createdMinutesAgo} minutes'
+      )
+    `)
+    await getDatabase().run(`
+      INSERT INTO app.review_rebuild_chunk_manifest (
+        chunk_id, request_id, project_id, snapshot_id, projection_component, projection_identity, chunk_start_key,
+        chunk_end_key, output_base_generation, status, admission_state, started_at, completed_at
+      ) VALUES (
+        'chunk:${requestId}', '${requestId}', '${projectId}', '${snapshotId}', 'search', 'search:chunk-groups',
+        'article-00', 'article-99', 0, '${chunkStatus}', 'admitted', current_timestamp, current_timestamp
+      )
+    `)
+  }, Promise.resolve())
+
+  await runReviewServingProjectorWorkerOnce(
+    {rebuildProjectId: projectId, workerId: 'worker-chunk-groups'},
+    getFinalizationCycleDependencies(),
+  )
+
+  expect(
+    await getDatabase().queryJson<{requestId: string; status: string}>(`
+      SELECT request.request_id AS requestId, request.status
+      FROM app.review_rebuild_request request
+      WHERE request.project_id = '${projectId}'
+        AND EXISTS (SELECT 1 FROM app.review_rebuild_chunk_manifest chunk WHERE chunk.request_id = request.request_id)
+      ORDER BY request.request_id
+    `),
+  ).toEqual([
+    {requestId: 'rebuild:search-readmittable', status: 'failed'},
+    {requestId: 'rebuild:search-refresh-new', status: 'completed'},
+  ])
+})

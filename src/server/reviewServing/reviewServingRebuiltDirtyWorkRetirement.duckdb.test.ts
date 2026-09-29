@@ -25,6 +25,7 @@ const getDatabase = () => {
 const insertSnapshot = async (input: {
   components: readonly string[]
   projectId: string
+  reviewConfigHash?: string
   snapshotId: string
   status: 'active' | 'candidate'
 }) => {
@@ -41,15 +42,36 @@ const insertSnapshot = async (input: {
     required: [],
   }
 
+  const reviewConfigHash = input.reviewConfigHash ?? (await getCurrentReviewConfigHash(input.projectId))
+
   await getDatabase().run(`
     INSERT INTO app.review_serving_snapshot_manifest (
       project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
       required_components_json, optional_components_json, source_watermarks_json
     ) VALUES (
-      '${input.projectId}', '${input.snapshotId}', '${input.status}', 'review-config', '{}',
+      '${input.projectId}', '${input.snapshotId}', '${input.status}', '${reviewConfigHash}', '{}',
       '${JSON.stringify(componentState)}', '[]', '${JSON.stringify(input.components)}', '{}'
     )
   `)
+}
+
+// Snapshots are retired against for the project's current review config, which needs the project to exist.
+const getCurrentReviewConfigHash = async (projectId: string) => {
+  const {getCurrentReviewServingReviewConfigHash} = await import('./reviewServingReviewConfig.ts')
+
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    SELECT '${projectId}', '${projectId}', 'model-retirement', TRUE, TRUE, FALSE, FALSE
+    WHERE NOT EXISTS (SELECT 1 FROM app.project WHERE id = '${projectId}')
+  `)
+
+  const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(projectId, getDatabase() as never)
+
+  if (reviewConfigHash === null) {
+    throw new Error(`expected a review config hash for ${projectId}`)
+  }
+
+  return reviewConfigHash
 }
 
 const insertCompletedChunk = async (input: {
@@ -82,6 +104,33 @@ const insertCompletedChunk = async (input: {
       ${completedAtSql}, '${input.snapshotId}', 'rebuild:${input.projectId}', 0,
       ${input.lastError === undefined ? 'NULL' : `'${input.lastError}'`},
       ${input.inputDigest === undefined ? 'NULL' : `'${input.inputDigest}'`}
+    )
+  `)
+}
+
+// An admitted request with a pending chunk on the snapshot, or a failed one whose chunk went terminal.
+const insertBuildingRequest = async (input: {
+  projectId: string
+  requestId: string
+  snapshotId: string
+  terminal?: boolean
+}) => {
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_request (
+      request_id, project_id, reason, requested_components_json, priority, status, admission_state
+    ) VALUES (
+      '${input.requestId}', '${input.projectId}', 'payloadDirtyWork', '["payload"]'::JSON, 50,
+      '${input.terminal === true ? 'failed' : 'admitted'}', 'admitted'
+    )
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_chunk_manifest (
+      chunk_id, project_id, projection_component, projection_identity, chunk_start_key, chunk_end_key, status,
+      snapshot_id, request_id, output_base_generation
+    ) VALUES (
+      'chunk-${input.requestId}', '${input.projectId}', 'payload', 'payload:${input.projectId}', 'article-a',
+      'article-z', '${input.terminal === true ? 'blocked_over_budget' : 'pending'}', '${input.snapshotId}',
+      '${input.requestId}', 0
     )
   `)
 }
@@ -251,6 +300,12 @@ test('unheld dirty work that a completed rebuild chunk re-read is completed, the
     status: 'pending',
     updatedMinutesAgo: 30,
   })
+  // An admitted rebuild is still building the candidate, so the row still needs its patch there.
+  await insertBuildingRequest({
+    projectId: 'project-with-candidate',
+    requestId: 'rebuild:candidate-train',
+    snapshotId: 'snapshot-other-candidate',
+  })
 
   resetReviewServingRebuiltDirtyWorkRetirementForTests()
 
@@ -389,6 +444,14 @@ test('a row the projector claimed and released after its chunk started is retire
   const changedAfterChunk = await upsertDisplayChange('article-c', 12)
 
   await pause()
+  // Display rows other tests left pending would be claimed first.
+  await getDatabase().run(`
+    DELETE FROM app.review_serving_dirty_work_claim_state
+    WHERE projection_component = 'display' AND project_id <> '${projectId}'
+  `)
+  await getDatabase().run(`
+    DELETE FROM app.review_serving_dirty_work WHERE projection_component = 'display' AND project_id <> '${projectId}'
+  `)
 
   const claims = await claimReviewServingDirtyWork({limit: 10, projectionComponent: 'display'}, getDatabase())
 
@@ -517,7 +580,7 @@ test('derived dirty work is not retired by an in-place chunk, nor by one that st
     ['chunk-posting-in-place', 'posting', 'article-a', 'article-f', 'inPlaceReviewServingRefresh', 5],
     ['chunk-posting-old', 'posting', 'article-g', 'article-m', 'freshReviewServingSnapshot', 45],
     ['chunk-posting-recent', 'posting', 'article-n', 'article-z', 'freshReviewServingSnapshot', 5],
-    ['chunk-search-in-place', 'search', 'article-a', 'article-z', 'inPlaceReviewServingRefresh', 45],
+    ['chunk-search-in-place', 'search', 'article-a', 'article-z', 'inPlaceReviewServingRefresh', 5],
   ] as const
 
   await chunks.reduce<Promise<void>>(async (previous, [chunkId, component, startKey, endKey, inputDigest, age]) => {
@@ -562,5 +625,180 @@ test('derived dirty work is not retired by an in-place chunk, nor by one that st
     {dirtyWorkId: 'posting-old-chunk', status: 'pending'},
     {dirtyWorkId: 'posting-recent-chunk', status: 'completed'},
     {dirtyWorkId: 'search-in-place', status: 'completed'},
+  ])
+})
+
+test('source-reading dirty work is retired only when the scope and import rows its chunk read had caught up', async () => {
+  const {resetReviewServingRebuiltDirtyWorkRetirementForTests, retireReviewServingDirtyWorkRebuiltByChunks} =
+    await import('./reviewServingRebuiltDirtyWorkRetirement.ts')
+  const projectId = 'project-source-inputs'
+
+  await insertSnapshot({
+    components: ['judgmentInputContent', 'payload', 'search'],
+    projectId,
+    snapshotId: 'snapshot-source-inputs',
+    status: 'active',
+  })
+  await (['judgmentInputContent', 'payload', 'search'] as const).reduce<Promise<void>>(async (previous, component) => {
+    await previous
+    await insertCompletedChunk({
+      chunkId: `chunk-source-${component}`,
+      component,
+      endKey: 'article-z',
+      inputDigest: 'inPlaceReviewServingRefresh',
+      projectId,
+      snapshotId: 'snapshot-source-inputs',
+      startKey: 'article-a',
+    })
+  }, Promise.resolve())
+
+  // [article, claimed component, input component, input status, input age in minutes]
+  const cases = [
+    ['article-b', 'search', 'projectScope', 'pending', 30],
+    ['article-c', 'search', 'selectedImport', 'completed', 1],
+    ['article-d', 'search', 'projectScope', 'completed', 10],
+    ['article-e', 'payload', 'projectScope', 'pending', 30],
+    ['article-f', 'judgmentInputContent', 'projectScope', 'pending', 30],
+    ['article-g', 'judgmentInputContent', 'projectScope', 'completed', 10],
+  ] as const
+
+  await cases.reduce<Promise<void>>(async (previous, [articleId, component, inputComponent, inputStatus, inputAge]) => {
+    await previous
+    await insertDirtyWork({
+      articleId,
+      component,
+      dirtyWorkId: `${component}-${articleId}`,
+      projectId,
+      status: 'pending',
+      updatedMinutesAgo: 30,
+    })
+    await insertDirtyWork({
+      articleId,
+      component: inputComponent,
+      dirtyWorkId: `${component}-${articleId}-input`,
+      projectId,
+      status: inputStatus,
+      updatedMinutesAgo: inputAge,
+    })
+  }, Promise.resolve())
+
+  resetReviewServingRebuiltDirtyWorkRetirementForTests()
+  await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: Date.now(), projectId})
+
+  expect(
+    await getDatabase().queryJson<{dirtyWorkId: string; status: string}>(`
+      SELECT dirty_work_id AS dirtyWorkId, status
+      FROM app.review_serving_dirty_work
+      WHERE project_id = '${projectId}' AND projection_component IN ('judgmentInputContent', 'payload', 'search')
+      ORDER BY dirty_work_id
+    `),
+  ).toEqual([
+    {dirtyWorkId: 'judgmentInputContent-article-f', status: 'pending'},
+    {dirtyWorkId: 'judgmentInputContent-article-g', status: 'completed'},
+    {dirtyWorkId: 'payload-article-e', status: 'pending'},
+    {dirtyWorkId: 'search-article-b', status: 'pending'},
+    {dirtyWorkId: 'search-article-c', status: 'pending'},
+    {dirtyWorkId: 'search-article-d', status: 'completed'},
+  ])
+})
+
+test('retirement ignores candidates no rebuild still builds and active snapshots of an older review config', async () => {
+  const {resetReviewServingRebuiltDirtyWorkRetirementForTests, retireReviewServingDirtyWorkRebuiltByChunks} =
+    await import('./reviewServingRebuiltDirtyWorkRetirement.ts')
+  const projects = {
+    liveOtherConfigCandidate: 'project-other-config-candidate',
+    oldConfigActive: 'project-old-config-active',
+    stoppedCandidate: 'project-stopped-candidate',
+  } as const
+
+  await insertSnapshot({
+    components: ['payload'],
+    projectId: projects.stoppedCandidate,
+    snapshotId: 'snapshot-stopped-active',
+    status: 'active',
+  })
+  await insertSnapshot({
+    components: ['payload'],
+    projectId: projects.stoppedCandidate,
+    snapshotId: 'snapshot-stopped-candidate',
+    status: 'candidate',
+  })
+  await insertBuildingRequest({
+    projectId: projects.stoppedCandidate,
+    requestId: 'rebuild:stopped-train',
+    snapshotId: 'snapshot-stopped-candidate',
+    terminal: true,
+  })
+  await getCurrentReviewConfigHash(projects.oldConfigActive)
+  await insertSnapshot({
+    components: ['payload'],
+    projectId: projects.oldConfigActive,
+    reviewConfigHash: 'review-config-before-edit',
+    snapshotId: 'snapshot-old-config-active',
+    status: 'active',
+  })
+  await insertSnapshot({
+    components: ['payload'],
+    projectId: projects.liveOtherConfigCandidate,
+    snapshotId: 'snapshot-other-config-active',
+    status: 'active',
+  })
+  await insertSnapshot({
+    components: ['payload'],
+    projectId: projects.liveOtherConfigCandidate,
+    reviewConfigHash: 'review-config-before-edit',
+    snapshotId: 'snapshot-other-config-candidate',
+    status: 'candidate',
+  })
+  await insertBuildingRequest({
+    projectId: projects.liveOtherConfigCandidate,
+    requestId: 'rebuild:other-config-train',
+    snapshotId: 'snapshot-other-config-candidate',
+  })
+
+  const snapshotIds = {
+    [projects.liveOtherConfigCandidate]: 'snapshot-other-config-active',
+    [projects.oldConfigActive]: 'snapshot-old-config-active',
+    [projects.stoppedCandidate]: 'snapshot-stopped-active',
+  }
+
+  await Object.values(projects).reduce<Promise<void>>(async (previous, projectId) => {
+    await previous
+    await insertCompletedChunk({
+      chunkId: `chunk-${projectId}`,
+      component: 'payload',
+      endKey: 'article-z',
+      projectId,
+      snapshotId: snapshotIds[projectId],
+      startKey: 'article-a',
+    })
+    await insertDirtyWork({
+      articleId: 'article-b',
+      component: 'payload',
+      dirtyWorkId: `payload-${projectId}`,
+      projectId,
+      status: 'pending',
+      updatedMinutesAgo: 30,
+    })
+  }, Promise.resolve())
+
+  resetReviewServingRebuiltDirtyWorkRetirementForTests()
+  await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: Date.now()})
+
+  expect(
+    await getDatabase().queryJson<{dirtyWorkId: string; status: string}>(`
+      SELECT dirty_work_id AS dirtyWorkId, status
+      FROM app.review_serving_dirty_work
+      WHERE dirty_work_id IN (${Object.values(projects)
+        .map((projectId) => {
+          return `'payload-${projectId}'`
+        })
+        .join(', ')})
+      ORDER BY dirty_work_id
+    `),
+  ).toEqual([
+    {dirtyWorkId: 'payload-project-old-config-active', status: 'pending'},
+    {dirtyWorkId: 'payload-project-other-config-candidate', status: 'completed'},
+    {dirtyWorkId: 'payload-project-stopped-candidate', status: 'completed'},
   ])
 })
