@@ -644,7 +644,7 @@ const createFakeRequestDatabase = (stats: FakeStats, options: FakeRequestDatabas
       return [{legacyRequiredEnrichmentCount: options.legacyRequiredEnrichmentCandidate === true ? 1 : 0}] as T[]
     }
 
-    if (statement.includes('arg_max(open_request.request_id, open_request.priority)')) {
+    if (statement.includes('arg_max(request_id, priority) AS requestId')) {
       return (options.buildingComponentRequests ?? []) as T[]
     }
 

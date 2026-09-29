@@ -56,28 +56,32 @@ const insertCompletedChunk = async (input: {
   chunkId: string
   component: string
   endKey: string
+  inputDigest?: string
   lastError?: string
   projectId: string
   snapshotId: string
+  startedMinutesAgo?: number
   startedNow?: boolean
   startKey: string
 }) => {
+  const startedMinutesAgo = input.startedMinutesAgo ?? chunkStartedMinutesAgo
   const startedAtSql = input.startedNow
     ? 'current_timestamp'
-    : `current_timestamp - INTERVAL '${chunkStartedMinutesAgo} minutes'`
+    : `current_timestamp - INTERVAL '${startedMinutesAgo} minutes'`
   const completedAtSql = input.startedNow
     ? 'current_timestamp'
-    : `current_timestamp - INTERVAL '${chunkStartedMinutesAgo - 1} minutes'`
+    : `current_timestamp - INTERVAL '${startedMinutesAgo - 1} minutes'`
 
   await getDatabase().run(`
     INSERT INTO app.review_rebuild_chunk_manifest (
       chunk_id, project_id, projection_component, projection_identity, chunk_start_key, chunk_end_key, status,
-      started_at, completed_at, snapshot_id, request_id, output_base_generation, last_error
+      started_at, completed_at, snapshot_id, request_id, output_base_generation, last_error, input_digest
     ) VALUES (
       '${input.chunkId}', '${input.projectId}', '${input.component}', '${input.component}:${input.projectId}',
       '${input.startKey}', '${input.endKey}', 'completed', ${startedAtSql},
       ${completedAtSql}, '${input.snapshotId}', 'rebuild:${input.projectId}', 0,
-      ${input.lastError === undefined ? 'NULL' : `'${input.lastError}'`}
+      ${input.lastError === undefined ? 'NULL' : `'${input.lastError}'`},
+      ${input.inputDigest === undefined ? 'NULL' : `'${input.inputDigest}'`}
     )
   `)
 }
@@ -494,5 +498,69 @@ test('posting dirty work is retired only when its article inputs had reached the
     {dirtyWorkId: 'posting-payload-completed-after-chunk', status: 'pending'},
     {dirtyWorkId: 'posting-payload-completed-before-chunk', status: 'completed'},
     {dirtyWorkId: 'posting-payload-pending', status: 'pending'},
+  ])
+})
+
+test('derived dirty work is not retired by an in-place chunk, nor by one that started before retention could drop its inputs', async () => {
+  const {resetReviewServingRebuiltDirtyWorkRetirementForTests, retireReviewServingDirtyWorkRebuiltByChunks} =
+    await import('./reviewServingRebuiltDirtyWorkRetirement.ts')
+  const projectId = 'project-derived-window'
+
+  await insertSnapshot({
+    components: ['posting', 'search'],
+    projectId,
+    snapshotId: 'snapshot-derived-window',
+    status: 'active',
+  })
+
+  const chunks = [
+    ['chunk-posting-in-place', 'posting', 'article-a', 'article-f', 'inPlaceReviewServingRefresh', 5],
+    ['chunk-posting-old', 'posting', 'article-g', 'article-m', 'freshReviewServingSnapshot', 45],
+    ['chunk-posting-recent', 'posting', 'article-n', 'article-z', 'freshReviewServingSnapshot', 5],
+    ['chunk-search-in-place', 'search', 'article-a', 'article-z', 'inPlaceReviewServingRefresh', 45],
+  ] as const
+
+  await chunks.reduce<Promise<void>>(async (previous, [chunkId, component, startKey, endKey, inputDigest, age]) => {
+    await previous
+    await insertCompletedChunk({
+      chunkId,
+      component,
+      endKey,
+      inputDigest,
+      projectId,
+      snapshotId: 'snapshot-derived-window',
+      startedMinutesAgo: age,
+      startKey,
+    })
+  }, Promise.resolve())
+
+  // No input dirty work is left for any of these articles, as after retention deleted it.
+  const rows = [
+    ['article-b', 'posting', 'posting-in-place'],
+    ['article-h', 'posting', 'posting-old-chunk'],
+    ['article-p', 'posting', 'posting-recent-chunk'],
+    ['article-b', 'search', 'search-in-place'],
+  ] as const
+
+  await rows.reduce<Promise<void>>(async (previous, [articleId, component, dirtyWorkId]) => {
+    await previous
+    await insertDirtyWork({articleId, component, dirtyWorkId, projectId, status: 'pending', updatedMinutesAgo: 60})
+  }, Promise.resolve())
+
+  resetReviewServingRebuiltDirtyWorkRetirementForTests()
+  await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: Date.now(), projectId})
+
+  expect(
+    await getDatabase().queryJson<{dirtyWorkId: string; status: string}>(`
+      SELECT dirty_work_id AS dirtyWorkId, status
+      FROM app.review_serving_dirty_work
+      WHERE project_id = '${projectId}'
+      ORDER BY dirty_work_id
+    `),
+  ).toEqual([
+    {dirtyWorkId: 'posting-in-place', status: 'pending'},
+    {dirtyWorkId: 'posting-old-chunk', status: 'pending'},
+    {dirtyWorkId: 'posting-recent-chunk', status: 'completed'},
+    {dirtyWorkId: 'search-in-place', status: 'completed'},
   ])
 })

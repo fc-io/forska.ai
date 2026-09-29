@@ -875,3 +875,138 @@ test('the worker cleanup purges an unreferenced failed snapshot through its back
   })
   expect(await countSnapshotRows()).toEqual({manifests: 0, rows: 0})
 })
+
+test('a request whose summary publication failed stays admitted and a later finalization publishes it', async () => {
+  const {runReviewServingProjectorWorkerOnce} = await import('./reviewServingProjectorWorker.ts')
+  const {upsertReviewServingProjectionIdentityManifest} =
+    await import('../reviewServing/reviewServingManifestRepository.ts')
+  const projectId = 'project-summary-retry'
+  const snapshotId = 'snapshot-summary-retry'
+  const requestId = 'rebuild:summary-retry'
+  const chunkId = 'chunk:summary-retry'
+  const summaryReviewConfigHash = 'review-config-summary-retry'
+  const summaryRetryRequiredComponents = [
+    'projectScope',
+    'selectedImport',
+    'display',
+    'llmStatus',
+    'humanStatus',
+    'queue',
+    'payload',
+    'posting',
+  ] as const
+  const componentState = {
+    optional: [
+      {
+        baseGeneration: '0',
+        component: 'summary',
+        patchWatermark: '0',
+        projectionIdentity: `summary:${projectId}`,
+        requirement: 'optional',
+      },
+    ],
+    required: summaryRetryRequiredComponents.map((component) => {
+      return {
+        baseGeneration: '0',
+        component,
+        patchWatermark: '0',
+        projectionIdentity: `${component}:${projectId}`,
+        requirement: 'required',
+      }
+    }),
+  }
+  const runFinalizationCycle = () => {
+    return runReviewServingProjectorWorkerOnce(
+      {rebuildProjectId: projectId, workerId: 'worker-summary-retry'},
+      getFinalizationCycleDependencies(),
+    )
+  }
+  const getState = async () => {
+    const [request] = await getDatabase().queryJson<{lastError: string | null; status: string}>(`
+      SELECT status, last_error AS lastError FROM app.review_rebuild_request WHERE request_id = '${requestId}'
+    `)
+    const [bucket] = await getDatabase().queryJson<{ledgerStatus: string}>(`
+      SELECT ledger_status AS ledgerStatus FROM mart.review_article_summary_bucket_v4 WHERE bucket_id = '${chunkId}'
+    `)
+
+    return {bucket: bucket?.ledgerStatus, lastError: request?.lastError?.split(':')[0] ?? null, status: request?.status}
+  }
+
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', '${projectId}', 'model-queue', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await [...summaryRetryRequiredComponents, 'summary' as const].reduce<Promise<void>>(async (previous, component) => {
+    await previous
+    await upsertReviewServingProjectionIdentityManifest(
+      {
+        baseGeneration: 0,
+        definitionVersion: `${component}:test`,
+        inputWatermark: 0,
+        patchWatermark: 0,
+        projectId,
+        projectionComponent: component,
+        projectionIdentity: `${component}:${projectId}`,
+        reviewConfigHash: summaryReviewConfigHash,
+        status: 'active',
+      },
+      getDatabase(),
+    )
+  }, Promise.resolve())
+  // Without a review config hash the snapshot's summary partials cannot be reduced, so publication fails.
+  await getDatabase().run(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
+      required_components_json, optional_components_json, source_watermarks_json, selected_import_snapshot_id
+    ) VALUES (
+      '${projectId}', '${snapshotId}', 'active', NULL, '{}'::JSON, '${JSON.stringify(componentState)}'::JSON,
+      '${JSON.stringify(summaryRetryRequiredComponents)}'::JSON, '["summary"]'::JSON, '{}'::JSON,
+      'selected-import-summary-retry'
+    )
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_request (
+      request_id, project_id, reason, requested_components_json, priority, status, admission_state
+    ) VALUES ('${requestId}', '${projectId}', 'summaryDirtyWork', '["summary"]'::JSON, 50, 'admitted', 'admitted')
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_chunk_manifest (
+      chunk_id, request_id, project_id, snapshot_id, projection_component, projection_identity, chunk_start_key,
+      chunk_end_key, output_base_generation, status, admission_state, input_digest
+    ) VALUES (
+      '${chunkId}', '${requestId}', '${projectId}', '${snapshotId}', 'summary', 'summary:${projectId}', 'article-00',
+      'article-99', 0, 'completed', 'admitted', 'inPlaceReviewServingRefresh'
+    )
+  `)
+  await getDatabase().run(`
+    INSERT INTO mart.review_article_summary_bucket_v4 (
+      project_id, review_config_hash, snapshot_id, bucket_id, request_id, bucket_start_key, bucket_end_key, ledger_status
+    ) VALUES (
+      '${projectId}', '${summaryReviewConfigHash}', '${snapshotId}', '${chunkId}', '${requestId}', 'article-00',
+      'article-99', 'building'
+    )
+  `)
+
+  await runFinalizationCycle()
+
+  expect(await getState()).toEqual({bucket: 'building', lastError: 'summary publication failed', status: 'admitted'})
+
+  await getDatabase().run(`
+    UPDATE app.review_serving_snapshot_manifest
+    SET review_config_hash = '${summaryReviewConfigHash}'
+    WHERE snapshot_id = '${snapshotId}'
+  `)
+  await runFinalizationCycle()
+
+  // The retry waits a few minutes after a failed publication.
+  expect(await getState()).toEqual({bucket: 'building', lastError: 'summary publication failed', status: 'admitted'})
+
+  await getDatabase().run(`
+    UPDATE app.review_rebuild_request
+    SET updated_at = current_timestamp - INTERVAL '10 minutes'
+    WHERE request_id = '${requestId}'
+  `)
+  await runFinalizationCycle()
+
+  expect(await getState()).toEqual({bucket: 'published', lastError: null, status: 'completed'})
+})
