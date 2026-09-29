@@ -12,6 +12,7 @@ import {
 } from './reviewServingContracts.ts'
 import {defaultReviewServingDirtyWorkStaleClaimSeconds} from './reviewServingDirtyWorkService.ts'
 import {getReviewServingOptionalComponentAvailability} from './reviewServingSnapshotPromotionService.ts'
+import {getReviewServingClosedRebuildRequestLastErrorSql} from './reviewServingSupersededRebuildChunk.ts'
 
 export type ReviewServingDiagnosticsDatabase = {
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
@@ -1009,8 +1010,9 @@ const getDiagnosticsSummaryRowsEffect = (
           AND status <> 'completed'
       ), latest_request AS (
         SELECT request_id, admission_state, priority, reason, status
-        FROM app.review_rebuild_request
+        FROM app.review_rebuild_request request
         WHERE project_id IS NOT DISTINCT FROM ${getSqlLiteral(input.projectId)}
+          AND NOT (status IN ('failed', 'cancelled') AND ${getReviewServingClosedRebuildRequestLastErrorSql('request')})
         ORDER BY
           CASE
             WHEN admission_state = 'admitted' AND status IN ('admitted', 'running')
