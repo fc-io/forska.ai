@@ -14,11 +14,12 @@ type MultiSelectProps = {
 }
 
 export const getIsSameMultiSelectOptionList = (
-  left: readonly MultiSelectOption[],
+  left: readonly MultiSelectOption[] | undefined,
   right: readonly MultiSelectOption[],
 ) => {
   return (
-    left.length === right.length
+    left !== undefined
+    && left.length === right.length
     && left.every((option, index) => {
       return option.value === right[index]?.value && option.label === right[index]?.label
     })
