@@ -79,6 +79,19 @@ export const summaryUpstreamReviewServingComponents = [
   'posting',
 ] as const satisfies readonly ReviewServingProjectionComponent[]
 
+// The components whose rows (in the snapshot, or the shared scope and selected-import marts) a rebuild chunk of each
+// component reads besides the source. A chunk only rebuilt an article from current inputs when none of these was still
+// waiting for that article's change.
+export const chunkInputReviewServingComponents: Partial<
+  Record<ReviewServingProjectionComponent, readonly ReviewServingProjectionComponent[]>
+> = {
+  judgmentInputContent: ['projectScope'],
+  payload: ['projectScope'],
+  posting: postingUpstreamReviewServingComponents,
+  search: ['projectScope', 'selectedImport'],
+  summary: summaryUpstreamReviewServingComponents,
+}
+
 // Components whose serving rows a rebuild request publishes when it is finalized, after every one of its chunks
 // completed, rather than chunk by chunk.
 export const requestFinalizedReviewServingComponents = [

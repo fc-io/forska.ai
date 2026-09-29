@@ -1,10 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {
-  postingUpstreamReviewServingComponents,
-  type ReviewServingProjectionComponent,
-  summaryUpstreamReviewServingComponents,
-} from './reviewServingContracts.ts'
+import {chunkInputReviewServingComponents, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   completeReviewServingDirtyWorkRebuiltByChunks,
   defaultCompletedDirtyWorkRetentionSeconds,
@@ -15,6 +11,7 @@ import {
 } from './reviewServingDirtyWorkService.ts'
 import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
 import {getReviewServingRebuildChunkInPlacePredicateSql} from './reviewServingRebuildChunkInputDigest.ts'
+import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 
 // A bootstrap rebuild re-reads every article of a component from source, but per-article dirty work queued before the
 // rebuild ran stays pending, because rebuild watermarks only cover the source partitions the request knew about. On
@@ -43,6 +40,7 @@ type SnapshotManifestRow = {
   optionalComponentsJson: unknown
   projectId: string
   requiredComponentsJson: unknown
+  reviewConfigHash: string | null
   snapshotId: string
   snapshotStatus: string
 }
@@ -52,10 +50,13 @@ type RetirementTarget = {
   component: ReviewServingProjectionComponent
   projectId: string
   projectionIdentity: string
+  reviewConfigHash: string | null
   snapshotId: string
 }
 
-const getRetirementTargetKey = (target: RetirementTarget) => {
+type LiveCandidate = {components: ReadonlySet<string>; projectId: string; reviewConfigHash: string | null}
+
+const getRetirementTargetKey = (target: Omit<RetirementTarget, 'reviewConfigHash'>) => {
   return [target.projectId, target.snapshotId, target.component, target.projectionIdentity, target.baseGeneration].join(
     '\u0000',
   )
@@ -105,74 +106,182 @@ const getComponentStates = (value: unknown) => {
   })
 }
 
-// Components of active snapshots that no candidate of the same project also carries: patches for them only go to the
-// active snapshot, so its own rebuild coverage decides whether a pending row still needs one.
+// A candidate still being built by an admitted request, or by a failed one readmission would bring back. Candidates
+// whose rebuild stopped for good receive no patches that matter and never block anything.
+export const getLiveReviewServingCandidateSnapshotSql = (candidateAlias: string) => {
+  return `EXISTS (
+      SELECT 1
+      FROM app.review_rebuild_chunk_manifest live_chunk
+      INNER JOIN app.review_rebuild_request live_request
+        ON live_request.request_id = live_chunk.request_id
+      WHERE live_chunk.project_id = ${candidateAlias}.project_id
+        AND live_chunk.snapshot_id = ${candidateAlias}.snapshot_id
+        AND live_request.admission_state = 'admitted'
+        AND (
+          live_request.status IN ('admitted', 'running')
+          OR (
+            live_request.status = 'failed'
+            AND COALESCE(live_request.last_error, '') NOT LIKE 'superseded%'
+            AND COALESCE(live_request.last_error, '') NOT LIKE 'coalesced%'
+          )
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest terminal_chunk
+          WHERE terminal_chunk.request_id = live_request.request_id
+            AND terminal_chunk.status IN ('blocked_over_budget', 'quarantined')
+        )
+    )`
+}
+
+// Components of active snapshots, and the live candidates of their projects. Rows are only retired for an active
+// snapshot of the project's current review config whose component no live candidate of that config also carries:
+// patches for it then only go to that snapshot, so its own rebuild coverage decides whether a pending row still needs
+// one. An active snapshot of an older config is not what the project serves once its current config is active.
 const getRetirementTargets = async (
   input: {projectId?: string | null},
   database: ReviewServingRetirementDatabase,
-): Promise<readonly RetirementTarget[]> => {
+): Promise<{liveCandidates: readonly LiveCandidate[]; targets: readonly RetirementTarget[]}> => {
   const rows = await database.queryJson<SnapshotManifestRow>(`
     SELECT
-      project_id AS projectId,
-      snapshot_id AS snapshotId,
-      snapshot_status AS snapshotStatus,
-      component_state_json AS componentStateJson,
-      required_components_json AS requiredComponentsJson,
-      optional_components_json AS optionalComponentsJson
-    FROM app.review_serving_snapshot_manifest
-    WHERE snapshot_status IN ('active', 'candidate')
-      ${input.projectId ? `AND project_id = ${getSqlLiteral(input.projectId)}` : ''}
-  `)
-  const candidateComponentsByProject = rows
-    .filter((row) => {
-      return row.snapshotStatus === 'candidate'
-    })
-    .reduce((components, row) => {
-      const projectComponents = components.get(row.projectId) ?? new Set<string>()
-
-      ;[...getComponentList(row.requiredComponentsJson), ...getComponentList(row.optionalComponentsJson)].forEach(
-        (component) => {
-          projectComponents.add(component)
-        },
+      snapshot.project_id AS projectId,
+      snapshot.snapshot_id AS snapshotId,
+      snapshot.snapshot_status AS snapshotStatus,
+      snapshot.review_config_hash AS reviewConfigHash,
+      snapshot.component_state_json AS componentStateJson,
+      snapshot.required_components_json AS requiredComponentsJson,
+      snapshot.optional_components_json AS optionalComponentsJson
+    FROM app.review_serving_snapshot_manifest snapshot
+    WHERE (
+        snapshot.snapshot_status = 'active'
+        OR (snapshot.snapshot_status = 'candidate' AND ${getLiveReviewServingCandidateSnapshotSql('snapshot')})
       )
+      ${input.projectId ? `AND snapshot.project_id = ${getSqlLiteral(input.projectId)}` : ''}
+  `)
 
-      return components.set(row.projectId, projectComponents)
-    }, new Map<string, Set<string>>())
-
-  return rows
-    .filter((row) => {
-      return row.snapshotStatus === 'active'
-    })
-    .flatMap((row) => {
-      const candidateComponents = candidateComponentsByProject.get(row.projectId)
-
-      return getComponentStates(row.componentStateJson)
-        .filter((state) => {
-          return candidateComponents?.has(state.component) !== true
+  return {
+    liveCandidates: rows
+      .filter((row) => {
+        return row.snapshotStatus === 'candidate'
+      })
+      .map((row) => {
+        return {
+          components: new Set([
+            ...getComponentList(row.requiredComponentsJson),
+            ...getComponentList(row.optionalComponentsJson),
+          ]),
+          projectId: row.projectId,
+          reviewConfigHash: row.reviewConfigHash,
+        }
+      }),
+    targets: rows
+      .filter((row) => {
+        return row.snapshotStatus === 'active'
+      })
+      .flatMap((row) => {
+        return getComponentStates(row.componentStateJson).map((state) => {
+          return {
+            ...state,
+            projectId: row.projectId,
+            reviewConfigHash: row.reviewConfigHash,
+            snapshotId: row.snapshotId,
+          }
         })
-        .map((state) => {
-          return {...state, projectId: row.projectId, snapshotId: row.snapshotId}
-        })
-    })
+      }),
+  }
 }
 
-// Posting and summary chunks read their own snapshot's rows of their input components, so whether a chunk rebuilt an
-// article from current inputs depends on the input dirty work of that article (see below). That evidence is only
-// reliable while it cannot have been deleted yet: completed dirty work is deleted an hour after it completed, and the
-// per-target cursor is lost on restart, so derived chunks are only considered while they started within half that
-// window. Derived chunks of an in-place rebuild of the active snapshot never retire dirty work: they may run next to
-// patches of their own inputs, so their rows patch incrementally, where inputs are checked claim by claim.
-const derivedRetirementWindowMs = (defaultCompletedDirtyWorkRetentionSeconds * 1000) / 2
+const getTargetsOfCurrentReviewConfig = async (
+  input: {liveCandidates: readonly LiveCandidate[]; targets: readonly RetirementTarget[]},
+  database: ReviewServingRetirementDatabase,
+) => {
+  const projectIds = [
+    ...new Set(
+      input.targets.map((target) => {
+        return target.projectId
+      }),
+    ),
+  ]
+  const currentHashes = new Map(
+    await Promise.all(
+      projectIds.map(async (projectId) => {
+        return [projectId, await getCurrentReviewServingReviewConfigHash(projectId, database as never)] as const
+      }),
+    ),
+  )
+
+  return input.targets.filter((target) => {
+    const currentHash = currentHashes.get(target.projectId) ?? null
+
+    return (
+      currentHash !== null
+      && target.reviewConfigHash === currentHash
+      && !input.liveCandidates.some((candidate) => {
+        return (
+          candidate.projectId === target.projectId
+          && candidate.reviewConfigHash === currentHash
+          && candidate.components.has(target.component)
+        )
+      })
+    )
+  })
+}
+
+// A chunk rebuilds its range from the source plus the rows it reads of its input components (see
+// chunkInputReviewServingComponents), so whether it rebuilt a pending row's article from current inputs depends on the
+// input dirty work of that article. That evidence is only reliable while it cannot have been deleted yet: completed
+// dirty work is deleted an hour after it completed, and the per-target cursor is lost on restart, so such chunks only
+// complete dirty work while they started within half that window. Posting and summary chunks of an in-place rebuild
+// of the active snapshot never do: they may run next to patches of their own inputs, so their rows patch
+// incrementally, where inputs are checked claim by claim.
+export const reviewServingChunkCompletionWindowMs = (defaultCompletedDirtyWorkRetentionSeconds * 1000) / 2
+const inputGatedReviewServingComponents = Object.keys(chunkInputReviewServingComponents)
 const derivedReviewServingComponents = ['posting', 'summary'] as const
 
-const getDerivedRebuiltRangePredicateSql = (nowMs: number) => {
+export const getReviewServingChunkCompletionEligibilitySql = (input: {chunkAlias: string; nowMs: number}) => {
+  const chunk = input.chunkAlias
+
   return `(
-          chunk.projection_component NOT IN (${derivedReviewServingComponents.map(getSqlLiteral).join(', ')})
+          ${chunk}.projection_component NOT IN (${inputGatedReviewServingComponents.map(getSqlLiteral).join(', ')})
           OR (
-            NOT ${getReviewServingRebuildChunkInPlacePredicateSql('chunk')}
-            AND chunk.started_at >= ${getSqlLiteral(new Date(nowMs - derivedRetirementWindowMs).toISOString())}::TIMESTAMPTZ
+            ${chunk}.started_at >= ${getSqlLiteral(new Date(input.nowMs - reviewServingChunkCompletionWindowMs).toISOString())}::TIMESTAMPTZ
+            AND (
+              ${chunk}.projection_component NOT IN (${derivedReviewServingComponents.map(getSqlLiteral).join(', ')})
+              OR NOT ${getReviewServingRebuildChunkInPlacePredicateSql(chunk)}
+            )
           )
         )`
+}
+
+export const getReviewServingChunkInputComponentsCteSql = () => {
+  return `chunk_input_component(projection_component, upstream_component) AS (
+      VALUES ${Object.entries(chunkInputReviewServingComponents)
+        .flatMap(([component, upstreams]) => {
+          return upstreams.map((upstream) => {
+            return `(${getSqlLiteral(component)}, ${getSqlLiteral(upstream)})`
+          })
+        })
+        .join(', ')}
+    )`
+}
+
+// Needs chunk_input_component in scope. True when no input dirty work of the row's article (same source partition, at
+// or below its watermark) was unfinished, or finished after the chunk started.
+export const getReviewServingChunkSawDirtyWorkInputsSql = (input: {dirtyWorkAlias: string; startedAtSql: string}) => {
+  const dirtyWork = input.dirtyWorkAlias
+
+  return `NOT EXISTS (
+        SELECT 1
+        FROM chunk_input_component
+        INNER JOIN app.review_serving_dirty_work upstream
+          ON upstream.projection_component = chunk_input_component.upstream_component
+        WHERE chunk_input_component.projection_component = ${dirtyWork}.projection_component
+          AND upstream.project_id = ${dirtyWork}.project_id
+          AND upstream.article_id = ${dirtyWork}.article_id
+          AND upstream.source_partition = ${dirtyWork}.source_partition
+          AND upstream.first_source_high_water_mark <= ${dirtyWork}.latest_source_high_water_mark
+          AND (upstream.status <> 'completed' OR upstream.updated_at >= ${input.startedAtSql})
+      )`
 }
 
 const getRebuiltRangeCteSql = (targets: readonly RetirementTarget[], nowMs: number) => {
@@ -224,7 +333,7 @@ const getRebuiltRangeCteSql = (targets: readonly RetirementTarget[], nowMs: numb
         AND COALESCE(chunk.checksum, '') NOT LIKE 'split:%'
         AND COALESCE(chunk.last_error, '') NOT LIKE 'superseded%'
         AND COALESCE(chunk.last_error, '') NOT LIKE 'coalesced%'
-        AND ${getDerivedRebuiltRangePredicateSql(nowMs)}
+        AND ${getReviewServingChunkCompletionEligibilitySql({chunkAlias: 'chunk', nowMs})}
     )
   `
 }
@@ -269,34 +378,12 @@ const getTargetsWithRebuiltRanges = async (
 // Rows written before source_changed_at existed and closed since have none; updated_at bounds their last change.
 const dirtyWorkSourceChangedAtSql = 'COALESCE(dirty_work.source_changed_at, dirty_work.updated_at)'
 
-// Posting and summary chunks read their own snapshot's rows of these components, not the source, so a chunk only
-// rebuilt a derived row's article from current inputs when no input row of that article was still waiting (or finished
-// after the chunk started). The same pairs gate their incremental patches.
-const derivedComponentUpstreamRows = [
-  ...postingUpstreamReviewServingComponents.map((upstream) => {
-    return ['posting', upstream] as const
-  }),
-  ...summaryUpstreamReviewServingComponents.map((upstream) => {
-    return ['summary', upstream] as const
-  }),
-]
-
-const getDerivedComponentUpstreamCteSql = () => {
-  return `derived_upstream(projection_component, upstream_component) AS (
-      VALUES ${derivedComponentUpstreamRows
-        .map(([component, upstream]) => {
-          return `(${getSqlLiteral(component)}, ${getSqlLiteral(upstream)})`
-        })
-        .join(', ')}
-    )`
-}
-
 // Rows older than the newest covering chunk of their component are narrowed first, then matched to a chunk range that
-// started after them, and, for derived components, after the inputs it read had caught up with them.
+// started after them, and after the inputs it read had caught up with them.
 const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[], nowMs: number) => {
   return `
     WITH ${getRebuiltRangeCteSql(targets, nowMs)},
-    ${getDerivedComponentUpstreamCteSql()},
+    ${getReviewServingChunkInputComponentsCteSql()},
     rebuilt_component AS (
       SELECT project_id, projection_component, projection_identity, MAX(started_at) AS latest_started_at
       FROM rebuilt_range
@@ -331,18 +418,10 @@ const getRetirableDirtyWorkSql = (targets: readonly RetirementTarget[], nowMs: n
         AND older_dirty_work.article_id >= rebuilt_range.chunk_start_key
         AND older_dirty_work.article_id <= rebuilt_range.chunk_end_key
         AND older_dirty_work.source_changed_at < rebuilt_range.started_at
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM derived_upstream
-        INNER JOIN app.review_serving_dirty_work upstream
-          ON upstream.projection_component = derived_upstream.upstream_component
-        WHERE derived_upstream.projection_component = older_dirty_work.projection_component
-          AND upstream.project_id = older_dirty_work.project_id
-          AND upstream.article_id = older_dirty_work.article_id
-          AND upstream.source_partition = older_dirty_work.source_partition
-          AND upstream.first_source_high_water_mark <= older_dirty_work.latest_source_high_water_mark
-          AND (upstream.status <> 'completed' OR upstream.updated_at >= rebuilt_range.started_at)
-      )
+      WHERE ${getReviewServingChunkSawDirtyWorkInputsSql({
+        dirtyWorkAlias: 'older_dirty_work',
+        startedAtSql: 'rebuilt_range.started_at',
+      })}
       LIMIT ${retirementSelectLimit}
     )
     ${getReviewServingDirtyWorkRecordSelectSql('dirty_work')}
@@ -363,8 +442,11 @@ export const retireReviewServingDirtyWorkRebuiltByChunks = async (
     return {retiredCount: 0, scanned: false}
   }
 
-  const targets = await getRetirementTargets(input, database)
-  const rebuiltTargets = await getTargetsWithRebuiltRanges(targets, nowMs, database)
+  const {liveCandidates, targets} = await getRetirementTargets(input, database)
+  const rebuiltTargets = await getTargetsOfCurrentReviewConfig(
+    {liveCandidates, targets: await getTargetsWithRebuiltRanges(targets, nowMs, database)},
+    database,
+  )
   const rows =
     rebuiltTargets.length === 0
       ? []

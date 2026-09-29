@@ -425,8 +425,6 @@ const getAvailableSnapshotManifest = async (
       LEFT JOIN app.review_rebuild_request request
         ON chunk.request_id IS NOT NULL
         AND (request.request_id || '') = chunk.request_id
-      WHERE chunk.request_id IS NULL
-        OR request.status <> 'cancelled'
       GROUP BY
         chunk.projection_component,
         chunk.projection_identity,
@@ -455,6 +453,7 @@ const getAvailableSnapshotManifest = async (
         ROW_NUMBER() OVER (
           PARTITION BY component, projectionIdentity, outputBaseGeneration
           ORDER BY
+            CASE WHEN requestStatus = 'cancelled' THEN 1 ELSE 0 END ASC,
             CASE WHEN effectiveChunkCount > 0 THEN 0 ELSE 1 END ASC,
             requestCreatedAt DESC NULLS LAST,
             requestUpdatedAt DESC NULLS LAST,
@@ -555,6 +554,12 @@ const getAvailableSnapshotManifest = async (
 
     const totalChunkCount = getNonNegativeFiniteInteger(chunkAvailability.totalChunkCount)
     const completedChunkCount = getNonNegativeFiniteInteger(chunkAvailability.completedChunkCount)
+
+    // Chunks of cancelled requests only rank when no other request built the component; the component was then never
+    // built (a cancelled in-place addition must not read as built, as a component without any chunks would).
+    if (chunkAvailability.requestStatus === 'cancelled') {
+      return false
+    }
 
     return (
       totalChunkCount !== null

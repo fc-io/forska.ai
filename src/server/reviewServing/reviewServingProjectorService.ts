@@ -4,6 +4,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {
+  chunkInputReviewServingComponents,
   countReadyReviewServingComponents,
   enrichmentReviewServingProjectionComponents,
   type ReviewServingProjectionComponent,
@@ -16,6 +17,7 @@ import {
   completeReviewServingDirtyWorkClaims,
   defaultReviewServingDirtyWorkBlockedByRebuildRequeueSeconds,
   failReviewServingDirtyWorkClaims,
+  getReviewServingDirtyWorkClaimIdsAwaitingUpstream,
   releaseReviewServingDirtyWorkClaims,
   type ReviewServingDirtyWorkClaim,
   type ReviewServingDirtyWorkClaimOrder,
@@ -42,6 +44,12 @@ import {
   type PromoteReviewServingProjectorSnapshotResult,
 } from './reviewServingProjectorWriter.ts'
 import type {ReviewServingRebuildRequest} from './reviewServingRebuildRequestRepository.ts'
+import {
+  getLiveReviewServingCandidateSnapshotSql,
+  getReviewServingChunkCompletionEligibilitySql,
+  getReviewServingChunkInputComponentsCteSql,
+  getReviewServingChunkSawDirtyWorkInputsSql,
+} from './reviewServingRebuiltDirtyWorkRetirement.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
 import {getReviewServingSummaryLedgerSnapshotPredicateSql} from './reviewServingSummaryLedger.ts'
 import {requestReviewServingV4RebuildEffect} from './reviewServingV4RebuildRequestService.ts'
@@ -376,12 +384,13 @@ const getRebuildRequestComponents = (request: ReviewServingRebuildRequest) => {
   ])
 }
 
-// Requests that build a component into an active snapshot (in place, or a bootstrap train whose snapshot was promoted
-// meanwhile). Their chunks rewrite rows the snapshot is serving range by range, from inputs that may still be catching
-// up, so a claim of that component is never completed just because such a request's watermarks reach it: the claim
-// stays pending and is patched incrementally, or retired once a chunk that started after its change has completed.
-// Only requests building fresh candidates, which nothing reads before activation, cover claims when they are created.
-const getActiveSnapshotBuildingRequestIds = async (input: {
+// Requests whose chunks of a component build anything but a live candidate: in place into the active snapshot (or one
+// that has since been replaced), or for a bootstrap train whose snapshot was promoted meanwhile. Their chunks rewrite
+// rows that are, or were, being served, from inputs that may still be catching up, so a claim of that component is
+// never completed just because such a request's watermarks reach it: the claim stays pending and is patched
+// incrementally, or completed once a chunk that started after its change (and after its inputs caught up) has
+// completed. Only requests building fresh candidates, which nothing reads before activation, cover claims.
+const getNonCoveringRequestIds = async (input: {
   component: ReviewServingProjectionComponent
   database: ReviewServingProjectorServiceDatabase
   requests: readonly ReviewServingRebuildRequest[]
@@ -393,7 +402,7 @@ const getActiveSnapshotBuildingRequestIds = async (input: {
   const rows = await input.database.queryJson<{requestId: string}>(`
     SELECT DISTINCT chunk.request_id AS requestId
     FROM app.review_rebuild_chunk_manifest chunk
-    INNER JOIN app.review_serving_snapshot_manifest snapshot
+    LEFT JOIN app.review_serving_snapshot_manifest snapshot
       ON snapshot.project_id = chunk.project_id
       AND snapshot.snapshot_id = chunk.snapshot_id
     WHERE chunk.request_id IN (${input.requests
@@ -402,26 +411,31 @@ const getActiveSnapshotBuildingRequestIds = async (input: {
       })
       .join(', ')})
       AND chunk.projection_component = ${getSqlLiteral(input.component)}
-      AND snapshot.snapshot_status = 'active'
+      AND chunk.snapshot_id IS NOT NULL
+      AND COALESCE(snapshot.snapshot_status, 'missing') <> 'candidate'
   `)
+  const inPlaceRequestIds = input.requests.flatMap((request) => {
+    return typeof getObjectRecord(request.identityJson)?.inPlaceSnapshotId === 'string' ? [request.requestId] : []
+  })
 
-  return new Set(
-    rows.map((row) => {
+  return new Set([
+    ...inPlaceRequestIds,
+    ...rows.map((row) => {
       return row.requestId
     }),
-  )
+  ])
 }
 
 const isClaimCoveredByRebuildRequest = (
   claim: ReviewServingDirtyWorkClaim,
   request: ReviewServingRebuildRequest,
-  activeSnapshotBuildingRequestIds: ReadonlySet<string> = new Set(),
+  nonCoveringRequestIds: ReadonlySet<string> = new Set(),
 ) => {
   if (
     claim.projectId === null
     || request.projectId !== claim.projectId
     || !getRebuildRequestComponents(request).has(claim.projectionComponent)
-    || activeSnapshotBuildingRequestIds.has(request.requestId)
+    || nonCoveringRequestIds.has(request.requestId)
   ) {
     return false
   }
@@ -446,10 +460,10 @@ const isClaimCoveredByRebuildRequest = (
 const isClaimCoveredByRebuildRequests = (
   claim: ReviewServingDirtyWorkClaim,
   requests: readonly ReviewServingRebuildRequest[],
-  activeSnapshotBuildingRequestIds: ReadonlySet<string>,
+  nonCoveringRequestIds: ReadonlySet<string>,
 ) => {
   return requests.some((request) => {
-    return isClaimCoveredByRebuildRequest(claim, request, activeSnapshotBuildingRequestIds)
+    return isClaimCoveredByRebuildRequest(claim, request, nonCoveringRequestIds)
   })
 }
 
@@ -727,7 +741,7 @@ const getAwaitedRebuildRequestDiagnostic = (requests: readonly ReviewServingRebu
 // pending, since that snapshot now carries the component and their next pass patches it incrementally; other claims
 // wait parked until the build they wait for is done.
 const settleBootstrapRoutedArticleDirtyWork = async (input: {
-  activeSnapshotBuildingRequestIds: ReadonlySet<string>
+  nonCoveringRequestIds: ReadonlySet<string>
   blockDirtyWorkForRebuild: typeof blockReviewServingDirtyWorkClaimsForRebuild
   claims: readonly ReviewServingDirtyWorkClaim[]
   completeDirtyWork: typeof completeReviewServingDirtyWorkClaims
@@ -738,10 +752,10 @@ const settleBootstrapRoutedArticleDirtyWork = async (input: {
   state: WakeReviewServingProjectorState
 }): Promise<WakeReviewServingProjectorState> => {
   const coveredClaims = input.claims.filter((claim) => {
-    return isClaimCoveredByRebuildRequests(claim, input.requests, input.activeSnapshotBuildingRequestIds)
+    return isClaimCoveredByRebuildRequests(claim, input.requests, input.nonCoveringRequestIds)
   })
   const buildsActiveSnapshot = input.requests.some((request) => {
-    return input.activeSnapshotBuildingRequestIds.has(request.requestId)
+    return input.nonCoveringRequestIds.has(request.requestId)
   })
   const uncoveredClaims = input.claims.filter((claim) => {
     return !coveredClaims.includes(claim)
@@ -797,16 +811,18 @@ export const getChunkedDirtyWorkRebuildPriority = (component: ReviewServingProje
     : getOptionalComponentRebuildPriority(component)
 }
 
-// Components whose rebuild chunks read the source, so a chunk that started after a row's change rebuilt it (posting and
-// summary read their snapshot's own input rows and patch incrementally instead).
+// Components whose rebuild chunks read the source (plus the scope and selected-import rows their inputs gate), so a
+// chunk that started after a row's change, once those inputs had caught up, rebuilt it. Posting and summary read their
+// snapshot's own input rows and patch incrementally instead.
 const sourceReadingChunkedComponents = new Set<ReviewServingProjectionComponent>([
   'judgmentInputContent',
   'payload',
   'search',
 ])
 
-// Article claims whose article a completed chunk of the active snapshot rebuilt after the claim's change: the same test
-// chunk-based retirement applies, run for the claims in hand so that they are not taken for a reason to rebuild again.
+// Article claims whose article a completed chunk of the project's current active snapshot rebuilt after the claim's
+// change and after the chunk's inputs caught up with it: the test chunk-based retirement applies, run for the claims in
+// hand so that they are not taken for a reason to rebuild again.
 const getClaimsRebuiltByActiveSnapshotChunks = async (input: {
   claims: readonly ReviewServingDirtyWorkClaim[]
   component: ReviewServingProjectionComponent
@@ -820,54 +836,110 @@ const getClaimsRebuiltByActiveSnapshotChunks = async (input: {
     return []
   }
 
-  const rows = await input.database.queryJson<{dirtyWorkId: string}>(`
-    WITH claimed(dirty_work_id) AS (
-      VALUES ${articleClaims
-        .map((claim) => {
-          return `(${getSqlLiteral(claim.dirtyWorkId)})`
-        })
-        .join(', ')}
-    )
-    SELECT DISTINCT dirty_work.dirty_work_id AS dirtyWorkId
-    FROM claimed
-    INNER JOIN app.review_serving_dirty_work dirty_work
-      ON dirty_work.dirty_work_id = claimed.dirty_work_id
-    INNER JOIN app.review_rebuild_chunk_manifest chunk
-      ON chunk.project_id = dirty_work.project_id
-      AND chunk.projection_component = dirty_work.projection_component
-      AND chunk.projection_identity = dirty_work.projection_identity
-      AND dirty_work.article_id >= chunk.chunk_start_key
-      AND dirty_work.article_id <= chunk.chunk_end_key
-    INNER JOIN app.review_serving_snapshot_manifest snapshot
-      ON snapshot.project_id = chunk.project_id
-      AND snapshot.snapshot_id = chunk.snapshot_id
-    WHERE snapshot.snapshot_status = 'active'
-      AND chunk.status = 'completed'
-      AND chunk.started_at IS NOT NULL
-      AND COALESCE(chunk.checksum, '') NOT LIKE 'split:%'
-      AND COALESCE(chunk.last_error, '') NOT LIKE 'superseded%'
-      AND COALESCE(chunk.last_error, '') NOT LIKE 'coalesced%'
-      AND COALESCE(dirty_work.source_changed_at, dirty_work.updated_at) < chunk.started_at
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.review_serving_snapshot_manifest candidate
-        WHERE candidate.project_id = dirty_work.project_id
-          AND candidate.snapshot_status = 'candidate'
-          AND (
-            json_contains(candidate.required_components_json, to_json(dirty_work.projection_component))
-            OR json_contains(candidate.optional_components_json, to_json(dirty_work.projection_component))
+  const rebuiltClaimIds = await getClaimProjectIds(articleClaims).reduce<Promise<Set<string>>>(
+    async (previous, projectId) => {
+      const rebuilt = await previous
+      const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(projectId, input.database)
+
+      if (reviewConfigHash === null) {
+        return rebuilt
+      }
+
+      const rows = await input.database.queryJson<{dirtyWorkId: string}>(`
+        WITH ${getReviewServingChunkInputComponentsCteSql()},
+        claimed(dirty_work_id) AS (
+          VALUES ${articleClaims
+            .filter((claim) => {
+              return claim.projectId === projectId
+            })
+            .map((claim) => {
+              return `(${getSqlLiteral(claim.dirtyWorkId)})`
+            })
+            .join(', ')}
+        )
+        SELECT DISTINCT dirty_work.dirty_work_id AS dirtyWorkId
+        FROM claimed
+        INNER JOIN app.review_serving_dirty_work dirty_work
+          ON dirty_work.dirty_work_id = claimed.dirty_work_id
+        INNER JOIN app.review_rebuild_chunk_manifest chunk
+          ON chunk.project_id = dirty_work.project_id
+          AND chunk.projection_component = dirty_work.projection_component
+          AND chunk.projection_identity = dirty_work.projection_identity
+          AND dirty_work.article_id >= chunk.chunk_start_key
+          AND dirty_work.article_id <= chunk.chunk_end_key
+        INNER JOIN app.review_serving_snapshot_manifest snapshot
+          ON snapshot.project_id = chunk.project_id
+          AND snapshot.snapshot_id = chunk.snapshot_id
+        WHERE snapshot.snapshot_status = 'active'
+          AND snapshot.review_config_hash = ${getSqlLiteral(reviewConfigHash)}
+          AND chunk.status = 'completed'
+          AND chunk.started_at IS NOT NULL
+          AND COALESCE(chunk.checksum, '') NOT LIKE 'split:%'
+          AND COALESCE(chunk.last_error, '') NOT LIKE 'superseded%'
+          AND COALESCE(chunk.last_error, '') NOT LIKE 'coalesced%'
+          AND ${getReviewServingChunkCompletionEligibilitySql({chunkAlias: 'chunk', nowMs: Date.now()})}
+          AND COALESCE(dirty_work.source_changed_at, dirty_work.updated_at) < chunk.started_at
+          AND ${getReviewServingChunkSawDirtyWorkInputsSql({dirtyWorkAlias: 'dirty_work', startedAtSql: 'chunk.started_at'})}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.review_serving_snapshot_manifest candidate
+            WHERE candidate.project_id = dirty_work.project_id
+              AND candidate.snapshot_status = 'candidate'
+              AND candidate.review_config_hash = ${getSqlLiteral(reviewConfigHash)}
+              AND (
+                json_contains(candidate.required_components_json, to_json(dirty_work.projection_component))
+                OR json_contains(candidate.optional_components_json, to_json(dirty_work.projection_component))
+              )
+              AND ${getLiveReviewServingCandidateSnapshotSql('candidate')}
           )
-      )
-  `)
-  const rebuiltClaimIds = new Set(
-    rows.map((row) => {
-      return row.dirtyWorkId
-    }),
+      `)
+
+      return new Set([
+        ...rebuilt,
+        ...rows.map((row) => {
+          return row.dirtyWorkId
+        }),
+      ])
+    },
+    Promise.resolve(new Set<string>()),
   )
 
   return articleClaims.filter((claim) => {
     return rebuiltClaimIds.has(claim.dirtyWorkId)
   })
+}
+
+const inputWaitingChunkedComponents = new Set<ReviewServingProjectionComponent>(['judgmentInputContent', 'search'])
+
+// Search and judgment input content claims only ever complete through a chunk that read their article after its
+// scope and import inputs caught up, so a rebuild requested while those inputs are still pending would have to run
+// again: the claims wait for their inputs first.
+const getClaimIdsWaitingForChunkInputs = async (input: {
+  claims: readonly ReviewServingDirtyWorkClaim[]
+  component: ReviewServingProjectionComponent
+  database: ReviewServingProjectorServiceDatabase
+}) => {
+  const upstreamComponents = chunkInputReviewServingComponents[input.component]
+
+  if (upstreamComponents === undefined || !inputWaitingChunkedComponents.has(input.component)) {
+    return new Set<string>()
+  }
+
+  return getClaimProjectIds(input.claims).reduce<Promise<Set<string>>>(async (previous, projectId) => {
+    const waiting = await previous
+    const projectWaiting = await getReviewServingDirtyWorkClaimIdsAwaitingUpstream(
+      {
+        claims: input.claims.filter((claim) => {
+          return claim.projectId === projectId
+        }),
+        projectId,
+        upstreamComponents,
+      },
+      input.database,
+    )
+
+    return new Set([...waiting, ...projectWaiting])
+  }, Promise.resolve(new Set<string>()))
 }
 
 const hasProjectWideClaim = (claims: readonly ReviewServingDirtyWorkClaim[], projectId: string) => {
@@ -1160,10 +1232,21 @@ export const wakeReviewServingProjectorService = async (
       articleDirtyWorkRoute === 'incremental' ? [] : getChunkedDirtyWorkProjectIds(component, claims)
 
     if (chunkedDirtyWorkProjectIds.length > 0) {
-      // Claims a completed chunk of the active snapshot already rebuilt are complete; only the rest need a rebuild.
+      // Claims a completed chunk of the active snapshot already rebuilt are complete; claims whose chunk inputs have not
+      // caught up yet wait for them (a rebuild now would read the same stale inputs); only the rest need a rebuild.
       const rebuiltClaims = await getClaimsRebuiltByActiveSnapshotChunks({claims, component, database})
+      const inputWaitingClaimIds = await getClaimIdsWaitingForChunkInputs({
+        claims: claims.filter((claim) => {
+          return !rebuiltClaims.includes(claim)
+        }),
+        component,
+        database,
+      })
+      const inputWaitingClaims = claims.filter((claim) => {
+        return inputWaitingClaimIds.has(claim.dirtyWorkId)
+      })
       const openClaims = claims.filter((claim) => {
-        return !rebuiltClaims.includes(claim)
+        return !rebuiltClaims.includes(claim) && !inputWaitingClaimIds.has(claim.dirtyWorkId)
       })
       const openClaimIds = getDirtyWorkIds(openClaims)
       const openProjectIds = chunkedDirtyWorkProjectIds.filter((projectId) => {
@@ -1176,14 +1259,22 @@ export const wakeReviewServingProjectorService = async (
         await completeDirtyWork(rebuiltClaims, database)
       }
 
+      if (inputWaitingClaims.length > 0) {
+        await releaseDirtyWork(getDirtyWorkIds(inputWaitingClaims), database)
+      }
+
+      const waitingState =
+        inputWaitingClaims.length === 0
+          ? state
+          : {...state, releasedClaimIds: [...state.releasedClaimIds, ...getDirtyWorkIds(inputWaitingClaims)]}
       const openState =
         rebuiltClaims.length === 0
-          ? state
+          ? waitingState
           : {
-              ...state,
-              processedRows: state.processedRows + rebuiltClaims.length,
+              ...waitingState,
+              processedRows: waitingState.processedRows + rebuiltClaims.length,
               runs: [
-                ...state.runs,
+                ...waitingState.runs,
                 {
                   attempts: 1,
                   claimCount: rebuiltClaims.length,
@@ -1255,15 +1346,11 @@ export const wakeReviewServingProjectorService = async (
         })
       }
 
-      const activeSnapshotBuildingRequestIds = await getActiveSnapshotBuildingRequestIds({
-        component,
-        database,
-        requests: rebuildResult.right,
-      })
+      const nonCoveringRequestIds = await getNonCoveringRequestIds({component, database, requests: rebuildResult.right})
 
       if (articleDirtyWorkRoute === 'bootstrap') {
         return settleBootstrapRoutedArticleDirtyWork({
-          activeSnapshotBuildingRequestIds,
+          nonCoveringRequestIds,
           blockDirtyWorkForRebuild,
           claims: openClaims,
           completeDirtyWork,
@@ -1276,7 +1363,7 @@ export const wakeReviewServingProjectorService = async (
       }
 
       const coveredClaims = openClaims.filter((claim) => {
-        return isClaimCoveredByRebuildRequests(claim, rebuildResult.right, activeSnapshotBuildingRequestIds)
+        return isClaimCoveredByRebuildRequests(claim, rebuildResult.right, nonCoveringRequestIds)
       })
       const uncoveredClaimIds = getDirtyWorkIds(
         openClaims.filter((claim) => {
