@@ -574,7 +574,8 @@ test('live rebuild diagnostics prefer unfinished admitted work over a repeatedly
     await connection.run(`CREATE SCHEMA app;
       CREATE TABLE app.review_rebuild_request (
         request_id VARCHAR, project_id VARCHAR, admission_state VARCHAR,
-        priority INTEGER, reason VARCHAR, status VARCHAR, created_at TIMESTAMP, updated_at TIMESTAMP);
+        priority INTEGER, reason VARCHAR, status VARCHAR, created_at TIMESTAMP, updated_at TIMESTAMP,
+        last_error VARCHAR DEFAULT NULL);
       CREATE TABLE app.review_serving_snapshot_manifest (
         snapshot_id VARCHAR, project_id VARCHAR, snapshot_status VARCHAR);
       CREATE TABLE app.review_rebuild_chunk_manifest (
@@ -582,7 +583,7 @@ test('live rebuild diagnostics prefer unfinished admitted work over a repeatedly
       INSERT INTO app.review_serving_snapshot_manifest VALUES
         ('snapshot-active', 'project-1', 'active'),
         ('snapshot-retired', 'project-1', 'retired');
-      INSERT INTO app.review_rebuild_request VALUES
+      INSERT INTO app.review_rebuild_request (request_id, project_id, admission_state, priority, reason, status, created_at, updated_at) VALUES
         ('old-empty', 'project-1', 'admitted', 100, 'searchDirtyWork', 'admitted', '2026-09-07', '2026-09-10'),
         ('new-work', 'project-1', 'admitted', 100, 'nativeFix', 'admitted', '2026-09-09', '2026-09-09'),
         ('retired-stale', 'project-1', 'admitted', 1000, 'supersededNativeFix', 'admitted', '2026-09-11', '2026-09-11'),
@@ -604,7 +605,7 @@ test('live rebuild diagnostics prefer unfinished admitted work over a repeatedly
     )
     expect(await read()).toEqual([{requestId: 'new-work', pending: 2, running: 1, completed: 1, failed: 0}])
 
-    await connection.run(`INSERT INTO app.review_rebuild_request VALUES
+    await connection.run(`INSERT INTO app.review_rebuild_request (request_id, project_id, admission_state, priority, reason, status, created_at, updated_at) VALUES
         ('low-priority-enrichment', 'project-1', 'admitted', 50, 'filterReadinessEnrichment', 'admitted', '2026-09-13', '2026-09-13');
       INSERT INTO app.review_rebuild_chunk_manifest (request_id, project_id, status, snapshot_id) VALUES
         ('low-priority-enrichment', 'project-1', 'pending', NULL)`)
@@ -623,10 +624,18 @@ test('live rebuild diagnostics prefer unfinished admitted work over a repeatedly
     ])
 
     await connection.run(`UPDATE app.review_rebuild_request SET status = 'completed', priority = 1 WHERE project_id = 'project-1';
-      INSERT INTO app.review_rebuild_request VALUES
+      INSERT INTO app.review_rebuild_request (request_id, project_id, admission_state, priority, reason, status, created_at, updated_at) VALUES
         ('terminal', 'project-1', 'blocked_over_budget', 100, 'manualRebuild', 'failed', '2026-09-13', '2026-09-13');
       INSERT INTO app.review_rebuild_chunk_manifest (request_id, project_id, status, snapshot_id)
         VALUES ('terminal', 'project-1', 'failed', NULL)`)
+    expect(await read()).toEqual([{requestId: 'terminal', pending: 1, running: 0, completed: 0, failed: 1}])
+
+    // A request closed for good (superseded or coalesced) is history, not the project's latest rebuild.
+    await connection.run(`INSERT INTO app.review_rebuild_request VALUES
+        ('closed', 'project-1', 'blocked_over_budget', 10000, 'selectedImportDirtyWork', 'failed', '2026-09-14',
+          '2026-09-14', 'superseded: review config changed');
+      INSERT INTO app.review_rebuild_chunk_manifest (request_id, project_id, status, snapshot_id)
+        VALUES ('closed', 'project-1', 'blocked_over_budget', NULL)`)
     expect(await read()).toEqual([{requestId: 'terminal', pending: 1, running: 0, completed: 0, failed: 1}])
   } finally {
     connection.closeSync()

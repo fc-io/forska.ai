@@ -19,9 +19,11 @@ import {getReviewServingClosedRebuildRequestLastErrorSql} from './reviewServingS
 //   admits) is only re-evaluated when a dirty-work claim or a page poll plans the same request again: planning updates
 //   the row it lands on and re-runs admission against the budget of that moment, and a claim parked on a blocked request
 //   is requeued, and plans again, once the request is older than the blocked-request reuse window. A never-admitted
-//   request past that window is therefore nobody's path to anything. It is still only closed when it is provably
-//   superseded: it was planned for a review config that is no longer current, or the active snapshot of the current
-//   config serves every component it asked for and none of those components has open dirty work.
+//   request past that window is therefore nobody's path to anything. A pending-admission one is closed then: it can
+//   only hold parked claims forever (the requeue treats it as covering its components at any age). A blocked one is
+//   only closed when it is provably superseded: it was planned for a review config that is no longer current, or the
+//   active snapshot of the current config serves every component it asked for and none of those components has open
+//   dirty work.
 //
 // A closed request fails with a last error starting with 'superseded', which readmission, trains, the purge and the
 // live-candidate checks all treat as closed for good. It is failed rather than cancelled: availability reads a
@@ -47,6 +49,7 @@ export type StaleRebuildRequestCleanupDatabase = StaleRebuildRequestCleanupTrans
 
 export type StaleRebuildRequestCloseReason =
   | 'componentsServed'
+  | 'neverAdmittable'
   | 'projectArchived'
   | 'projectDeleted'
   | 'projectDeletePending'
@@ -86,6 +89,13 @@ type CloseCandidate = {
   requestId: string
 }
 
+type ClosePassResult = {
+  closedRequests: readonly CloseCandidate[]
+  failedSnapshots: readonly {projectId: string; snapshotId: string}[]
+}
+
+type LiveProjectCloseCandidates = {closeCandidates: CloseCandidate[]; keptRequestIds: string[]}
+
 type NeverAdmittedRequestRow = {
   projectId: string
   requestedComponentsJson: unknown
@@ -105,6 +115,7 @@ type CleanupRun = {
 
 export const staleReviewServingRebuildRequestLastErrors = {
   componentsServed: 'superseded: the active snapshot serves every component it asked for',
+  neverAdmittable: 'superseded: nothing admits a request pending admission',
   projectArchived: 'superseded: project archived',
   projectDeleted: 'superseded: project deleted',
   projectDeletePending: 'superseded: project delete pending',
@@ -308,7 +319,12 @@ const failUnbuiltCandidateSnapshots = async (
 }
 
 const closeRequestsForReason = async (
-  input: {closableSql: string; reason: StaleRebuildRequestCloseReason; requestIds: readonly string[]},
+  input: {
+    closableSql: string
+    maxChunkRows: number
+    reason: StaleRebuildRequestCloseReason
+    requestIds: readonly string[]
+  },
   tx: StaleRebuildRequestCleanupTransaction,
 ) => {
   const lastError = staleReviewServingRebuildRequestLastErrors[input.reason]
@@ -329,6 +345,7 @@ const closeRequestsForReason = async (
     return row.requestId
   })
 
+  // Chunks past the cap stay pending under a closed request; the next pass fails them with the other dead chunks.
   if (closedRequestIds.length > 0) {
     await tx.run(`
       UPDATE app.review_rebuild_chunk_manifest
@@ -338,8 +355,13 @@ const closeRequestsForReason = async (
         lease_owner = NULL,
         lease_expires_at = NULL,
         updated_at = current_timestamp
-      WHERE request_id IN (${getSqlList(closedRequestIds)})
-        AND status = 'pending'
+      WHERE rowid IN (
+        SELECT rowid
+        FROM app.review_rebuild_chunk_manifest
+        WHERE request_id IN (${getSqlList(closedRequestIds)})
+          AND status = 'pending'
+        LIMIT ${getSqlLiteral(input.maxChunkRows)}
+      )
     `)
   }
 
@@ -349,7 +371,13 @@ const closeRequestsForReason = async (
 // One transaction per batch: requests fail with their unstarted chunks, then the candidates nobody builds any more
 // (which also catches candidates of inactive projects that no request names at all).
 const closeRequests = async (
-  input: {candidates: readonly CloseCandidate[]; closableSql: string; projectId: string | null; settleSeconds: number},
+  input: {
+    candidates: readonly CloseCandidate[]
+    closableSql: string
+    maxChunkRows: number
+    projectId: string | null
+    settleSeconds: number
+  },
   database: StaleRebuildRequestCleanupDatabase,
 ) => {
   const reasons = [
@@ -369,7 +397,10 @@ const closeRequests = async (
 
       return [
         ...closedSoFar,
-        ...(await closeRequestsForReason({closableSql: input.closableSql, reason, requestIds}, tx)),
+        ...(await closeRequestsForReason(
+          {closableSql: input.closableSql, maxChunkRows: input.maxChunkRows, reason, requestIds},
+          tx,
+        )),
       ]
     }, Promise.resolve([]))
     const failedSnapshots = await failUnbuiltCandidateSnapshots(
@@ -416,7 +447,7 @@ const getLiveProjectIdsToCheck = async (
 }
 
 const getNeverAdmittedRequests = async (
-  input: {projectIds: readonly string[]; settleSeconds: number},
+  input: {limit: number; projectIds: readonly string[]; settleSeconds: number},
   database: StaleRebuildRequestCleanupDatabase,
 ) => {
   return database.queryJson<NeverAdmittedRequestRow>(`
@@ -430,6 +461,7 @@ const getNeverAdmittedRequests = async (
     WHERE request.project_id IN (${getSqlList(input.projectIds)})
       AND ${getSettledNeverAdmittedRequestSql('request', input.settleSeconds)}
     ORDER BY request.updated_at ASC, request.request_id ASC
+    LIMIT ${getSqlLiteral(input.limit)}
   `)
 }
 
@@ -502,6 +534,13 @@ const getServedComponents = async (
   )
 }
 
+const getBlockedRequestSupersededReason = (input: {
+  plannedForCurrentConfig: boolean
+  served: boolean
+}): StaleRebuildRequestCloseReason | null => {
+  return !input.plannedForCurrentConfig ? 'reviewConfigChanged' : input.served ? 'componentsServed' : null
+}
+
 const getSupersededReason = (input: {
   currentConfigRequestIds: ReadonlySet<string>
   openDirtyComponents: ReadonlySet<string>
@@ -518,7 +557,9 @@ const getSupersededReason = (input: {
     return input.servedComponents.has(component) && !input.openDirtyComponents.has(component)
   })
 
-  return !plannedForCurrentConfig ? 'reviewConfigChanged' : served ? 'componentsServed' : null
+  return input.request.status === 'pending_admission'
+    ? 'neverAdmittable'
+    : getBlockedRequestSupersededReason({plannedForCurrentConfig, served})
 }
 
 const getProjectCloseCandidates = async (
@@ -577,7 +618,7 @@ const getLiveProjectCloseCandidates = async (
   run: CleanupRun,
   nowMs: number,
   database: StaleRebuildRequestCleanupDatabase,
-) => {
+): Promise<LiveProjectCloseCandidates> => {
   const projectIds = await getLiveProjectIdsToCheck(run, nowMs, database)
 
   if (projectIds.length === 0) {
@@ -585,11 +626,11 @@ const getLiveProjectCloseCandidates = async (
   }
 
   const [requests, openDirtyComponents] = await Promise.all([
-    getNeverAdmittedRequests({projectIds, settleSeconds: run.settleSeconds}, database),
+    getNeverAdmittedRequests({limit: run.maxRequests, projectIds, settleSeconds: run.settleSeconds}, database),
     getOpenDirtyWorkComponents(projectIds, database),
   ])
 
-  return projectIds.reduce<Promise<{closeCandidates: CloseCandidate[]; keptRequestIds: string[]}>>(
+  return projectIds.reduce<Promise<LiveProjectCloseCandidates>>(
     async (previous, projectId) => {
       const result = await previous
       const project = await getProjectCloseCandidates(
@@ -603,7 +644,7 @@ const getLiveProjectCloseCandidates = async (
         database,
       )
 
-      if (project.keptRequestIds.length > 0) {
+      if (project.keptRequestIds.length > 0 && requests.length < run.maxRequests) {
         lastKeptProjectCheckAtMs.set(projectId, nowMs)
       }
 
@@ -686,39 +727,56 @@ export const closeStaleReviewServingRebuildRequests = async (
         return false
       }),
   }
-  const failedChunkRows = await failUnstartedClosedRequestChunks(run, database)
-  const inactive = await closeRequests(
-    {
-      candidates: await getInactiveProjectCloseCandidates(run, database),
-      closableSql: getInactiveProjectClosableRequestSql('request', run.settleSeconds),
-      projectId: run.projectId,
-      settleSeconds: run.settleSeconds,
-    },
-    database,
-  )
-  const liveCandidates = run.shouldYield() ? null : await getLiveProjectCloseCandidates(run, startedAtMs, database)
+  const yieldState = {yielded: false}
+  // Every phase is skipped once foreground work is waiting; a pass never resumes after yielding.
+  const unlessYielding = async <T>(skipped: T, phase: () => Promise<T>) => {
+    yieldState.yielded = yieldState.yielded || run.shouldYield()
+
+    return yieldState.yielded ? skipped : phase()
+  }
+  const noClosures: ClosePassResult = {closedRequests: [], failedSnapshots: []}
+  const failedChunkRows = await unlessYielding(0, () => {
+    return failUnstartedClosedRequestChunks(run, database)
+  })
+  const inactive = await unlessYielding<ClosePassResult>(noClosures, async () => {
+    return closeRequests(
+      {
+        candidates: await getInactiveProjectCloseCandidates(run, database),
+        closableSql: getInactiveProjectClosableRequestSql('request', run.settleSeconds),
+        maxChunkRows: run.maxChunkRows,
+        projectId: run.projectId,
+        settleSeconds: run.settleSeconds,
+      },
+      database,
+    )
+  })
+  const liveCandidates = await unlessYielding<LiveProjectCloseCandidates | null>(null, () => {
+    return getLiveProjectCloseCandidates(run, startedAtMs, database)
+  })
   const live =
     liveCandidates === null || liveCandidates.closeCandidates.length === 0
-      ? {closedRequests: [], failedSnapshots: []}
+      ? noClosures
       : await closeRequests(
           {
             candidates: liveCandidates.closeCandidates,
             closableSql: getSettledNeverAdmittedRequestSql('request', run.settleSeconds),
+            maxChunkRows: run.maxChunkRows,
             projectId: run.projectId,
             settleSeconds: run.settleSeconds,
           },
           database,
         )
-  const deletedChunkRows =
-    liveCandidates === null || run.shouldYield() ? null : await deleteUnreadableClosedRequestChunks(run, database)
+  const deletedChunkRows = await unlessYielding(0, () => {
+    return deleteUnreadableClosedRequestChunks(run, database)
+  })
 
   return {
     closedRequests: [...inactive.closedRequests, ...live.closedRequests],
-    deletedChunkRows: deletedChunkRows ?? 0,
+    deletedChunkRows,
     elapsedMs: Math.max(0, nowMs() - startedAtMs),
     failedChunkRows,
     failedSnapshots: [...inactive.failedSnapshots, ...live.failedSnapshots],
     keptRequestIds: liveCandidates?.keptRequestIds ?? [],
-    stopReason: deletedChunkRows === null ? 'yield' : 'complete',
+    stopReason: yieldState.yielded ? 'yield' : 'complete',
   }
 }

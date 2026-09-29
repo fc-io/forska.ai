@@ -654,7 +654,7 @@ test('a live project only loses never-admitted requests that are settled and pro
     requestedComponents: ['display'],
     requestId: 'rebuild:legacy-unknown',
     reviewConfigHash: null,
-    status: 'pending_admission',
+    status: 'blocked_over_budget',
   })
   await insertChunk({
     chunkId: 'chunk:legacy-unknown',
@@ -662,14 +662,14 @@ test('a live project only loses never-admitted requests that are settled and pro
     projectId,
     requestId: 'rebuild:legacy-unknown',
     snapshotId: null,
-    status: 'pending',
+    status: 'blocked_over_budget',
   })
   await insertRequest({
     projectId,
     requestedComponents: ['display'],
     requestId: 'rebuild:legacy-current',
     reviewConfigHash: null,
-    status: 'pending_admission',
+    status: 'blocked_over_budget',
   })
   await insertChunk({
     chunkId: 'chunk:legacy-current',
@@ -677,7 +677,16 @@ test('a live project only loses never-admitted requests that are settled and pro
     projectId,
     requestId: 'rebuild:legacy-current',
     snapshotId: retiredSnapshotId,
-    status: 'pending',
+    status: 'blocked_over_budget',
+  })
+  // Nothing admits a request pending admission, so it goes once settled even though its component has open work.
+  await insertRequest({
+    projectId,
+    reason: 'humanStatusDirtyWork',
+    requestedComponents: ['humanStatus'],
+    requestId: 'rebuild:pending-admission',
+    reviewConfigHash,
+    status: 'pending_admission',
   })
   await insertRequest({
     projectId,
@@ -724,9 +733,10 @@ test('a live project only loses never-admitted requests that are settled and pro
   const result = await runCleanup({projectId})
 
   expect(getClosedRequestSummary(result)).toEqual([
-    ['rebuild:legacy-current', 'componentsServed', 'pending_admission'],
-    ['rebuild:legacy-unknown', 'reviewConfigChanged', 'pending_admission'],
+    ['rebuild:legacy-current', 'componentsServed', 'blocked_over_budget'],
+    ['rebuild:legacy-unknown', 'reviewConfigChanged', 'blocked_over_budget'],
     ['rebuild:old-config', 'reviewConfigChanged', 'blocked_over_budget'],
+    ['rebuild:pending-admission', 'neverAdmittable', 'pending_admission'],
     ['rebuild:served', 'componentsServed', 'blocked_over_budget'],
   ])
   expect([...result.keptRequestIds].sort()).toEqual(['rebuild:dirty', 'rebuild:unserved'])
@@ -740,6 +750,11 @@ test('a live project only loses never-admitted requests that are settled and pro
     {lastError: 'superseded: review config changed', requestId: 'rebuild:legacy-unknown', status: 'failed'},
     {lastError: 'superseded: review config changed', requestId: 'rebuild:old-config', status: 'failed'},
     {lastError: null, requestId: 'rebuild:open', status: 'admitted'},
+    {
+      lastError: 'superseded: nothing admits a request pending admission',
+      requestId: 'rebuild:pending-admission',
+      status: 'failed',
+    },
     {lastError: null, requestId: 'rebuild:recent', status: 'blocked_over_budget'},
     {lastError: 'Out of Memory', requestId: 'rebuild:retryable', status: 'failed'},
     {
@@ -750,7 +765,7 @@ test('a live project only loses never-admitted requests that are settled and pro
     {lastError: null, requestId: 'rebuild:unserved', status: 'blocked_over_budget'},
   ])
   expect(await getChunks(projectId)).toEqual([
-    {chunkId: 'chunk:legacy-current', status: 'failed'},
+    {chunkId: 'chunk:legacy-current', status: 'blocked_over_budget'},
     {chunkId: 'chunk:open', status: 'pending'},
     {chunkId: 'chunk:retryable', status: 'failed'},
   ])
@@ -890,6 +905,62 @@ test('chunk rows of closed requests go once nothing can read them, a bounded bat
   ])
 })
 
+// Queues article dirty work of one component, claims it and parks the claim behind a rebuild request, the way the
+// projector does when the request it asked for is not admitted.
+const parkDirtyWorkClaim = async (projectId: string, component: ReviewServingProjectionComponent) => {
+  const [{getReviewServingDirtyWorkScopeForChange}, dirtyWorkService, {buildReviewDirtyProjectionIdentity}] =
+    await Promise.all([
+      import('./reviewServingProjectorDomain.ts'),
+      import('./reviewServingDirtyWorkService.ts'),
+      import('./reviewProjectionIdentity.ts'),
+    ])
+  const scope = getReviewServingDirtyWorkScopeForChange({
+    changeKind: 'judgment.llm.created',
+    sourceHighWaterMark: 3,
+    sourcePartition: `judgmentSqliteOutboxImport:job-${projectId}`,
+    values: {
+      articleId: `${projectId}-article-a`,
+      contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+      judgmentId: `judgment-${projectId}`,
+      modelId: 'model-stale',
+      projectId,
+      promptId: `prompt-${projectId}`,
+      sourceHighWaterMark: 3,
+    },
+  })
+
+  if (scope === null) {
+    throw new Error('expected an article dirty work scope')
+  }
+
+  await dirtyWorkService.upsertReviewServingDirtyWork(
+    {
+      projectionComponent: component,
+      projectionIdentity: buildReviewDirtyProjectionIdentity({projectId, projectionComponent: component}),
+      scope,
+    },
+    getDatabase(),
+  )
+
+  const claims = await dirtyWorkService.claimReviewServingDirtyWork(
+    {limit: 10, projectionComponent: component},
+    getDatabase(),
+  )
+  const claimIds = claims.map((claim) => {
+    return claim.dirtyWorkId
+  })
+
+  await dirtyWorkService.blockReviewServingDirtyWorkClaimsForRebuild(claimIds, getDatabase())
+
+  return claimIds
+}
+
+const requeueParkedClaims = async () => {
+  const {requeueReviewServingDirtyWorkBlockedByRebuild} = await import('./reviewServingDirtyWorkService.ts')
+
+  return requeueReviewServingDirtyWorkBlockedByRebuild({limit: 10, minBlockedSeconds: 0}, getDatabase())
+}
+
 // A project with a prompt and two articles in scope, enough for the planner to bootstrap and extend its snapshots.
 const insertProjectWithArticles = async (projectId: string) => {
   const articleValues = ['article-a', 'article-b']
@@ -927,19 +998,12 @@ const insertProjectWithArticles = async (projectId: string) => {
 // An archived project keeps its active snapshot and its dirty work; once unarchived, the claims a dead request held
 // come back and the planner builds what the closed requests would have built.
 test('unarchiving a project after its requests were closed requests again what it needs', async () => {
-  const [
-    {requestReviewServingV4Rebuild},
-    {getReviewServingDirtyWorkScopeForChange},
-    dirtyWorkService,
-    {buildReviewDirtyProjectionIdentity},
-    {countReadyReviewServingComponents},
-  ] = await Promise.all([
-    import('./reviewServingV4RebuildRequestService.ts'),
-    import('./reviewServingProjectorDomain.ts'),
-    import('./reviewServingDirtyWorkService.ts'),
-    import('./reviewProjectionIdentity.ts'),
-    import('./reviewServingContracts.ts'),
-  ])
+  const [{requestReviewServingV4Rebuild}, {claimReviewServingDirtyWork}, {countReadyReviewServingComponents}] =
+    await Promise.all([
+      import('./reviewServingV4RebuildRequestService.ts'),
+      import('./reviewServingDirtyWorkService.ts'),
+      import('./reviewServingContracts.ts'),
+    ])
   const projectId = 'project-unarchive'
 
   await insertProjectWithArticles(projectId)
@@ -971,45 +1035,12 @@ test('unarchiving a project after its requests were closed requests again what i
     projectId,
     reason: 'searchDirtyWork',
   })
-  const scope = getReviewServingDirtyWorkScopeForChange({
-    changeKind: 'judgment.llm.created',
-    sourceHighWaterMark: 3,
-    sourcePartition: 'judgmentSqliteOutboxImport:job-unarchive',
-    values: {
-      articleId: `${projectId}-article-a`,
-      contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
-      judgmentId: 'judgment-unarchive',
-      modelId: 'model-stale',
-      projectId,
-      promptId: `prompt-${projectId}`,
-      sourceHighWaterMark: 3,
-    },
-  })
-
-  if (scope === null || activeSnapshot === undefined) {
-    throw new Error('expected an active snapshot and an article dirty work scope')
+  if (activeSnapshot === undefined) {
+    throw new Error('expected an active snapshot')
   }
 
-  await dirtyWorkService.upsertReviewServingDirtyWork(
-    {
-      projectionComponent: 'llmStatus',
-      projectionIdentity: buildReviewDirtyProjectionIdentity({projectId, projectionComponent: 'llmStatus'}),
-      scope,
-    },
-    getDatabase(),
-  )
+  const claimIds = await parkDirtyWorkClaim(projectId, 'llmStatus')
 
-  const claims = await dirtyWorkService.claimReviewServingDirtyWork(
-    {limit: 10, projectionComponent: 'llmStatus'},
-    getDatabase(),
-  )
-
-  await dirtyWorkService.blockReviewServingDirtyWorkClaimsForRebuild(
-    claims.map((claim) => {
-      return claim.dirtyWorkId
-    }),
-    getDatabase(),
-  )
   // A request left from before admission existed: nothing admits it, and it holds the parked claim forever.
   await insertRequest({
     projectId,
@@ -1019,14 +1050,7 @@ test('unarchiving a project after its requests were closed requests again what i
   })
   await archiveProject(projectId, true)
 
-  const requeueParkedClaims = () => {
-    return dirtyWorkService.requeueReviewServingDirtyWorkBlockedByRebuild(
-      {limit: 10, minBlockedSeconds: 0},
-      getDatabase(),
-    )
-  }
-
-  expect(claims).toHaveLength(1)
+  expect(claimIds).toHaveLength(1)
   expect(await requeueParkedClaims()).toEqual({requeuedCount: 0})
 
   const closed = await runCleanup({projectId})
@@ -1040,10 +1064,7 @@ test('unarchiving a project after its requests were closed requests again what i
 
   await archiveProject(projectId, false)
 
-  const reclaimed = await dirtyWorkService.claimReviewServingDirtyWork(
-    {limit: 10, projectionComponent: 'llmStatus'},
-    getDatabase(),
-  )
+  const reclaimed = await claimReviewServingDirtyWork({limit: 10, projectionComponent: 'llmStatus'}, getDatabase())
   const replanned = await requestReviewServingV4Rebuild({
     components: ['search'],
     priority: 75,
@@ -1060,11 +1081,7 @@ test('unarchiving a project after its requests were closed requests again what i
     reclaimed.map((claim) => {
       return claim.dirtyWorkId
     }),
-  ).toEqual(
-    claims.map((claim) => {
-      return claim.dirtyWorkId
-    }),
-  )
+  ).toEqual(claimIds)
   expect(replanned.status).toBe('admitted')
   expect(replannedChunks).toEqual([{component: 'search', snapshotId: activeSnapshot.snapshotId, status: 'pending'}])
 })
@@ -1121,5 +1138,191 @@ test('a project unarchived before its first snapshot was built bootstraps again'
   expect(liveCandidates).toHaveLength(1)
   expect(await getBootstrapChunkStatuses(rebootstrap.requestId)).toEqual([
     {snapshotId: liveCandidates[0]?.snapshotId ?? '', status: 'pending'},
+  ])
+})
+
+// A request pending admission covers its components in the parked-claim requeue at any age, and a parked claim is open
+// dirty work of that component, so the served test alone would never let either go.
+test('a settled request pending admission on a live project stops holding the claims parked behind it', async () => {
+  const projectId = 'project-live-pending-admission'
+
+  await insertProject({projectId})
+
+  const claimIds = await parkDirtyWorkClaim(projectId, 'humanStatus')
+
+  await insertRequest({
+    projectId,
+    reason: 'humanStatusDirtyWork',
+    requestedComponents: ['humanStatus'],
+    requestId: 'rebuild:live-pending-admission',
+    reviewConfigHash: await getCurrentReviewConfigHash(projectId),
+    status: 'pending_admission',
+  })
+
+  expect(claimIds).toHaveLength(1)
+  expect(await requeueParkedClaims()).toEqual({requeuedCount: 0})
+
+  const result = await runCleanup({projectId})
+
+  expect(getClosedRequestSummary(result)).toEqual([
+    ['rebuild:live-pending-admission', 'neverAdmittable', 'pending_admission'],
+  ])
+  expect(await requeueParkedClaims()).toEqual({requeuedCount: 1})
+
+  await getDatabase().run(`
+    UPDATE app.review_serving_dirty_work SET status = 'completed' WHERE project_id = '${projectId}'
+  `)
+  await getDatabase().run(`
+    UPDATE app.review_serving_dirty_work_claim_state SET status = 'completed' WHERE project_id = '${projectId}'
+  `)
+})
+
+test('diagnostics report the rebuild state of a project whose stale requests were closed as healthy', async () => {
+  const {getReviewServingDiagnostics} = await import('./reviewServingDiagnosticsRepository.ts')
+  const projectId = 'project-diagnostics'
+  const activeSnapshotId = 'snapshot-diagnostics-active'
+
+  await insertProject({projectId})
+
+  const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
+
+  await insertSnapshot({
+    components: visibilityComponents,
+    projectId,
+    reviewConfigHash,
+    snapshotId: activeSnapshotId,
+    status: 'active',
+  })
+  // The rebuild that built the active snapshot, finished before the blocked request was planned.
+  await insertRequest({
+    projectId,
+    reason: 'missingReviewServingSnapshot',
+    requestedComponents: visibilityComponents,
+    requestId: 'rebuild:diagnostics-built',
+    reviewConfigHash,
+    status: 'completed',
+    updatedHoursAgo: 3,
+  })
+  await insertChunk({
+    chunkId: 'chunk:diagnostics-built',
+    component: 'display',
+    projectId,
+    requestId: 'rebuild:diagnostics-built',
+    snapshotId: activeSnapshotId,
+    status: 'completed',
+  })
+  await insertRequest({
+    projectId,
+    reason: 'selectedImportDirtyWork',
+    requestedComponents: ['selectedImport'],
+    requestId: 'rebuild:diagnostics-blocked',
+    reviewConfigHash: oldReviewConfigHash,
+    status: 'blocked_over_budget',
+  })
+  await insertChunk({
+    chunkId: 'chunk:diagnostics-blocked',
+    component: 'selectedImport',
+    projectId,
+    requestId: 'rebuild:diagnostics-blocked',
+    snapshotId: activeSnapshotId,
+    status: 'blocked_over_budget',
+  })
+
+  const getRebuildChunkState = async () => {
+    const {rebuildChunks} = await getReviewServingDiagnostics({projectId, reviewConfigHash}, getDatabase())
+
+    return {
+      blockedOverBudgetCount: rebuildChunks.blockedOverBudgetCount,
+      failedCount: rebuildChunks.failedCount,
+      pendingCount: rebuildChunks.pendingCount,
+    }
+  }
+
+  expect(await getRebuildChunkState()).toEqual({blockedOverBudgetCount: 1, failedCount: 0, pendingCount: 0})
+  expect(getClosedRequestSummary(await runCleanup({projectId}))).toEqual([
+    ['rebuild:diagnostics-blocked', 'reviewConfigChanged', 'blocked_over_budget'],
+  ])
+  expect(await getRebuildChunkState()).toEqual({blockedOverBudgetCount: 0, failedCount: 0, pendingCount: 0})
+})
+
+test('each pass is bounded and stops before touching anything once foreground work is waiting', async () => {
+  const projectId = 'project-bounded'
+  const candidateSnapshotId = 'snapshot-bounded'
+
+  await insertProject({archived: true, projectId})
+  await insertSnapshot({
+    components: ['display'],
+    projectId,
+    reviewConfigHash: 'review-config-bounded',
+    snapshotId: candidateSnapshotId,
+    status: 'candidate',
+  })
+  await insertRequest({projectId, requestedComponents: ['display'], requestId: 'rebuild:bounded', status: 'admitted'})
+  await ['a', 'b', 'c'].reduce<Promise<void>>(async (previous, suffix) => {
+    await previous
+    await insertChunk({
+      chunkId: `chunk:bounded-${suffix}`,
+      component: 'display',
+      projectId,
+      requestId: 'rebuild:bounded',
+      snapshotId: candidateSnapshotId,
+      status: 'pending',
+    })
+  }, Promise.resolve())
+
+  const getChunkStatuses = async () => {
+    return (await getChunks(projectId)).map((chunk) => {
+      return chunk.status
+    })
+  }
+  const yielded = await runCleanup({
+    projectId,
+    shouldYield: () => {
+      return true
+    },
+  })
+
+  expect(yielded).toMatchObject({closedRequests: [], deletedChunkRows: 0, failedChunkRows: 0, stopReason: 'yield'})
+  expect(await getRequests(projectId)).toEqual([{lastError: null, requestId: 'rebuild:bounded', status: 'admitted'}])
+
+  const first = await runCleanup({maxChunkRows: 1, projectId})
+
+  expect(getClosedRequestSummary(first)).toEqual([['rebuild:bounded', 'projectArchived', 'admitted']])
+  expect((await getChunkStatuses()).sort()).toEqual(['failed', 'pending', 'pending'])
+  expect(await getSnapshotStatuses(projectId)).toEqual([{snapshotId: candidateSnapshotId, status: 'candidate'}])
+
+  await runCleanup({maxChunkRows: 1, projectId})
+
+  const last = await runCleanup({maxChunkRows: 1, projectId})
+
+  expect(await getChunkStatuses()).toEqual(['failed', 'failed', 'failed'])
+  expect(last.failedSnapshots).toEqual([{projectId, snapshotId: candidateSnapshotId}])
+})
+
+test('a live project evaluates a bounded batch of its never-admitted requests per pass', async () => {
+  const projectId = 'project-live-bounded'
+
+  await insertProject({projectId})
+
+  const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
+
+  await ['a', 'b'].reduce<Promise<void>>(async (previous, suffix) => {
+    await previous
+    await insertRequest({
+      projectId,
+      requestedComponents: ['llmStatus'],
+      requestId: `rebuild:live-bounded-${suffix}`,
+      reviewConfigHash: oldReviewConfigHash,
+      status: 'blocked_over_budget',
+      updatedHoursAgo: suffix === 'a' ? 3 : 2,
+    })
+  }, Promise.resolve())
+
+  expect(reviewConfigHash).not.toBe(oldReviewConfigHash)
+  expect(getClosedRequestSummary(await runCleanup({maxRequests: 1, projectId}))).toEqual([
+    ['rebuild:live-bounded-a', 'reviewConfigChanged', 'blocked_over_budget'],
+  ])
+  expect(getClosedRequestSummary(await runCleanup({maxRequests: 1, projectId}))).toEqual([
+    ['rebuild:live-bounded-b', 'reviewConfigChanged', 'blocked_over_budget'],
   ])
 })
