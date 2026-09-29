@@ -355,6 +355,37 @@ const defaultReviewServingRebuildChunkRetryPolicy = {
   terminalState: 'quarantined',
 } as const satisfies ReviewServingRebuildChunkRetryPolicy
 
+// What a failed request needs for readmission to bring it back: a chunk it can still run (pending, running, or failed
+// with attempts left) and no chunk that reached a terminal status. Anything that treats a failed request as still
+// building (a live candidate, a component being rebuilt) uses the same test, so it cannot wait on a request readmission
+// would never bring back.
+export const getReviewServingRebuildRequestReadmittableChunksSql = (requestAlias: string) => {
+  return `EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest readmittable_chunk
+        WHERE readmittable_chunk.request_id = ${requestAlias}.request_id
+          AND (
+            readmittable_chunk.status IN ('pending', 'running')
+            OR (
+              readmittable_chunk.status = 'failed'
+              AND COALESCE(readmittable_chunk.retry_count, 0) < COALESCE(
+                GREATEST(
+                  1,
+                  TRY_CAST(json_extract_string(${requestAlias}.retry_policy_json, '$.maxAttempts') AS INTEGER)
+                ),
+                3
+              )
+            )
+          )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.review_rebuild_chunk_manifest terminal_chunk
+        WHERE terminal_chunk.request_id = ${requestAlias}.request_id
+          AND terminal_chunk.status IN ('blocked_over_budget', 'quarantined')
+      )`
+}
+
 const getReviewServingRebuildChunkRetryMaxAttemptsSql = (requestIdExpression: string) => {
   return `COALESCE((
     SELECT GREATEST(

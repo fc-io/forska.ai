@@ -18,6 +18,7 @@ import {
   getReviewServingRebuildChunkClaimOrder,
   getReviewServingRebuildChunkClaimWhere,
   getReviewServingRebuildChunkManifest,
+  getReviewServingRebuildRequestReadmittableChunksSql,
   heartbeatReviewServingRebuildChunkLease,
   heartbeatReviewServingRebuildChunkLeases,
   isReviewServingRebuildChunkComplete,
@@ -6260,30 +6261,7 @@ const readmitRetryableFailedRebuildRequests = async (input: {
       AND request.admission_state = 'admitted'
       AND COALESCE(request.last_error, '') <> ${getSqlLiteral(supersededForegroundRebuildRequestError)}
       ${projectCondition}
-      AND EXISTS (
-        SELECT 1
-        FROM app.review_rebuild_chunk_manifest chunk
-        WHERE chunk.request_id = request.request_id
-          AND (
-            chunk.status IN ('pending', 'running')
-            OR (
-              chunk.status = 'failed'
-              AND COALESCE(chunk.retry_count, 0) < COALESCE(
-                GREATEST(
-                  1,
-                  TRY_CAST(json_extract_string(request.retry_policy_json, '$.maxAttempts') AS INTEGER)
-                ),
-                3
-              )
-            )
-          )
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.review_rebuild_chunk_manifest chunk
-        WHERE chunk.request_id = request.request_id
-          AND chunk.status IN ('blocked_over_budget', 'quarantined')
-      )
+      AND ${getReviewServingRebuildRequestReadmittableChunksSql('request')}
       AND NOT EXISTS (
         SELECT 1
         FROM app.review_rebuild_request active_request
@@ -7301,15 +7279,14 @@ const finalizeErroredCompletedReviewServingRebuildRequest = async (
     return
   }
 
+  const lastError = deferral.kind === 'abandoned' ? deferral.lastError : getErrorText(input.error)
+
   await markFailedRebuildRequestFinalized(
-    {
-      chunkId: input.chunk.chunkId,
-      lastError: deferral.kind === 'abandoned' ? deferral.lastError : getErrorText(input.error),
-      requestId: input.chunk.requestId,
-      status: 'finalization_failed',
-    },
+    {chunkId: input.chunk.chunkId, lastError, requestId: input.chunk.requestId, status: 'finalization_failed'},
     database,
   )
+  // All its chunks completed, so readmission never brings it back to promote its candidates.
+  await failCandidatesOfTerminalRebuildRequest({lastError, requestId: input.chunk.requestId}, database)
 }
 
 type FailedRebuildRequestPromotion = {error: string; row: RebuildRequestSnapshotPromotionRow}

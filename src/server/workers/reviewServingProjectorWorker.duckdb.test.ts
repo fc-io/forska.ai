@@ -1278,3 +1278,57 @@ test('a finished rebuild of the active snapshot deletes the chunk rows older fin
     {requestId: 'rebuild:search-refresh-new', status: 'completed'},
   ])
 })
+
+test('a candidate fails with the train building it once that train failed its finalization', async () => {
+  const {runReviewServingProjectorWorkerOnce} = await import('./reviewServingProjectorWorker.ts')
+  const projectId = 'project-finalization-failed-train'
+  const snapshotId = 'snapshot-finalization-failed-train'
+  const requestId = 'rebuild:finalization-failed-train'
+
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', '${projectId}', 'model-queue', TRUE, TRUE, FALSE, FALSE)
+  `)
+  // Without a review config hash the candidate's summary partials cannot be reduced, so finalization throws.
+  await getDatabase().run(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
+      required_components_json, optional_components_json, source_watermarks_json
+    ) VALUES (
+      '${projectId}', '${snapshotId}', 'candidate', NULL, '{}', '{"optional":[],"required":[]}', '[]',
+      '["search", "summary"]', '{}'
+    )
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_request (
+      request_id, project_id, reason, requested_components_json, priority, status, admission_state
+    ) VALUES ('${requestId}', '${projectId}', 'summaryDirtyWork', '["summary"]', 50, 'admitted', 'admitted')
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_chunk_manifest (
+      chunk_id, request_id, project_id, snapshot_id, projection_component, projection_identity, chunk_start_key,
+      chunk_end_key, output_base_generation, status, admission_state
+    ) VALUES (
+      'chunk:finalization-failed-train', '${requestId}', '${projectId}', '${snapshotId}', 'summary',
+      'summary:finalization-failed-train', 'article-00', 'article-99', 0, 'completed', 'admitted'
+    )
+  `)
+
+  await runReviewServingProjectorWorkerOnce(
+    {rebuildProjectId: projectId, workerId: 'worker-finalization-failed-train'},
+    getFinalizationCycleDependencies(),
+  )
+
+  expect(
+    await getDatabase().queryJson<{id: string; status: string}>(`
+      SELECT snapshot_id AS id, snapshot_status AS status FROM app.review_serving_snapshot_manifest
+      WHERE project_id = '${projectId}'
+      UNION ALL
+      SELECT request_id AS id, status FROM app.review_rebuild_request WHERE project_id = '${projectId}'
+      ORDER BY id
+    `),
+  ).toEqual([
+    {id: requestId, status: 'failed'},
+    {id: snapshotId, status: 'failed'},
+  ])
+})
