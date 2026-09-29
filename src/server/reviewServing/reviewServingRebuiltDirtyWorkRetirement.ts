@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getReviewServingRebuildRequestReadmittableChunksSql} from './reviewServingChunkManifestRepository.ts'
 import {chunkInputReviewServingComponents, type ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {
   completeReviewServingDirtyWorkRebuiltByChunks,
@@ -106,8 +107,8 @@ const getComponentStates = (value: unknown) => {
   })
 }
 
-// A candidate still being built by an admitted request, or by a failed one readmission would bring back. Candidates
-// whose rebuild stopped for good receive no patches that matter and never block anything.
+// A candidate still being built by an admitted request, or by a failed one readmission would bring back (the worker's
+// readmission test). Candidates whose rebuild stopped for good receive no patches that matter and never block anything.
 export const getLiveReviewServingCandidateSnapshotSql = (candidateAlias: string) => {
   return `EXISTS (
       SELECT 1
@@ -118,18 +119,21 @@ export const getLiveReviewServingCandidateSnapshotSql = (candidateAlias: string)
         AND live_chunk.snapshot_id = ${candidateAlias}.snapshot_id
         AND live_request.admission_state = 'admitted'
         AND (
-          live_request.status IN ('admitted', 'running')
+          (
+            live_request.status IN ('admitted', 'running')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM app.review_rebuild_chunk_manifest terminal_chunk
+              WHERE terminal_chunk.request_id = live_request.request_id
+                AND terminal_chunk.status IN ('blocked_over_budget', 'quarantined')
+            )
+          )
           OR (
             live_request.status = 'failed'
             AND COALESCE(live_request.last_error, '') NOT LIKE 'superseded%'
             AND COALESCE(live_request.last_error, '') NOT LIKE 'coalesced%'
+            AND ${getReviewServingRebuildRequestReadmittableChunksSql('live_request')}
           )
-        )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM app.review_rebuild_chunk_manifest terminal_chunk
-          WHERE terminal_chunk.request_id = live_request.request_id
-            AND terminal_chunk.status IN ('blocked_over_budget', 'quarantined')
         )
     )`
 }
@@ -231,10 +235,12 @@ const getTargetsOfCurrentReviewConfig = async (
 // chunkInputReviewServingComponents), so whether it rebuilt a pending row's article from current inputs depends on the
 // input dirty work of that article. That evidence is only reliable while it cannot have been deleted yet: completed
 // dirty work is deleted an hour after it completed, and the per-target cursor is lost on restart, so such chunks only
-// complete dirty work while they started within half that window. Posting and summary chunks of an in-place rebuild
+// complete dirty work while they started within that retention less a slack for cleanup timing. Posting and summary chunks of an in-place rebuild
 // of the active snapshot never do: they may run next to patches of their own inputs, so their rows patch
 // incrementally, where inputs are checked claim by claim.
-export const reviewServingChunkCompletionWindowMs = (defaultCompletedDirtyWorkRetentionSeconds * 1000) / 2
+const reviewServingChunkCompletionRetentionSlackSeconds = 10 * 60
+export const reviewServingChunkCompletionWindowMs =
+  (defaultCompletedDirtyWorkRetentionSeconds - reviewServingChunkCompletionRetentionSlackSeconds) * 1000
 const inputGatedReviewServingComponents = Object.keys(chunkInputReviewServingComponents)
 const derivedReviewServingComponents = ['posting', 'summary'] as const
 

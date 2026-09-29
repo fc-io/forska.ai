@@ -109,18 +109,27 @@ const insertCompletedChunk = async (input: {
 }
 
 // An admitted request with a pending chunk on the snapshot, or a failed one whose chunk went terminal.
+// A request building the snapshot: admitted with a pending chunk, failed with a chunk that went terminal, or failed
+// after all of its chunks completed (e.g. its finalization failed), which readmission never brings back either.
 const insertBuildingRequest = async (input: {
   projectId: string
   requestId: string
   snapshotId: string
-  terminal?: boolean
+  state?: 'admitted' | 'finalizationFailed' | 'terminal'
 }) => {
+  const [requestStatus, chunkStatus] =
+    input.state === 'terminal'
+      ? ['failed', 'blocked_over_budget']
+      : input.state === 'finalizationFailed'
+        ? ['failed', 'completed']
+        : ['admitted', 'pending']
+
   await getDatabase().run(`
     INSERT INTO app.review_rebuild_request (
-      request_id, project_id, reason, requested_components_json, priority, status, admission_state
+      request_id, project_id, reason, requested_components_json, priority, status, admission_state, last_error
     ) VALUES (
-      '${input.requestId}', '${input.projectId}', 'payloadDirtyWork', '["payload"]'::JSON, 50,
-      '${input.terminal === true ? 'failed' : 'admitted'}', 'admitted'
+      '${input.requestId}', '${input.projectId}', 'payloadDirtyWork', '["payload"]'::JSON, 50, '${requestStatus}',
+      'admitted', ${input.state === 'finalizationFailed' ? "'finalization failed'" : 'NULL'}
     )
   `)
   await getDatabase().run(`
@@ -129,8 +138,7 @@ const insertBuildingRequest = async (input: {
       snapshot_id, request_id, output_base_generation
     ) VALUES (
       'chunk-${input.requestId}', '${input.projectId}', 'payload', 'payload:${input.projectId}', 'article-a',
-      'article-z', '${input.terminal === true ? 'blocked_over_budget' : 'pending'}', '${input.snapshotId}',
-      '${input.requestId}', 0
+      'article-z', '${chunkStatus}', '${input.snapshotId}', '${input.requestId}', 0
     )
   `)
 }
@@ -578,9 +586,9 @@ test('derived dirty work is not retired by an in-place chunk, nor by one that st
 
   const chunks = [
     ['chunk-posting-in-place', 'posting', 'article-a', 'article-f', 'inPlaceReviewServingRefresh', 5],
-    ['chunk-posting-old', 'posting', 'article-g', 'article-m', 'freshReviewServingSnapshot', 45],
+    ['chunk-posting-old', 'posting', 'article-g', 'article-m', 'freshReviewServingSnapshot', 55],
     ['chunk-posting-recent', 'posting', 'article-n', 'article-z', 'freshReviewServingSnapshot', 5],
-    ['chunk-search-in-place', 'search', 'article-a', 'article-z', 'inPlaceReviewServingRefresh', 5],
+    ['chunk-search-in-place', 'search', 'article-a', 'article-z', 'inPlaceReviewServingRefresh', 45],
   ] as const
 
   await chunks.reduce<Promise<void>>(async (previous, [chunkId, component, startKey, endKey, inputDigest, age]) => {
@@ -706,6 +714,7 @@ test('retirement ignores candidates no rebuild still builds and active snapshots
   const {resetReviewServingRebuiltDirtyWorkRetirementForTests, retireReviewServingDirtyWorkRebuiltByChunks} =
     await import('./reviewServingRebuiltDirtyWorkRetirement.ts')
   const projects = {
+    finalizationFailedCandidate: 'project-finalization-failed-candidate',
     liveOtherConfigCandidate: 'project-other-config-candidate',
     oldConfigActive: 'project-old-config-active',
     stoppedCandidate: 'project-stopped-candidate',
@@ -727,7 +736,7 @@ test('retirement ignores candidates no rebuild still builds and active snapshots
     projectId: projects.stoppedCandidate,
     requestId: 'rebuild:stopped-train',
     snapshotId: 'snapshot-stopped-candidate',
-    terminal: true,
+    state: 'terminal',
   })
   await getCurrentReviewConfigHash(projects.oldConfigActive)
   await insertSnapshot({
@@ -756,7 +765,27 @@ test('retirement ignores candidates no rebuild still builds and active snapshots
     snapshotId: 'snapshot-other-config-candidate',
   })
 
+  await insertSnapshot({
+    components: ['payload'],
+    projectId: projects.finalizationFailedCandidate,
+    snapshotId: 'snapshot-finalization-failed-active',
+    status: 'active',
+  })
+  await insertSnapshot({
+    components: ['payload'],
+    projectId: projects.finalizationFailedCandidate,
+    snapshotId: 'snapshot-finalization-failed-candidate',
+    status: 'candidate',
+  })
+  await insertBuildingRequest({
+    projectId: projects.finalizationFailedCandidate,
+    requestId: 'rebuild:finalization-failed-train',
+    snapshotId: 'snapshot-finalization-failed-candidate',
+    state: 'finalizationFailed',
+  })
+
   const snapshotIds = {
+    [projects.finalizationFailedCandidate]: 'snapshot-finalization-failed-active',
     [projects.liveOtherConfigCandidate]: 'snapshot-other-config-active',
     [projects.oldConfigActive]: 'snapshot-old-config-active',
     [projects.stoppedCandidate]: 'snapshot-stopped-active',
@@ -797,6 +826,7 @@ test('retirement ignores candidates no rebuild still builds and active snapshots
       ORDER BY dirty_work_id
     `),
   ).toEqual([
+    {dirtyWorkId: 'payload-project-finalization-failed-candidate', status: 'completed'},
     {dirtyWorkId: 'payload-project-old-config-active', status: 'pending'},
     {dirtyWorkId: 'payload-project-other-config-candidate', status: 'completed'},
     {dirtyWorkId: 'payload-project-stopped-candidate', status: 'completed'},
