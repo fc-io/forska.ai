@@ -1332,3 +1332,183 @@ test('a candidate fails with the train building it once that train failed its fi
     {id: snapshotId, status: 'failed'},
   ])
 })
+
+test('a request failed as superseded stays failed while a merely failed one is readmitted', async () => {
+  const {runReviewServingProjectorWorkerOnce} = await import('./reviewServingProjectorWorker.ts')
+  const insertFailedRequest = async (input: {lastError: string; projectId: string; requestId: string}) => {
+    await getDatabase().run(`
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES ('${input.projectId}', '${input.projectId}', 'model-queue', TRUE, TRUE, FALSE, FALSE)
+    `)
+    await getDatabase().run(`
+      INSERT INTO app.review_rebuild_request (
+        request_id, project_id, reason, requested_components_json, priority, status, admission_state, last_error
+      ) VALUES (
+        '${input.requestId}', '${input.projectId}', 'searchDirtyWork', '["search"]'::JSON, 75, 'failed', 'admitted',
+        '${input.lastError}'
+      )
+    `)
+    await getDatabase().run(`
+      INSERT INTO app.review_rebuild_chunk_manifest (
+        chunk_id, request_id, project_id, projection_component, projection_identity, chunk_start_key, chunk_end_key,
+        output_base_generation, status, admission_state, retry_count
+      ) VALUES (
+        'chunk:${input.requestId}', '${input.requestId}', '${input.projectId}', 'search',
+        'search:${input.projectId}', 'article-00', 'article-99', 0, 'failed', 'admitted', 0
+      )
+    `)
+  }
+  const getStatus = async (requestId: string) => {
+    const [row] = await getDatabase().queryJson<{status: string}>(`
+      SELECT status FROM app.review_rebuild_request WHERE request_id = '${requestId}'
+    `)
+
+    return row?.status
+  }
+
+  // Closed by the stale request cleanup while the project was archived; the project has since been unarchived.
+  await insertFailedRequest({
+    lastError: 'superseded: project archived',
+    projectId: 'project-readmit-closed',
+    requestId: 'rebuild:readmit-closed',
+  })
+  await insertFailedRequest({
+    lastError: 'Out of Memory',
+    projectId: 'project-readmit-retryable',
+    requestId: 'rebuild:readmit-retryable',
+  })
+
+  await runReviewServingProjectorWorkerOnce(
+    {rebuildProjectId: 'project-readmit-closed', workerId: 'worker-readmit-closed'},
+    getFinalizationCycleDependencies(),
+  )
+  await runReviewServingProjectorWorkerOnce(
+    {rebuildProjectId: 'project-readmit-retryable', workerId: 'worker-readmit-retryable'},
+    getFinalizationCycleDependencies(),
+  )
+
+  expect(await getStatus('rebuild:readmit-closed')).toBe('failed')
+  expect(await getStatus('rebuild:readmit-retryable')).toBe('admitted')
+})
+
+test('the worker cleanup closes a stale blocked request and purges the snapshot it held in the same cycle', async () => {
+  const [
+    {runReviewServingProjectorWorkerOnce},
+    {purgeReviewServingSnapshots},
+    {closeStaleReviewServingRebuildRequests},
+  ] = await Promise.all([
+    import('./reviewServingProjectorWorker.ts'),
+    import('../reviewServing/reviewServingSnapshotPurge.ts'),
+    import('../reviewServing/reviewServingStaleRebuildRequestCleanup.ts'),
+  ])
+  const staleProjectId = 'project-stale-blocked'
+  const heldSnapshotId = 'snapshot-stale-blocked'
+  const requestId = 'rebuild:stale-blocked'
+  const getState = async () => {
+    const [row] = await getDatabase().queryJson<{
+      chunks: number | string
+      lastError: string | null
+      manifests: number | string
+      rows: number | string
+      status: string
+    }>(`
+      SELECT
+        request.status,
+        request.last_error AS lastError,
+        (
+          SELECT COUNT(*) FROM app.review_serving_snapshot_manifest
+          WHERE project_id = '${staleProjectId}' AND snapshot_id = '${heldSnapshotId}'
+        ) AS manifests,
+        (
+          SELECT COUNT(*) FROM mart.review_unassessed_queue_article_rank_serving_v4
+          WHERE project_id = '${staleProjectId}' AND snapshot_id = '${heldSnapshotId}'
+        ) AS rows,
+        (SELECT COUNT(*) FROM app.review_rebuild_chunk_manifest WHERE request_id = '${requestId}') AS chunks
+      FROM app.review_rebuild_request request
+      WHERE request.request_id = '${requestId}'
+    `)
+
+    return {
+      chunks: Number(row?.chunks ?? 0),
+      lastError: row?.lastError ?? null,
+      manifests: Number(row?.manifests ?? 0),
+      rows: Number(row?.rows ?? 0),
+      status: row?.status,
+    }
+  }
+  const runCleanupCycle = () => {
+    return runReviewServingProjectorWorkerOnce(
+      {rebuildProjectId: staleProjectId, workerId: 'worker-stale-blocked'},
+      {
+        ...getFinalizationCycleDependencies(),
+        closeStaleRebuildRequests: closeStaleReviewServingRebuildRequests,
+        purgeSnapshots: purgeReviewServingSnapshots,
+      },
+    )
+  }
+
+  await getDatabase().run(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${staleProjectId}', '${staleProjectId}', 'model-queue', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_serving_snapshot_manifest (
+      project_id, snapshot_id, snapshot_status, review_config_hash, composed_identity_json, component_state_json,
+      required_components_json, optional_components_json, source_watermarks_json, updated_at, failed_at
+    ) VALUES (
+      '${staleProjectId}', '${heldSnapshotId}', 'failed', 'review-config-before-change', '{}',
+      '{"optional":[],"required":[]}', '[]', '[]', '{}', current_timestamp - INTERVAL 5 HOUR,
+      current_timestamp - INTERVAL 5 HOUR
+    )
+  `)
+  await getDatabase().run(`
+    INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 (
+      project_id, review_config_hash, snapshot_id, queue_kind, priority_bucket, article_id, activity_sort_at
+    ) VALUES
+      ('${staleProjectId}', 'review-config-before-change', '${heldSnapshotId}', 'unassessed', 1, 'article-10',
+        current_timestamp)
+  `)
+  // Blocked over budget before the project's review config changed; nothing will ever admit it.
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_request (
+      request_id, project_id, reason, requested_components_json, identity_json, priority, status, admission_state,
+      updated_at
+    ) VALUES (
+      '${requestId}', '${staleProjectId}', 'selectedImportDirtyWork', '["selectedImport"]'::JSON,
+      '{"reviewConfigHash":"review-config-before-change"}'::JSON, 10000, 'blocked_over_budget',
+      'blocked_over_budget', current_timestamp - INTERVAL 5 HOUR
+    )
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_rebuild_chunk_manifest (
+      chunk_id, request_id, project_id, snapshot_id, projection_component, projection_identity, chunk_start_key,
+      chunk_end_key, output_base_generation, status, admission_state
+    ) VALUES (
+      'chunk:stale-blocked', '${requestId}', '${staleProjectId}', '${heldSnapshotId}', 'selectedImport',
+      'selectedImport:${staleProjectId}', 'article-00', 'article-99', 0, 'blocked_over_budget', 'blocked_over_budget'
+    )
+  `)
+
+  expect((await purgeReviewServingSnapshots({projectId: staleProjectId}, getDatabase())).snapshots).toEqual([])
+
+  const result = await runCleanupCycle()
+
+  expect(result.cleanup.staleRequestCleanup).toMatchObject({
+    closedRequests: [
+      {previousStatus: 'blocked_over_budget', projectId: staleProjectId, reason: 'reviewConfigChanged', requestId},
+    ],
+    status: 'completed',
+    stopReason: 'complete',
+  })
+  expect(result.cleanup.snapshotPurge).toMatchObject({
+    snapshots: [{outcome: 'purged', projectId: staleProjectId, snapshotId: heldSnapshotId}],
+    status: 'completed',
+  })
+  expect(await getState()).toEqual({
+    chunks: 0,
+    lastError: 'superseded: review config changed',
+    manifests: 0,
+    rows: 0,
+    status: 'failed',
+  })
+})

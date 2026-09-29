@@ -71,7 +71,10 @@ import {
   getCloneReviewServingSummaryLedgerStatements,
   reviewServingSummaryBucketTable,
 } from './reviewServingSummaryLedger.ts'
-import {getReviewServingRebuildChunkBuiltPredicateSql} from './reviewServingSupersededRebuildChunk.ts'
+import {
+  getReviewServingClosedRebuildRequestLastErrorSql,
+  getReviewServingRebuildChunkBuiltPredicateSql,
+} from './reviewServingSupersededRebuildChunk.ts'
 
 export const defaultReviewServingV4RebuildComponents = [
   ...countReadyReviewServingComponents,
@@ -2125,7 +2128,6 @@ const getReviewServingV4RebuildStats = async (
 // dirty-work patch fanned out to all eight live snapshots. A later bootstrap-type request now joins the running train
 // and adds the components it lacks; the train's watermarks never change, so claims newer than the train wait for it.
 const requestlessReviewServingRebuildReasons = ['requestless_bootstrap_rebuild', 'requestless_summary_range_rebuild']
-const supersededReviewServingRebuildRequestLastErrorPrefixes = ['superseded', 'coalesced']
 const reviewServingV4BootstrapTrainCheckIntervalMs = 60_000
 const lastReviewServingV4BootstrapTrainCheckAtMsByProject = new Map<string, number>()
 
@@ -2179,11 +2181,7 @@ const getReviewServingV4RequestlessReasonSqlList = () => {
 }
 
 const getReviewServingV4ReadmittableFailedRequestSql = (requestAlias: string) => {
-  return supersededReviewServingRebuildRequestLastErrorPrefixes
-    .map((prefix) => {
-      return `COALESCE(${requestAlias}.last_error, '') NOT LIKE ${getSqlLiteral(`${prefix}%`)}`
-    })
-    .join(' AND ')
+  return `NOT ${getReviewServingClosedRebuildRequestLastErrorSql(requestAlias)}`
 }
 
 // A train other requests can join or be folded into: admitted, building a live snapshot, with nothing blocked.

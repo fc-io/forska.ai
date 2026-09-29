@@ -13,6 +13,7 @@ import {
 import {getReviewServingJsonRowsSql} from './reviewServingJsonRowSource.ts'
 import {getReviewServingRebuildChunkInPlacePredicateSql} from './reviewServingRebuildChunkInputDigest.ts'
 import {getCurrentReviewServingReviewConfigHash} from './reviewServingReviewConfig.ts'
+import {getReviewServingClosedRebuildRequestLastErrorSql} from './reviewServingSupersededRebuildChunk.ts'
 
 // A bootstrap rebuild re-reads every article of a component from source, but per-article dirty work queued before the
 // rebuild ran stays pending, because rebuild watermarks only cover the source partitions the request knew about. On
@@ -130,8 +131,7 @@ export const getLiveReviewServingCandidateSnapshotSql = (candidateAlias: string)
           )
           OR (
             live_request.status = 'failed'
-            AND COALESCE(live_request.last_error, '') NOT LIKE 'superseded%'
-            AND COALESCE(live_request.last_error, '') NOT LIKE 'coalesced%'
+            AND NOT ${getReviewServingClosedRebuildRequestLastErrorSql('live_request')}
             AND ${getReviewServingRebuildRequestReadmittableChunksSql('live_request')}
           )
         )

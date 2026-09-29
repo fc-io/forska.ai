@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getReviewServingClosedRebuildRequestLastErrorSql} from './reviewServingSupersededRebuildChunk.ts'
 
 // Failed and retired review-serving snapshots keep every serving row they were built with. Nothing reads them once
 // nothing resolves them any more: the reader follows the active snapshot, its last known good snapshot and the latest
@@ -117,17 +118,24 @@ const getSecondsAgoSql = (seconds: number) => {
   return `current_timestamp - to_seconds(${getSqlLiteral(seconds)})`
 }
 
-// Requests that still run, wait for admission or can be readmitted (a failed request whose chunks may retry). The
+// Requests that still run, wait for admission or can be readmitted (a failed request whose chunks may retry and that
+// was not closed for good: readmission skips superseded and coalesced requests and ones with a terminal chunk). The
 // list is uncorrelated so DuckDB builds it once instead of joining every chunk manifest with its request per snapshot.
 const getOpenRebuildRequestIdsSql = () => {
   return `
     SELECT open_request.request_id
     FROM app.review_rebuild_request open_request
     WHERE open_request.status IN ('pending_admission', 'admitted', 'running', 'blocked_over_budget', 'quarantined')
-      OR open_request.admission_state IN ('pending', 'blocked_over_budget')
       OR (
         open_request.status = 'failed'
         AND open_request.admission_state = 'admitted'
+        AND NOT ${getReviewServingClosedRebuildRequestLastErrorSql('open_request')}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.review_rebuild_chunk_manifest terminal_chunk
+          WHERE terminal_chunk.request_id = open_request.request_id
+            AND terminal_chunk.status IN ('blocked_over_budget', 'quarantined')
+        )
         AND EXISTS (
           SELECT 1
           FROM app.review_rebuild_chunk_manifest retryable_chunk

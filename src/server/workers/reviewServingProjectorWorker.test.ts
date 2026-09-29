@@ -20,6 +20,10 @@ import type {
   PurgeReviewServingSnapshotsInput,
   ReviewServingSnapshotPurgeResult,
 } from '../reviewServing/reviewServingSnapshotPurge.ts'
+import type {
+  CloseStaleReviewServingRebuildRequestsInput,
+  CloseStaleReviewServingRebuildRequestsResult,
+} from '../reviewServing/reviewServingStaleRebuildRequestCleanup.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {getProcessActivitySnapshot, resetProcessActivityStateForTests} from '../utils/processActivityState.ts'
 import {
@@ -175,12 +179,27 @@ const fakeSnapshotPurgeResult = {
   stopReason: 'complete',
 } satisfies ReviewServingSnapshotPurgeResult
 
+const fakeStaleRequestCleanupResult = {
+  closedRequests: [
+    {previousStatus: 'blocked_over_budget', projectId: 'project-1', reason: 'projectArchived', requestId: 'rebuild:a'},
+    {previousStatus: 'admitted', projectId: 'project-1', reason: 'projectArchived', requestId: 'rebuild:b'},
+    {previousStatus: 'blocked_over_budget', projectId: 'project-2', reason: 'componentsServed', requestId: 'rebuild:c'},
+  ],
+  deletedChunkRows: 12,
+  elapsedMs: 4,
+  failedChunkRows: 3,
+  failedSnapshots: [{projectId: 'project-1', snapshotId: 'snapshot-candidate'}],
+  keptRequestIds: ['rebuild:d'],
+  stopReason: 'complete',
+} satisfies CloseStaleReviewServingRebuildRequestsResult
+
 const createWorkerHarness = (input?: {
   chunkComplete?: boolean
   nowMs?: number
   runChunkThrows?: boolean
   snapshotPurgeThrows?: boolean
   staleCandidateCleanupThrows?: boolean
+  staleRequestCleanupThrows?: boolean
   wakeStatus?: 'blocked' | 'completed' | 'failed' | 'partial'
 }) => {
   const events: string[] = []
@@ -223,6 +242,7 @@ const createWorkerHarness = (input?: {
   const claimInputs: unknown[] = []
   const dirtyWorkRetentionCleanupInputs: unknown[] = []
   const staleCandidateCleanupInputs: unknown[] = []
+  const staleRequestCleanupInputs: CloseStaleReviewServingRebuildRequestsInput[] = []
   const snapshotPurgeInputs: PurgeReviewServingSnapshotsInput[] = []
   const failedChunks: unknown[] = []
   const garbageCollectedChunks: ReviewServingRebuildChunkManifest[] = []
@@ -247,6 +267,16 @@ const createWorkerHarness = (input?: {
 
       return fakeStaleCandidateCleanupResult
     },
+    closeStaleRebuildRequests: async (cleanupInput) => {
+      events.push('staleRequestCleanup')
+      staleRequestCleanupInputs.push(cleanupInput ?? {})
+
+      if (input?.staleRequestCleanupThrows) {
+        throw new Error('stale request cleanup failed')
+      }
+
+      return fakeStaleRequestCleanupResult
+    },
     getDatabase: () => {
       return database
     },
@@ -254,6 +284,7 @@ const createWorkerHarness = (input?: {
       return input?.nowMs ?? 1_000
     },
     purgeSnapshots: async (purgeInput) => {
+      events.push('snapshotPurge')
       snapshotPurgeInputs.push(purgeInput ?? {})
 
       if (input?.snapshotPurgeThrows) {
@@ -332,6 +363,7 @@ const createWorkerHarness = (input?: {
     runStatements,
     snapshotPurgeInputs,
     staleCandidateCleanupInputs,
+    staleRequestCleanupInputs,
     wakeInputs,
     workloadContexts,
   }
@@ -7889,7 +7921,7 @@ test('worker refreshes request candidate snapshot state before promotion', async
   expect(joined).toContain("status = 'completed'")
 })
 
-test('worker runs dirty-work cleanup, stale candidate cleanup and the snapshot purge after its cleanup interval', async () => {
+test('worker runs dirty-work cleanup, stale candidate and request cleanup and the snapshot purge after its cleanup interval', async () => {
   const skippedHarness = createWorkerHarness({nowMs: 1_000})
   const completedHarness = createWorkerHarness({nowMs: 62_000})
   const skipped = await runReviewServingProjectorWorkerOnce(
@@ -7905,11 +7937,36 @@ test('worker runs dirty-work cleanup, stale candidate cleanup and the snapshot p
   expect(skippedHarness.snapshotPurgeInputs).toEqual([])
   expect(skippedHarness.dirtyWorkRetentionCleanupInputs).toEqual([])
   expect(skippedHarness.staleCandidateCleanupInputs).toEqual([])
+  expect(skippedHarness.staleRequestCleanupInputs).toEqual([])
   expect(completed.cleanup).toEqual({
     dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
     snapshotPurge: {...fakeSnapshotPurgeResult, status: 'completed'},
     staleCandidateCleanup: {...fakeStaleCandidateCleanupResult, status: 'completed'},
+    staleRequestCleanup: {...fakeStaleRequestCleanupResult, status: 'completed'},
     status: 'completed',
+  })
+  // Requests close before the purge, so it can reclaim the snapshots they held in the same cleanup.
+  expect(
+    completedHarness.events.filter((event) => {
+      return event === 'staleRequestCleanup' || event === 'snapshotPurge'
+    }),
+  ).toEqual(['staleRequestCleanup', 'snapshotPurge'])
+  expect(
+    completedHarness.staleRequestCleanupInputs.map((cleanupInput) => {
+      return Object.keys(cleanupInput).sort()
+    }),
+  ).toEqual([['nowMs', 'projectId', 'shouldYield']])
+  expect(completedHarness.staleRequestCleanupInputs[0]?.nowMs?.()).toBe(62_000)
+  expect(getReviewServingProjectorWorkerCycleLogAttrs(completed).cleanupStaleRequestCleanup).toEqual({
+    closedRequestCount: 3,
+    closedRequestReasons: {componentsServed: 1, projectArchived: 2},
+    deletedChunkRows: 12,
+    elapsedMs: 4,
+    failedChunkRows: 3,
+    failedSnapshotCount: 1,
+    keptRequestCount: 1,
+    status: 'completed',
+    stopReason: 'complete',
   })
   expect(completedHarness.dirtyWorkRetentionCleanupInputs).toEqual([{}])
   expect(completedHarness.staleCandidateCleanupInputs).toEqual([
@@ -7935,7 +7992,7 @@ test('worker runs dirty-work cleanup, stale candidate cleanup and the snapshot p
   })
 })
 
-test('the snapshot purge yields while foreground DuckDB work is queued', async () => {
+test('the snapshot purge and the stale request cleanup yield while foreground DuckDB work is queued', async () => {
   const harness = createWorkerHarness({nowMs: 62_000})
   let foregroundQueueDepth = 0
 
@@ -7949,18 +8006,27 @@ test('the snapshot purge yields while foreground DuckDB work is queued', async (
   )
 
   const [purgeInput] = harness.snapshotPurgeInputs
+  const [staleRequestCleanupInput] = harness.staleRequestCleanupInputs
 
   expect(purgeInput?.shouldYield?.()).toBe(false)
+  expect(staleRequestCleanupInput?.shouldYield?.()).toBe(false)
   foregroundQueueDepth = 1
   expect(purgeInput?.shouldYield?.()).toBe(true)
+  expect(staleRequestCleanupInput?.shouldYield?.()).toBe(true)
 })
 
-test('worker contains stale candidate cleanup and snapshot purge failures and still completes its cleanup cycle', async () => {
-  const harness = createWorkerHarness({nowMs: 62_000, snapshotPurgeThrows: true, staleCandidateCleanupThrows: true})
+test('worker contains stale candidate cleanup, stale request cleanup and snapshot purge failures and still completes its cleanup cycle', async () => {
+  const harness = createWorkerHarness({
+    nowMs: 62_000,
+    snapshotPurgeThrows: true,
+    staleCandidateCleanupThrows: true,
+    staleRequestCleanupThrows: true,
+  })
   const skippedHarness = createWorkerHarness({
     nowMs: 60_999,
     snapshotPurgeThrows: true,
     staleCandidateCleanupThrows: true,
+    staleRequestCleanupThrows: true,
   })
   const result = await runReviewServingProjectorWorkerOnce(
     {cleanupIntervalMs: 60_000, lastCleanupAtMs: 1_000, workerId: 'worker-1'},
@@ -7975,6 +8041,7 @@ test('worker contains stale candidate cleanup and snapshot purge failures and st
     dirtyWorkRetentionCleanup: {deletedDirtyWorkCount: 5},
     snapshotPurge: {error: 'snapshot purge failed', status: 'failed'},
     staleCandidateCleanup: {error: 'stale candidate cleanup failed', status: 'failed'},
+    staleRequestCleanup: {error: 'stale request cleanup failed', status: 'failed'},
     status: 'completed',
   })
   expect(harness.staleCandidateCleanupInputs).toEqual([{source: 'worker staleCandidateCleanup'}])
@@ -7984,6 +8051,7 @@ test('worker contains stale candidate cleanup and snapshot purge failures and st
     dirtyWorkRetentionCleanup: null,
     snapshotPurge: null,
     staleCandidateCleanup: null,
+    staleRequestCleanup: null,
     status: 'skipped',
   })
   expect(skippedHarness.staleCandidateCleanupInputs).toEqual([])
