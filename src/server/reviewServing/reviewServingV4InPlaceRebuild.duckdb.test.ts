@@ -322,11 +322,12 @@ const upsertDirtyWork = async (input: {
   }, Promise.resolve())
 }
 
-// Queues project-wide dirty work the way intake does for a prompt config change.
-const upsertPromptDirtyWork = async (input: {
+// Queues project-wide dirty work the way intake does for a project-level change.
+const upsertProjectDirtyWork = async (input: {
+  changeKind: string
   components: readonly ReviewServingProjectionComponent[]
   projectId: string
-  sourceHighWaterMark: number
+  values: Record<string, string>
 }) => {
   const [
     {getReviewServingDirtyWorkScopeForChange},
@@ -338,19 +339,14 @@ const upsertPromptDirtyWork = async (input: {
     import('./reviewProjectionIdentity.ts'),
   ])
   const scope = getReviewServingDirtyWorkScopeForChange({
-    changeKind: 'prompt.config.updated',
-    sourceHighWaterMark: input.sourceHighWaterMark,
+    changeKind: input.changeKind,
+    sourceHighWaterMark: 4,
     sourcePartition: jobPartition,
-    values: {
-      changedPromptConfigFields: ['text'],
-      projectId: input.projectId,
-      promptId: `prompt-${input.projectId}`,
-      sourceHighWaterMark: input.sourceHighWaterMark,
-    },
+    values: {...input.values, projectId: input.projectId, sourceHighWaterMark: 4},
   })
 
   if (scope === null) {
-    throw new Error('expected a prompt dirty work scope')
+    throw new Error(`expected a ${input.changeKind} dirty work scope`)
   }
 
   await input.components.reduce<Promise<void>>(async (previous, component) => {
@@ -1011,8 +1007,10 @@ test('summary dirty work rebuilds the served summary in place and serves the old
   expect(await getSnapshots(projectId)).toHaveLength(1)
 })
 
-test('in-place posting only completes dirty work whose inputs caught up before its chunks started', async () => {
-  const projectId = 'project-in-place-posting-inputs'
+test('a rebuild of the active snapshot completes no dirty work when it is created, only once its chunks ran', async () => {
+  const {resetReviewServingRebuiltDirtyWorkRetirementForTests, retireReviewServingDirtyWorkRebuiltByChunks} =
+    await import('./reviewServingRebuiltDirtyWorkRetirement.ts')
+  const projectId = 'project-in-place-dirty-work'
 
   await insertProject(projectId)
 
@@ -1026,7 +1024,9 @@ test('in-place posting only completes dirty work whose inputs caught up before i
     sourceHighWaterMark: 5,
   })
   await upsertDirtyWork({articleId: 'article-b', components: ['posting'], projectId, sourceHighWaterMark: 6})
+  await upsertDirtyWork({articleId: 'article-c', components: ['search'], projectId, sourceHighWaterMark: 7})
   await wakeProjector('posting')
+  await wakeProjector('search')
 
   const [request] = (await getRequestRows(projectId)).filter((row) => {
     return row.reason === 'postingDirtyWork'
@@ -1040,27 +1040,72 @@ test('in-place posting only completes dirty work whose inputs caught up before i
       snapshotId: activeSnapshotId,
       status: 'pending',
     },
+    {component: 'search', inputDigest: 'inPlaceReviewServingAddition', snapshotId: activeSnapshotId, status: 'pending'},
   ])
+  // Nothing is completed because the rebuild will rewrite it: the snapshot is served meanwhile, and its rows (and
+  // the inputs posting reads) only catch up as its chunks run. Posting claims patch incrementally instead.
   expect(await getDirtyWorkStatuses(projectId, 'posting')).toEqual([
-    {articleId: 'article-a', status: 'blocked_by_rebuild'},
-    {articleId: 'article-b', status: 'completed'},
+    {articleId: 'article-a', status: 'pending'},
+    {articleId: 'article-b', status: 'pending'},
   ])
+  expect(await getDirtyWorkStatuses(projectId, 'search')).toEqual([{articleId: 'article-c', status: 'pending'}])
 
-  // Once the request started building posting, it no longer covers a claim its watermarks reach (a prompt change
-  // queued before the request, whose inputs are current): its chunks may have read the rows before.
-  await getDatabase().run(`
-    UPDATE app.review_rebuild_chunk_manifest
-    SET status = 'running', started_at = current_timestamp
-    WHERE request_id = '${request?.requestId}'
-  `)
-  await upsertPromptDirtyWork({components: ['posting'], projectId, sourceHighWaterMark: 4})
-  await wakeProjector('posting')
+  await completeRequestChunks(request?.requestId ?? '')
+  await wakeProjector('search')
+
+  // The search chunk that started after article-c changed rebuilt it, so its claim completes instead of asking for
+  // another rebuild; posting, read from the snapshot's own inputs, is left to its patches.
+  expect(await getDirtyWorkStatuses(projectId, 'search')).toEqual([{articleId: 'article-c', status: 'completed'}])
+  expect(
+    (await getRequestRows(projectId)).filter((row) => {
+      return row.reason.endsWith('DirtyWork')
+    }),
+  ).toHaveLength(1)
+
+  resetReviewServingRebuiltDirtyWorkRetirementForTests()
+  await retireReviewServingDirtyWorkRebuiltByChunks({nowMs: Date.now(), projectId})
 
   expect(await getDirtyWorkStatuses(projectId, 'posting')).toEqual([
-    {articleId: 'article-a', status: 'blocked_by_rebuild'},
-    {articleId: 'article-b', status: 'completed'},
-    {articleId: null, status: 'pending'},
+    {articleId: 'article-a', status: 'pending'},
+    {articleId: 'article-b', status: 'pending'},
   ])
+})
+
+test('project-wide dirty work takes a fresh snapshot, whose request covers it', async () => {
+  const projectId = 'project-fresh-for-project-wide'
+
+  await insertProject(projectId)
+
+  const activeSnapshotId = await buildActiveSnapshot(projectId, [...countReadyReviewServingComponents, 'search'])
+
+  await upsertProjectDirtyWork({
+    changeKind: 'project.searchTokenizer.updated',
+    components: ['search'],
+    projectId,
+    values: {tokenizerVersion: 'tokenizer-v2'},
+  })
+  await wakeProjector('search')
+
+  const snapshots = await getSnapshots(projectId)
+  const candidate = snapshots.find((snapshot) => {
+    return snapshot.status === 'candidate'
+  })
+  const [request] = (await getRequestRows(projectId)).filter((row) => {
+    return row.reason === 'searchDirtyWork'
+  })
+
+  expect(
+    snapshots.find((snapshot) => {
+      return snapshot.snapshotId === activeSnapshotId
+    })?.status,
+  ).toBe('active')
+  expect(candidate).toBeDefined()
+  expect(
+    (await getRequestChunks(request?.requestId ?? '')).every((chunk) => {
+      return chunk.snapshotId === candidate?.snapshotId && chunk.inputDigest === 'freshReviewServingSnapshot'
+    }),
+  ).toBe(true)
+  expect(await getDirtyWorkStatuses(projectId, 'search')).toEqual([{articleId: null, status: 'completed'}])
 })
 
 test('a train that already rebuilt a component neither takes new dirty work of it nor keeps it from being rebuilt', async () => {
@@ -1137,6 +1182,13 @@ test('repeated dirty-work requests hand back the open request without planning a
   const repeated = await requestSearchDirtyWork()
 
   expect(repeated).toEqual({queryCount: 1, requestId: first.requestId})
+
+  // A request that is no longer open is never handed back: it is re-read, and the planner runs again.
+  await getDatabase().run(
+    `UPDATE app.review_rebuild_request SET status = 'failed' WHERE request_id = '${first.requestId}'`,
+  )
+
+  expect((await requestSearchDirtyWork()).queryCount).toBeGreaterThan(1)
 
   await completeRequestChunks(first.requestId)
 

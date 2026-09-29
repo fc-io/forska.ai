@@ -1836,9 +1836,8 @@ const getUpstreamGateClaimRowsSql = (claims: readonly ReviewServingDirtyWorkClai
 }
 
 // Watermarks only order changes within one source partition, so a claim waits for unfinished upstream work of its own
-// article and partition that started at or below the claim's watermark; a claim not scoped to one article waits for
-// that of any article of its project. Upstream rows keep their first watermark across re-dirtying, which makes the check
-// conservative rather than exact.
+// article and partition that started at or below the claim's watermark. Upstream rows keep their first watermark
+// across re-dirtying, which makes the check conservative rather than exact.
 export const getReviewServingDirtyWorkClaimIdsAwaitingUpstream = async (
   input: {
     claims: readonly ReviewServingDirtyWorkClaim[]
@@ -1850,21 +1849,12 @@ export const getReviewServingDirtyWorkClaimIdsAwaitingUpstream = async (
   const articleClaims = input.claims.filter((claim) => {
     return claim.articleId !== null
   })
-  const projectClaims = input.claims.filter((claim) => {
-    return claim.articleId === null
-  })
 
-  if (input.upstreamComponents.length === 0 || input.claims.length === 0) {
+  if (articleClaims.length === 0 || input.upstreamComponents.length === 0) {
     return new Set<string>()
   }
 
-  const upstreamPredicateSql = `upstream.project_id = ${getSqlLiteral(input.projectId)}
-      AND upstream.projection_component IN (${input.upstreamComponents.map(getSqlLiteral).join(', ')})
-      AND upstream.status IN ('pending', 'running', 'failed', 'blocked_by_rebuild')`
-  const articleRows =
-    articleClaims.length === 0
-      ? []
-      : await database.queryJson<{dirtyWorkId: string}>(`
+  const rows = await database.queryJson<{dirtyWorkId: string}>(`
     WITH claimed AS (
       ${getUpstreamGateClaimRowsSql(articleClaims)}
     )
@@ -1874,25 +1864,13 @@ export const getReviewServingDirtyWorkClaimIdsAwaitingUpstream = async (
       ON upstream.article_id = claimed.article_id
       AND upstream.source_partition = claimed.source_partition
       AND upstream.first_source_high_water_mark <= claimed.latest_source_high_water_mark
-    WHERE ${upstreamPredicateSql}
-  `)
-  const projectRows =
-    projectClaims.length === 0
-      ? []
-      : await database.queryJson<{dirtyWorkId: string}>(`
-    WITH claimed AS (
-      ${getUpstreamGateClaimRowsSql(projectClaims)}
-    )
-    SELECT DISTINCT claimed.dirty_work_id AS dirtyWorkId
-    FROM claimed
-    INNER JOIN app.review_serving_dirty_work upstream
-      ON upstream.source_partition = claimed.source_partition
-      AND upstream.first_source_high_water_mark <= claimed.latest_source_high_water_mark
-    WHERE ${upstreamPredicateSql}
+    WHERE upstream.project_id = ${getSqlLiteral(input.projectId)}
+      AND upstream.projection_component IN (${input.upstreamComponents.map(getSqlLiteral).join(', ')})
+      AND upstream.status IN ('pending', 'running', 'failed', 'blocked_by_rebuild')
   `)
 
   return new Set(
-    [...articleRows, ...projectRows].map((row) => {
+    rows.map((row) => {
       return row.dirtyWorkId
     }),
   )

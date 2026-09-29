@@ -184,6 +184,30 @@ export const getInvalidateReviewServingSummaryLedgerStatements = (
   })
 }
 
+// Drops a request's buckets that were never published (in every snapshot), leaving the published ledgers alone.
+export const getDropUnpublishedReviewServingSummaryLedgerBucketsStatements = (input: {requestId: string}) => {
+  return [
+    `
+      DELETE FROM ${reviewServingSummaryBucketPartialTable} partial
+      WHERE EXISTS (
+        SELECT 1
+        FROM ${reviewServingSummaryBucketTable} bucket
+        WHERE bucket.project_id = partial.project_id
+          AND bucket.review_config_hash = partial.review_config_hash
+          AND bucket.snapshot_id = partial.snapshot_id
+          AND bucket.bucket_id = partial.bucket_id
+          AND bucket.request_id = ${getSqlLiteral(input.requestId)}
+          AND bucket.ledger_status = 'building'
+      )
+    `,
+    `
+      DELETE FROM ${reviewServingSummaryBucketTable}
+      WHERE request_id = ${getSqlLiteral(input.requestId)}
+        AND ledger_status = 'building'
+    `,
+  ]
+}
+
 export const getPublishReviewServingSummaryLedgerStatusStatements = (
   input: ReviewServingSummaryLedgerSnapshotScope & {requestId: string},
 ) => {

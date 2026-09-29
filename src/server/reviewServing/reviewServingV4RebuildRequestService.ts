@@ -242,6 +242,10 @@ type ReviewServingV4AdmissionSplit = {
 
 export type RequestReviewServingV4RebuildInput = {
   components?: readonly ReviewServingProjectionComponent[]
+  // False builds a fresh snapshot even when the active one could take the components in place: the caller's dirty
+  // work is then covered by the request (a fresh candidate is not read before activation) instead of waiting for
+  // incremental patches or chunk retirement, which work article by article only.
+  inPlace?: boolean
   pageFirstOnly?: boolean
   priority?: number
   projectId: string
@@ -2954,7 +2958,10 @@ const extendReviewServingV4BootstrapTrain = async (
 
 // Returns the project's running train after adding the components this request needs, or null when there is none.
 const joinReviewServingV4BootstrapTrain = async (
-  input: Omit<ReviewServingV4BootstrapTrainExtension, 'requestId' | 'snapshotId'> & {reviewConfigHash: string | null},
+  input: Omit<ReviewServingV4BootstrapTrainExtension, 'requestId' | 'snapshotId'> & {
+    candidateTrainsOnly: boolean
+    reviewConfigHash: string | null
+  },
   database: ReviewServingChunkManifestRepositoryDatabase,
 ) => {
   const [train] = (
@@ -2962,7 +2969,12 @@ const joinReviewServingV4BootstrapTrain = async (
       {projectIds: [input.projectId], reviewConfigHash: input.reviewConfigHash},
       database,
     )
-  ).filter(isReviewServingV4RunnableBootstrapTrain)
+  ).filter((request) => {
+    return (
+      isReviewServingV4RunnableBootstrapTrain(request)
+      && (!input.candidateTrainsOnly || request.snapshotStatus !== 'active')
+    )
+  })
 
   if (train?.snapshotId === undefined || train.snapshotId === null) {
     return null
@@ -3853,12 +3865,16 @@ const planReviewServingV4Rebuild = async (
   const isRequestedComponentBootstrap =
     input.reason === 'filterReadinessEnrichment' || isRequestedOptionalDirtyWorkBootstrap
   const shouldReuseActiveRequest = input.reason === 'missingReviewServingSnapshot' || isRequestedComponentBootstrap
-  const activeRequest = shouldReuseActiveRequest
+  const reusableRequest = shouldReuseActiveRequest
     ? await getActiveReviewServingRebuildRequestForProject(
         {projectId: input.projectId, reason: input.reason, requestedComponents, reviewConfigHash},
         requestDatabase,
       )
     : null
+  const activeRequest =
+    input.inPlace === false && getReviewServingV4ObjectRecord(reusableRequest?.identityJson).inPlaceSnapshotId
+      ? null
+      : reusableRequest
 
   const activeRequestUsesLegacyRequiredEnrichmentBootstrap =
     activeRequest !== null && input.reason === 'missingReviewServingSnapshot'
@@ -3898,6 +3914,7 @@ const planReviewServingV4Rebuild = async (
   const joinedTrain = canJoinBootstrapTrain
     ? await joinReviewServingV4BootstrapTrain(
         {
+          candidateTrainsOnly: input.inPlace === false,
           components: bootstrapComponents,
           priority: requestPriority,
           projectId: input.projectId,
@@ -3913,19 +3930,20 @@ const planReviewServingV4Rebuild = async (
     return joinedTrain
   }
 
-  const inPlaceRebuild = canJoinBootstrapTrain
-    ? await getReviewServingV4InPlaceRebuild(
-        {
-          components: bootstrapComponents,
-          priority: requestPriority,
-          projectId: input.projectId,
-          reason: input.reason,
-          requestedComponents,
-          reviewConfigHash,
-        },
-        requestDatabase,
-      )
-    : ({kind: 'none'} as const)
+  const inPlaceRebuild =
+    canJoinBootstrapTrain && input.inPlace !== false
+      ? await getReviewServingV4InPlaceRebuild(
+          {
+            components: bootstrapComponents,
+            priority: requestPriority,
+            projectId: input.projectId,
+            reason: input.reason,
+            requestedComponents,
+            reviewConfigHash,
+          },
+          requestDatabase,
+        )
+      : ({kind: 'none'} as const)
 
   if ('requestId' in inPlaceRebuild) {
     return inPlaceRebuild
@@ -4187,7 +4205,12 @@ export const resetReviewServingV4DirtyWorkRequestReuseForTests = () => {
 
 const getReviewServingV4DirtyWorkRequestKey = (input: RequestReviewServingV4RebuildInput) => {
   return input.reason.endsWith('DirtyWork')
-    ? [input.projectId, input.reason, ...getCanonicalReviewServingComponents(input.components ?? [])].join('\u0000')
+    ? [
+        input.projectId,
+        input.reason,
+        input.inPlace === false ? 'fresh' : 'any',
+        ...getCanonicalReviewServingComponents(input.components ?? []),
+      ].join('\u0000')
     : null
 }
 

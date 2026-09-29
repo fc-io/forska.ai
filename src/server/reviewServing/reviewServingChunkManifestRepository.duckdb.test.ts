@@ -176,6 +176,7 @@ const insertChunk = async (input: {
   leaseOwner?: string | null
   projectId: string
   requestId: string
+  snapshotId?: string
   startedAt?: string | null
   status: 'completed' | 'pending' | 'running'
 }) => {
@@ -188,7 +189,7 @@ const insertChunk = async (input: {
       '${input.chunkId}',
       '${input.requestId}',
       '${input.projectId}',
-      'snapshot-${input.projectId}',
+      '${input.snapshotId ?? `snapshot-${input.projectId}`}',
       '${input.component}',
       '${input.component}:identity',
       '${input.chunkId}:a',
@@ -659,9 +660,10 @@ test('batched rebuild chunk heartbeats in DuckDB extend only the leases the owne
   ])
 })
 
-test('an in-place chunk waits for unfinished input chunks another in-flight request builds into the same snapshot', async () => {
+test('a chunk building into the active snapshot waits for unfinished input chunks other in-flight requests build there', async () => {
   const {getReviewServingRebuildChunkClaimWhere} = await import('./reviewServingChunkManifestRepository.ts')
-  const projectId = 'project-in-place-prerequisite'
+  const projectId = 'project-active-prerequisite'
+  const candidateSnapshotId = 'snapshot-project-active-prerequisite-candidate'
   const getClaimableChunkIds = async () => {
     const rows = await getDatabase().queryJson<{chunkId: string}>(`
       SELECT candidate.chunk_id AS chunkId
@@ -678,13 +680,16 @@ test('an in-place chunk waits for unfinished input chunks another in-flight requ
   await clearRebuildState()
   await insertProject(projectId)
   await insertSnapshot({components: ['payload', 'posting'], projectId, snapshotStatus: 'active'})
+  await insertSnapshot({components: ['payload', 'posting'], projectId, snapshotId: candidateSnapshotId})
 
-  // A payload refresh of the active snapshot, and two later requests building posting into it: one in place, one as
-  // a fresh bootstrap (whose own request orders its inputs).
+  // A payload refresh of the active snapshot, two later requests building posting into it (in place, and a
+  // bootstrap train whose snapshot was promoted meanwhile), and two requests sharing a candidate snapshot.
   const requests = [
     ['request-payload-refresh', 'payload', 50],
     ['request-posting-in-place', 'posting', 100],
-    ['request-posting-fresh', 'posting', 100],
+    ['request-posting-promoted', 'posting', 100],
+    ['request-candidate-payload', 'payload', 50],
+    ['request-candidate-posting', 'posting', 100],
   ] as const
 
   await requests.reduce<Promise<void>>(async (previous, [requestId, component, priority]) => {
@@ -693,32 +698,60 @@ test('an in-place chunk waits for unfinished input chunks another in-flight requ
   }, Promise.resolve())
 
   const chunks = [
-    ['chunk-payload-refresh', 'payload', 'request-payload-refresh', 'inPlaceReviewServingRefresh'],
-    ['chunk-posting-fresh', 'posting', 'request-posting-fresh', 'freshReviewServingSnapshot'],
-    ['chunk-posting-in-place', 'posting', 'request-posting-in-place', 'inPlaceReviewServingAddition'],
+    ['chunk-active-payload-refresh', 'payload', 'request-payload-refresh', 'inPlaceReviewServingRefresh', undefined],
+    ['chunk-active-posting-in-place', 'posting', 'request-posting-in-place', 'inPlaceReviewServingAddition', undefined],
+    ['chunk-active-posting-promoted', 'posting', 'request-posting-promoted', 'freshReviewServingSnapshot', undefined],
+    [
+      'chunk-candidate-payload',
+      'payload',
+      'request-candidate-payload',
+      'freshReviewServingSnapshot',
+      candidateSnapshotId,
+    ],
+    [
+      'chunk-candidate-posting',
+      'posting',
+      'request-candidate-posting',
+      'freshReviewServingSnapshot',
+      candidateSnapshotId,
+    ],
   ] as const
 
-  await chunks.reduce<Promise<void>>(async (previous, [chunkId, component, requestId, inputDigest]) => {
+  await chunks.reduce<Promise<void>>(async (previous, [chunkId, component, requestId, inputDigest, snapshotId]) => {
     await previous
-    await insertChunk({chunkId, component, inputDigest, projectId, requestId, status: 'pending'})
+    await insertChunk({chunkId, component, inputDigest, projectId, requestId, snapshotId, status: 'pending'})
   }, Promise.resolve())
 
-  expect(await getClaimableChunkIds()).toEqual(['chunk-payload-refresh', 'chunk-posting-fresh'])
+  expect(await getClaimableChunkIds()).toEqual([
+    'chunk-active-payload-refresh',
+    'chunk-candidate-payload',
+    'chunk-candidate-posting',
+  ])
 
   await getDatabase().run(`
     UPDATE app.review_rebuild_request SET status = 'failed' WHERE request_id = 'request-payload-refresh'
   `)
 
-  expect(await getClaimableChunkIds()).toEqual(['chunk-posting-fresh', 'chunk-posting-in-place'])
+  expect(await getClaimableChunkIds()).toEqual([
+    'chunk-active-posting-in-place',
+    'chunk-active-posting-promoted',
+    'chunk-candidate-payload',
+    'chunk-candidate-posting',
+  ])
 
   await getDatabase().run(`
     UPDATE app.review_rebuild_request SET status = 'admitted' WHERE request_id = 'request-payload-refresh'
   `)
   await getDatabase().run(`
-    UPDATE app.review_rebuild_chunk_manifest SET status = 'completed' WHERE chunk_id = 'chunk-payload-refresh'
+    UPDATE app.review_rebuild_chunk_manifest SET status = 'completed' WHERE chunk_id = 'chunk-active-payload-refresh'
   `)
 
-  expect(await getClaimableChunkIds()).toEqual(['chunk-posting-fresh', 'chunk-posting-in-place'])
+  expect(await getClaimableChunkIds()).toEqual([
+    'chunk-active-posting-in-place',
+    'chunk-active-posting-promoted',
+    'chunk-candidate-payload',
+    'chunk-candidate-posting',
+  ])
 })
 
 test('a summary chunk waits for the posting chunks of its request, whose flags it reads', async () => {

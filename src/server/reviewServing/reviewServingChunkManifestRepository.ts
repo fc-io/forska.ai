@@ -11,7 +11,6 @@ import {
   type ReviewServingProjectionComponent,
 } from './reviewServingContracts.ts'
 import {promoteReviewServingProjectorSnapshot} from './reviewServingProjectorWriter.ts'
-import {getReviewServingRebuildChunkInPlacePredicateSql} from './reviewServingRebuildChunkInputDigest.ts'
 import {reviewServingSummaryBucketTable} from './reviewServingSummaryLedger.ts'
 import {supersededRetiredSnapshotRebuildChunkLastError} from './reviewServingSupersededRebuildChunk.ts'
 
@@ -813,9 +812,9 @@ export const releaseInactiveRequestRebuildChunkManifestsForUpsert = async (
 }
 
 // A chunk reads the rows its snapshot holds for its prerequisite components, so it waits for its own request's chunks
-// of them. A chunk that builds into the active snapshot in place also waits for unfinished ones any other in-flight
-// request builds into that snapshot: in-place rebuilds of one snapshot run side by side, and one may be refreshing an
-// input of another's component.
+// of them. A chunk building into the active snapshot (in place, or for a bootstrap train whose snapshot was promoted
+// meanwhile) also waits for unfinished ones any other in-flight request builds into that snapshot: several requests
+// rebuild the active snapshot side by side, and one may be refreshing an input of another's component.
 const getRebuildChunkPrerequisitesPendingSql = (
   prerequisites: readonly ReviewServingProjectionComponent[],
   tableAlias?: string,
@@ -831,20 +830,21 @@ const getRebuildChunkPrerequisitesPendingSql = (
               AND prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
               AND prerequisite.status <> 'completed'
           )
-          AND (
-            NOT ${getReviewServingRebuildChunkInPlacePredicateSql(outer.slice(0, -1))}
-            OR NOT EXISTS (
+          AND NOT EXISTS (
             SELECT 1
             FROM app.review_rebuild_chunk_manifest shared_prerequisite
+            INNER JOIN app.review_serving_snapshot_manifest shared_snapshot
+              ON shared_snapshot.project_id = shared_prerequisite.project_id
+              AND shared_snapshot.snapshot_id = shared_prerequisite.snapshot_id
             INNER JOIN app.review_rebuild_request shared_request
               ON shared_request.request_id = shared_prerequisite.request_id
             WHERE shared_prerequisite.project_id IS NOT DISTINCT FROM ${outer}project_id
               AND shared_prerequisite.snapshot_id = ${outer}snapshot_id
               AND shared_prerequisite.projection_component IN ${getComponentSqlList(prerequisites)}
               AND shared_prerequisite.status IN ('pending', 'running', 'failed')
+              AND shared_snapshot.snapshot_status = 'active'
               AND shared_request.status IN ('admitted', 'running')
               AND shared_request.admission_state = 'admitted'
-            )
           )`
 }
 
