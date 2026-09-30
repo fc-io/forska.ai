@@ -2630,6 +2630,11 @@ test('isolated SQLite preflight upgrades legacy ack columns before readonly vali
   ).map((row) => {
     return row.name
   })
+  const upgradedJobInfoColumns = (
+    upgradedDatabase.query(`PRAGMA table_info('job_info')`).all() as Array<{name: string}>
+  ).map((row) => {
+    return row.name
+  })
   const upgradedQueueColumns = (
     upgradedDatabase.query(`PRAGMA table_info('queue_prompt')`).all() as Array<{name: string}>
   ).map((row) => {
@@ -2650,8 +2655,48 @@ test('isolated SQLite preflight upgrades legacy ack columns before readonly vali
   expect(upgradedColumns).toContain('wrap_visibility_ack_token')
   expect(upgradedColumns).not.toContain('last_project_refresh_ack_seq')
   expect(upgradedColumns).not.toContain('wrap_visibility_ack_seq')
+  expect(upgradedJobInfoColumns).toContain('system_prompt_variant')
   expect(upgradedQueueColumns).toContain('ready_insert_seq')
   expect(upgradedQueueRows).toEqual([{articleId: 'article-1', readyInsertSeq: 1}])
+})
+
+test('job info carries the project system prompt variant and defaults to legacy', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-variant-${Date.now()}`
+  const modelId = `model-variant-${Date.now()}`
+  const screeningProjectId = `project-variant-screening-${Date.now()}`
+  const legacyProjectId = `project-variant-legacy-${Date.now()}`
+  const screeningJobId = `job-variant-screening-${Date.now()}`
+  const legacyJobId = `job-variant-legacy-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant)
+    VALUES
+      ('${screeningProjectId}', 'Screening variant', '${modelId}', TRUE, TRUE, FALSE, FALSE, 'screening_v1'),
+      ('${legacyProjectId}', 'Legacy variant', '${modelId}', TRUE, TRUE, FALSE, FALSE, NULL)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${screeningJobId}', '${screeningProjectId}', 'running'), ('${legacyJobId}', '${legacyProjectId}', 'running')
+  `)
+
+  await service.initializeJob(screeningJobId)
+  await service.initializeJob(legacyJobId)
+
+  expect((await service.getJobInfo(screeningJobId))?.systemPromptVariant).toBe('screening_v1')
+  expect((await service.getJobInfo(legacyJobId))?.systemPromptVariant).toBe('legacy')
 })
 
 test('claims, reaps, releases, and completes outbox batches', async () => {

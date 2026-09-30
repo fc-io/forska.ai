@@ -459,6 +459,7 @@ const processSinglePrompt = async (
         useFulltext: promptToProcess.useFulltext,
         useFulltextNoImages: promptToProcess.useFulltextNoImages,
       },
+      systemPromptVariant: promptToProcess.systemPromptVariant,
     })
   } finally {
     releaseRequestWork()

@@ -4,6 +4,7 @@ import {dirname} from 'node:path'
 
 import {Database} from 'bun:sqlite'
 
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
@@ -84,6 +85,7 @@ type JobInfoRow = {
   modelVersion: string | null
   projectId: string | null
   providerConfigJson: unknown
+  systemPromptVariant: string | null
   useAbstract: boolean | null
   useFulltext: boolean | null
   useFulltextNoImages: boolean | null
@@ -113,6 +115,7 @@ export type JudgmentJobSqliteInfo = {
   modelVersion: string | null
   projectId: string
   providerConfigJson: unknown
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -817,6 +820,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       use_abstract INTEGER NOT NULL,
       use_fulltext INTEGER NOT NULL,
       use_fulltext_no_images INTEGER NOT NULL,
+      system_prompt_variant TEXT,
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS job_scan_state (
@@ -911,6 +915,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       ON judgment_outbox(exported_at, outbox_seq);
   `)
 
+  ensureJobInfoSchema(database)
   ensureJobScanStateSchema(database)
   ensureQueuePromptSchema(database)
   ensureOutboxClaimSchema(database)
@@ -1040,6 +1045,8 @@ const judgmentJobSqliteRequiredSchema = {
     'updated_at',
   ],
 } as const
+
+const jobInfoColumns = [{name: 'system_prompt_variant', sql: 'TEXT'}] as const
 
 const jobScanStateColumns = [
   {name: 'cursor_last_prompt_id', sql: 'TEXT'},
@@ -1247,6 +1254,33 @@ const getJobScanState = (row: ScanStateRow | null | undefined): JobScanState => 
     scanEpoch: Number(row?.scanEpoch ?? 0),
     wrapVisibilityAckSeq: row?.wrapVisibilityAckToken == null ? null : Number(row.wrapVisibilityAckToken),
   }
+}
+
+const addMissingJobInfoColumns = (
+  database: Database,
+  columns: ReadonlyArray<(typeof jobInfoColumns)[number]>,
+): void => {
+  const [currentColumn] = columns
+
+  if (!currentColumn) {
+    return
+  }
+
+  database.exec(`ALTER TABLE job_info ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
+  return addMissingJobInfoColumns(database, columns.slice(1))
+}
+
+const ensureJobInfoSchema = (database: Database) => {
+  const existingColumnNames = new Set(
+    (database.query(`PRAGMA table_info('job_info')`).all() as SqliteTableInfoRow[]).map((row) => {
+      return row.name
+    }),
+  )
+  const missingColumns = jobInfoColumns.filter((column) => {
+    return !existingColumnNames.has(column.name)
+  })
+
+  addMissingJobInfoColumns(database, missingColumns)
 }
 
 const ensureJobScanStateSchema = (database: Database) => {
@@ -2127,6 +2161,7 @@ const upgradeJudgmentJobSqliteSchemaInPlace = (jobId: string) => {
   let database: Database | null = null
 
   if (cachedDatabase) {
+    ensureJobInfoSchema(cachedDatabase)
     ensureJobScanStateSchema(cachedDatabase)
     ensureQueuePromptSchema(cachedDatabase)
     ensureOutboxClaimSchema(cachedDatabase)
@@ -2144,6 +2179,10 @@ const upgradeJudgmentJobSqliteSchemaInPlace = (jobId: string) => {
     `)
 
     const existingTables = getExistingTableNames(database)
+
+    if (existingTables.has('job_info')) {
+      ensureJobInfoSchema(database)
+    }
 
     if (existingTables.has('job_scan_state')) {
       ensureJobScanStateSchema(database)
@@ -2804,6 +2843,7 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
       TO_JSON(m.metadata_json) AS modelMetadataJson,
       pc.base_url AS modelBaseUrl,
       TO_JSON(pc.config_json) AS providerConfigJson,
+      p.system_prompt_variant AS systemPromptVariant,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
@@ -2845,6 +2885,7 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
       parseJsonText(
         typeof row.providerConfigJson === 'string' ? row.providerConfigJson : JSON.stringify(row.providerConfigJson),
       ) ?? null,
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
     useAbstract: row.useAbstract ?? true,
     useFulltext: row.useFulltext ?? false,
     useFulltextNoImages: row.useFulltextNoImages ?? false,
@@ -5112,6 +5153,7 @@ const sqliteService = {
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
+            system_prompt_variant AS systemPromptVariant,
             created_at AS createdAt
           FROM job_info
           WHERE job_id = ?
@@ -5130,6 +5172,7 @@ const sqliteService = {
           modelVersion: string | null
           projectId: string
           providerConfigJson: string | null
+          systemPromptVariant: string | null
           useAbstract: number
           useFulltext: number
           useFulltextNoImages: number
@@ -5151,6 +5194,7 @@ const sqliteService = {
               modelVersion: row.modelVersion,
               projectId: row.projectId,
               providerConfigJson: parseJsonText(row.providerConfigJson),
+              systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
               useAbstract: toBoolean(row.useAbstract),
               useFulltext: toBoolean(row.useFulltext),
               useFulltextNoImages: toBoolean(row.useFulltextNoImages),
@@ -5597,8 +5641,9 @@ const sqliteService = {
             use_abstract,
             use_fulltext,
             use_fulltext_no_images,
+            system_prompt_variant,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
           )
           .run(
@@ -5616,6 +5661,7 @@ const sqliteService = {
             Number(jobInfo.useAbstract),
             Number(jobInfo.useFulltext),
             Number(jobInfo.useFulltextNoImages),
+            jobInfo.systemPromptVariant,
             createdAt,
           )
         seedJudgmentOutboxSequenceFromDatabase(database, jobId, importedOutboxSeqFloor)

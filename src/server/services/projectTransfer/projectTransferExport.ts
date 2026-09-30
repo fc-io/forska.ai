@@ -9,6 +9,11 @@ import {
   getSinglePromptEvidenceSystemPromptForArticle,
   getSinglePromptSystemPromptForArticle,
 } from '../../../agent/judge/judgePromptSelection.ts'
+import {
+  defaultSystemPromptVariant,
+  getSystemPromptVariant,
+  type SystemPromptVariant,
+} from '../../../agent/judge/systemPromptVariant.ts'
 import {type ArticleRecord} from '../../../db/schemaTypes.ts'
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
 import {
@@ -94,6 +99,7 @@ export type ProjectTransferExportSourceProjectSettings = {
   modelId: string | null
   name: string
   sourceProjectId: string
+  systemPromptVariant: SystemPromptVariant
   updatedAt: Date | null
   useAbstract: boolean
   useFulltext: boolean
@@ -909,6 +915,7 @@ export const getProjectTransferExportSourceProjectSettings = async (
     modelId: string | null
     name: string
     sourceProjectId: string
+    systemPromptVariant: string | null
     updatedAt: unknown
     useAbstract: boolean | null
     useFulltext: boolean | null
@@ -921,6 +928,7 @@ export const getProjectTransferExportSourceProjectSettings = async (
       description,
       model_id AS modelId,
       human_judgment_mode AS humanJudgmentMode,
+      system_prompt_variant AS systemPromptVariant,
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
@@ -949,6 +957,7 @@ export const getProjectTransferExportSourceProjectSettings = async (
     modelId: row.modelId,
     name: row.name,
     sourceProjectId: row.sourceProjectId,
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
     updatedAt: getDateValue(row.updatedAt),
   }
 }
@@ -1999,7 +2008,13 @@ const getProjectTransferExportContentSettings = (
 }
 
 const getProjectTransferExportProjectSettingsPayload = (project: ProjectTransferExportSourceProjectSettings) => {
-  return {humanJudgmentMode: project.humanJudgmentMode ?? 'prompt', ...getProjectTransferExportContentSettings(project)}
+  return {
+    humanJudgmentMode: project.humanJudgmentMode ?? 'prompt',
+    ...getProjectTransferExportContentSettings(project),
+    ...(project.systemPromptVariant === defaultSystemPromptVariant
+      ? {}
+      : {systemPromptVariant: project.systemPromptVariant}),
+  }
 }
 
 const getProjectTransferExportArticleRecordForSignature = (

@@ -5,6 +5,7 @@ import {
   getSinglePromptJudgmentPreviewText,
   getSinglePromptJudgmentRequest,
 } from '../../../agent/judge/getSinglePromptJudgmentRequest.ts'
+import {getSystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import {getProviderModelMetadataPromptTokenLimit} from '../../providers/providerModelMetadata.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
@@ -147,6 +148,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
     const [project, prompt] = await Promise.all([
       getAppDatabaseService().queryJson<{
         modelId: string
+        systemPromptVariant: string | null
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -155,6 +157,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         `
         SELECT
           model_id AS modelId,
+          system_prompt_variant AS systemPromptVariant,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
@@ -263,6 +266,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       },
       prompt: {...promptRow, order: null},
       provider: projectModel?.provider ?? null,
+      systemPromptVariant: getSystemPromptVariant(projectRow.systemPromptVariant),
     })
 
     return {

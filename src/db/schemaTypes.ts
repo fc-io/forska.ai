@@ -265,6 +265,7 @@ export type ProjectRecord = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant: string | null
   dateFrom: Date | null
   dateTo: Date | null
   archived: boolean

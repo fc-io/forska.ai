@@ -48,6 +48,7 @@ import {
   tryParseJsonWithSanitization,
 } from './judge/parseSinglePromptJudgment.ts'
 import {JudgmentPersistenceError, storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
+import type {SystemPromptVariant} from './judge/systemPromptVariant.ts'
 
 type ModelConfigInput = {
   modelId: string
@@ -1300,6 +1301,7 @@ export const judgeSinglePrompt = async ({
   projectId,
   claimIdentity,
   contentSettings,
+  systemPromptVariant,
 }: {
   article: ArticlesType[number]
   prompt: SinglePromptInput
@@ -1311,6 +1313,7 @@ export const judgeSinglePrompt = async ({
   projectId: string
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
   contentSettings: ContentSettings
+  systemPromptVariant?: SystemPromptVariant | null
 }): Promise<void> => {
   const {
     baseURL,
@@ -1341,7 +1344,7 @@ export const judgeSinglePrompt = async ({
     recordText: recordTextForQuoteValidation,
     systemPrompt,
     userPrompt: basePrompt,
-  } = getSinglePromptJudgmentRequest({article, contentSettings, prompt, provider})
+  } = getSinglePromptJudgmentRequest({article, contentSettings, prompt, provider, systemPromptVariant})
   const promptIds = [prompt.id]
 
   const baseBudget = isWithinContextBudget({

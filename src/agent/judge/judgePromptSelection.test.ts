@@ -13,6 +13,10 @@ import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptE
 import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptEvidenceSystemPromptStructuredImport.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT, SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptSystemPromptPatient.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV1.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 type PromptSelectionCase = {
@@ -147,5 +151,44 @@ describe('judge prompt selection', () => {
       expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT,
       expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT,
     })
+  })
+
+  test('uses the screening system prompt for a scientific article on the screening_v1 variant', () => {
+    const article = buildArticle()
+
+    expect(getSinglePromptSystemPromptForArticle(article, 'openai', 'screening_v1')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, 'anthropic', 'screening_v1')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
+    )
+    expect(getSinglePromptEvidenceSystemPromptForArticle(article, 'anthropic')).toBe(
+      SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_ANTHROPIC,
+    )
+  })
+
+  test('treats a missing or legacy variant as the legacy system prompt', () => {
+    const article = buildArticle()
+
+    expect(getSinglePromptSystemPromptForArticle(article, 'anthropic', 'legacy')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, 'anthropic', null)).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, 'openai', undefined)).toBe(SINGLE_PROMPT_SYSTEM_PROMPT)
+  })
+
+  test('keeps patient and structured import prompts on the screening_v1 variant', () => {
+    expect(
+      getSinglePromptSystemPromptForArticle(buildArticle({articleId: 'fhir:patient-1'}), 'anthropic', 'screening_v1'),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT)
+    expect(
+      getSinglePromptSystemPromptForArticle(
+        buildArticle({importRoute: 'structured-file:registry-entry.xml'}),
+        'anthropic',
+        'screening_v1',
+      ),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
   })
 })

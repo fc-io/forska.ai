@@ -1,3 +1,8 @@
+import {
+  isSystemPromptVariant,
+  type SystemPromptVariant,
+  systemPromptVariants,
+} from '../../../agent/judge/systemPromptVariant.ts'
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import {
@@ -94,7 +99,10 @@ export type ProjectTransferContentSettings = {
   useTitle: boolean
 }
 
-export type ProjectTransferProjectSettings = ProjectTransferContentSettings & {humanJudgmentMode: 'prompt' | 'summary'}
+export type ProjectTransferProjectSettings = ProjectTransferContentSettings & {
+  humanJudgmentMode: 'prompt' | 'summary'
+  systemPromptVariant?: SystemPromptVariant
+}
 
 export type ProjectTransferPayloadRecord = JsonRecord & {
   omissions?: ProjectTransferPayloadOmission[]
@@ -448,10 +456,19 @@ export const assertProjectTransferProjectSettings = (
   const contentSettings = assertProjectTransferContentSettings(settings, label)
   const humanJudgmentMode = settings.humanJudgmentMode
   const isValidHumanJudgmentMode = humanJudgmentMode === 'prompt' || humanJudgmentMode === 'summary'
+  const systemPromptVariant = assertProjectTransferSystemPromptVariant(settings.systemPromptVariant, label)
 
   return isValidHumanJudgmentMode
-    ? {...contentSettings, humanJudgmentMode}
+    ? {...contentSettings, humanJudgmentMode, ...(systemPromptVariant ? {systemPromptVariant} : {})}
     : failProjectTransferPayload(`${label}.humanJudgmentMode must be prompt or summary`)
+}
+
+const assertProjectTransferSystemPromptVariant = (value: unknown, label: string): SystemPromptVariant | null => {
+  return value === undefined || value === null
+    ? null
+    : isSystemPromptVariant(value)
+      ? value
+      : failProjectTransferPayload(`${label}.systemPromptVariant must be one of ${systemPromptVariants.join(', ')}`)
 }
 
 export const normalizeProjectTransferModelVariant = (variant: unknown): string | null => {

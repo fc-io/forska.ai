@@ -1827,6 +1827,94 @@ test('edit route still supports full config and prompt edits before a judgment j
   expect(promptRows[0]?.enabled).toBe(false)
 })
 
+test('edit route switches the system prompt variant before a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-variant-connection'
+  const modelId = 'edit-variant-model'
+  const projectId = 'edit-variant-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+
+  const initialResponse = await app.handle(new Request(`http://localhost/api/projects/${projectId}`))
+  const initialBody = (await initialResponse.json()) as {data: {project: {systemPromptVariant: string}}}
+
+  expect(initialResponse.status).toBe(200)
+  expect(initialBody.data.project.systemPromptVariant).toBe('legacy')
+
+  const editResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({systemPromptVariant: 'screening_v1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const editBody = (await editResponse.json()) as {data: {project: {systemPromptVariant: string}}}
+
+  expect(editResponse.status).toBe(200)
+  expect(editBody.data.project.systemPromptVariant).toBe('screening_v1')
+
+  const [projectRow] = await queryDatabase<{systemPromptVariant: string | null}>(`
+    SELECT system_prompt_variant AS systemPromptVariant
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(projectRow).toEqual({systemPromptVariant: 'screening_v1'})
+
+  const revertResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({systemPromptVariant: 'legacy'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const revertBody = (await revertResponse.json()) as {data: {project: {systemPromptVariant: string}}}
+
+  expect(revertResponse.status).toBe(200)
+  expect(revertBody.data.project.systemPromptVariant).toBe('legacy')
+})
+
+test('edit route rejects a system prompt variant change when a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-variant-job-connection'
+  const modelId = 'edit-variant-job-model'
+  const projectId = 'edit-variant-job-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('edit-variant-job', '${projectId}', 'completed')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({systemPromptVariant: 'screening_v1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(409)
+  expect(body).toContain('systemPromptVariant')
+
+  const [projectRow] = await queryDatabase<{systemPromptVariant: string | null}>(`
+    SELECT system_prompt_variant AS systemPromptVariant
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(projectRow).toEqual({systemPromptVariant: null})
+})
+
 test('edit route rejects protected config changes when a judgment job exists', async () => {
   if (!app || !queryDatabase || !runDatabase) {
     throw new Error('Test app not initialized')
@@ -5432,6 +5520,64 @@ test('editing a cloned project model leaves the source project model unchanged',
 
   expect(sourceProject?.modelId).toBe(initialModelId)
   expect(clonedProject?.modelId).toBe(nextModelId)
+
+  await flushMartRefreshes()
+})
+
+test('create route stores the requested system prompt variant and defaults to legacy', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'create-variant-connection'
+  const modelId = 'create-variant-model'
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
+  `)
+
+  const screeningResponse = await app.handle(
+    new Request('http://localhost/api/projects', {
+      body: JSON.stringify({name: 'Screening variant project', modelId, systemPromptVariant: 'screening_v1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const screeningBody = (await screeningResponse.json()) as {data: {id: string; systemPromptVariant: string}}
+  const defaultResponse = await app.handle(
+    new Request('http://localhost/api/projects', {
+      body: JSON.stringify({name: 'Default variant project', modelId}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const defaultBody = (await defaultResponse.json()) as {data: {id: string; systemPromptVariant: string}}
+
+  expect(screeningResponse.status).toBe(200)
+  expect(screeningBody.data.systemPromptVariant).toBe('screening_v1')
+  expect(defaultResponse.status).toBe(200)
+  expect(defaultBody.data.systemPromptVariant).toBe('legacy')
+
+  const projectRows = await queryDatabase<{id: string; systemPromptVariant: string | null}>(`
+    SELECT id, system_prompt_variant AS systemPromptVariant
+    FROM app.project
+    WHERE id IN ('${screeningBody.data.id}', '${defaultBody.data.id}')
+    ORDER BY id ASC
+  `)
+
+  expect(projectRows).toEqual(
+    [
+      {id: screeningBody.data.id, systemPromptVariant: 'screening_v1'},
+      {id: defaultBody.data.id, systemPromptVariant: null},
+    ].sort((left, right) => {
+      return left.id.localeCompare(right.id)
+    }),
+  )
 
   await flushMartRefreshes()
 })

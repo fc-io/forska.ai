@@ -1,5 +1,10 @@
 import {Elysia, t} from 'elysia'
 
+import {
+  getSystemPromptVariant,
+  type SystemPromptVariant,
+  systemPromptVariants,
+} from '../../agent/judge/systemPromptVariant.ts'
 import type {ProjectPromptCriteriaDisposition} from '../../db/schemaTypes.ts'
 import {
   appendProviderModelThinkingBadgeLabel,
@@ -219,6 +224,12 @@ type ProjectPromptLlmCleanupCandidateRow = {
   useTitle: boolean
 }
 
+const systemPromptVariantBodySchema = t.Union(
+  systemPromptVariants.map((systemPromptVariant) => {
+    return t.Literal(systemPromptVariant)
+  }),
+)
+
 type ProjectEditCurrentProject = {
   dateFrom: unknown
   dateTo: unknown
@@ -227,6 +238,7 @@ type ProjectEditCurrentProject = {
   id: string
   modelId: string
   name: string
+  systemPromptVariant: string | null
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -250,6 +262,7 @@ type ProjectRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant?: string | null
   dateFrom: unknown
   dateTo: unknown
   archived: boolean
@@ -260,6 +273,7 @@ type ProjectRow = {
 const getProjectValue = (row: ProjectRow) => {
   return {
     ...row,
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
     dateFrom: getDateValue(row.dateFrom),
     dateTo: getDateValue(row.dateTo),
     createdAt: getDateValue(row.createdAt),
@@ -279,6 +293,7 @@ const getProjectRowSql = (projectId: string) => {
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
       human_judgment_mode AS humanJudgmentMode,
+      system_prompt_variant AS systemPromptVariant,
       date_from AS dateFrom,
       date_to AS dateTo,
       archived,
@@ -373,6 +388,16 @@ const hasSameStringSet = (left: string[], right: string[]) => {
   )
 }
 
+const hasSystemPromptVariantEditChanged = (
+  systemPromptVariant: SystemPromptVariant | undefined,
+  currentProject: Pick<ProjectEditCurrentProject, 'systemPromptVariant'>,
+) => {
+  return (
+    systemPromptVariant !== undefined
+    && systemPromptVariant !== getSystemPromptVariant(currentProject.systemPromptVariant)
+  )
+}
+
 const getChangedProtectedProjectEditFields = ({
   body,
   currentImportRoutes,
@@ -386,6 +411,7 @@ const getChangedProtectedProjectEditFields = ({
     humanJudgmentMode?: 'prompt' | 'summary'
     importRoutes?: string[]
     modelId?: string
+    systemPromptVariant?: SystemPromptVariant
     useAbstract?: boolean
     useFulltext?: boolean
     useFulltextNoImages?: boolean
@@ -398,6 +424,7 @@ const getChangedProtectedProjectEditFields = ({
 }) => {
   return [
     body.modelId !== undefined && body.modelId !== currentProject.modelId ? 'modelId' : null,
+    hasSystemPromptVariantEditChanged(body.systemPromptVariant, currentProject) ? 'systemPromptVariant' : null,
     body.useTitle !== undefined && body.useTitle !== currentProject.useTitle ? 'useTitle' : null,
     body.useAbstract !== undefined && body.useAbstract !== currentProject.useAbstract ? 'useAbstract' : null,
     body.useFulltext !== undefined && body.useFulltext !== currentProject.useFulltext ? 'useFulltext' : null,
@@ -1102,6 +1129,7 @@ export const projectsRoutes = new Elysia()
         useFulltext: boolean
         useFulltextNoImages: boolean
         humanJudgmentMode: 'prompt' | 'summary' | null
+        systemPromptVariant: string | null
         dateFrom: unknown
         dateTo: unknown
         archived: boolean
@@ -1123,6 +1151,7 @@ export const projectsRoutes = new Elysia()
         p.use_fulltext AS useFulltext,
         p.use_fulltext_no_images AS useFulltextNoImages,
         p.human_judgment_mode AS humanJudgmentMode,
+        p.system_prompt_variant AS systemPromptVariant,
         p.date_from AS dateFrom,
         p.date_to AS dateTo,
         p.archived AS archived,
@@ -1152,6 +1181,7 @@ export const projectsRoutes = new Elysia()
 
           return {
             ...projectRow,
+            systemPromptVariant: getSystemPromptVariant(projectRow.systemPromptVariant),
             dateFrom: getDateValue(projectRow.dateFrom),
             dateTo: getDateValue(projectRow.dateTo),
             createdAt: getDateValue(projectRow.createdAt),
@@ -1180,6 +1210,7 @@ export const projectsRoutes = new Elysia()
         useFulltext: boolean
         useFulltextNoImages: boolean
         humanJudgmentMode: 'prompt' | 'summary' | null
+        systemPromptVariant: string | null
         dateFrom: unknown
         dateTo: unknown
         archived: boolean
@@ -1201,6 +1232,7 @@ export const projectsRoutes = new Elysia()
         p.use_fulltext AS useFulltext,
         p.use_fulltext_no_images AS useFulltextNoImages,
         p.human_judgment_mode AS humanJudgmentMode,
+        p.system_prompt_variant AS systemPromptVariant,
         p.date_from AS dateFrom,
         p.date_to AS dateTo,
         p.archived AS archived,
@@ -1230,6 +1262,7 @@ export const projectsRoutes = new Elysia()
 
           return {
             ...projectRow,
+            systemPromptVariant: getSystemPromptVariant(projectRow.systemPromptVariant),
             dateFrom: getDateValue(projectRow.dateFrom),
             dateTo: getDateValue(projectRow.dateTo),
             createdAt: getDateValue(projectRow.createdAt),
@@ -1272,6 +1305,7 @@ export const projectsRoutes = new Elysia()
           useFulltext: boolean
           useFulltextNoImages: boolean
           humanJudgmentMode: 'prompt' | 'summary' | null
+          systemPromptVariant: string | null
           dateFrom: unknown
           dateTo: unknown
           archived: boolean
@@ -1289,6 +1323,7 @@ export const projectsRoutes = new Elysia()
         use_fulltext AS useFulltext,
         use_fulltext_no_images AS useFulltextNoImages,
         human_judgment_mode AS humanJudgmentMode,
+        system_prompt_variant AS systemPromptVariant,
         date_from AS dateFrom,
         date_to AS dateTo,
         archived,
@@ -1310,6 +1345,7 @@ export const projectsRoutes = new Elysia()
           return rows.map((row) => {
             return {
               ...row,
+              systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
               dateFrom: getDateValue(row.dateFrom),
               dateTo: getDateValue(row.dateTo),
               createdAt: getDateValue(row.createdAt),
@@ -1502,6 +1538,7 @@ export const projectsRoutes = new Elysia()
           useAbstract: boolean
           useFulltext: boolean
           useFulltextNoImages: boolean
+          systemPromptVariant: string | null
           dateFrom: unknown
           dateTo: unknown
           archived: boolean
@@ -1517,6 +1554,7 @@ export const projectsRoutes = new Elysia()
             use_abstract,
             use_fulltext,
             use_fulltext_no_images,
+            system_prompt_variant,
             date_from,
             date_to
           )
@@ -1529,6 +1567,7 @@ export const projectsRoutes = new Elysia()
             ${(body.useAbstract ?? true) ? 'TRUE' : 'FALSE'},
             ${(body.useFulltext ?? false) ? 'TRUE' : 'FALSE'},
             ${(body.useFulltextNoImages ?? false) ? 'TRUE' : 'FALSE'},
+            ${getSqlLiteral(body.systemPromptVariant ?? null)},
             ${dateFrom ? getTimestampLiteral(dateFrom) : 'NULL'},
             ${dateTo ? getTimestampLiteral(dateTo) : 'NULL'}
           )
@@ -1541,6 +1580,7 @@ export const projectsRoutes = new Elysia()
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
+            system_prompt_variant AS systemPromptVariant,
             date_from AS dateFrom,
             date_to AS dateTo,
             archived,
@@ -1687,6 +1727,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: t.Optional(t.Boolean()),
         useFulltext: t.Optional(t.Boolean()),
         useFulltextNoImages: t.Optional(t.Boolean()),
+        systemPromptVariant: t.Optional(systemPromptVariantBodySchema),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Union([
@@ -1761,6 +1802,7 @@ export const projectsRoutes = new Elysia()
           description,
           model_id AS modelId,
           human_judgment_mode AS humanJudgmentMode,
+          system_prompt_variant AS systemPromptVariant,
           use_title AS useTitle,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
@@ -1827,7 +1869,9 @@ export const projectsRoutes = new Elysia()
       })
       const hasNameUpdate = body.name !== undefined && body.name !== currentProject.name
       const hasDescriptionUpdate = body.description !== undefined && body.description !== currentProject.description
-      const hasEditChanges = hasNameUpdate || hasDescriptionUpdate || changedReviewConfigFields.length > 0
+      const hasSystemPromptVariantUpdate = hasSystemPromptVariantEditChanged(body.systemPromptVariant, currentProject)
+      const hasEditChanges =
+        hasNameUpdate || hasDescriptionUpdate || hasSystemPromptVariantUpdate || changedReviewConfigFields.length > 0
 
       if (!hasEditChanges) {
         const [project, prompts] = await Promise.all([
@@ -1870,6 +1914,9 @@ export const projectsRoutes = new Elysia()
               ? `date_to = ${getSqlLiteral(parsedDateTo)}`
               : null,
             !hasExistingJob && hasModelIdUpdate ? `model_id = ${getSqlLiteral(body.modelId)}` : null,
+            !hasExistingJob && hasSystemPromptVariantUpdate
+              ? `system_prompt_variant = ${getSqlLiteral(body.systemPromptVariant)}`
+              : null,
             !hasExistingJob && changedReviewConfigFields.includes('humanJudgmentMode')
               ? `human_judgment_mode = ${getSqlLiteral(body.humanJudgmentMode)}`
               : null,
@@ -2218,6 +2265,7 @@ export const projectsRoutes = new Elysia()
         dateTo: t.Optional(t.Union([t.String(), t.Null()])),
         modelId: t.Optional(t.String()),
         humanJudgmentMode: t.Optional(t.Union([t.Literal('prompt'), t.Literal('summary')])),
+        systemPromptVariant: t.Optional(systemPromptVariantBodySchema),
         useTitle: t.Optional(t.Boolean()),
         useAbstract: t.Optional(t.Boolean()),
         useFulltext: t.Optional(t.Boolean()),
@@ -2317,6 +2365,7 @@ export const projectsRoutes = new Elysia()
         description: string | null
         modelId: string
         humanJudgmentMode: 'prompt' | 'summary' | null
+        systemPromptVariant: string | null
         useTitle: boolean
         useAbstract: boolean
         useFulltext: boolean
@@ -2331,6 +2380,7 @@ export const projectsRoutes = new Elysia()
         description,
         model_id AS modelId,
         human_judgment_mode AS humanJudgmentMode,
+        system_prompt_variant AS systemPromptVariant,
         use_title AS useTitle,
         use_abstract AS useAbstract,
         use_fulltext AS useFulltext,
@@ -2372,6 +2422,7 @@ export const projectsRoutes = new Elysia()
         description: string | null
         modelId: string
         humanJudgmentMode: 'prompt' | 'summary' | null
+        systemPromptVariant: string | null
         useTitle: boolean
         useAbstract: boolean
         useFulltext: boolean
@@ -2388,6 +2439,7 @@ export const projectsRoutes = new Elysia()
           description,
           model_id,
           human_judgment_mode,
+          system_prompt_variant,
           use_title,
           use_abstract,
           use_fulltext,
@@ -2402,6 +2454,7 @@ export const projectsRoutes = new Elysia()
           ${getSqlLiteral(sourceProject.description)},
           '${escapeSqlString(sourceProject.modelId)}',
           ${getSqlLiteral(sourceProject.humanJudgmentMode ?? 'prompt')},
+          ${getSqlLiteral(sourceProject.systemPromptVariant)},
           ${sourceProject.useTitle ? 'TRUE' : 'FALSE'},
           ${sourceProject.useAbstract ? 'TRUE' : 'FALSE'},
           ${sourceProject.useFulltext ? 'TRUE' : 'FALSE'},
@@ -2416,6 +2469,7 @@ export const projectsRoutes = new Elysia()
           description,
           model_id AS modelId,
           human_judgment_mode AS humanJudgmentMode,
+          system_prompt_variant AS systemPromptVariant,
           use_title AS useTitle,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
