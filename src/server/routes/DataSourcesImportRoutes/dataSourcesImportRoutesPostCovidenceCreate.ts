@@ -1,30 +1,31 @@
 import {randomUUID} from 'node:crypto'
 
-import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {articleImportStoreWorkloadContext} from '../../services/articleImportStoreService.ts'
 import {
   buildCovidencePackageConfig,
   buildCovidencePromptDefinition,
   buildCovidencePromptDefinitionsForEligibilityFields,
+  type CovidencePackageConfig,
   deleteCovidencePackageFiles,
   getCovidencePackageCursor,
+  getCovidencePackageRowsFromConfig,
   getOrCreateCovidenceProject,
   getOrCreateCovidencePrompt,
-  importCovidencePackageFromConfig,
-  seedCovidenceHumanJudgmentsFromConfig,
   storeCovidencePackageFiles,
   syncCovidenceProjectPrompts,
-  syncCovidenceProjectScopeFromConfig,
 } from '../../services/covidenceImportService.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
+import {
+  getCovidenceImportRoute,
+  startCovidencePackageImportInBackground,
+} from './startCovidencePackageImportInBackground.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe' | 'yes_no' | 'yes_no_maybe'
 type CovidencePromptGrouping = 'per_field' | 'per_section' | 'single_prompt'
-type CreatedCovidenceProject = {id: string} & Record<string, unknown>
 type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
 type CovidenceEligibilityFieldDisposition = 'include' | 'exclude'
 type CovidenceEligibilityField = {
@@ -33,6 +34,7 @@ type CovidenceEligibilityField = {
   sectionLabel: string
   text: string
 }
+type CovidencePromptDefinitions = ReturnType<typeof buildCovidencePromptDefinitionsForEligibilityFields>
 
 const getNormalizedCovidenceEligibilityFields = (eligibilityFields?: CovidenceEligibilityField[]) => {
   return (eligibilityFields ?? [])
@@ -89,17 +91,76 @@ const getCovidencePromptDefinitions = (body: {
     : null
 }
 
-const getCreatedCovidenceProject = (result: unknown): CreatedCovidenceProject | null => {
-  const value =
-    result !== null && typeof result === 'object' && 'covidenceProject' in result ? result.covidenceProject : null
+const createCovidenceProjectRecords = async (input: {
+  config: CovidencePackageConfig
+  cursor: string
+  dataSourceId: string
+  description: string | null
+  importRoute: string
+  modelId?: string
+  promptDefinitions: CovidencePromptDefinitions | null
+  title: string
+}) => {
+  const packageRows = getCovidencePackageRowsFromConfig(input.config)
+  const project = await getAppDatabaseService().transaction(async (tx) => {
+    const covidencePrompts = input.promptDefinitions
+      ? await Promise.all(
+          input.promptDefinitions.map(async (promptDefinition) => {
+            const covidencePrompt = await getOrCreateCovidencePrompt({promptDefinition, tx})
 
-  return value !== null && typeof value === 'object' && 'id' in value && typeof value.id === 'string'
-    ? (value as CreatedCovidenceProject)
-    : null
-}
+            return {
+              ...covidencePrompt,
+              criteriaDisposition: covidencePrompt.criteriaDisposition ?? promptDefinition.criteriaDisposition,
+              criteriaSectionKey: covidencePrompt.criteriaSectionKey ?? promptDefinition.criteriaSectionKey,
+              criteriaSectionLabel: covidencePrompt.criteriaSectionLabel ?? promptDefinition.criteriaSectionLabel,
+            }
+          }),
+        )
+      : []
 
-const getCanRequestReviewServingBootstrap = () => {
-  return typeof (getAppDatabaseService() as {queryJson?: unknown}).queryJson === 'function'
+    await tx.run(`
+      INSERT INTO app.data_source (id, title, description, import_route, cursor)
+      VALUES (
+        '${escapeSqlString(input.dataSourceId)}',
+        ${getSqlLiteral(input.title)},
+        ${getSqlLiteral(input.description)},
+        ${getSqlLiteral(input.importRoute)},
+        ${getSqlLiteral(input.cursor)}
+      )
+    `)
+
+    await tx.run(`
+      INSERT INTO app.import_route (id, route, name, active)
+      VALUES (${getQuotedStringList([randomUUID(), input.importRoute, input.title]).join(', ')}, TRUE)
+      ON CONFLICT(route) DO NOTHING
+    `)
+
+    const covidenceProject = await getOrCreateCovidenceProject({
+      importRoute: input.importRoute,
+      modelId: input.modelId,
+      mode: input.config.mode,
+      promptId: null,
+      title: input.title,
+      tx,
+    })
+
+    await syncCovidenceProjectPrompts({
+      projectId: covidenceProject.id,
+      promptLinks: covidencePrompts.map((covidencePrompt) => {
+        return {
+          criteriaDisposition: covidencePrompt.criteriaDisposition,
+          criteriaSectionKey: covidencePrompt.criteriaSectionKey,
+          criteriaSectionLabel: covidencePrompt.criteriaSectionLabel,
+          promptId: covidencePrompt.id,
+        }
+      }),
+      tx,
+    })
+
+    return {covidenceProject, covidencePrompts}
+  }, articleImportStoreWorkloadContext)
+
+  return {...project, packageRows}
 }
 
 export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
@@ -123,125 +184,42 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
 
   const storedFiles = await storeCovidencePackageFiles({datasourceId: dataSourceId, files: body.files})
   const config = buildCovidencePackageConfig({files: storedFiles, mode: body.mode})
-  const cursor = getCovidencePackageCursor(config)
-  const importRoute = `covidence:${dataSourceId}`
-  const covidencePromptDefinitions = getCovidencePromptDefinitions(body)
-  const result = (await getAppDatabaseService()
-    .transaction(async (tx) => {
-      const covidencePrompts = covidencePromptDefinitions
-        ? await Promise.all(
-            covidencePromptDefinitions.map(async (promptDefinition) => {
-              const covidencePrompt = await getOrCreateCovidencePrompt({promptDefinition, tx})
+  const created = await createCovidenceProjectRecords({
+    config,
+    cursor: getCovidencePackageCursor(config),
+    dataSourceId,
+    description: body.description?.trim() ? body.description : null,
+    importRoute: getCovidenceImportRoute(dataSourceId),
+    modelId: body.modelId,
+    promptDefinitions: getCovidencePromptDefinitions(body),
+    title,
+  }).catch((error: unknown) => {
+    deleteCovidencePackageFiles(dataSourceId)
+    throw error
+  })
 
-              return {
-                ...covidencePrompt,
-                criteriaDisposition: covidencePrompt.criteriaDisposition ?? promptDefinition.criteriaDisposition,
-                criteriaSectionKey: covidencePrompt.criteriaSectionKey ?? promptDefinition.criteriaSectionKey,
-                criteriaSectionLabel: covidencePrompt.criteriaSectionLabel ?? promptDefinition.criteriaSectionLabel,
-              }
-            }),
-          )
-        : []
-
-      await tx.run(`
-        INSERT INTO app.data_source (id, title, description, import_route, cursor)
-        VALUES (
-          '${escapeSqlString(dataSourceId)}',
-          ${getSqlLiteral(title)},
-          ${getSqlLiteral(body.description?.trim() ? body.description : null)},
-          ${getSqlLiteral(importRoute)},
-          ${getSqlLiteral(cursor)}
-        )
-      `)
-
-      const importResult = await importCovidencePackageFromConfig({config, datasourceId: dataSourceId, importRoute, tx})
-      const updatedAt = new Date()
-
-      await tx.run(`
-        UPDATE app.import_route
-        SET name = ${getSqlLiteral(title)}
-        WHERE route = ${getSqlLiteral(importRoute)}
-      `)
-
-      await tx.run(`
-        UPDATE app.data_source
-        SET last_import_at = ${getTimestampLiteral(updatedAt)},
-            items_after_last_import = ${importResult.stats.importedCount},
-            updated_at = ${getTimestampLiteral(updatedAt)},
-            import_route = ${getSqlLiteral(importRoute)},
-            cursor = ${getSqlLiteral(cursor)}
-        WHERE id = '${escapeSqlString(dataSourceId)}'
-      `)
-
-      const covidenceProject = await getOrCreateCovidenceProject({
-        importRoute,
-        modelId: body.modelId,
-        mode: body.mode,
-        promptId: null,
-        title,
-        tx,
-      })
-
-      await syncCovidenceProjectPrompts({
-        projectId: covidenceProject.id,
-        promptLinks: covidencePrompts.map((covidencePrompt) => {
-          return {
-            criteriaDisposition: covidencePrompt.criteriaDisposition,
-            criteriaSectionKey: covidencePrompt.criteriaSectionKey,
-            criteriaSectionLabel: covidencePrompt.criteriaSectionLabel,
-            promptId: covidencePrompt.id,
-          }
-        }),
-        tx,
-      })
-
-      await syncCovidenceProjectScopeFromConfig({
-        config,
-        importRoute,
-        packageRows: importResult.packageRows,
-        projectId: covidenceProject.id,
-        tx,
-      })
-      await seedCovidenceHumanJudgmentsFromConfig({
-        config,
-        importRoute,
-        packageRows: importResult.packageRows,
-        projectId: covidenceProject?.id ?? null,
-        tx,
-      })
-
-      const {packageRows: _packageRows, ...responseImportResult} = importResult
-
-      return {...responseImportResult, covidenceProject, covidencePrompts}
-    }, articleImportStoreWorkloadContext)
-    .catch(async (error) => {
-      deleteCovidencePackageFiles(dataSourceId)
-      throw error
-    })) as Awaited<ReturnType<typeof importCovidencePackageFromConfig>>
+  await startCovidencePackageImportInBackground({
+    config,
+    dataSourceId,
+    packageRows: created.packageRows,
+    projectId: created.covidenceProject.id,
+    title,
+    trigger: 'manual',
+  })
 
   const dataSource = await getDataSourceQueryService().getDataSourceById(dataSourceId)
-  const covidenceProject = getCreatedCovidenceProject(result)
 
   if (!dataSource) {
     throw new Error('Data source not found after Covidence import create')
-  }
-
-  if (covidenceProject !== null && getCanRequestReviewServingBootstrap()) {
-    requestReviewServingV4Rebuild({projectId: covidenceProject.id, reason: 'missingReviewServingSnapshot'}).catch(
-      () => {
-        return undefined
-      },
-    )
   }
 
   return {
     success: true,
     data: {
       covidencePackageConfig: config,
-      covidenceProject,
-      covidencePrompts: 'covidencePrompts' in result ? result.covidencePrompts : [],
+      covidenceProject: created.covidenceProject,
+      covidencePrompts: created.covidencePrompts,
       dataSource,
-      stats: result.stats,
     },
   }
 }

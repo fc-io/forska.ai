@@ -1,64 +1,34 @@
-import type {Context} from 'elysia'
-
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
-import {articleImportStoreWorkloadContext} from '../../services/articleImportStoreService.ts'
-import {
-  clearCovidenceSeededHumanJudgments,
-  getCovidencePackageConfig,
-  getCovidencePackageCursor,
-  importCovidencePackageFromConfig,
-  seedCovidenceHumanJudgmentsFromConfig,
-  syncCovidenceProjectScopeFromConfig,
-} from '../../services/covidenceImportService.ts'
+import {getCovidencePackageConfig, getCovidencePackageRowsFromConfig} from '../../services/covidenceImportService.ts'
+import type {DataSourceImportTrigger} from '../../services/dataSourceImportStateRepository.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
+import {HttpError} from '../../utils/httpError.ts'
+import {startCovidencePackageImportInBackground} from './startCovidencePackageImportInBackground.ts'
 
-export const dataSourcesImportRoutesPostCovidence = async ({body, set}: {body: {id: string}; set: Context['set']}) => {
-  const dataSource = await getDataSourceQueryService().getDataSourceById(body.id)
+export const dataSourcesImportRoutesPostCovidence = async (
+  body: {id: string},
+  options: {trigger?: DataSourceImportTrigger} = {},
+) => {
+  const dataSourceQueryService = getDataSourceQueryService()
+  const dataSource = await dataSourceQueryService.getDataSourceById(body.id)
 
   if (!dataSource) {
-    set.status = 404
-    return {data: null, error: 'Data source not found'}
+    throw new HttpError(404, 'Data source not found')
   }
 
   const config = getCovidencePackageConfig(dataSource.cursor)
 
   if (!config) {
-    set.status = 400
-    return {data: null, error: 'Data source is not configured for Covidence import'}
+    throw new HttpError(400, 'Data source is not configured for Covidence import')
   }
 
-  const importRoute = `covidence:${dataSource.id}`
-  const cursor = getCovidencePackageCursor(config)
-  const result = (await getAppDatabaseService().transaction(async (tx) => {
-    await clearCovidenceSeededHumanJudgments({importRoute, tx})
+  await startCovidencePackageImportInBackground({
+    config,
+    dataSourceId: dataSource.id,
+    packageRows: getCovidencePackageRowsFromConfig(config),
+    projectId: null,
+    title: dataSource.title,
+    trigger: options.trigger ?? 'manual',
+  })
 
-    const importResult = await importCovidencePackageFromConfig({config, datasourceId: dataSource.id, importRoute, tx})
-    const updatedAt = new Date()
-
-    await syncCovidenceProjectScopeFromConfig({config, importRoute, packageRows: importResult.packageRows, tx})
-    await seedCovidenceHumanJudgmentsFromConfig({config, importRoute, packageRows: importResult.packageRows, tx})
-
-    await tx.run(`
-      UPDATE app.import_route
-      SET name = ${getSqlLiteral(dataSource.title)}
-      WHERE route = ${getSqlLiteral(importRoute)}
-    `)
-
-    await tx.run(`
-      UPDATE app.data_source
-      SET last_import_at = ${getTimestampLiteral(updatedAt)},
-          items_after_last_import = ${importResult.stats.importedCount},
-          updated_at = ${getTimestampLiteral(updatedAt)},
-          import_route = ${getSqlLiteral(importRoute)},
-          cursor = ${getSqlLiteral(cursor)}
-      WHERE id = '${escapeSqlString(dataSource.id)}'
-    `)
-
-    const {packageRows: _packageRows, ...responseImportResult} = importResult
-
-    return responseImportResult
-  }, articleImportStoreWorkloadContext)) as Awaited<ReturnType<typeof importCovidencePackageFromConfig>>
-
-  return {success: true, data: await getDataSourceQueryService().getDataSourceById(dataSource.id), stats: result.stats}
+  return {success: true, data: await dataSourceQueryService.getDataSourceById(dataSource.id)}
 }

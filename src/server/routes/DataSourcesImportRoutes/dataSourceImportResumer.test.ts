@@ -5,7 +5,9 @@ import type {
   DataSourceImportTrigger,
 } from '../../services/dataSourceImportStateRepository.ts'
 import {HttpError} from '../../utils/httpError.ts'
-import {runDataSourceImportResumerWake} from './dataSourceImportResumer.ts'
+import {getDataSourceImportStarterForRoute, runDataSourceImportResumerWake} from './dataSourceImportResumer.ts'
+import {dataSourcesImportRoutesPostCovidence} from './dataSourcesImportRoutesPostCovidence.ts'
+import {dataSourcesImportRoutesPostPubmed} from './dataSourcesImportRoutesPostPubmed.ts'
 
 const now = new Date('2026-09-26T12:00:00.000Z')
 
@@ -150,4 +152,11 @@ test('an import interrupted five times without progress is stopped instead of re
   expect(result.stopped).toEqual(['source-g'])
   expect(calls).toEqual(['stopped:source-g'])
   expect(started).toEqual(['source-h'])
+})
+
+test('Covidence package imports resume through the Covidence starter and unknown routes have none', () => {
+  expect(getDataSourceImportStarterForRoute('covidence:source-a')).toBe(dataSourcesImportRoutesPostCovidence)
+  expect(getDataSourceImportStarterForRoute('/api/datasources/import/pubmed')).toBe(dataSourcesImportRoutesPostPubmed)
+  expect(getDataSourceImportStarterForRoute('covidence')).toBeUndefined()
+  expect(getDataSourceImportStarterForRoute('/api/datasources/import/covidence')).toBeUndefined()
 })

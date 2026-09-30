@@ -121,7 +121,6 @@ type CovidenceCreateResponse = {
     covidenceProject: {created: boolean; id: string; modelId: string; name: string} | null
     covidencePrompts: Array<{created: boolean; id: string; promptHeading: string; type: string}>
     dataSource: {id: string; importRoute: string | null; title: string}
-    stats: {importedCount: number; itemCount: number}
   }
 }
 
@@ -451,7 +450,7 @@ const AdminCovidenceImport = () => {
     return {
       mutationFn: createCovidenceImport,
       onSuccess: () => {
-        globalThis.location.assign('/projects')
+        globalThis.location.assign('/admin/datasources')
       },
     }
   })
@@ -590,7 +589,8 @@ const AdminCovidenceImport = () => {
               <h1 class="text-3xl font-semibold tracking-tight text-stone-900">Covidence multi-file import</h1>
               <p class="max-w-2xl text-sm leading-6 text-stone-600">
                 Upload the required Covidence CSV exports, inspect the merged rows, then create the datasource, prompt,
-                linked project, and seeded judgments in one pass.
+                and linked project. The articles and seeded judgments import in the background; the Data Sources page
+                shows the progress.
               </p>
             </div>
             <Button as={Link} to="/admin/datasources" variant="outline" size="sm">

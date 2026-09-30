@@ -1,18 +1,19 @@
 import {expect, test} from 'bun:test'
 
+type BackgroundCall = {
+  candidateCount: number
+  dataSourceId: string
+  mode: string
+  projectId: string | null
+  title: string
+  trigger: string
+}
+
 type CovidenceReimportResult = {
-  clearCalls?: string[]
-  queueCalls: string[][]
-  seedCalls?: Array<{importRoute: string; mode: string}>
-  scopeCalls?: Array<{importRoute: string; mode: string}>
-  result: {
-    data: {id: string} | null
-    error?: string
-    success?: boolean
-    stats?: {importedCount: number; itemCount: number}
-  }
-  setStatus: number
-  txStatements: string[]
+  backgroundCalls: BackgroundCall[]
+  error: {message: string; status: number | null} | null
+  getDataSourceCallCount: number
+  result: {data: {id: string} | null; success?: boolean} | null
 }
 
 const getLastJsonLine = (stdout: string) => {
@@ -29,289 +30,38 @@ const getLastJsonLine = (stdout: string) => {
   )
 }
 
-test('Covidence reimport reloads config and updates the existing datasource route', () => {
-  const runRoute = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {mock} = await import('bun:test')
+const getHarnessScript = (params: {cursor: string | null; dataSourceExists: boolean; steps: string}) => {
+  return `
+    const {mock} = await import('bun:test')
 
-        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').href
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
-        const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').href
-        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').href
+    const getModulePath = (path) => {
+      return new URL(path, 'file://' + process.cwd() + '/').href
+    }
+    const state = {backgroundCalls: [], getDataSourceCallCount: 0}
 
-        const state = {clearCalls: [], queueCalls: [], scopeCalls: [], seedCalls: [], txStatements: []}
-
-        void mock.module(articleImportStoreServiceModulePath, () => {
+    void mock.module(getModulePath('./src/server/services/covidenceImportService.ts'), () => {
+      return {
+        getCovidencePackageConfig: (cursor) => {
+          return cursor === 'cursor-json'
+            ? {kind: 'covidence_import', version: 1, mode: 'full_text', files: []}
+            : null
+        },
+        getCovidencePackageRowsFromConfig: () => {
+          return {candidates: [{articleKey: 'a'}, {articleKey: 'b'}, {articleKey: 'c'}], warnings: {}}
+        },
+      }
+    })
+    void mock.module(getModulePath('./src/server/services/dataSourceQueryService.ts'), () => {
+      return {
+        getDataSourceQueryService: () => {
           return {
-            articleImportStoreWorkloadContext: {
-              allowsTempSpill: true,
-              fallbackIntent: 'reject',
-              routeOrJobKey: 'import.storeArticles',
-              timeoutMs: 120000,
-              workloadClass: 'background.importStore',
-            },
-            markImportedArticleProjectsDirty: async (importRouteIds) => {
-              state.queueCalls.push(importRouteIds)
-            },
-          }
-        })
-
-
-        void mock.module(appDatabaseServiceModulePath, () => {
-          return {
-            getAppDatabaseService: () => {
-              return {
-                transaction: async (work) => {
-                  return await work({
-                    run: async (statement) => {
-                      state.txStatements.push(statement)
-                    },
-                  })
-                },
-              }
-            },
-          }
-        })
-
-        void mock.module(covidenceImportServiceModulePath, () => {
-          return {
-            clearCovidenceSeededHumanJudgments: async (params) => {
-              state.clearCalls.push(params.importRoute)
-            },
-            getCovidencePackageConfig: (cursor) => {
-              return cursor === 'cursor-json'
-                ? {kind: 'covidence_import', version: 1, mode: 'title_abstract', files: []}
-                : null
-            },
-            getCovidencePackageCursor: (config) => {
-              return JSON.stringify(config)
-            },
-            importCovidencePackageFromConfig: async () => {
-              return {importRouteIds: ['route-1'], stats: {importedCount: 3, itemCount: 3}}
-            },
-            seedCovidenceHumanJudgmentsFromConfig: async (params) => {
-              state.seedCalls.push({importRoute: params.importRoute, mode: params.config.mode})
-            },
-            syncCovidenceProjectScopeFromConfig: async (params) => {
-              state.scopeCalls.push({importRoute: params.importRoute, mode: params.config.mode})
-            },
-          }
-        })
-
-        void mock.module(dataSourceQueryServiceModulePath, () => {
-          return {
-            getDataSourceQueryService: () => {
-              return {
-                getDataSourceById: async (id) => {
-                  return {
+            getDataSourceById: async (id) => {
+              state.getDataSourceCallCount += 1
+              return ${JSON.stringify(params.dataSourceExists)}
+                ? {
                     archived: false,
                     createdAt: new Date('2026-01-01T00:00:00.000Z'),
-                    cursor: 'cursor-json',
-                    dateFrom: null,
-                    dateTo: null,
-                    description: 'Created from Covidence package',
-                    id,
-                    importRoute: 'covidence:' + id,
-                    itemsAfterLastImport: 3,
-                    lastImportAt: new Date('2026-01-02T00:00:00.000Z'),
-                    title: 'Created datasource',
-                    updatedAt: new Date('2026-01-02T00:00:00.000Z'),
-                  }
-                },
-              }
-            },
-          }
-        })
-
-        const {dataSourcesImportRoutesPostCovidence} = await import(
-          './src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts?test=' + Date.now(),
-        )
-
-        const set = {status: 200}
-        const result = await dataSourcesImportRoutesPostCovidence({body: {id: 'datasource-1'}, set})
-        console.log(JSON.stringify({clearCalls: state.clearCalls, queueCalls: state.queueCalls, result, scopeCalls: state.scopeCalls, seedCalls: state.seedCalls, setStatus: set.status, txStatements: state.txStatements}))
-      `,
-    ],
-    {cwd: process.cwd(), env: process.env},
-  )
-
-  if (runRoute.exitCode !== 0) {
-    throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'Covidence reimport test failed')
-  }
-
-  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as CovidenceReimportResult
-
-  expect(parsed.setStatus).toBe(200)
-  expect(parsed.clearCalls).toEqual(['covidence:datasource-1'])
-  expect(parsed.txStatements).toHaveLength(2)
-  expect(parsed.txStatements[0]).toContain('UPDATE app.import_route')
-  expect(parsed.txStatements[1]).toContain("WHERE id = 'datasource-1'")
-  expect(parsed.txStatements[1]).toContain('items_after_last_import = 3')
-  expect(parsed.scopeCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'title_abstract'}])
-  expect(parsed.seedCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'title_abstract'}])
-  expect(parsed.queueCalls).toEqual([])
-  expect(parsed.result.success).toBe(true)
-  expect((parsed.result.data as {id: string} | null)?.id).toBe('datasource-1')
-  expect(parsed.result.stats).toEqual({importedCount: 3, itemCount: 3})
-})
-
-test('Covidence reimport returns 400 when the datasource cursor is not a Covidence config', () => {
-  const runRoute = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {mock} = await import('bun:test')
-
-        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').href
-        const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').href
-
-        void mock.module(dataSourceQueryServiceModulePath, () => {
-          return {
-            getDataSourceQueryService: () => {
-              return {
-                getDataSourceById: async (id) => {
-                  return {
-                    archived: false,
-                    createdAt: new Date('2026-01-01T00:00:00.000Z'),
-                    cursor: 'not-covidence',
-                    dateFrom: null,
-                    dateTo: null,
-                    description: null,
-                    id,
-                    importRoute: 'covidence:' + id,
-                    itemsAfterLastImport: 0,
-                    lastImportAt: null,
-                    title: 'Created datasource',
-                    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-                  }
-                },
-              }
-            },
-          }
-        })
-
-        void mock.module(covidenceImportServiceModulePath, () => {
-          return {
-            clearCovidenceSeededHumanJudgments: async () => {},
-            getCovidencePackageConfig: () => null,
-            getCovidencePackageCursor: () => 'cursor-json',
-            importCovidencePackageFromConfig: async () => {
-              return {importRouteIds: [], stats: {importedCount: 0, itemCount: 0}}
-            },
-            seedCovidenceHumanJudgmentsFromConfig: async () => {},
-            syncCovidenceProjectScopeFromConfig: async () => {},
-          }
-        })
-
-        const {dataSourcesImportRoutesPostCovidence} = await import(
-          './src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts?test=' + Date.now(),
-        )
-
-        const set = {status: 200}
-        const result = await dataSourcesImportRoutesPostCovidence({body: {id: 'datasource-1'}, set})
-        console.log(JSON.stringify({result, setStatus: set.status}))
-      `,
-    ],
-    {cwd: process.cwd(), env: process.env},
-  )
-
-  if (runRoute.exitCode !== 0) {
-    throw new Error(
-      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Covidence invalid reimport test failed',
-    )
-  }
-
-  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as CovidenceReimportResult
-
-  expect(parsed.setStatus).toBe(400)
-  expect(parsed.result).toEqual({data: null, error: 'Data source is not configured for Covidence import'})
-})
-
-test('Covidence reimport clears and reseeds full-text project judgments', () => {
-  const runRoute = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {mock} = await import('bun:test')
-
-        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').href
-        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').href
-        const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').href
-        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').href
-
-        const state = {clearCalls: [], queueCalls: [], scopeCalls: [], seedCalls: [], txStatements: []}
-
-        void mock.module(articleImportStoreServiceModulePath, () => {
-          return {
-            articleImportStoreWorkloadContext: {
-              allowsTempSpill: true,
-              fallbackIntent: 'reject',
-              routeOrJobKey: 'import.storeArticles',
-              timeoutMs: 120000,
-              workloadClass: 'background.importStore',
-            },
-            markImportedArticleProjectsDirty: async (importRouteIds) => {
-              state.queueCalls.push(importRouteIds)
-            },
-          }
-        })
-
-
-        void mock.module(appDatabaseServiceModulePath, () => {
-          return {
-            getAppDatabaseService: () => {
-              return {
-                transaction: async (work) => {
-                  return await work({
-                    run: async (statement) => {
-                      state.txStatements.push(statement)
-                    },
-                  })
-                },
-              }
-            },
-          }
-        })
-
-        void mock.module(covidenceImportServiceModulePath, () => {
-          return {
-            clearCovidenceSeededHumanJudgments: async (params) => {
-              state.clearCalls.push(params.importRoute)
-            },
-            getCovidencePackageConfig: (cursor) => {
-              return cursor === 'cursor-json'
-                ? {kind: 'covidence_import', version: 1, mode: 'full_text', files: []}
-                : null
-            },
-            getCovidencePackageCursor: (config) => {
-              return JSON.stringify(config)
-            },
-            importCovidencePackageFromConfig: async () => {
-              return {importRouteIds: ['route-1'], stats: {importedCount: 3, itemCount: 4}}
-            },
-            seedCovidenceHumanJudgmentsFromConfig: async (params) => {
-              state.seedCalls.push({importRoute: params.importRoute, mode: params.config.mode})
-            },
-            syncCovidenceProjectScopeFromConfig: async (params) => {
-              state.scopeCalls.push({importRoute: params.importRoute, mode: params.config.mode})
-            },
-          }
-        })
-
-        void mock.module(dataSourceQueryServiceModulePath, () => {
-          return {
-            getDataSourceQueryService: () => {
-              return {
-                getDataSourceById: async (id) => {
-                  return {
-                    archived: false,
-                    createdAt: new Date('2026-01-01T00:00:00.000Z'),
-                    cursor: 'cursor-json',
+                    cursor: ${JSON.stringify(params.cursor)},
                     dateFrom: null,
                     dateTo: null,
                     description: 'Created from Covidence package',
@@ -322,37 +72,118 @@ test('Covidence reimport clears and reseeds full-text project judgments', () => 
                     title: 'Full text datasource',
                     updatedAt: new Date('2026-01-02T00:00:00.000Z'),
                   }
-                },
-              }
+                : null
             },
           }
-        })
+        },
+      }
+    })
+    void mock.module(getModulePath('./src/server/routes/DataSourcesImportRoutes/startCovidencePackageImportInBackground.ts'), () => {
+      return {
+        getCovidenceImportRoute: (dataSourceId) => {
+          return 'covidence:' + dataSourceId
+        },
+        isCovidenceImportRoute: (importRoute) => {
+          return typeof importRoute === 'string' && importRoute.startsWith('covidence:')
+        },
+        startCovidencePackageImportInBackground: async (input) => {
+          state.backgroundCalls.push({
+            candidateCount: input.packageRows.candidates.length,
+            dataSourceId: input.dataSourceId,
+            mode: input.config.mode,
+            projectId: input.projectId,
+            title: input.title,
+            trigger: input.trigger,
+          })
+        },
+      }
+    })
 
-        const {dataSourcesImportRoutesPostCovidence} = await import(
-          './src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts?test=' + Date.now(),
-        )
-
-        const set = {status: 200}
-        const result = await dataSourcesImportRoutesPostCovidence({body: {id: 'datasource-1'}, set})
-        console.log(JSON.stringify({clearCalls: state.clearCalls, queueCalls: state.queueCalls, result, scopeCalls: state.scopeCalls, seedCalls: state.seedCalls, setStatus: set.status, txStatements: state.txStatements}))
-      `,
-    ],
-    {cwd: process.cwd(), env: process.env},
-  )
-
-  if (runRoute.exitCode !== 0) {
-    throw new Error(
-      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Covidence full-text reimport test failed',
+    const {dataSourcesImportRoutesPostCovidence} = await import(
+      './src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts?test=' + Date.now()
     )
+    const output = {backgroundCalls: state.backgroundCalls, error: null, getDataSourceCallCount: 0, result: null}
+
+    try {
+      ${params.steps}
+    } catch (error) {
+      output.error = {message: error instanceof Error ? error.message : String(error), status: error?.status ?? null}
+    }
+
+    output.getDataSourceCallCount = state.getDataSourceCallCount
+    console.log(JSON.stringify(output))
+  `
+}
+
+const runHarness = (params: {cursor: string | null; dataSourceExists: boolean; steps: string}) => {
+  const run = globalThis.Bun.spawnSync(['bun', '-e', getHarnessScript(params)], {cwd: process.cwd(), env: process.env})
+
+  if (run.exitCode !== 0) {
+    throw new Error(run.stderr.toString() || run.stdout.toString() || 'Covidence reimport test failed')
   }
 
-  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as CovidenceReimportResult
+  return JSON.parse(getLastJsonLine(run.stdout.toString())) as CovidenceReimportResult
+}
 
-  expect(parsed.setStatus).toBe(200)
-  expect(parsed.clearCalls).toEqual(['covidence:datasource-1'])
-  expect(parsed.scopeCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'full_text'}])
-  expect(parsed.seedCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'full_text'}])
-  expect(parsed.queueCalls).toEqual([])
-  expect(parsed.result.success).toBe(true)
-  expect(parsed.result.stats).toEqual({importedCount: 3, itemCount: 4})
+test('Covidence reimport starts the package import in the background and returns the datasource', () => {
+  const result = runHarness({
+    cursor: 'cursor-json',
+    dataSourceExists: true,
+    steps: `
+      const manual = await dataSourcesImportRoutesPostCovidence({id: 'datasource-1'})
+      await dataSourcesImportRoutesPostCovidence({id: 'datasource-1'}, {trigger: 'auto_retry'})
+      output.result = manual
+    `,
+  })
+
+  expect(result.error).toBeNull()
+  expect(result.result?.success).toBe(true)
+  expect(result.result?.data?.id).toBe('datasource-1')
+  expect(result.getDataSourceCallCount).toBe(4)
+  expect(result.backgroundCalls).toEqual([
+    {
+      candidateCount: 3,
+      dataSourceId: 'datasource-1',
+      mode: 'full_text',
+      projectId: null,
+      title: 'Full text datasource',
+      trigger: 'manual',
+    },
+    {
+      candidateCount: 3,
+      dataSourceId: 'datasource-1',
+      mode: 'full_text',
+      projectId: null,
+      title: 'Full text datasource',
+      trigger: 'auto_retry',
+    },
+  ])
+})
+
+test('Covidence reimport rejects with 400 when the datasource cursor is not a Covidence config', () => {
+  const result = runHarness({
+    cursor: 'not-covidence',
+    dataSourceExists: true,
+    steps: `
+      output.result = await dataSourcesImportRoutesPostCovidence({id: 'datasource-1'})
+    `,
+  })
+
+  expect(result.result).toBeNull()
+  expect(result.error).toEqual({message: 'Data source is not configured for Covidence import', status: 400})
+  expect(result.backgroundCalls).toEqual([])
+})
+
+test('Covidence reimport rejects with 404 when the datasource does not exist', () => {
+  const result = runHarness({
+    cursor: null,
+    dataSourceExists: false,
+    steps: `
+      output.result = await dataSourcesImportRoutesPostCovidence({id: 'missing-datasource'})
+    `,
+  })
+
+  expect(result.result).toBeNull()
+  expect(result.error).toEqual({message: 'Data source not found', status: 404})
+  expect(result.backgroundCalls).toEqual([])
 })

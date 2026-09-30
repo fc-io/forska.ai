@@ -85,8 +85,8 @@ export const dataSourcesImportRoutes = new Elysia()
   )
   .post(
     '/api/datasources/import/covidence',
-    async ({body, set}) => {
-      return await dataSourcesImportRoutesPostCovidence({body, set})
+    async ({body}) => {
+      return await dataSourcesImportRoutesPostCovidence(body)
     },
     {body: t.Object({id: t.String()})},
   )
