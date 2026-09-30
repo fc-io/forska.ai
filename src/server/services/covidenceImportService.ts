@@ -106,7 +106,7 @@ type CovidenceStudyGroupWarning = {
   studyKey: string
   studyKeySource: CovidenceStudyKeySource
 }
-type CovidenceReferenceMergeResult = {
+export type CovidenceReferenceMergeResult = {
   candidates: CovidenceMergedArticleCandidate[]
   warnings: {
     conflictingStageMemberships: CovidenceMergeConflict[]
@@ -133,7 +133,7 @@ type CovidenceCsvHeaderResult = {normalizedHeaders: string[]; ok: true} | {error
 type CovidenceRisRecordParseResult =
   | {ok: true; records: Array<Record<string, string[]>>}
   | {error: CovidenceCsvParseError; ok: false}
-type CovidencePackageConfig = {
+export type CovidencePackageConfig = {
   kind: 'covidence_import'
   version: 1
   mode: CovidenceImportMode
@@ -1686,7 +1686,7 @@ const getCovidencePackageAbsolutePath = (assetPath: string) => {
   return absolutePath.startsWith(allowedPrefix) ? absolutePath : null
 }
 
-const getCovidencePackageRowsFromConfig = (config: CovidencePackageConfig) => {
+export const getCovidencePackageRowsFromConfig = (config: CovidencePackageConfig) => {
   const parsedRows = config.files.map((file) => {
     return parseCovidenceReferenceRows({
       content: getCovidencePackageFileContent(file.assetPath),

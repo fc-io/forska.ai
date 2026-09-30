@@ -123,7 +123,7 @@ const postImportAndRefetch = async (
 }
 
 const alertIfImportStartedInBackground = (entry: DataSourceListItem) => {
-  if (isBuiltInImportRoute(entry.importRoute)) {
+  if (isBuiltInImportRoute(entry.importRoute) || entry.reimportable) {
     alert('Import started. It runs in the background; Last Import updates when it finishes.')
   }
 }
@@ -443,14 +443,19 @@ export const AdminDataSources = () => {
                                 onClick={() => {
                                   void startDataSourceImport(entry, () => {
                                     return dataSourcesQuery.refetch()
-                                  }).catch((error) => {
-                                    console.error('Failed to reimport Covidence datasource', error)
-                                    alert(
-                                      error instanceof Error
-                                        ? error.message
-                                        : 'Failed to reimport Covidence datasource',
-                                    )
-                                  })
+                                  }).then(
+                                    () => {
+                                      alertIfImportStartedInBackground(entry)
+                                    },
+                                    (error) => {
+                                      console.error('Failed to reimport Covidence datasource', error)
+                                      alert(
+                                        error instanceof Error
+                                          ? error.message
+                                          : 'Failed to reimport Covidence datasource',
+                                      )
+                                    },
+                                  )
                                 }}
                                 class="px-3 py-1.5 rounded-md bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1"
                               >

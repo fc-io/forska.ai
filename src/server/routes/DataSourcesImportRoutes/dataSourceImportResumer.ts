@@ -9,9 +9,11 @@ import {HttpError} from '../../utils/httpError.ts'
 import {writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from '../../utils/runtimeLogger.ts'
 import {dataSourcesImportRoutesPostArxiv} from './dataSourcesImportRoutesPostArxiv.ts'
 import {dataSourcesImportRoutesPostBiorxiv} from './dataSourcesImportRoutesPostBiorxiv.ts'
+import {dataSourcesImportRoutesPostCovidence} from './dataSourcesImportRoutesPostCovidence.ts'
 import {dataSourcesImportRoutesPostEuropePmcPpr} from './dataSourcesImportRoutesPostEuropePmcPpr.ts'
 import {dataSourcesImportRoutesPostMedrxiv} from './dataSourcesImportRoutesPostMedrxiv.ts'
 import {dataSourcesImportRoutesPostPubmed} from './dataSourcesImportRoutesPostPubmed.ts'
+import {isCovidenceImportRoute} from './startCovidencePackageImportInBackground.ts'
 import {isDataSourceImportRunningInProcess} from './startDataSourceImportInBackground.ts'
 
 type DataSourceImportStarter = (body: {id: string}, options: {trigger?: DataSourceImportTrigger}) => Promise<unknown>
@@ -42,11 +44,17 @@ const isInterruptedTooOften = (candidate: DataSourceImportResumeCandidate) => {
   return candidate.status === 'running' && candidate.consecutiveFailureCount >= dataSourceImportMaxConsecutiveFailures
 }
 
+export const getDataSourceImportStarterForRoute = (importRoute: string): DataSourceImportStarter | undefined => {
+  return isCovidenceImportRoute(importRoute)
+    ? dataSourcesImportRoutesPostCovidence
+    : dataSourceImportStartersByRoute[importRoute]
+}
+
 export const startDataSourceImportForResume = async (
   candidate: DataSourceImportResumeCandidate,
   trigger: DataSourceImportTrigger,
 ) => {
-  const starter = dataSourceImportStartersByRoute[candidate.importRoute]
+  const starter = getDataSourceImportStarterForRoute(candidate.importRoute)
 
   if (!starter) {
     throw new Error(`Automatic resume is not supported for import route ${candidate.importRoute}`)
