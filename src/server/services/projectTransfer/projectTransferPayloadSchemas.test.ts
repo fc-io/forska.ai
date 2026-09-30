@@ -154,6 +154,28 @@ test('locks project settings and warning, omission, and redaction code fixtures'
   expect(getValidationError(invalidWarningResult)).toContain('unknown code secretOmitted')
 })
 
+test('accepts known judge system prompt keys, keeps packages without one importable, and rejects unknown keys', () => {
+  const project = getProjectTransferPayloadFixture('project')
+  const getSettingsResult = (judgeSystemPromptKey: unknown) => {
+    return validateProjectTransferPayload('project', {
+      ...project,
+      settings: {...project.settings, judgeSystemPromptKey},
+    })
+  }
+  const {judgeSystemPromptKey: _fixtureKey, ...settingsWithoutKey} = project.settings
+  const withoutKeyResult = validateProjectTransferPayload('project', {...project, settings: settingsWithoutKey})
+
+  expect(Object.hasOwn(settingsWithoutKey, 'judgeSystemPromptKey')).toBe(false)
+  expect(getValidationError(withoutKeyResult)).toBeNull()
+  expect(getValidationError(getSettingsResult(null))).toBeNull()
+  expect(getValidationError(getSettingsResult('legacy'))).toBeNull()
+  expect(getValidationError(getSettingsResult('screening_v1'))).toBeNull()
+  expect(getValidationError(getSettingsResult('screening_v2'))).toContain(
+    'settings.judgeSystemPromptKey must be one of legacy, screening_v1',
+  )
+  expect(getValidationError(getSettingsResult(1))).toContain('settings.judgeSystemPromptKey must be one of')
+})
+
 test('rejects missing required signature fields and source ids outside provenance', () => {
   const project = getProjectTransferPayloadFixture('project')
   const article = getOnlyRecord(getProjectTransferPayloadFixture('articles'))

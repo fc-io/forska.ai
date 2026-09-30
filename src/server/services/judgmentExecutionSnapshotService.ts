@@ -34,6 +34,7 @@ type JudgmentExecutionSnapshotRow = {
   fullTextPdf: string | null
   fullTextSource: string | null
   jobId: string
+  judgeSystemPromptKey: string | null
   modelDisplayName: string | null
   modelId: string
   modelMetadataJson: unknown
@@ -427,6 +428,7 @@ const getSnapshotRows = async (
       snapshot_request.article_id AS requestedArticleId,
       snapshot_request.prompt_id AS requestedPromptId,
       p.name AS projectName,
+      p.judge_system_prompt_key AS judgeSystemPromptKey,
       p.model_id AS modelId,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
@@ -605,6 +607,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       dateFrom: getDateIsoValue(row.dateFrom),
       dateTo: getDateIsoValue(row.dateTo),
       id: row.projectId,
+      judgeSystemPromptKey: row.judgeSystemPromptKey,
       name: row.projectName,
     },
     prompt: {

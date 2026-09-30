@@ -1300,6 +1300,7 @@ export const judgeSinglePrompt = async ({
   projectId,
   claimIdentity,
   contentSettings,
+  systemPromptKey,
 }: {
   article: ArticlesType[number]
   prompt: SinglePromptInput
@@ -1311,6 +1312,7 @@ export const judgeSinglePrompt = async ({
   projectId: string
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
   contentSettings: ContentSettings
+  systemPromptKey?: string | null
 }): Promise<void> => {
   const {
     baseURL,
@@ -1341,7 +1343,7 @@ export const judgeSinglePrompt = async ({
     recordText: recordTextForQuoteValidation,
     systemPrompt,
     userPrompt: basePrompt,
-  } = getSinglePromptJudgmentRequest({article, contentSettings, prompt, provider})
+  } = getSinglePromptJudgmentRequest({article, contentSettings, prompt, provider, systemPromptKey})
   const promptIds = [prompt.id]
 
   const baseBudget = isWithinContextBudget({

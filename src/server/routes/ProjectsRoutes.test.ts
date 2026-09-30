@@ -4,6 +4,8 @@ import {fileURLToPath} from 'node:url'
 import {afterAll, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
+import {SINGLE_PROMPT_SYSTEM_PROMPT} from '../../agent/judge/judgeSinglePromptSystemPrompt.ts'
+import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1} from '../../agent/judge/judgeSinglePromptSystemPromptScreeningV1.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
@@ -644,22 +646,26 @@ test('project prompt preview uses the first project article and shared prompt bu
       FALSE
     )
   `)
-  const response = await app.handle(
-    new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
-  )
-  const payload = (await response.json()) as {
+  type PromptPreviewPayload = {
     data: {
       articleId: string | null
       previewText: string | null
       status: 'ready' | 'unavailable'
       systemPrompt: string | null
+      systemPromptKey: string
       userPrompt: string | null
     }
   }
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
+  )
+  const payload = (await response.json()) as PromptPreviewPayload
 
   expect(response.status).toBe(200)
   expect(payload.data.status).toBe('ready')
   expect(payload.data.articleId).toBe('preview-article-second')
+  expect(payload.data.systemPromptKey).toBe('legacy')
+  expect(payload.data.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT)
   expect(payload.data.systemPrompt).toContain('You are a helpful deep research assistant.')
   expect(payload.data.userPrompt).toContain('Second article title')
   expect(payload.data.userPrompt).toContain('Second article summary')
@@ -667,6 +673,27 @@ test('project prompt preview uses the first project article and shared prompt bu
   expect(payload.data.userPrompt).not.toContain('First article title')
   expect(payload.data.previewText).toContain('## System Prompt')
   expect(payload.data.previewText).toContain('## User Prompt')
+
+  const patchResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}`, {
+      body: JSON.stringify({judgeSystemPromptKey: 'screening_v1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const screeningResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
+  )
+  const screeningPayload = (await screeningResponse.json()) as PromptPreviewPayload
+
+  expect(patchResponse.status).toBe(200)
+  expect(await getCurrentReviewConfigHash(projectId)).toBe(reviewConfigHash)
+  expect(screeningResponse.status).toBe(200)
+  expect(screeningPayload.data.status).toBe('ready')
+  expect(screeningPayload.data.systemPromptKey).toBe('screening_v1')
+  expect(screeningPayload.data.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1)
+  expect(screeningPayload.data.userPrompt).toBe(payload.data.userPrompt)
+  expect(screeningPayload.data.previewText).toContain('You are screening records for a systematic review.')
 })
 
 test('project prompt preview builds article records from the prompt preview serving read', () => {
@@ -720,13 +747,21 @@ test('project prompt preview fails closed while serving scope rebuilds', async (
     new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
   )
   const payload = (await response.json()) as {
-    data: {articleId: string | null; reason: string | null; status: 'ready' | 'unavailable'}
+    data: {
+      articleId: string | null
+      reason: string | null
+      status: 'ready' | 'unavailable'
+      systemPrompt: string | null
+      systemPromptKey: string
+    }
   }
 
   expect(response.status).toBe(200)
   expect(payload.data.status).toBe('unavailable')
   expect(payload.data.articleId).toBeNull()
   expect(payload.data.reason).toBe('unavailable')
+  expect(payload.data.systemPrompt).toBeNull()
+  expect(payload.data.systemPromptKey).toBe('legacy')
 })
 
 test('archive route clears refresh state for archived projects without depending on the legacy queue', async () => {
@@ -1546,6 +1581,123 @@ test('simple patch route allows name and description edits when a judgment job e
   `)
 
   expect(jobRow?.status).toBe('completed')
+})
+
+test('project routes read and patch the judge system prompt key without re-judging or review-serving deltas', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const testApp = app
+  const database = queryDatabase
+  const connectionId = 'system-prompt-key-connection'
+  const modelId = 'system-prompt-key-model'
+  const projectId = 'system-prompt-key-project'
+  const promptId = 'system-prompt-key-prompt'
+  const judgmentId = 'system-prompt-key-judgment'
+  const originalText = 'Is this a screening study?'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(originalText, null, null, null),
+    originProjectId: projectId,
+    originalText,
+    projectId,
+    projectPromptId: 'system-prompt-key-project-prompt',
+    promptId,
+  })
+  await insertProjectArticleFixture({
+    articleId: 'system-prompt-key-article',
+    articleSeq: 1,
+    projectArticleId: 'system-prompt-key-project-article',
+    projectId,
+    title: 'Screening article',
+  })
+  await insertCloneRerunJudgmentFixture({
+    answer: 'yes',
+    articleId: 'system-prompt-key-article',
+    config: {modelId, useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+    createdAt: '2026-09-01T00:00:00.000Z',
+    judgmentId,
+    projectId,
+    promptId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('system-prompt-key-job', '${projectId}', 'running')
+  `)
+
+  const getProjectKey = async () => {
+    const response = await testApp.handle(new Request(`http://localhost/api/projects/${projectId}`))
+    const body = (await response.json()) as {data: {project: {judgeSystemPromptKey: string | null}}}
+
+    expect(response.status).toBe(200)
+
+    return body.data.project.judgeSystemPromptKey
+  }
+  const patchProject = (body: Record<string, unknown>) => {
+    return testApp.handle(
+      new Request(`http://localhost/api/projects/${projectId}`, {
+        body: JSON.stringify(body),
+        headers: {'content-type': 'application/json'},
+        method: 'PATCH',
+      }),
+    )
+  }
+  const getSideEffectState = async () => {
+    const [state] = await database<{
+      deltaCount: number
+      dirtyWorkCount: number
+      jobStatus: string
+      judgmentDeleteGeneration: number
+      judgmentVisible: boolean
+    }>(`
+      SELECT
+        (SELECT COUNT(*) FROM app.review_change_delta WHERE project_id = '${projectId}') AS deltaCount,
+        (SELECT COUNT(*) FROM app.review_serving_dirty_work WHERE project_id = '${projectId}') AS dirtyWorkCount,
+        (SELECT status FROM app.judgment_job WHERE id = 'system-prompt-key-job') AS jobStatus,
+        (SELECT delete_generation FROM app.judgment WHERE id = '${judgmentId}') AS judgmentDeleteGeneration,
+        (SELECT deleted_at IS NULL FROM app.judgment WHERE id = '${judgmentId}') AS judgmentVisible
+    `)
+
+    return state
+  }
+
+  const reviewConfigHashBefore = await getCurrentReviewConfigHash(projectId)
+  const stateBefore = await getSideEffectState()
+
+  expect(await getProjectKey()).toBeNull()
+  expect(stateBefore?.jobStatus).toBe('running')
+  expect(stateBefore?.judgmentVisible).toBe(true)
+
+  const screeningResponse = await patchProject({judgeSystemPromptKey: 'screening_v1'})
+  const screeningBody = (await screeningResponse.json()) as {data: {judgeSystemPromptKey: string | null; name: string}}
+
+  expect(screeningResponse.status).toBe(200)
+  expect(screeningBody.data.judgeSystemPromptKey).toBe('screening_v1')
+  expect(screeningBody.data.name).toBe('Archive Regression Project')
+  expect(await getProjectKey()).toBe('screening_v1')
+  expect(await getCurrentReviewConfigHash(projectId)).toBe(reviewConfigHashBefore)
+  expect(await getSideEffectState()).toEqual(stateBefore)
+
+  const unknownKeyResponse = await patchProject({judgeSystemPromptKey: 'screening_v2'})
+
+  expect(unknownKeyResponse.status).toBe(400)
+  expect(await getProjectKey()).toBe('screening_v1')
+
+  const renameResponse = await patchProject({name: 'Renamed system prompt key project'})
+
+  expect(renameResponse.status).toBe(200)
+  expect(await getProjectKey()).toBe('screening_v1')
+
+  const legacyResponse = await patchProject({judgeSystemPromptKey: null})
+  const legacyBody = (await legacyResponse.json()) as {data: {judgeSystemPromptKey: string | null}}
+
+  expect(legacyResponse.status).toBe(200)
+  expect(legacyBody.data.judgeSystemPromptKey).toBeNull()
+  expect(await getProjectKey()).toBeNull()
+  expect(await getCurrentReviewConfigHash(projectId)).toBe(reviewConfigHashBefore)
+  expect(await getSideEffectState()).toEqual(stateBefore)
 })
 
 test('edit patch routes reject archived and delete-pending projects', async () => {
@@ -4596,6 +4748,51 @@ test('clone route reuses prompt ids and hides duplicate importable prompts', asy
   expect(editUnrelatedPrompts[0]?.linkedToProject).toBe(false)
 
   await flushMartRefreshes()
+})
+
+test('clone route copies the judge system prompt key of the source project', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const testApp = app
+  const database = queryDatabase
+
+  await insertProjectFixture({
+    connectionId: 'clone-system-prompt-key-connection',
+    modelId: 'clone-system-prompt-key-model',
+    projectId: 'clone-system-prompt-key-screening',
+  })
+  await insertProjectFixture({
+    connectionId: 'clone-system-prompt-key-legacy-connection',
+    modelId: 'clone-system-prompt-key-legacy-model',
+    projectId: 'clone-system-prompt-key-legacy',
+  })
+  await runDatabase(`
+    UPDATE app.project
+    SET judge_system_prompt_key = 'screening_v1'
+    WHERE id = 'clone-system-prompt-key-screening'
+  `)
+
+  const cloneProject = async (projectId: string) => {
+    const response = await testApp.handle(
+      new Request(`http://localhost/api/projects/${projectId}/clone`, {method: 'POST'}),
+    )
+    const body = (await response.json()) as {data: {id: string; judgeSystemPromptKey: string | null}}
+    const [row] = await database<{judgeSystemPromptKey: string | null}>(`
+      SELECT judge_system_prompt_key AS judgeSystemPromptKey
+      FROM app.project
+      WHERE id = '${body.data.id}'
+    `)
+
+    expect(response.status).toBe(200)
+    expect(body.data.judgeSystemPromptKey).toBe(row?.judgeSystemPromptKey ?? null)
+
+    return row?.judgeSystemPromptKey ?? null
+  }
+
+  expect(await cloneProject('clone-system-prompt-key-screening')).toBe('screening_v1')
+  expect(await cloneProject('clone-system-prompt-key-legacy')).toBeNull()
 })
 
 test('clone route preserves summary mode criteria and human summary judgments', async () => {

@@ -13,7 +13,18 @@ import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptE
 import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptEvidenceSystemPromptStructuredImport.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT, SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptSystemPromptPatient.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV1.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
+import {
+  COVIDENCE_JUDGE_SYSTEM_PROMPT_KEY,
+  DEFAULT_JUDGE_SYSTEM_PROMPT_KEY,
+  isJudgeSystemPromptKey,
+  JUDGE_SYSTEM_PROMPT_VARIANTS,
+  resolveJudgeSystemPromptKey,
+} from './judgeSystemPromptVariants.ts'
 
 type PromptSelectionCase = {
   name: string
@@ -146,6 +157,79 @@ describe('judge prompt selection', () => {
       article,
       expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT,
       expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT,
+    })
+  })
+})
+
+describe('judge system prompt variants', () => {
+  test('registers legacy and screening_v1 with the legacy constants imported unchanged', () => {
+    expect(Object.keys(JUDGE_SYSTEM_PROMPT_VARIANTS).sort()).toEqual(['legacy', 'screening_v1'])
+    expect(DEFAULT_JUDGE_SYSTEM_PROMPT_KEY).toBe('legacy')
+    expect(COVIDENCE_JUDGE_SYSTEM_PROMPT_KEY).toBe('screening_v1')
+    expect(JUDGE_SYSTEM_PROMPT_VARIANTS.legacy.singlePrompt).toEqual({
+      anthropic: SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC,
+      default: SINGLE_PROMPT_SYSTEM_PROMPT,
+    })
+    expect(JUDGE_SYSTEM_PROMPT_VARIANTS.screening_v1.singlePrompt).toEqual({
+      anthropic: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
+      default: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1,
+    })
+    Object.entries(JUDGE_SYSTEM_PROMPT_VARIANTS).map(([key, variant]) => {
+      return expect(variant.key).toBe(key as keyof typeof JUDGE_SYSTEM_PROMPT_VARIANTS)
+    })
+  })
+
+  test('accepts only registered keys', () => {
+    expect(isJudgeSystemPromptKey('legacy')).toBe(true)
+    expect(isJudgeSystemPromptKey('screening_v1')).toBe(true)
+    expect(isJudgeSystemPromptKey('screening_v2')).toBe(false)
+    expect(isJudgeSystemPromptKey('Screening_V1')).toBe(false)
+    expect(isJudgeSystemPromptKey('toString')).toBe(false)
+    expect(isJudgeSystemPromptKey('')).toBe(false)
+    expect(isJudgeSystemPromptKey(null)).toBe(false)
+    expect(isJudgeSystemPromptKey(undefined)).toBe(false)
+    expect(isJudgeSystemPromptKey(1)).toBe(false)
+  })
+
+  test('resolves NULL, missing and unknown keys to legacy', () => {
+    expect(resolveJudgeSystemPromptKey(null)).toBe('legacy')
+    expect(resolveJudgeSystemPromptKey(undefined)).toBe('legacy')
+    expect(resolveJudgeSystemPromptKey('screening_v2')).toBe('legacy')
+    expect(resolveJudgeSystemPromptKey('screening_v1')).toBe('screening_v1')
+  })
+  ;[
+    {key: null, name: 'NULL', provider: null, expected: SINGLE_PROMPT_SYSTEM_PROMPT},
+    {key: undefined, name: 'missing', provider: 'anthropic', expected: SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC},
+    {key: 'legacy', name: 'legacy', provider: 'openai', expected: SINGLE_PROMPT_SYSTEM_PROMPT},
+    {key: 'legacy', name: 'legacy', provider: 'anthropic', expected: SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC},
+    {key: 'screening_v1', name: 'screening_v1', provider: 'openai', expected: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1},
+    {key: 'screening_v1', name: 'screening_v1', provider: null, expected: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1},
+    {
+      key: 'screening_v1',
+      name: 'screening_v1',
+      provider: 'Anthropic',
+      expected: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
+    },
+    {key: 'screening_v2', name: 'unknown', provider: 'openai', expected: SINGLE_PROMPT_SYSTEM_PROMPT},
+    {key: 'screening_v2', name: 'unknown', provider: 'anthropic', expected: SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC},
+  ].map(({key, name, provider, expected}) => {
+    return test(`selects the ${name} key variant for a scientific article on ${provider ?? 'no provider'}`, () => {
+      expect(getSinglePromptSystemPromptForArticle(buildArticle(), provider, key)).toBe(expected)
+    })
+  })
+
+  test('keeps patient and structured import prompts ahead of the variant', () => {
+    ;['screening_v1', 'legacy', null].map((key) => {
+      expect(getSinglePromptSystemPromptForArticle(buildArticle({articleId: 'fhir:patient-1'}), 'anthropic', key)).toBe(
+        SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT,
+      )
+      return expect(
+        getSinglePromptSystemPromptForArticle(
+          buildArticle({importRoute: 'structured-file:registry-entry.xml'}),
+          'openai',
+          key,
+        ),
+      ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
     })
   })
 })

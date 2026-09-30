@@ -9,6 +9,7 @@ import {
   getSinglePromptEvidenceSystemPromptForArticle,
   getSinglePromptSystemPromptForArticle,
 } from '../../../agent/judge/judgePromptSelection.ts'
+import {resolveJudgeSystemPromptKey} from '../../../agent/judge/judgeSystemPromptVariants.ts'
 import {type ArticleRecord} from '../../../db/schemaTypes.ts'
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
 import {
@@ -91,6 +92,7 @@ export type ProjectTransferExportSourceProjectSettings = {
   dateTo: Date | null
   description: string | null
   humanJudgmentMode: 'prompt' | 'summary'
+  judgeSystemPromptKey: string | null
   modelId: string | null
   name: string
   sourceProjectId: string
@@ -906,6 +908,7 @@ export const getProjectTransferExportSourceProjectSettings = async (
     dateTo: unknown
     description: string | null
     humanJudgmentMode: 'prompt' | 'summary' | null
+    judgeSystemPromptKey: string | null
     modelId: string | null
     name: string
     sourceProjectId: string
@@ -921,6 +924,7 @@ export const getProjectTransferExportSourceProjectSettings = async (
       description,
       model_id AS modelId,
       human_judgment_mode AS humanJudgmentMode,
+      judge_system_prompt_key AS judgeSystemPromptKey,
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
@@ -946,6 +950,7 @@ export const getProjectTransferExportSourceProjectSettings = async (
     archived: row.archived ?? false,
     createdAt: getDateValue(row.createdAt),
     description: row.description,
+    judgeSystemPromptKey: row.judgeSystemPromptKey ?? null,
     modelId: row.modelId,
     name: row.name,
     sourceProjectId: row.sourceProjectId,
@@ -1999,7 +2004,11 @@ const getProjectTransferExportContentSettings = (
 }
 
 const getProjectTransferExportProjectSettingsPayload = (project: ProjectTransferExportSourceProjectSettings) => {
-  return {humanJudgmentMode: project.humanJudgmentMode ?? 'prompt', ...getProjectTransferExportContentSettings(project)}
+  return {
+    humanJudgmentMode: project.humanJudgmentMode ?? 'prompt',
+    judgeSystemPromptKey: project.judgeSystemPromptKey,
+    ...getProjectTransferExportContentSettings(project),
+  }
 }
 
 const getProjectTransferExportArticleRecordForSignature = (
@@ -2175,6 +2184,7 @@ export const getProjectTransferExportJudgmentInputSignature = ({
   model,
   prompt,
   providerConnection,
+  systemPromptKey = null,
 }: {
   article: ProjectTransferExportArticlePayloadRecord
   chunkEvidenceDigests?: string[] | null
@@ -2184,6 +2194,7 @@ export const getProjectTransferExportJudgmentInputSignature = ({
   model: ProjectTransferExportModelRow
   prompt: ProjectTransferExportProjectPromptRow
   providerConnection: ProjectTransferExportProviderConnectionRow
+  systemPromptKey?: string | null
 }) => {
   const modelRequestSignature = getProjectTransferExportModelRequestSignature({model, providerConnection})
   const providerKind = providerConnection.providerKind
@@ -2193,7 +2204,8 @@ export const getProjectTransferExportJudgmentInputSignature = ({
     promptTokenLimit: modelRequestSignature.promptTokenLimit,
   })
   const articleRecord = getProjectTransferExportArticleRecordForSignature(article, fullTextProcessing.fullText)
-  const systemPrompt = getSinglePromptSystemPromptForArticle(articleRecord, providerKind)
+  const resolvedSystemPromptKey = resolveJudgeSystemPromptKey(systemPromptKey)
+  const systemPrompt = getSinglePromptSystemPromptForArticle(articleRecord, providerKind, resolvedSystemPromptKey)
   const evidenceSystemPrompt = chunkingStrategy
     ? getSinglePromptEvidenceSystemPromptForArticle(articleRecord, providerKind)
     : null
@@ -2226,7 +2238,8 @@ export const getProjectTransferExportJudgmentInputSignature = ({
       reservedCompletionTokens: MAX_COMPLETION_TOKENS,
       retryContract: 'json-schema-and-quote-validation:v1',
       systemPromptDigest: getDigestValue(systemPrompt),
-      systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v1',
+      systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v2',
+      systemPromptKey: resolvedSystemPromptKey,
     },
     version: projectTransferInputSignatureVersion,
   }
@@ -2574,6 +2587,7 @@ const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTra
               model,
               prompt,
               providerConnection,
+              systemPromptKey: context.project.judgeSystemPromptKey,
             })
           : null
 

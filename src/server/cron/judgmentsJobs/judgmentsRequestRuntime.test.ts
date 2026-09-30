@@ -128,7 +128,7 @@ class RecoverableJudgeError extends Error {
 const judgeSinglePrompt = mock(async (_input: unknown) => {
   return undefined
 })
-const queryJson = mock(async (sql: string) => {
+const queryJson = mock(async (sql: string): Promise<unknown[]> => {
   if (sql.includes('FROM app.prompt p')) {
     return createPromptRows()
   }
@@ -1743,6 +1743,32 @@ test('prompt release marks running then judged on success', async () => {
   expect(sqliteServiceMock.markPromptAsSkipped).not.toHaveBeenCalled()
 })
 
+test('local prompt execution passes the project judge system prompt key to the judge', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  const projectKeyQueries: string[] = []
+
+  queryJson.mockImplementation(async (sql: string) => {
+    if (sql.includes('FROM app.prompt p')) {
+      return createPromptRows()
+    }
+
+    if (sql.includes('judge_system_prompt_key')) {
+      projectKeyQueries.push(sql)
+      return [{judgeSystemPromptKey: 'screening_v1'}]
+    }
+
+    return []
+  })
+
+  await processPromptWithLLM(createPromptToProcess())
+
+  const firstJudgeCall = judgeSinglePrompt.mock.calls[0]?.[0] as {systemPromptKey?: string | null} | undefined
+
+  expect(firstJudgeCall?.systemPromptKey).toBe('screening_v1')
+  expect(projectKeyQueries).toHaveLength(1)
+  expect(projectKeyQueries[0]).toContain("WHERE id = 'project-a'")
+})
+
 test('judge-worker prompt execution uses owner-backed snapshots instead of live DuckDB reads', async () => {
   useJudgeWorkerOwnerHandoffMocks = true
   const {processPromptWithLLM} = await loadProcessPromptModule()
@@ -1820,9 +1846,11 @@ test('judge-worker prompt execution uses owner-backed snapshots instead of live 
           }
         }
         prompt: {originalText: string; promptHeading: string | null}
+        systemPromptKey: string | null
       }
     | undefined
 
+  expect(firstJudgeCall?.systemPromptKey).toBeNull()
   expect(firstJudgeCall?.article).toMatchObject({
     articleTitle: 'Owner-backed title',
     fullText: 'Owner-backed full text',
@@ -1893,6 +1921,7 @@ test('judge-worker prompt execution hydrates scoped snapshot payload compatibili
         sourceMetadata: {stage: 'title_abstract'},
         url: null,
       },
+      project: {id: 'project-a', judgeSystemPromptKey: 'screening_v1', name: 'Project A'},
       prompt: {
         id: 'prompt-a',
         order: 1,
@@ -1914,9 +1943,11 @@ test('judge-worker prompt execution hydrates scoped snapshot payload compatibili
           sourceMetadata: unknown
         }
         prompt: {originalText: string}
+        systemPromptKey: string | null
       }
     | undefined
 
+  expect(firstJudgeCall?.systemPromptKey).toBe('screening_v1')
   expect(firstJudgeCall?.article).toMatchObject({
     articleId: 'covidence:123',
     id: 'canonical-article-a',

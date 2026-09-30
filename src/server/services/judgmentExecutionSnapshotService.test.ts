@@ -198,8 +198,7 @@ test('snapshot hydration reads only the resolved articles instead of hash-joinin
   expect(snapshotSql).not.toContain('LEFT JOIN app.article a ON')
 })
 
-test('snapshot article resolution prefers project-scoped imports over legacy ids', () => {
-  const result = runScript<{articleId: string; articleTitle: string; selectedExternalArticleId: string}>(`
+const snapshotResolutionSetupScript = `
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
     const {createTransientJudgmentExecutionSnapshotsForClaims} = await import('./src/server/services/judgmentExecutionSnapshotService.ts')
@@ -268,6 +267,11 @@ test('snapshot article resolution prefers project-scoped imports over legacy ids
       INSERT INTO app.article_import_route (id, article_id, import_route_id, external_article_id)
       VALUES ('air-snapshot-scoped', 'article-snapshot-scoped', 'route-snapshot-resolution', 'snapshot-collision')
     \`)
+`
+
+test('snapshot article resolution prefers project-scoped imports over legacy ids', () => {
+  const result = runScript<{articleId: string; articleTitle: string; selectedExternalArticleId: string}>(`
+${snapshotResolutionSetupScript}
 
     const [snapshot] = await createTransientJudgmentExecutionSnapshotsForClaims(
       [{
@@ -295,4 +299,55 @@ test('snapshot article resolution prefers project-scoped imports over legacy ids
     articleTitle: 'Snapshot Scoped Article',
     selectedExternalArticleId: 'snapshot-collision',
   })
+})
+
+test('snapshot payload carries the project judge system prompt key and keeps stored claim snapshots after a key change', () => {
+  const result = runScript<{
+    firstKey: string | null
+    nextClaimKey: string | null
+    persistedClaimKept: boolean
+    storedKey: string | null
+  }>(`
+${snapshotResolutionSetupScript}
+    const {createJudgmentExecutionSnapshotsForClaims, getJudgmentExecutionSnapshot} = await import('./src/server/services/judgmentExecutionSnapshotService.ts')
+    const getClaim = (claimId) => {
+      return {
+        articleId: 'snapshot-collision',
+        claimId,
+        claimedBy: 'server-1',
+        jobId: 'job-snapshot-resolution',
+        promptId: 'prompt-snapshot-resolution',
+        queueRecordId: 'queue-' + claimId,
+      }
+    }
+
+    const [first] = await createTransientJudgmentExecutionSnapshotsForClaims([getClaim('claim-first')], database)
+    const [persistedBefore] = await createJudgmentExecutionSnapshotsForClaims([getClaim('claim-persisted')])
+
+    await database.run(\`
+      UPDATE app.project
+      SET judge_system_prompt_key = 'screening_v1'
+      WHERE id = 'project-snapshot-resolution'
+    \`)
+
+    const [persistedAfter] = await createJudgmentExecutionSnapshotsForClaims([getClaim('claim-persisted')])
+    const stored = await getJudgmentExecutionSnapshot({
+      executionSnapshotHash: persistedBefore.executionSnapshotHash,
+      executionSnapshotId: persistedBefore.executionSnapshotId,
+    })
+    const [nextClaim] = await createTransientJudgmentExecutionSnapshotsForClaims([getClaim('claim-next')], database)
+
+    console.log(JSON.stringify({
+      firstKey: first.executionSnapshotPayload.project.judgeSystemPromptKey,
+      nextClaimKey: nextClaim.executionSnapshotPayload.project.judgeSystemPromptKey,
+      persistedClaimKept:
+        persistedAfter.executionSnapshotId === persistedBefore.executionSnapshotId
+        && persistedAfter.executionSnapshotHash === persistedBefore.executionSnapshotHash,
+      storedKey: stored.payload.project.judgeSystemPromptKey,
+    }))
+
+    await database.close()
+  `)
+
+  expect(result).toEqual({firstKey: null, nextClaimKey: 'screening_v1', persistedClaimKept: true, storedKey: null})
 })

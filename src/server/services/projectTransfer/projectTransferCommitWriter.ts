@@ -1,3 +1,4 @@
+import {isJudgeSystemPromptKey} from '../../../agent/judge/judgeSystemPromptVariants.ts'
 import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
 import {
   appendArticleReviewServingDeltas,
@@ -1385,6 +1386,7 @@ const getProjectSettings = (project: ProjectTransferProjectPayload) => {
 
   return {
     humanJudgmentMode,
+    judgeSystemPromptKey: isJudgeSystemPromptKey(settings.judgeSystemPromptKey) ? settings.judgeSystemPromptKey : null,
     useAbstract: getBoolean(settings.useAbstract, true),
     useFulltext: getBoolean(settings.useFulltext, false),
     useFulltextNoImages: getBoolean(settings.useFulltextNoImages, false),
@@ -1415,6 +1417,7 @@ const insertImportedProject = async ({
       description,
       model_id,
       human_judgment_mode,
+      judge_system_prompt_key,
       use_title,
       use_abstract,
       use_fulltext,
@@ -1430,6 +1433,7 @@ const insertImportedProject = async ({
       ${getSqlLiteral(getNullableString(project.description))},
       ${getSqlLiteral(getTargetModelId({models, plan, project}))},
       ${getSqlLiteral(settings.humanJudgmentMode)},
+      ${getSqlLiteral(settings.judgeSystemPromptKey)},
       ${getSqlLiteral(settings.useTitle)},
       ${getSqlLiteral(settings.useAbstract)},
       ${getSqlLiteral(settings.useFulltext)},

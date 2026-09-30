@@ -2,6 +2,11 @@ import {expect, test} from 'bun:test'
 
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {getSinglePromptJudgmentRequest} from './getSinglePromptJudgmentRequest.ts'
+import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judgeSinglePromptSystemPrompt.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV1.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => {
@@ -88,4 +93,31 @@ test('getSinglePromptJudgmentRequest uses structured import system prompt and ra
   expect(result.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
   expect(result.userPrompt).not.toContain('<SOURCE_TEXT_START>')
   expect(result.userPrompt).toContain('## article_title\n\nRegistry title')
+})
+
+test('getSinglePromptJudgmentRequest uses the project system prompt key and leaves the user prompt unchanged', () => {
+  const request = {
+    article: buildArticle({articleSummary: 'Screening summary', articleTitle: 'Screening title'}),
+    contentSettings: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+    prompt: {
+      id: 'prompt-3',
+      originalText: 'Is this about healthcare?',
+      order: 3,
+      promptHeading: 'Healthcare',
+      type: `'yes' | 'no' | 'maybe'`,
+    },
+  }
+  const legacy = getSinglePromptJudgmentRequest({...request, provider: 'openai', systemPromptKey: null})
+  const screening = getSinglePromptJudgmentRequest({...request, provider: 'openai', systemPromptKey: 'screening_v1'})
+  const screeningAnthropic = getSinglePromptJudgmentRequest({
+    ...request,
+    provider: 'anthropic',
+    systemPromptKey: 'screening_v1',
+  })
+
+  expect(legacy.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT)
+  expect(screening.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1)
+  expect(screeningAnthropic.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC)
+  expect(screening.userPrompt).toBe(legacy.userPrompt)
+  expect(screening.recordText).toBe(legacy.recordText)
 })

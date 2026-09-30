@@ -5,6 +5,7 @@ import {
   getSinglePromptJudgmentPreviewText,
   getSinglePromptJudgmentRequest,
 } from '../../../agent/judge/getSinglePromptJudgmentRequest.ts'
+import {type JudgeSystemPromptKey, resolveJudgeSystemPromptKey} from '../../../agent/judge/judgeSystemPromptVariants.ts'
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import {getProviderModelMetadataPromptTokenLimit} from '../../providers/providerModelMetadata.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
@@ -54,6 +55,7 @@ const getUnavailablePromptPreview = (input: {
   articleTitle?: string | null
   diagnostics?: ReviewServingReaderResult<PromptPreviewServingRow>['diagnostics'] | null
   reason: string
+  systemPromptKey: JudgeSystemPromptKey
 }) => {
   return {
     data: {
@@ -64,6 +66,7 @@ const getUnavailablePromptPreview = (input: {
       reason: input.reason,
       status: 'unavailable' as const,
       systemPrompt: null,
+      systemPromptKey: input.systemPromptKey,
       userPrompt: null,
     },
   }
@@ -146,6 +149,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
 
     const [project, prompt] = await Promise.all([
       getAppDatabaseService().queryJson<{
+        judgeSystemPromptKey: string | null
         modelId: string
         useAbstract: boolean
         useFulltext: boolean
@@ -154,6 +158,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       }>(
         `
         SELECT
+          judge_system_prompt_key AS judgeSystemPromptKey,
           model_id AS modelId,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
@@ -199,6 +204,8 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       throw new Error('Prompt not found or not enabled for this project')
     }
 
+    const systemPromptKey = resolveJudgeSystemPromptKey(projectRow.judgeSystemPromptKey)
+
     const reviewConfigHash = await getCurrentReviewConfigHash(params.id)
     const previewArticleRead = await getFirstProjectArticleFromServing(params.id, reviewConfigHash)
     const previewArticle = previewArticleRead.status === 'accepted' ? (previewArticleRead.rows[0] ?? null) : null
@@ -209,6 +216,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         reason:
           previewArticleRead.status === 'accepted' ? 'no_articles' : previewArticleRead.diagnostics.manifest.freshness,
+        systemPromptKey,
       })
     }
 
@@ -250,6 +258,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         articleTitle: firstArticle.articleTitle,
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         reason: 'no_fulltext',
+        systemPromptKey,
       })
     }
 
@@ -263,6 +272,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       },
       prompt: {...promptRow, order: null},
       provider: projectModel?.provider ?? null,
+      systemPromptKey,
     })
 
     return {
@@ -274,6 +284,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         reason: null,
         status: 'ready' as const,
         systemPrompt,
+        systemPromptKey,
         userPrompt,
       },
     }

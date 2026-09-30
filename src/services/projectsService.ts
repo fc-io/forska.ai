@@ -1,5 +1,6 @@
 import type {QueryClient} from '@tanstack/solid-query'
 
+import type {JudgeSystemPromptKey} from '../agent/judge/judgeSystemPromptVariants.ts'
 import {apiClient} from './apiClient.ts'
 import {handleApiResponse} from './utils/handleApiResponse.ts'
 
@@ -37,6 +38,7 @@ export type ProjectPromptPreview = {
   reason: 'conversion_failed' | 'no_articles' | 'no_fulltext' | 'transient_failure' | null
   status: 'ready' | 'unavailable'
   systemPrompt: string | null
+  systemPromptKey: JudgeSystemPromptKey
   userPrompt: string | null
 }
 

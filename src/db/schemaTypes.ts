@@ -261,6 +261,7 @@ export type ProjectRecord = {
   description: string | null
   modelId: string
   humanJudgmentMode: HumanJudgmentMode | null
+  judgeSystemPromptKey: string | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean

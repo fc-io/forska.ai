@@ -7,13 +7,15 @@ export const getSinglePromptJudgmentRequest = ({
   contentSettings,
   prompt,
   provider,
+  systemPromptKey,
 }: {
   article: ArticleRecord
   contentSettings: ContentSettings
   prompt: SinglePromptType
   provider?: string | null
+  systemPromptKey?: string | null
 }) => {
-  const systemPrompt = getSinglePromptSystemPromptForArticle(article, provider)
+  const systemPrompt = getSinglePromptSystemPromptForArticle(article, provider, systemPromptKey)
   const userPrompt = judgeGetSinglePrompt(article, prompt, contentSettings, provider)
   const recordText = `${article.articleTitle}\n\n${article.articleSummary ?? ''}\n\n${article.fullText ?? ''}`
 

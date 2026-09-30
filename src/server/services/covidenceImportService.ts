@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto'
 import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import path from 'node:path'
 
+import {COVIDENCE_JUDGE_SYSTEM_PROMPT_KEY} from '../../agent/judge/judgeSystemPromptVariants.ts'
 import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
@@ -2597,6 +2598,7 @@ export const getOrCreateCovidenceProject = async (params: {
       name,
       model_id,
       human_judgment_mode,
+      judge_system_prompt_key,
       use_title,
       use_abstract,
       use_fulltext,
@@ -2607,6 +2609,7 @@ export const getOrCreateCovidenceProject = async (params: {
       ${getSqlLiteral(params.title)},
       '${escapeSqlString(modelId)}',
       'summary',
+      ${getSqlLiteral(COVIDENCE_JUDGE_SYSTEM_PROMPT_KEY)},
       ${settings.useTitle ? 'TRUE' : 'FALSE'},
       ${settings.useAbstract ? 'TRUE' : 'FALSE'},
       ${settings.useFulltext ? 'TRUE' : 'FALSE'},

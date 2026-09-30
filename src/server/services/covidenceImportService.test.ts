@@ -738,6 +738,15 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
 
           INSERT INTO app.import_route (id, route, name, active)
           VALUES ('route-covidence', 'covidence:ds-1', 'covidence:ds-1', TRUE);
+
+          INSERT INTO app.import_route (id, route, name, active)
+          VALUES ('route-covidence-existing', 'covidence:ds-existing', 'covidence:ds-existing', TRUE);
+
+          INSERT INTO app.project (id, name, model_id, human_judgment_mode, use_title, use_abstract)
+          VALUES ('project-covidence-existing', 'Existing datasource', 'model-covidence', 'summary', TRUE, TRUE);
+
+          INSERT INTO app.project_import_route (id, project_id, import_route_id)
+          VALUES ('project-route-covidence-existing', 'project-covidence-existing', 'route-covidence-existing');
         \`)
 
         const prompt = await covidenceImportService.getOrCreateCovidencePrompt({
@@ -758,10 +767,17 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
           promptId: prompt.id,
           title: 'Created datasource',
         })
+        const existingProject = await covidenceImportService.getOrCreateCovidenceProject({
+          importRoute: 'covidence:ds-existing',
+          mode: 'title_abstract',
+          promptId: prompt.id,
+          title: 'Existing datasource',
+        })
         const projectRows = await database.queryJson(\`
           SELECT
             p.human_judgment_mode AS humanJudgmentMode,
             p.id AS id,
+            p.judge_system_prompt_key AS judgeSystemPromptKey,
             p.model_id AS modelId,
             p.name AS name,
             p.use_title AS useTitle,
@@ -769,18 +785,26 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
             p.use_fulltext AS useFulltext,
             p.use_fulltext_no_images AS useFulltextNoImages
           FROM app.project p
+          WHERE p.id <> 'project-covidence-existing'
+        \`)
+        const existingProjectRows = await database.queryJson(\`
+          SELECT id, judge_system_prompt_key AS judgeSystemPromptKey
+          FROM app.project
+          WHERE id = 'project-covidence-existing'
         \`)
         const projectImportRouteRows = await database.queryJson(\`
           SELECT pir.project_id AS projectId, ir.route AS route
           FROM app.project_import_route pir
           INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
+          WHERE pir.project_id <> 'project-covidence-existing'
         \`)
         const projectPromptRows = await database.queryJson(\`
           SELECT project_id AS projectId, prompt_id AS promptId, enabled
           FROM app.project_prompt
+          WHERE project_id <> 'project-covidence-existing'
         \`)
 
-        console.log(JSON.stringify({createdProject, projectImportRouteRows, projectPromptRows, projectRows, reusedProject}))
+        console.log(JSON.stringify({createdProject, existingProject, existingProjectRows, projectImportRouteRows, projectPromptRows, projectRows, reusedProject}))
         await database.close()
       `,
     ],
@@ -822,11 +846,14 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         useFulltextNoImages: boolean
         useTitle: boolean
       }
+      existingProject: {created: boolean; id: string}
+      existingProjectRows: Array<{id: string; judgeSystemPromptKey: string | null}>
       projectImportRouteRows: Array<{projectId: string; route: string}>
       projectPromptRows: Array<{enabled: boolean; projectId: string; promptId: string}>
       projectRows: Array<{
         humanJudgmentMode: string
         id: string
+        judgeSystemPromptKey: string | null
         modelId: string
         name: string
         useAbstract: boolean
@@ -873,6 +900,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
       {
         humanJudgmentMode: 'summary',
         id: parsed.createdProject.id,
+        judgeSystemPromptKey: 'screening_v1',
         modelId: 'model-covidence',
         name: 'Created datasource',
         useAbstract: true,
@@ -881,6 +909,9 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         useTitle: true,
       },
     ])
+    expect(parsed.existingProject.created).toBe(false)
+    expect(parsed.existingProject.id).toBe('project-covidence-existing')
+    expect(parsed.existingProjectRows).toEqual([{id: 'project-covidence-existing', judgeSystemPromptKey: null}])
     expect(parsed.projectImportRouteRows).toEqual([{projectId: parsed.createdProject.id, route: 'covidence:ds-1'}])
     expect(parsed.projectPromptRows).toHaveLength(1)
     expect(parsed.projectPromptRows[0]?.projectId).toBe(parsed.createdProject.id)

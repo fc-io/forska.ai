@@ -1,3 +1,8 @@
+import {
+  isJudgeSystemPromptKey,
+  JUDGE_SYSTEM_PROMPT_VARIANTS,
+  type JudgeSystemPromptKey,
+} from '../../../agent/judge/judgeSystemPromptVariants.ts'
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import {
@@ -94,7 +99,10 @@ export type ProjectTransferContentSettings = {
   useTitle: boolean
 }
 
-export type ProjectTransferProjectSettings = ProjectTransferContentSettings & {humanJudgmentMode: 'prompt' | 'summary'}
+export type ProjectTransferProjectSettings = ProjectTransferContentSettings & {
+  humanJudgmentMode: 'prompt' | 'summary'
+  judgeSystemPromptKey?: JudgeSystemPromptKey | null
+}
 
 export type ProjectTransferPayloadRecord = JsonRecord & {
   omissions?: ProjectTransferPayloadOmission[]
@@ -440,6 +448,14 @@ export const assertProjectTransferContentSettings = (
     : failProjectTransferPayload(`${label} must enable at least one article content field`)
 }
 
+const assertProjectTransferJudgeSystemPromptKey = (value: unknown, label: string): JudgeSystemPromptKey | null => {
+  return value === undefined || value === null
+    ? null
+    : isJudgeSystemPromptKey(value)
+      ? value
+      : failProjectTransferPayload(`${label} must be one of ${Object.keys(JUDGE_SYSTEM_PROMPT_VARIANTS).join(', ')}`)
+}
+
 export const assertProjectTransferProjectSettings = (
   value: unknown,
   label = 'settings',
@@ -448,9 +464,13 @@ export const assertProjectTransferProjectSettings = (
   const contentSettings = assertProjectTransferContentSettings(settings, label)
   const humanJudgmentMode = settings.humanJudgmentMode
   const isValidHumanJudgmentMode = humanJudgmentMode === 'prompt' || humanJudgmentMode === 'summary'
+  const judgeSystemPromptKey = assertProjectTransferJudgeSystemPromptKey(
+    settings.judgeSystemPromptKey,
+    `${label}.judgeSystemPromptKey`,
+  )
 
   return isValidHumanJudgmentMode
-    ? {...contentSettings, humanJudgmentMode}
+    ? {...contentSettings, humanJudgmentMode, judgeSystemPromptKey}
     : failProjectTransferPayload(`${label}.humanJudgmentMode must be prompt or summary`)
 }
 
@@ -1646,7 +1666,8 @@ const judgmentInputSignature = {
     reservedCompletionTokens: 4000,
     retryContract: 'json-schema-and-quote-validation:v1',
     systemPromptDigest: 'fixture-system-prompt-digest',
-    systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v1',
+    systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v2',
+    systemPromptKey: 'legacy',
   },
   version: 1,
 }

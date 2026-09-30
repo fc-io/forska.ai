@@ -73,10 +73,12 @@ type PreparedPromptResult =
   | {kind: 'closed'; closeoutReason: PromptCloseoutReason}
   | {kind: 'completed'; noRequestSuccessReason: PromptNoRequestSuccessReason}
   | {kind: 'ready'}
-  | {kind: 'run'; articleForJudging: ArticleRecord; prompt: PromptDefinition}
+  | {kind: 'run'; articleForJudging: ArticleRecord; prompt: PromptDefinition; systemPromptKey: string | null}
   | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
 
 type PromptPreparationWaiter = {limit: number; resolve: (release: () => void) => void}
+
+type OwnerBackedPromptInput = {article: ArticleRecord; prompt: PromptDefinition; systemPromptKey: string | null}
 
 type PromptTerminalState =
   | {kind: 'closed'; closeoutReason: PromptCloseoutReason}
@@ -88,8 +90,10 @@ const processPromptLogger = createRateLimitedLogger({sink: 'file-only', windowMs
 const processPromptFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const processPromptComponent = 'processPromptWithLLM'
 const cachedArticleLookups = new Map<string, Promise<ArticleRecord | null>>()
-const cachedOwnerBackedPromptLookups = new Map<string, Promise<{article: ArticleRecord; prompt: PromptDefinition}>>()
+const cachedOwnerBackedPromptLookups = new Map<string, Promise<OwnerBackedPromptInput>>()
 const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
+const cachedProjectSystemPromptKeyLookups = new Map<string, Promise<string | null>>()
+const projectSystemPromptKeyCacheWindowMs = 30_000
 
 const DEFAULT_MODEL_CONTEXT = 32768
 const DEFAULT_PROMPT_TOKEN_LIMIT = Math.max(0, DEFAULT_MODEL_CONTEXT - MAX_COMPLETION_TOKENS)
@@ -215,11 +219,16 @@ const getPublicationStatus = (value: unknown): PublicationStatus | null => {
     : null
 }
 
-const getOwnerBackedPromptInput = async (
-  promptToProcess: PromptToProcess,
-): Promise<{article: ArticleRecord; prompt: PromptDefinition}> => {
+const getExecutionSnapshotSystemPromptKey = (payloadValue: unknown): string | null => {
+  const projectPayload =
+    isObjectRecord(payloadValue) && isObjectRecord(payloadValue.project) ? payloadValue.project : null
+
+  return getStringValue(projectPayload?.judgeSystemPromptKey)
+}
+
+const getOwnerBackedPromptInput = async (promptToProcess: PromptToProcess): Promise<OwnerBackedPromptInput> => {
   const cacheKey = `${promptToProcess.executionSnapshotId}:${promptToProcess.executionSnapshotHash}`
-  const buildPromptInput = (payloadValue: unknown): {article: ArticleRecord; prompt: PromptDefinition} => {
+  const buildPromptInput = (payloadValue: unknown): OwnerBackedPromptInput => {
     const payload = isObjectRecord(payloadValue) ? payloadValue : null
     const articlePayload = payload && isObjectRecord(payload.article) ? payload.article : null
     const promptPayload = payload && isObjectRecord(payload.prompt) ? payload.prompt : null
@@ -277,6 +286,7 @@ const getOwnerBackedPromptInput = async (
         order: getNumberValue(promptPayload.order),
         type: getStringValue(promptPayload.type),
       },
+      systemPromptKey: getExecutionSnapshotSystemPromptKey(payload),
     }
   }
 
@@ -352,6 +362,29 @@ const getCachedPromptDefinition = async ({
   })
 }
 
+const getCachedProjectSystemPromptKey = async (projectId: string): Promise<string | null> => {
+  const cacheKey = `${projectId}:${Math.floor(Date.now() / projectSystemPromptKeyCacheWindowMs)}`
+
+  return withCachedLookup(cachedProjectSystemPromptKeyLookups, cacheKey, async () => {
+    const [project] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{
+      judgeSystemPromptKey: string | null
+    }>(`
+      SELECT judge_system_prompt_key AS judgeSystemPromptKey
+      FROM app.project
+      WHERE id = '${escapeSqlString(projectId)}'
+      LIMIT 1
+    `)
+
+    return project?.judgeSystemPromptKey ?? null
+  })
+}
+
+const getLocalPromptSystemPromptKey = async (promptToProcess: PromptToProcess): Promise<string | null> => {
+  return promptToProcess.executionSnapshotPayload === undefined
+    ? getCachedProjectSystemPromptKey(promptToProcess.projectId)
+    : getExecutionSnapshotSystemPromptKey(promptToProcess.executionSnapshotPayload)
+}
+
 const drainPromptPreparationWaiters = (): void => {
   const waiterIndex = promptPreparationWaiters.findIndex((waiter) => {
     return promptPreparationInFlight < waiter.limit
@@ -411,6 +444,7 @@ const processSinglePrompt = async (
   article: ArticleRecord,
   prompt: PromptDefinition,
   modelContext: number,
+  systemPromptKey: string | null,
 ): Promise<void> => {
   const sessionId = null
   const releaseRequestWork = reserveJudgmentPromptRequestWork({
@@ -459,6 +493,7 @@ const processSinglePrompt = async (
         useFulltext: promptToProcess.useFulltext,
         useFulltextNoImages: promptToProcess.useFulltextNoImages,
       },
+      systemPromptKey,
     })
   } finally {
     releaseRequestWork()
@@ -614,7 +649,7 @@ const prepareLocalPrompt = async (
     return {closeoutReason: 'promptMissing', kind: 'closed'}
   }
 
-  return {articleForJudging, kind: 'run', prompt}
+  return {articleForJudging, kind: 'run', prompt, systemPromptKey: await getLocalPromptSystemPromptKey(promptToProcess)}
 }
 
 const prepareOwnerBackedPrompt = async (
@@ -685,6 +720,7 @@ const prepareOwnerBackedPrompt = async (
     articleForJudging: needsFulltext ? articleWithFulltext : {...articleWithFulltext, fullText: null},
     kind: 'run',
     prompt: ownerBackedInput.prompt,
+    systemPromptKey: ownerBackedInput.systemPromptKey,
   }
 }
 
@@ -851,7 +887,13 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
               promptId: promptToProcess.promptId,
               recordId: promptToProcess.recordId,
             })
-            await processSinglePrompt(promptToProcess, prepared.articleForJudging, prepared.prompt, modelContext)
+            await processSinglePrompt(
+              promptToProcess,
+              prepared.articleForJudging,
+              prepared.prompt,
+              modelContext,
+              prepared.systemPromptKey,
+            )
             terminalState = {kind: 'completed'}
             const duration = Date.now() - startTime
             processPromptLogger.log(`llm:success:${promptToProcess.modelBaseUrl}`, '[llm] Success - processed prompt', {

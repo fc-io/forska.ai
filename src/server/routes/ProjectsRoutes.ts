@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {isJudgeSystemPromptKey} from '../../agent/judge/judgeSystemPromptVariants.ts'
 import type {ProjectPromptCriteriaDisposition} from '../../db/schemaTypes.ts'
 import {
   appendProviderModelThinkingBadgeLabel,
@@ -243,6 +244,7 @@ type ExistingProjectPromptComparisonRow = ExistingProjectPromptAssociation & {
 type ProjectRow = {
   humanJudgmentMode?: 'prompt' | 'summary' | null
   id: string
+  judgeSystemPromptKey: string | null
   name: string
   description: string | null
   modelId: string
@@ -255,6 +257,10 @@ type ProjectRow = {
   archived: boolean
   createdAt: unknown
   updatedAt: unknown
+}
+
+const isValidProjectJudgeSystemPromptKeyUpdate = (value: string | null | undefined) => {
+  return value === undefined || value === null || isJudgeSystemPromptKey(value)
 }
 
 const getProjectValue = (row: ProjectRow) => {
@@ -279,6 +285,7 @@ const getProjectRowSql = (projectId: string) => {
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
       human_judgment_mode AS humanJudgmentMode,
+      judge_system_prompt_key AS judgeSystemPromptKey,
       date_from AS dateFrom,
       date_to AS dateTo,
       archived,
@@ -1272,6 +1279,7 @@ export const projectsRoutes = new Elysia()
           useFulltext: boolean
           useFulltextNoImages: boolean
           humanJudgmentMode: 'prompt' | 'summary' | null
+          judgeSystemPromptKey: string | null
           dateFrom: unknown
           dateTo: unknown
           archived: boolean
@@ -1289,6 +1297,7 @@ export const projectsRoutes = new Elysia()
         use_fulltext AS useFulltext,
         use_fulltext_no_images AS useFulltextNoImages,
         human_judgment_mode AS humanJudgmentMode,
+        judge_system_prompt_key AS judgeSystemPromptKey,
         date_from AS dateFrom,
         date_to AS dateTo,
         archived,
@@ -1497,6 +1506,7 @@ export const projectsRoutes = new Elysia()
           id: string
           name: string
           description: string | null
+          judgeSystemPromptKey: string | null
           modelId: string
           useTitle: boolean
           useAbstract: boolean
@@ -1536,6 +1546,7 @@ export const projectsRoutes = new Elysia()
             id,
             name,
             description,
+            judge_system_prompt_key AS judgeSystemPromptKey,
             model_id AS modelId,
             use_title AS useTitle,
             use_abstract AS useAbstract,
@@ -1710,10 +1721,17 @@ export const projectsRoutes = new Elysia()
     async ({params, body}) => {
       await assertProjectIsActive(params.id)
 
+      if (!isValidProjectJudgeSystemPromptKeyUpdate(body.judgeSystemPromptKey)) {
+        throw new HttpError(400, `Unknown judge system prompt key: ${body.judgeSystemPromptKey}`)
+      }
+
       const updateParts = [
         `updated_at = current_timestamp`,
         body.name !== undefined ? `name = ${getSqlLiteral(body.name)}` : null,
         body.description !== undefined ? `description = ${getSqlLiteral(body.description)}` : null,
+        body.judgeSystemPromptKey !== undefined
+          ? `judge_system_prompt_key = ${getSqlLiteral(body.judgeSystemPromptKey)}`
+          : null,
       ].filter((part): part is string => {
         return part !== null
       })
@@ -1728,7 +1746,13 @@ export const projectsRoutes = new Elysia()
 
       return {data: getProjectValue(updatedProject)}
     },
-    {body: t.Object({name: t.Optional(t.String()), description: t.Optional(t.Union([t.String(), t.Null()]))})},
+    {
+      body: t.Object({
+        name: t.Optional(t.String()),
+        description: t.Optional(t.Union([t.String(), t.Null()])),
+        judgeSystemPromptKey: t.Optional(t.Union([t.String(), t.Null()])),
+      }),
+    },
   )
   .patch(
     '/api/projects/:id/edit',
@@ -2317,6 +2341,7 @@ export const projectsRoutes = new Elysia()
         description: string | null
         modelId: string
         humanJudgmentMode: 'prompt' | 'summary' | null
+        judgeSystemPromptKey: string | null
         useTitle: boolean
         useAbstract: boolean
         useFulltext: boolean
@@ -2331,6 +2356,7 @@ export const projectsRoutes = new Elysia()
         description,
         model_id AS modelId,
         human_judgment_mode AS humanJudgmentMode,
+        judge_system_prompt_key AS judgeSystemPromptKey,
         use_title AS useTitle,
         use_abstract AS useAbstract,
         use_fulltext AS useFulltext,
@@ -2372,6 +2398,7 @@ export const projectsRoutes = new Elysia()
         description: string | null
         modelId: string
         humanJudgmentMode: 'prompt' | 'summary' | null
+        judgeSystemPromptKey: string | null
         useTitle: boolean
         useAbstract: boolean
         useFulltext: boolean
@@ -2388,6 +2415,7 @@ export const projectsRoutes = new Elysia()
           description,
           model_id,
           human_judgment_mode,
+          judge_system_prompt_key,
           use_title,
           use_abstract,
           use_fulltext,
@@ -2402,6 +2430,7 @@ export const projectsRoutes = new Elysia()
           ${getSqlLiteral(sourceProject.description)},
           '${escapeSqlString(sourceProject.modelId)}',
           ${getSqlLiteral(sourceProject.humanJudgmentMode ?? 'prompt')},
+          ${getSqlLiteral(sourceProject.judgeSystemPromptKey)},
           ${sourceProject.useTitle ? 'TRUE' : 'FALSE'},
           ${sourceProject.useAbstract ? 'TRUE' : 'FALSE'},
           ${sourceProject.useFulltext ? 'TRUE' : 'FALSE'},
@@ -2416,6 +2445,7 @@ export const projectsRoutes = new Elysia()
           description,
           model_id AS modelId,
           human_judgment_mode AS humanJudgmentMode,
+          judge_system_prompt_key AS judgeSystemPromptKey,
           use_title AS useTitle,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
