@@ -8,19 +8,18 @@ import {apiClient} from '../../../../services/apiClient.ts'
 import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
 import {postFormDataToApi} from '../../../utils/postFormDataToApi.ts'
+import {
+  type CovidenceEligibilityDisposition,
+  type CovidenceEligibilitySectionKey,
+  covidenceEligibilitySections,
+  createEmptyEligibilitySectionValues,
+  parseCovidenceEligibilityClipboardText,
+} from './covidenceEligibilityClipboard.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe'
 type CovidencePromptGrouping = 'per_field' | 'per_section' | 'single_prompt'
-type CovidenceEligibilityDisposition = 'include' | 'exclude'
-type CovidenceEligibilitySectionKey =
-  | 'population'
-  | 'interventionExposure'
-  | 'comparatorContext'
-  | 'outcome'
-  | 'studyCharacteristics'
-  | 'other'
 type ModelOption = {
   id: string
   label: string
@@ -28,118 +27,6 @@ type ModelOption = {
   name: string
   provider: string | null
   version: string | null
-}
-
-const covidenceEligibilitySections: Array<{description: string; key: CovidenceEligibilitySectionKey; label: string}> = [
-  {
-    description: 'Participants, disease state, demographics, setting, or eligibility population details.',
-    key: 'population',
-    label: 'Population',
-  },
-  {
-    description: 'Treatments, exposures, programs, or index interventions under review.',
-    key: 'interventionExposure',
-    label: 'Intervention / Exposure',
-  },
-  {
-    description: 'Comparators, controls, background care, or study context requirements.',
-    key: 'comparatorContext',
-    label: 'Comparator / Context',
-  },
-  {
-    description: 'Outcomes, endpoints, follow-up thresholds, or outcome reporting needs.',
-    key: 'outcome',
-    label: 'Outcome',
-  },
-  {
-    description: 'Design, publication status, language, time frame, sample size, or other study features.',
-    key: 'studyCharacteristics',
-    label: 'Study Characteristics',
-  },
-  {
-    description: 'Anything else the prompt should screen for that does not fit the PICOS buckets above.',
-    key: 'other',
-    label: 'Other',
-  },
-]
-const createEmptyEligibilitySectionValues = (): Record<
-  CovidenceEligibilitySectionKey,
-  Record<CovidenceEligibilityDisposition, string>
-> => {
-  return {
-    comparatorContext: {exclude: '', include: ''},
-    interventionExposure: {exclude: '', include: ''},
-    other: {exclude: '', include: ''},
-    outcome: {exclude: '', include: ''},
-    population: {exclude: '', include: ''},
-    studyCharacteristics: {exclude: '', include: ''},
-  }
-}
-
-const normalizeCovidenceClipboardHeading = (value: string) => {
-  return value
-    .toLowerCase()
-    .replace(/\s*\/\s*/g, ' / ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-const covidenceEligibilitySectionKeyByLabel = covidenceEligibilitySections.reduce(
-  (lookup, section) => {
-    lookup[normalizeCovidenceClipboardHeading(section.label)] = section.key
-    return lookup
-  },
-  {} as Record<string, CovidenceEligibilitySectionKey>,
-)
-
-const appendEligibilityClipboardLine = (currentValue: string, nextLine: string) => {
-  return currentValue ? `${currentValue}\n${nextLine}` : nextLine
-}
-
-const parseCovidenceEligibilityClipboardText = (text: string) => {
-  const parsed = text
-    .split(/\r?\n/)
-    .map((line) => {
-      return line.trim()
-    })
-    .reduce(
-      (state, line) => {
-        if (line === '') {
-          return state
-        }
-
-        const nextSectionKey = covidenceEligibilitySectionKeyByLabel[normalizeCovidenceClipboardHeading(line)]
-
-        if (nextSectionKey) {
-          return {...state, currentDisposition: null, currentSection: nextSectionKey, sawSection: true}
-        }
-
-        const loweredLine = line.toLowerCase()
-
-        if (state.currentSection && (loweredLine === 'include' || loweredLine === 'exclude')) {
-          return {...state, currentDisposition: loweredLine as CovidenceEligibilityDisposition}
-        }
-
-        if (!state.currentSection || !state.currentDisposition) {
-          return state
-        }
-
-        state.values[state.currentSection][state.currentDisposition] = appendEligibilityClipboardLine(
-          state.values[state.currentSection][state.currentDisposition],
-          line,
-        )
-
-        return state
-      },
-      {
-        currentDisposition: null as CovidenceEligibilityDisposition | null,
-        currentSection: null as CovidenceEligibilitySectionKey | null,
-        sawSection: false,
-        values: createEmptyEligibilitySectionValues(),
-      },
-    )
-
-  return parsed.sawSection ? parsed.values : null
 }
 
 const getCovidenceEligibilityPromptFields = (
