@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {
   type CronRuntimeClassState,
   cronRuntimeTickNames,
@@ -712,6 +713,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     providerConnectionId: string | null
     providerConnectionUpdatedAt: Date | string | null
     providerName: string | null
+    systemPromptVariant: string | null
     useAbstract: boolean | null
     useFulltext: boolean | null
     useFulltextNoImages: boolean | null
@@ -731,6 +733,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
       pc.max_inflight_requests AS maxInflightRequests,
       pc.updated_at AS providerConnectionUpdatedAt,
       TO_JSON(pc.config_json) AS providerConfigJson,
+      p.system_prompt_variant AS systemPromptVariant,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
@@ -779,6 +782,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     ...providerSnapshot,
     providerConfigJson,
     ...runtimeMatch,
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
     useAbstract: row.useAbstract ?? true,
     useFulltext: row.useFulltext ?? false,
     useFulltextNoImages: row.useFulltextNoImages ?? false,

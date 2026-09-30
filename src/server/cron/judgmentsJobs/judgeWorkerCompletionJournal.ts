@@ -3,6 +3,7 @@ import {dirname} from 'node:path'
 
 import {Database} from 'bun:sqlite'
 
+import type {SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
 import type {JudgmentExecutionSnapshotRecord} from '../../services/judgmentExecutionSnapshotService.ts'
@@ -123,6 +124,7 @@ export type OwnerBackedJudgmentJobInfo = ProviderBucketSnapshot & {
   runtimeMatchReason: string
   runtimeMatchStatus: 'ambiguous' | 'manual-only' | 'matched' | 'unreachable'
   runtimeResolutionMode: 'auto-detect' | 'manual'
+  systemPromptVariant?: SystemPromptVariant | null
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean

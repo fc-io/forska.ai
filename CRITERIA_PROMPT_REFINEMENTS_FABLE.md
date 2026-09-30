@@ -235,6 +235,8 @@ Until the generator is changed, pasting the section texts in section 4 gives the
 
 ### 5.2 System prompt (`judgeSinglePromptSystemPrompt.ts`, Anthropic variant)
 
+Implemented as the `screening_v1` system prompt variant (`judgeSinglePromptSystemPromptScreeningV1.ts`), selected per project through `app.project.system_prompt_variant`. Covidence projects created after the change use it; existing projects keep the legacy prompt. See `docs/system-prompt-variants.md`.
+
 1. **Task framing.** "Your job is to judge if the article provided to you answers the question the user has" describes topic matching. Replace with: "You are screening records (title and abstract) for a systematic review against one section of the eligibility criteria at a time. Judge only the section you are given; the other sections are judged separately." Keep the sentence about results and methods versus superficial mention.
 2. **Structured explanation.** Keep `explanation` a string, but require its form: first the criteria line applied, then the evidence from the record in one sentence, and for "maybe" a final part `Missing: prescriber | country | intervention | comparison | results | other`. Resolvers get a readable reason, and the platform can tell a country "maybe" from a results "maybe" (5.3).
 3. **Examples.** The two examples use `'yes' | 'no' | 'unsure'` while the projects use `'yes' | 'no' | 'maybe'`. Build the examples from the prompt's own `output_type`, or write them with "maybe", and add a third example that shows a "maybe" answer with the `Missing:` part.

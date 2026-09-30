@@ -1,5 +1,6 @@
 import {existsSync} from 'node:fs'
 
+import type {SystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
 import {getProviderConnectionConfigFromJson} from '../../../providers/providerDbUtils.ts'
 import {resolveProviderConnectionRuntimeMatch} from '../../../providers/providerRuntimeMatchResolver.ts'
 import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
@@ -53,6 +54,7 @@ export type PromptToProcess = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant?: SystemPromptVariant | null
 }
 
 export type PromptRuntime = {
@@ -251,6 +253,7 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
         providerMaxInflightRequests: null,
         providerUsesFamilyDefault: true,
         modelWorkerUrls: runtime.modelWorkerUrls,
+        systemPromptVariant: jobInfo.systemPromptVariant,
       }
     })
   }
@@ -290,6 +293,7 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
       providerMaxInflightRequests: null,
       providerUsesFamilyDefault: true,
       modelWorkerUrls: runtime.workerUrls,
+      systemPromptVariant: jobInfo.systemPromptVariant,
     }
   })
 }
@@ -355,6 +359,7 @@ const getOwnerBackedReadyRows = async (
         useFulltext: jobInfo.useFulltext,
         useFulltextNoImages: jobInfo.useFulltextNoImages,
         useTitle: jobInfo.useTitle,
+        systemPromptVariant: jobInfo.systemPromptVariant,
       }
     })
 
@@ -392,6 +397,7 @@ const getOwnerBackedReadyRows = async (
           providerConnectionId: requestRuntime.providerId ?? requestRuntime.providerConnectionId,
           providerMaxInflightRequests: requestRuntime.providerLimit ?? requestRuntime.providerMaxInflightRequests,
           modelWorkerUrls: runtime.modelWorkerUrls,
+          systemPromptVariant: localJobInfo.systemPromptVariant,
         }
       })
 

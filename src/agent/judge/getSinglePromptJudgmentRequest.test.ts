@@ -2,6 +2,8 @@ import {expect, test} from 'bun:test'
 
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {getSinglePromptJudgmentRequest} from './getSinglePromptJudgmentRequest.ts'
+import {SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPrompt.ts'
+import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC} from './judgeSinglePromptSystemPromptScreeningV1.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => {
@@ -88,4 +90,29 @@ test('getSinglePromptJudgmentRequest uses structured import system prompt and ra
   expect(result.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
   expect(result.userPrompt).not.toContain('<SOURCE_TEXT_START>')
   expect(result.userPrompt).toContain('## article_title\n\nRegistry title')
+})
+
+test('getSinglePromptJudgmentRequest selects the system prompt by variant and keeps the user prompt unchanged', () => {
+  const request = {
+    article: buildArticle({articleTitle: 'Screening title', articleSummary: 'Screening summary'}),
+    contentSettings: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+    prompt: {
+      id: 'prompt-3',
+      originalText: 'Does this study meet the Setting criteria below?',
+      order: 3,
+      promptHeading: 'Setting',
+      type: `'yes' | 'no' | 'maybe'`,
+    },
+    provider: 'anthropic',
+  }
+  const legacyResult = getSinglePromptJudgmentRequest(request)
+  const screeningResult = getSinglePromptJudgmentRequest({...request, systemPromptVariant: 'screening_v1'})
+
+  expect(legacyResult.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC)
+  expect(screeningResult.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC)
+  expect(screeningResult.systemPrompt).toContain('You are screening records for a systematic review.')
+  expect(screeningResult.systemPrompt).toContain(`output_type: 'yes' | 'no' | 'maybe'`)
+  expect(screeningResult.systemPrompt).not.toContain(`'unsure'`)
+  expect(screeningResult.userPrompt).toBe(legacyResult.userPrompt)
+  expect(screeningResult.recordText).toBe(legacyResult.recordText)
 })

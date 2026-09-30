@@ -2,6 +2,11 @@ import {createHash} from 'node:crypto'
 import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import path from 'node:path'
 
+import {
+  covidenceSystemPromptVariant,
+  getSystemPromptVariant,
+  type SystemPromptVariant,
+} from '../../agent/judge/systemPromptVariant.ts'
 import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
@@ -217,6 +222,7 @@ type CovidenceProjectRecord = {
   id: string
   modelId: string
   name: string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -701,6 +707,7 @@ const getCovidenceProjectByImportRoute = async (params: {importRoute: string; tx
     id: string
     modelId: string
     name: string
+    systemPromptVariant: string | null
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
@@ -711,6 +718,7 @@ const getCovidenceProjectByImportRoute = async (params: {importRoute: string; tx
       p.id AS id,
       p.model_id AS modelId,
       p.name AS name,
+      p.system_prompt_variant AS systemPromptVariant,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
       p.use_fulltext_no_images AS useFulltextNoImages,
@@ -722,7 +730,7 @@ const getCovidenceProjectByImportRoute = async (params: {importRoute: string; tx
     LIMIT 1
   `)
 
-  return project ?? null
+  return project ? {...project, systemPromptVariant: getSystemPromptVariant(project.systemPromptVariant)} : null
 }
 
 const getNormalizedCovidenceMatchValue = (value: string | null) => {
@@ -2597,6 +2605,7 @@ export const getOrCreateCovidenceProject = async (params: {
       name,
       model_id,
       human_judgment_mode,
+      system_prompt_variant,
       use_title,
       use_abstract,
       use_fulltext,
@@ -2607,6 +2616,7 @@ export const getOrCreateCovidenceProject = async (params: {
       ${getSqlLiteral(params.title)},
       '${escapeSqlString(modelId)}',
       'summary',
+      ${getSqlLiteral(covidenceSystemPromptVariant)},
       ${settings.useTitle ? 'TRUE' : 'FALSE'},
       ${settings.useAbstract ? 'TRUE' : 'FALSE'},
       ${settings.useFulltext ? 'TRUE' : 'FALSE'},
@@ -2664,7 +2674,15 @@ export const getOrCreateCovidenceProject = async (params: {
     sourceOperation: 'insert',
   })
 
-  return {created: true, humanJudgmentMode: 'summary', id: projectId, modelId, name: params.title, ...settings}
+  return {
+    created: true,
+    humanJudgmentMode: 'summary',
+    id: projectId,
+    modelId,
+    name: params.title,
+    systemPromptVariant: covidenceSystemPromptVariant,
+    ...settings,
+  }
 }
 
 export const syncCovidenceProjectScopeFromConfig = async (params: {

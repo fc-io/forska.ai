@@ -764,6 +764,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
             p.id AS id,
             p.model_id AS modelId,
             p.name AS name,
+            p.system_prompt_variant AS systemPromptVariant,
             p.use_title AS useTitle,
             p.use_abstract AS useAbstract,
             p.use_fulltext AS useFulltext,
@@ -817,6 +818,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         id: string
         modelId: string
         name: string
+        systemPromptVariant: string
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -829,6 +831,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         id: string
         modelId: string
         name: string
+        systemPromptVariant: string | null
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -840,6 +843,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         id: string
         modelId: string
         name: string
+        systemPromptVariant: string
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -853,6 +857,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
       id: parsed.createdProject.id,
       modelId: 'model-covidence',
       name: 'Created datasource',
+      systemPromptVariant: 'screening_v1',
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
@@ -864,6 +869,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
       id: parsed.createdProject.id,
       modelId: 'model-covidence',
       name: 'Created datasource',
+      systemPromptVariant: 'screening_v1',
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
@@ -875,6 +881,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         id: parsed.createdProject.id,
         modelId: 'model-covidence',
         name: 'Created datasource',
+        systemPromptVariant: 'screening_v1',
         useAbstract: true,
         useFulltext: false,
         useFulltextNoImages: false,
@@ -971,6 +978,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
             id,
             model_id AS modelId,
             name,
+            system_prompt_variant AS systemPromptVariant,
             use_title AS useTitle,
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
@@ -1047,6 +1055,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         id: string
         modelId: string
         name: string
+        systemPromptVariant: string
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -1063,6 +1072,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         id: string
         modelId: string
         name: string
+        systemPromptVariant: string | null
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -1081,6 +1091,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         id: string
         modelId: string
         name: string
+        systemPromptVariant: string
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -1094,6 +1105,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
       id: parsed.createdProject.id,
       modelId: 'model-covidence-full-text',
       name: 'Full text datasource',
+      systemPromptVariant: 'screening_v1',
       useAbstract: true,
       useFulltext: true,
       useFulltextNoImages: false,
@@ -1105,6 +1117,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
       id: parsed.createdProject.id,
       modelId: 'model-covidence-full-text',
       name: 'Full text datasource',
+      systemPromptVariant: 'screening_v1',
       useAbstract: true,
       useFulltext: true,
       useFulltextNoImages: false,
@@ -1116,6 +1129,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         id: parsed.createdProject.id,
         modelId: 'model-covidence-full-text',
         name: 'Full text datasource',
+        systemPromptVariant: 'screening_v1',
         useAbstract: true,
         useFulltext: true,
         useFulltextNoImages: false,
