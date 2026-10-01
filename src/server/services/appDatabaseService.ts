@@ -1,3 +1,4 @@
+import type {SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {clearDuckdbOwnerWriteFailure, recordDuckdbOwnerWriteFailure} from '../utils/duckdbOwnerWarnings.ts'
 import {
   closeDuckdbService,
@@ -39,6 +40,7 @@ export type JudgmentInsertRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant: SystemPromptVariant
   chunkingStrategy: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
@@ -96,7 +98,7 @@ const getAppendJudgmentRowPlaceholders = () => {
     ?, ?, ?, ?,
     ?, ?, ?, (?::JSON)::VARCHAR[],
     ?, ?, ?::JSON,
-    ?, ?, ?, ?,
+    ?, ?, ?, ?, ?,
     ?, ?, ?,
     ?::TIMESTAMPTZ, ?::TIMESTAMPTZ
   )`
@@ -119,6 +121,7 @@ const getAppendJudgmentParameters = (row: JudgmentInsertRow) => {
     row.useAbstract,
     row.useFulltext,
     row.useFulltextNoImages,
+    row.systemPromptVariant,
     row.chunkingStrategy,
     row.snapshotProjectId,
     row.snapshotProjectModelName,
@@ -151,6 +154,7 @@ const getAppendJudgmentsSql = (rows: JudgmentInsertRow[]) => {
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      system_prompt_variant,
       chunking_strategy,
       snapshot_project_id,
       snapshot_project_model_name,
@@ -161,7 +165,7 @@ const getAppendJudgmentsSql = (rows: JudgmentInsertRow[]) => {
         return getAppendJudgmentRowPlaceholders()
       })
       .join(', ')}
-    ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, delete_generation) DO NOTHING
+    ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant, delete_generation) DO NOTHING
     RETURNING id
   `
 }

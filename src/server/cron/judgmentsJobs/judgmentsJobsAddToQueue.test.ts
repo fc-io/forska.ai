@@ -142,12 +142,14 @@ type MockJobConfigRow = {
   useFulltext: boolean
   useFulltextNoImages: boolean
   useTitle: boolean
+  systemPromptVariant: 'legacy' | 'screening_v1'
 }
 
 const getJobConfigRow = (): MockJobConfigRow => {
   return {
     humanJudgmentMode: 'prompt',
     modelId: 'model-1',
+    systemPromptVariant: 'legacy',
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
@@ -2018,6 +2020,7 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
   const unchangedArticleId = `${suffix}-article-unchanged`
   const changedModelArticleId = `${suffix}-article-changed-model`
   const changedFulltextArticleId = `${suffix}-article-changed-fulltext`
+  const changedVariantArticleId = `${suffix}-article-changed-variant`
   const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async (_jobId, entries) => {
@@ -2080,21 +2083,24 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
     VALUES
       ('${unchangedArticleId}', '${unchangedArticleId}-external', 'Unchanged article'),
       ('${changedModelArticleId}', '${changedModelArticleId}-external', 'Changed model article'),
-      ('${changedFulltextArticleId}', '${changedFulltextArticleId}-external', 'Changed fulltext article')
+      ('${changedFulltextArticleId}', '${changedFulltextArticleId}-external', 'Changed fulltext article'),
+      ('${changedVariantArticleId}', '${changedVariantArticleId}-external', 'Changed variant article')
   `)
   await dbRun(`
     INSERT INTO app.project_article (id, project_id, article_id)
     VALUES
       ('${suffix}-project-article-unchanged', '${projectId}', '${unchangedArticleId}'),
       ('${suffix}-project-article-changed-model', '${projectId}', '${changedModelArticleId}'),
-      ('${suffix}-project-article-changed-fulltext', '${projectId}', '${changedFulltextArticleId}')
+      ('${suffix}-project-article-changed-fulltext', '${projectId}', '${changedFulltextArticleId}'),
+      ('${suffix}-project-article-changed-variant', '${projectId}', '${changedVariantArticleId}')
   `)
   await dbRun(`
-    INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant)
     VALUES
-      ('${suffix}-judgment-unchanged', '${unchangedArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE),
-      ('${suffix}-judgment-changed-model', '${changedModelArticleId}', '${promptId}', '${changedModelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE),
-      ('${suffix}-judgment-changed-fulltext', '${changedFulltextArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, TRUE, FALSE)
+      ('${suffix}-judgment-unchanged', '${unchangedArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, 'legacy'),
+      ('${suffix}-judgment-changed-model', '${changedModelArticleId}', '${promptId}', '${changedModelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, 'legacy'),
+      ('${suffix}-judgment-changed-fulltext', '${changedFulltextArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, TRUE, FALSE, 'legacy'),
+      ('${suffix}-judgment-changed-variant', '${changedVariantArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, 'screening_v1')
   `)
   await dbRun(`
     INSERT INTO app.judgment_job (id, project_id, status)
@@ -2125,6 +2131,7 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
             {articleId: unchangedArticleId, promptId},
             {articleId: changedModelArticleId, promptId},
             {articleId: changedFulltextArticleId, promptId},
+            {articleId: changedVariantArticleId, promptId},
           ],
         }
       },
@@ -2144,6 +2151,7 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
     [
       {articleId: changedModelArticleId, promptId},
       {articleId: changedFulltextArticleId, promptId},
+      {articleId: changedVariantArticleId, promptId},
     ],
   ])
 })

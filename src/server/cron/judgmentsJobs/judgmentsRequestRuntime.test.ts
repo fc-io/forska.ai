@@ -1743,6 +1743,45 @@ test('prompt release marks running then judged on success', async () => {
   expect(sqliteServiceMock.markPromptAsSkipped).not.toHaveBeenCalled()
 })
 
+test('already-judged check only matches judgments of the prompt system prompt variant', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  const judgmentLookups: string[] = []
+
+  queryJson.mockImplementation(async (sql: string) => {
+    if (sql.includes('FROM app.prompt p')) {
+      return createPromptRows()
+    }
+
+    if (sql.includes('FROM app.judgment')) {
+      judgmentLookups.push(sql)
+    }
+
+    return []
+  })
+
+  await processPromptWithLLM({...createPromptToProcess(), systemPromptVariant: 'screening_v1'})
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(judgmentLookups).toHaveLength(2)
+  expect(judgmentLookups[0]).toContain("AND system_prompt_variant = 'screening_v1'")
+  expect(judgmentLookups[1]).toContain("AND system_prompt_variant = 'legacy'")
+})
+
+test('judge-worker terminal completions carry the prompt system prompt variant', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  hasJudgeWorkerCompletionIntent.mockImplementation((claimId: string) => {
+    return claimId === 'claim-a'
+  })
+
+  await processPromptWithLLM({...createPromptToProcess(), systemPromptVariant: 'screening_v1'})
+
+  expect(enqueueJudgeWorkerCompletion).toHaveBeenCalledWith(
+    expect.objectContaining({claimId: 'claim-a', status: 'retry', systemPromptVariant: 'screening_v1'}),
+  )
+})
+
 test('judge-worker prompt execution uses owner-backed snapshots instead of live DuckDB reads', async () => {
   useJudgeWorkerOwnerHandoffMocks = true
   const {processPromptWithLLM} = await loadProcessPromptModule()

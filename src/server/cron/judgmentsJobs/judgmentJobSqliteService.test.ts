@@ -42,7 +42,7 @@ const getQueueCountMap = (rows: QueueCountRow[]) => {
   )
 }
 
-const createSqliteJobFixture = async (prefix: string) => {
+const createSqliteJobFixture = async (prefix: string, systemPromptVariant: string | null = null) => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
   }
@@ -63,8 +63,13 @@ const createSqliteJobFixture = async (prefix: string) => {
     VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
   `)
   await runDatabase(`
-    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-    VALUES ('${projectId}', '${prefix} fixture', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+    INSERT INTO app.project (
+      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant
+    )
+    VALUES (
+      '${projectId}', '${prefix} fixture', '${modelId}', TRUE, TRUE, FALSE, FALSE,
+      ${systemPromptVariant === null ? 'NULL' : `'${systemPromptVariant}'`}
+    )
   `)
   await runDatabase(`
     INSERT INTO app.judgment_job (id, project_id, status)
@@ -73,6 +78,56 @@ const createSqliteJobFixture = async (prefix: string) => {
   await service.initializeJob(jobId)
 
   return {connectionId, jobId, modelId, projectId, service}
+}
+
+const getVariantOutboxInsert = (input: {
+  articleId: string
+  judgmentId: string
+  modelId: string
+  projectId: string
+  promptId: string
+  queuePromptId: string
+  systemPromptVariant?: 'legacy' | 'screening_v1'
+}) => {
+  return {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: input.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: input.judgmentId,
+    modelId: input.modelId,
+    projectId: input.projectId,
+    promptId: input.promptId,
+    queuePromptId: input.queuePromptId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: input.projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    systemPromptVariant: input.systemPromptVariant,
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
+}
+
+const getOutboxSystemPromptVariants = (jobId: string) => {
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId), {readonly: true})
+
+  try {
+    return sqliteDatabase
+      .query(
+        `SELECT judgment_id AS judgmentId, system_prompt_variant AS systemPromptVariant FROM judgment_outbox ORDER BY outbox_seq`,
+      )
+      .all() as Array<{judgmentId: string; systemPromptVariant: string | null}>
+  } finally {
+    sqliteDatabase.close(false)
+  }
 }
 
 const waitForPaths = async (paths: string[], timeoutMs: number): Promise<void> => {
@@ -2697,6 +2752,118 @@ test('job info carries the project system prompt variant and defaults to legacy'
 
   expect((await service.getJobInfo(screeningJobId))?.systemPromptVariant).toBe('screening_v1')
   expect((await service.getJobInfo(legacyJobId))?.systemPromptVariant).toBe('legacy')
+})
+
+test('judgment outbox rows take the frozen job_info system prompt variant over the completion payload', async () => {
+  const {jobId, modelId, projectId, service} = await createSqliteJobFixture('outbox-variant', 'screening_v1')
+  const prompts = [1, 2].map((index) => {
+    return {articleId: `outbox-variant-article-${index}`, promptId: `outbox-variant-prompt-${index}`}
+  })
+
+  await service.addReadyPrompts(jobId, prompts, 'server-a')
+
+  const claimed = await service.claimReadyPrompts(jobId, 'server-a', 2)
+  const [firstPrompt, secondPrompt] = claimed
+
+  if (!firstPrompt || !secondPrompt) {
+    throw new Error('Failed to claim SQLite queue prompts')
+  }
+
+  await service.recordJudgmentSuccess(
+    jobId,
+    getVariantOutboxInsert({
+      articleId: firstPrompt.articleId,
+      judgmentId: `${jobId}-judgment-1`,
+      modelId,
+      projectId,
+      promptId: firstPrompt.promptId,
+      queuePromptId: firstPrompt.recordId,
+      systemPromptVariant: 'legacy',
+    }),
+  )
+  await service.recordJudgmentSuccess(
+    jobId,
+    getVariantOutboxInsert({
+      articleId: secondPrompt.articleId,
+      judgmentId: `${jobId}-judgment-2`,
+      modelId,
+      projectId,
+      promptId: secondPrompt.promptId,
+      queuePromptId: secondPrompt.recordId,
+    }),
+  )
+
+  expect(getOutboxSystemPromptVariants(jobId)).toEqual([
+    {judgmentId: `${jobId}-judgment-1`, systemPromptVariant: 'screening_v1'},
+    {judgmentId: `${jobId}-judgment-2`, systemPromptVariant: 'screening_v1'},
+  ])
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase
+      .query(`UPDATE judgment_outbox SET system_prompt_variant = NULL WHERE judgment_id = ?`)
+      .run(`${jobId}-judgment-2`)
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  const batch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  expect(
+    batch?.rows.map((row) => {
+      return {judgmentId: row.judgmentId, systemPromptVariant: row.systemPromptVariant}
+    }),
+  ).toEqual([
+    {judgmentId: `${jobId}-judgment-1`, systemPromptVariant: 'screening_v1'},
+    {judgmentId: `${jobId}-judgment-2`, systemPromptVariant: 'screening_v1'},
+  ])
+})
+
+test('judgment outbox rows fall back to the completion payload variant only without a job_info row', async () => {
+  const {jobId, modelId, projectId, service} = await createSqliteJobFixture('outbox-variant-fallback')
+
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'outbox-variant-fallback-article', promptId: 'outbox-variant-fallback-prompt'}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase.query(`DELETE FROM job_info WHERE job_id = ?`).run(jobId)
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  await service.recordJudgmentSuccess(
+    jobId,
+    getVariantOutboxInsert({
+      articleId: claimedPrompt.articleId,
+      judgmentId: `${jobId}-judgment`,
+      modelId,
+      projectId,
+      promptId: claimedPrompt.promptId,
+      queuePromptId: claimedPrompt.recordId,
+      systemPromptVariant: 'screening_v1',
+    }),
+  )
+
+  expect(getOutboxSystemPromptVariants(jobId)).toEqual([
+    {judgmentId: `${jobId}-judgment`, systemPromptVariant: 'screening_v1'},
+  ])
 })
 
 test('claims, reaps, releases, and completes outbox batches', async () => {

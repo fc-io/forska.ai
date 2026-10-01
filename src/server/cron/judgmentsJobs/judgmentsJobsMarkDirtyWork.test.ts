@@ -103,7 +103,11 @@ const seedImportFixture = async (suffix: string) => {
   return ids
 }
 
-const getEntry = (ids: Awaited<ReturnType<typeof seedImportFixture>>, outboxSeq = 1): JudgmentJobSqliteOutboxEntry => {
+const getEntry = (
+  ids: Awaited<ReturnType<typeof seedImportFixture>>,
+  outboxSeq = 1,
+  overrides: Partial<JudgmentJobSqliteOutboxEntry> = {},
+): JudgmentJobSqliteOutboxEntry => {
   const now = new Date()
 
   return {
@@ -130,11 +134,13 @@ const getEntry = (ids: Awaited<ReturnType<typeof seedImportFixture>>, outboxSeq 
     requestAttemptsJson: null,
     snapshotProjectId: ids.projectId,
     snapshotProjectModelName: 'Qwen 35B',
+    systemPromptVariant: 'legacy',
     updatedAt: now,
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
     useTitle: true,
+    ...overrides,
   }
 }
 
@@ -161,6 +167,7 @@ test('dirty work commits judgment, import marker, and dirty state idempotently',
     judgmentRows: number
     markerRows: number
     modelId: string | null
+    systemPromptVariant: string | null
     useAbstract: boolean | null
     useFulltext: boolean | null
     useFulltextNoImages: boolean | null
@@ -168,6 +175,7 @@ test('dirty work commits judgment, import marker, and dirty state idempotently',
   }>(`
     SELECT
       (SELECT COUNT(*) FROM app.judgment WHERE id = '${ids.judgmentId}') AS judgmentRows,
+      (SELECT system_prompt_variant FROM app.judgment WHERE id = '${ids.judgmentId}') AS systemPromptVariant,
       (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${ids.jobId}') AS markerRows,
       (SELECT COUNT(*) FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}') AS deltaRows,
       (SELECT model_id FROM app.review_change_delta WHERE judgment_id = '${ids.judgmentId}' LIMIT 1) AS modelId,
@@ -183,6 +191,7 @@ test('dirty work commits judgment, import marker, and dirty state idempotently',
   expect(secondResult.importedRows).toEqual([])
   expect(secondResult.duplicateRows).toEqual([{jobId: ids.jobId, outboxSeq: 1}])
   expect(Number(row?.judgmentRows ?? 0)).toBe(1)
+  expect(row?.systemPromptVariant).toBe('legacy')
   expect(Number(row?.markerRows ?? 0)).toBe(1)
   expect(Number(row?.deltaRows ?? 0)).toBe(1)
   expect(row?.modelId).toBe(ids.modelId)
@@ -229,6 +238,69 @@ test('dirty work fans out SQLite LLM deltas to every visible project', async () 
   `)
 
   expect(rows).toEqual([{projectId: ids.projectId}, {projectId: visibleProjectId}])
+})
+
+test('dirty work stores each system prompt variant as its own judgment and fans out by variant', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const ids = await seedImportFixture(`variant-identity-${Date.now()}`)
+  const screeningProjectId = `${ids.projectId}-screening`
+  const screeningJudgmentId = `${ids.judgmentId}-screening`
+
+  await runDatabase(`
+    INSERT INTO app.project (
+      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant
+    )
+    VALUES ('${screeningProjectId}', 'Screening Project', '${ids.modelId}', TRUE, TRUE, FALSE, FALSE, 'screening_v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${screeningProjectId}-article', '${screeningProjectId}', '${ids.articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${screeningProjectId}-prompt', '${screeningProjectId}', '${ids.promptId}', 1, TRUE)
+  `)
+
+  const result = await commitJudgmentSqliteOutboxImportDirtyWork({
+    discardedEntries: [],
+    importableEntries: [
+      getEntry(ids, 1),
+      getEntry(ids, 2, {
+        judgmentId: screeningJudgmentId,
+        queuePromptId: `${ids.queuePromptId}-screening`,
+        systemPromptVariant: 'screening_v1',
+      }),
+    ],
+    requestedBy: 'test-importer',
+  })
+  const judgments = await queryDatabase<{id: string; systemPromptVariant: string}>(`
+    SELECT id, system_prompt_variant AS systemPromptVariant
+    FROM app.judgment
+    WHERE article_id = '${ids.articleId}'
+    ORDER BY system_prompt_variant ASC
+  `)
+  const deltas = await queryDatabase<{judgmentId: string; projectId: string}>(`
+    SELECT judgment_id AS judgmentId, project_id AS projectId
+    FROM app.review_change_delta
+    WHERE judgment_id IN ('${ids.judgmentId}', '${screeningJudgmentId}')
+    ORDER BY project_id ASC
+  `)
+
+  expect(result.importedRows).toEqual([
+    {jobId: ids.jobId, outboxSeq: 1},
+    {jobId: ids.jobId, outboxSeq: 2},
+  ])
+  expect(judgments).toEqual([
+    {id: ids.judgmentId, systemPromptVariant: 'legacy'},
+    {id: screeningJudgmentId, systemPromptVariant: 'screening_v1'},
+  ])
+  expect(deltas).toEqual([
+    {judgmentId: ids.judgmentId, projectId: ids.projectId},
+    {judgmentId: screeningJudgmentId, projectId: screeningProjectId},
+  ])
 })
 
 test('dirty work records import and V4 dirty work without legacy refresh claims', async () => {

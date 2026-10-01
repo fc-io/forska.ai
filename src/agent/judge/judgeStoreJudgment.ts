@@ -9,6 +9,7 @@ import {getComparisonProjectServingInvalidationService} from '../../server/servi
 import type {DuckdbWorkloadContext} from '../../server/utils/duckdbService.ts'
 import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
+import {getSystemPromptVariant, type SystemPromptVariant} from './systemPromptVariant.ts'
 
 type JudgmentStoreRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -21,6 +22,7 @@ type StoredJudgmentRow = {
   modelId: string
   projectId: string | null
   promptId: string
+  systemPromptVariant: SystemPromptVariant
   updatedAt: string | null
   useAbstract: boolean
   useFulltext: boolean
@@ -62,6 +64,7 @@ const storeJudgmentForPrompt = async ({
   shortIdMapping,
   snapshotProjectId,
   snapshotProjectModelName,
+  systemPromptVariant,
   useAbstract,
   useFulltext,
   useFulltextNoImages,
@@ -76,6 +79,7 @@ const storeJudgmentForPrompt = async ({
   shortIdMapping: ShortIdMapping
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -100,7 +104,8 @@ const storeJudgmentForPrompt = async ({
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
-      use_title AS useTitle
+      use_title AS useTitle,
+      system_prompt_variant AS systemPromptVariant
     FROM app.judgment
     WHERE article_id = ${getSqlLiteral(articleId)}
       AND model_id = ${getSqlLiteral(modelId)}
@@ -109,6 +114,7 @@ const storeJudgmentForPrompt = async ({
       AND use_abstract = ${getSqlLiteral(useAbstract)}
       AND use_fulltext = ${getSqlLiteral(useFulltext)}
       AND use_fulltext_no_images = ${getSqlLiteral(useFulltextNoImages)}
+      AND system_prompt_variant = ${getSqlLiteral(systemPromptVariant)}
       AND deleted_at IS NULL
     LIMIT 1
   `)
@@ -138,7 +144,8 @@ const storeJudgmentForPrompt = async ({
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
-            use_title AS useTitle
+            use_title AS useTitle,
+            system_prompt_variant AS systemPromptVariant
         `)
       )[0]
     : (
@@ -153,6 +160,7 @@ const storeJudgmentForPrompt = async ({
             use_abstract,
             use_fulltext,
             use_fulltext_no_images,
+            system_prompt_variant,
             is_answered,
             answered_original,
             answered_original_as_array,
@@ -173,6 +181,7 @@ const storeJudgmentForPrompt = async ({
             ${getSqlLiteral(useAbstract)},
             ${getSqlLiteral(useFulltext)},
             ${getSqlLiteral(useFulltextNoImages)},
+            ${getSqlLiteral(systemPromptVariant)},
             TRUE,
             ${getSqlLiteral(answeredOriginal)},
             ${getSqlLiteral(answeredOriginalAsArray)},
@@ -194,7 +203,8 @@ const storeJudgmentForPrompt = async ({
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
-            use_title AS useTitle
+            use_title AS useTitle,
+            system_prompt_variant AS systemPromptVariant
         `)
       )[0]
 }
@@ -213,6 +223,7 @@ const getAffectedProjectIdsForStoredJudgment = async (runner: JudgmentStoreRunne
       AND project.use_abstract = ${getSqlLiteral(result.useAbstract)}
       AND project.use_fulltext = ${getSqlLiteral(result.useFulltext)}
       AND project.use_fulltext_no_images = ${getSqlLiteral(result.useFulltextNoImages)}
+      AND COALESCE(project.system_prompt_variant, 'legacy') = ${getSqlLiteral(result.systemPromptVariant)}
       AND (
         EXISTS (
           SELECT 1
@@ -266,6 +277,7 @@ export const judgeStoreJudgment = async (
             useAbstract: boolean
             useFulltext: boolean
             useFulltextNoImages: boolean
+            systemPromptVariant: string | null
           }>(
             `
             SELECT
@@ -273,7 +285,8 @@ export const judgeStoreJudgment = async (
               use_title AS useTitle,
               use_abstract AS useAbstract,
               use_fulltext AS useFulltext,
-              use_fulltext_no_images AS useFulltextNoImages
+              use_fulltext_no_images AS useFulltextNoImages,
+              system_prompt_variant AS systemPromptVariant
             FROM app.project
             WHERE id = '${escapeSqlString(projectId)}'
             LIMIT 1
@@ -297,6 +310,7 @@ export const judgeStoreJudgment = async (
       snapshotProjectId: projectRow?.id ?? null,
       snapshotProjectModelName: modelRow?.modelName ?? null,
     } as const
+    const systemPromptVariant = getSystemPromptVariant(projectRow?.systemPromptVariant)
     await getAppDatabaseService().transaction(async (runner) => {
       const results = await promptIds.reduce<Promise<Array<StoredJudgmentRow | undefined>>>(
         async (promise, promptId) => {
@@ -311,6 +325,7 @@ export const judgeStoreJudgment = async (
             shortIdMapping,
             snapshotProjectId: snapshotValues.snapshotProjectId,
             snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
+            systemPromptVariant,
             useAbstract: projectRow?.useAbstract ?? true,
             useFulltext: projectRow?.useFulltext ?? false,
             useFulltextNoImages: projectRow?.useFulltextNoImages ?? false,
@@ -344,6 +359,7 @@ export const judgeStoreJudgment = async (
                 sourceMutationKey: `judgeStoreJudgment|${projectId}|${result.id}|${result.changeKind}|${String(result.updatedAt)}`,
                 sourceOperation: result.changeKind === 'judgment.llm.created' ? 'insert' : 'update',
                 sourceUpdatedAt: result.updatedAt,
+                systemPromptVariant: result.systemPromptVariant,
                 useAbstract: result.useAbstract,
                 useFulltext: result.useFulltext,
                 useFulltextNoImages: result.useFulltextNoImages,
@@ -360,6 +376,7 @@ export const judgeStoreJudgment = async (
               articleId,
               modelId,
               promptId,
+              systemPromptVariant,
               useAbstract: projectRow?.useAbstract ?? true,
               useFulltext: projectRow?.useFulltext ?? false,
               useFulltextNoImages: projectRow?.useFulltextNoImages ?? false,
