@@ -1,11 +1,11 @@
 CREATE SCHEMA app; CREATE SCHEMA mart;
-CREATE TABLE app.project (id VARCHAR, model_id VARCHAR, human_judgment_mode ENUM('prompt','summary'), use_title BOOLEAN, use_abstract BOOLEAN, use_fulltext BOOLEAN, use_fulltext_no_images BOOLEAN, system_prompt_variant VARCHAR);
-INSERT INTO app.project VALUES ('project-1', 'model-1', 'prompt', TRUE, TRUE, FALSE, FALSE, NULL);
+CREATE TABLE app.project (id VARCHAR, model_id VARCHAR, human_judgment_mode ENUM('prompt','summary'), use_title BOOLEAN, use_abstract BOOLEAN, use_fulltext BOOLEAN, use_fulltext_no_images BOOLEAN, system_prompt_variant VARCHAR, use_metadata BOOLEAN);
+INSERT INTO app.project VALUES ('project-1', 'model-1', 'prompt', TRUE, TRUE, FALSE, FALSE, NULL, NULL);
 CREATE TABLE app.prompt (id VARCHAR, archived BOOLEAN);
 INSERT INTO app.prompt VALUES ('prompt-1', FALSE);
 CREATE TABLE app.project_prompt (project_id VARCHAR, prompt_id VARCHAR, enabled BOOLEAN, archived BOOLEAN);
 INSERT INTO app.project_prompt VALUES ('project-1', 'prompt-1', TRUE, FALSE);
-CREATE TABLE app.judgment (id VARCHAR, article_id VARCHAR, prompt_id VARCHAR, model_id VARCHAR, is_answered BOOLEAN, use_title BOOLEAN, use_abstract BOOLEAN, use_fulltext BOOLEAN, use_fulltext_no_images BOOLEAN, system_prompt_variant VARCHAR NOT NULL DEFAULT 'legacy', created_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ);
+CREATE TABLE app.judgment (id VARCHAR, article_id VARCHAR, prompt_id VARCHAR, model_id VARCHAR, is_answered BOOLEAN, use_title BOOLEAN, use_abstract BOOLEAN, use_fulltext BOOLEAN, use_fulltext_no_images BOOLEAN, system_prompt_variant VARCHAR NOT NULL DEFAULT 'legacy', use_metadata BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ);
 CREATE TABLE app.judgment_human (id VARCHAR, project_id VARCHAR, article_id VARCHAR, prompt_id VARCHAR);
 CREATE TABLE app.judgment_human_summary (project_id VARCHAR, article_id VARCHAR, answer VARCHAR);
 CREATE TABLE mart.review_article_serving_base_v4 (project_id VARCHAR, review_config_hash VARCHAR, snapshot_id VARCHAR, article_id VARCHAR, base_generation BIGINT);

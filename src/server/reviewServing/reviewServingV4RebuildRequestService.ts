@@ -2026,7 +2026,8 @@ const getReviewServingV4RebuildStats = async (
         project.use_abstract,
         project.use_fulltext,
         project.use_fulltext_no_images,
-        COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant
+        COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant,
+        COALESCE(project.use_metadata, FALSE) AS use_metadata
       FROM app.project project
       WHERE project.id = ${getSqlLiteral(input.projectId)}
     ),
@@ -2073,6 +2074,7 @@ const getReviewServingV4RebuildStats = async (
       AND judgment.use_fulltext = project.use_fulltext
       AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
       AND judgment.system_prompt_variant = project.system_prompt_variant
+      AND judgment.use_metadata = project.use_metadata
     WHERE judgment.deleted_at IS NULL
     `)
   })

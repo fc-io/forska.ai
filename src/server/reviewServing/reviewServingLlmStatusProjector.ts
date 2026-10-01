@@ -83,6 +83,7 @@ type LlmStatusSourceRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -346,6 +347,7 @@ const getReviewConfigHash = (input: {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }) => {
   return buildReviewConfigHash({
@@ -367,6 +369,7 @@ const getReviewConfigHash = (input: {
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,
+    useMetadata: input.useMetadata,
     useTitle: input.useTitle,
   })
 }
@@ -396,6 +399,7 @@ const getJudgmentDeltaRows = async (
           delta.use_fulltext AS useFulltext,
           delta.use_fulltext_no_images AS useFulltextNoImages,
           COALESCE(delta.system_prompt_variant, 'legacy') AS systemPromptVariant,
+          COALESCE(delta.use_metadata, FALSE) AS useMetadata,
           COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
           delta.source_operation AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
@@ -430,6 +434,7 @@ const getJudgmentDeltaRows = async (
           AND judgment.use_fulltext = delta.use_fulltext
           AND judgment.use_fulltext_no_images = delta.use_fulltext_no_images
           AND judgment.system_prompt_variant = COALESCE(delta.system_prompt_variant, 'legacy')
+          AND judgment.use_metadata = COALESCE(delta.use_metadata, FALSE)
           AND judgment.deleted_at IS NULL
           AND NOT EXISTS (
             SELECT 1
@@ -442,6 +447,7 @@ const getJudgmentDeltaRows = async (
               AND newer_judgment.use_fulltext = judgment.use_fulltext
               AND newer_judgment.use_fulltext_no_images = judgment.use_fulltext_no_images
               AND newer_judgment.system_prompt_variant = judgment.system_prompt_variant
+              AND newer_judgment.use_metadata = judgment.use_metadata
               AND newer_judgment.deleted_at IS NULL
               AND (
                 newer_judgment.created_at > judgment.created_at
@@ -480,6 +486,7 @@ const getPromptScopedRows = async (
           project.use_fulltext AS useFulltext,
           project.use_fulltext_no_images AS useFulltextNoImages,
           COALESCE(project.system_prompt_variant, 'legacy') AS systemPromptVariant,
+          COALESCE(project.use_metadata, FALSE) AS useMetadata,
           COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
           'update' AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
@@ -545,7 +552,7 @@ const getProjectScopedRows = async (
           SELECT
             judgment.*,
             ROW_NUMBER() OVER (
-              PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images, judgment.system_prompt_variant
+              PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images, judgment.system_prompt_variant, judgment.use_metadata
               ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC
             ) AS judgment_rank
           FROM app."judgment" judgment
@@ -561,6 +568,7 @@ const getProjectScopedRows = async (
             AND project_judgment.use_fulltext = judgment.use_fulltext
             AND project_judgment.use_fulltext_no_images = judgment.use_fulltext_no_images
             AND COALESCE(project_judgment.system_prompt_variant, 'legacy') = judgment.system_prompt_variant
+            AND COALESCE(project_judgment.use_metadata, FALSE) = judgment.use_metadata
           WHERE judgment.deleted_at IS NULL
         )
         SELECT
@@ -578,6 +586,7 @@ const getProjectScopedRows = async (
           project.use_fulltext AS useFulltext,
           project.use_fulltext_no_images AS useFulltextNoImages,
           COALESCE(project.system_prompt_variant, 'legacy') AS systemPromptVariant,
+          COALESCE(project.use_metadata, FALSE) AS useMetadata,
           COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
           'update' AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
@@ -612,6 +621,7 @@ const getProjectScopedRows = async (
           AND judgment.use_fulltext = project.use_fulltext
           AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
           AND judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')
+          AND judgment.use_metadata = COALESCE(project.use_metadata, FALSE)
           AND judgment.judgment_rank = 1
         WHERE project.id = ${getSqlLiteral(input.projectId)}
         ORDER BY scope.article_id ASC, dirty_prompt.prompt_id ASC
@@ -632,7 +642,7 @@ const getArticleScopedRows = async (
           SELECT
             judgment.*,
             ROW_NUMBER() OVER (
-              PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images, judgment.system_prompt_variant
+              PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images, judgment.system_prompt_variant, judgment.use_metadata
               ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC
             ) AS judgment_rank
           FROM app."judgment" judgment
@@ -646,6 +656,7 @@ const getArticleScopedRows = async (
             AND project_judgment.use_fulltext = judgment.use_fulltext
             AND project_judgment.use_fulltext_no_images = judgment.use_fulltext_no_images
             AND COALESCE(project_judgment.system_prompt_variant, 'legacy') = judgment.system_prompt_variant
+            AND COALESCE(project_judgment.use_metadata, FALSE) = judgment.use_metadata
           WHERE judgment.deleted_at IS NULL
         )
         SELECT
@@ -663,6 +674,7 @@ const getArticleScopedRows = async (
           project.use_fulltext AS useFulltext,
           project.use_fulltext_no_images AS useFulltextNoImages,
           COALESCE(project.system_prompt_variant, 'legacy') AS systemPromptVariant,
+          COALESCE(project.use_metadata, FALSE) AS useMetadata,
           COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
           'update' AS sourceOperation,
           NOT (COALESCE(scope.in_curated_scope, FALSE) OR COALESCE(scope.in_route_scope, FALSE)) AS tombstone,
@@ -700,6 +712,7 @@ const getArticleScopedRows = async (
           AND judgment.use_fulltext = project.use_fulltext
           AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
           AND judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')
+          AND judgment.use_metadata = COALESCE(project.use_metadata, FALSE)
           AND judgment.judgment_rank = 1
         ORDER BY dirty.article_id ASC, project_prompt.prompt_order ASC NULLS LAST, prompt.id ASC
       `)
@@ -931,7 +944,7 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
          judgment.prompt_id,
          judgment.is_answered,
          ROW_NUMBER() OVER (
-           PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images, judgment.system_prompt_variant
+           PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images, judgment.system_prompt_variant, judgment.use_metadata
            ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC
          ) AS judgment_rank
        FROM target_serving serving
@@ -945,6 +958,7 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
         AND project.use_fulltext = judgment.use_fulltext
         AND project.use_fulltext_no_images = judgment.use_fulltext_no_images
         AND COALESCE(project.system_prompt_variant, 'legacy') = judgment.system_prompt_variant
+        AND COALESCE(project.use_metadata, FALSE) = judgment.use_metadata
        WHERE judgment.deleted_at IS NULL
      ),
      article_status AS (

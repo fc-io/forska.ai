@@ -32,6 +32,7 @@ export type ProjectReviewServingJudgmentPayloadInput = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -47,6 +48,7 @@ type ProjectReviewServingJudgmentPayloadProjectSettings = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -384,6 +386,7 @@ const getLlmJudgmentDirectInsertStatement = (
           AND judgment.use_fulltext = ${getSqlLiteral(input.useFulltext)}
           AND judgment.use_fulltext_no_images = ${getSqlLiteral(input.useFulltextNoImages)}
           AND judgment.system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(input.systemPromptVariant))}
+          AND judgment.use_metadata = ${getSqlLiteral(input.useMetadata === true)}
           AND judgment.deleted_at IS NULL
       ),
       payload AS (
@@ -696,7 +699,8 @@ const getProjectReviewServingJudgmentPayloadProjectSettings = async (
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
-      COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant
+      COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant,
+      COALESCE(use_metadata, FALSE) AS useMetadata
     FROM app.project
     WHERE id = ${getSqlLiteral(projectId)}
     LIMIT 1
@@ -742,6 +746,7 @@ export const ensureReviewServingJudgmentPayloadRowsForArticleSet = async (
       useAbstract: project.useAbstract,
       useFulltext: project.useFulltext,
       useFulltextNoImages: project.useFulltextNoImages,
+      useMetadata: project.useMetadata,
       useTitle: project.useTitle,
     },
     database,
@@ -802,6 +807,7 @@ const canUseSetBasedJudgmentPayloadRangeInsert = (
         && range.useAbstract === firstRange.useAbstract
         && range.useFulltext === firstRange.useFulltext
         && range.useFulltextNoImages === firstRange.useFulltextNoImages
+        && range.useMetadata === firstRange.useMetadata
         && range.useTitle === firstRange.useTitle
       )
     })

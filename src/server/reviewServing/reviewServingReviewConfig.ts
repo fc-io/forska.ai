@@ -33,6 +33,7 @@ export type ReviewServingProjectReviewSettingsRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -83,7 +84,8 @@ export const getReviewServingProjectReviewSettings = async (
       project.use_abstract AS useAbstract,
       project.use_fulltext AS useFulltext,
       project.use_fulltext_no_images AS useFulltextNoImages,
-      COALESCE(project.system_prompt_variant, 'legacy') AS systemPromptVariant
+      COALESCE(project.system_prompt_variant, 'legacy') AS systemPromptVariant,
+      COALESCE(project.use_metadata, FALSE) AS useMetadata
     FROM app.project project
     LEFT JOIN app.model model
       ON model.id = project.model_id
@@ -139,6 +141,7 @@ export const getReviewServingReviewConfigHash = (
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,
+    useMetadata: input.useMetadata,
     useTitle: input.useTitle,
   })
 }

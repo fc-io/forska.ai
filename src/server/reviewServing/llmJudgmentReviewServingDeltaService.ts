@@ -20,6 +20,7 @@ export type LlmJudgmentReviewServingDeltaRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -38,6 +39,7 @@ const getContentFlags = (input: LlmJudgmentReviewServingDeltaRow) => {
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,
+    useMetadata: input.useMetadata,
     useTitle: input.useTitle,
   }
 }
@@ -81,6 +83,7 @@ const getLlmJudgmentReviewServingDeltaInput = (
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,
+    useMetadata: input.useMetadata,
     useTitle: input.useTitle,
   }
 }

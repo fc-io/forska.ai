@@ -53,6 +53,7 @@ const createJudgmentPayloadDatabase = (input?: {humanCount?: number; llmCount?: 
             useAbstract: true,
             useFulltext: false,
             useFulltextNoImages: false,
+            useMetadata: true,
             useTitle: true,
           },
         ] as T[]
@@ -83,6 +84,7 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[] = []) => {
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
   }
 }
@@ -137,6 +139,7 @@ test('judgment payload projection writes llm and human payload kinds with SQL-na
   expect(inserts.join('\n')).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(llmInsert).toContain('payload.answered_original_as_array')
   expect(llmInsert).toContain("AND judgment.system_prompt_variant = 'legacy'")
+  expect(llmInsert).toContain('AND judgment.use_metadata = FALSE')
   expect(humanInsert).toContain('payload.answer AS answered_original')
   expect(humanInsert).toContain('NULL AS answered_original_as_array')
   expect(humanInsert).not.toContain('[payload.answer]')
@@ -415,6 +418,9 @@ test('lazy article-set judgment payload ensure builds only requested visible art
   expect(joined).toContain("COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant")
   expect(joined).toContain("AND judgment.system_prompt_variant = 'screening_v1'")
   expect(joined).not.toContain("AND judgment.system_prompt_variant = 'legacy'")
+  expect(joined).toContain('COALESCE(use_metadata, FALSE) AS useMetadata')
+  expect(joined).toContain('AND judgment.use_metadata = TRUE')
+  expect(joined).not.toContain('AND judgment.use_metadata = FALSE')
 })
 
 test('claimless judgment payload range batches with different system prompt variants filter each range separately', async () => {
@@ -444,4 +450,28 @@ test('claimless judgment payload range batches with different system prompt vari
   expect(llmInserts).toHaveLength(2)
   expect(llmInserts[0]).toContain("AND judgment.system_prompt_variant = 'legacy'")
   expect(llmInserts[1]).toContain("AND judgment.system_prompt_variant = 'screening_v1'")
+})
+
+test('claimless judgment payload range batches with different article metadata settings filter each range separately', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase()
+
+  await projectReviewServingJudgmentPayloadArticleRanges(
+    {
+      ranges: [
+        {...projectInput(), chunkEndArticleId: 'article-050', chunkStartArticleId: 'article-001'},
+        {...projectInput(), chunkEndArticleId: 'article-099', chunkStartArticleId: 'article-051', useMetadata: true},
+      ],
+    },
+    database,
+  )
+  const llmInserts = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+      && statement.includes("'llm' AS payload_kind")
+    )
+  })
+
+  expect(llmInserts).toHaveLength(2)
+  expect(llmInserts[0]).toContain('AND judgment.use_metadata = FALSE')
+  expect(llmInserts[1]).toContain('AND judgment.use_metadata = TRUE')
 })

@@ -694,6 +694,53 @@ test('bulk review change deltas stage and copy the system prompt variant typed c
   expect(targetInsert?.match(/system_prompt_variant/g)).toHaveLength(2)
 })
 
+test('review change deltas write the article metadata typed column and default it to false', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendReviewServingChangeDelta(tx, {
+    ...baseIdempotencyInput,
+    changeKind: 'judgment.llm.updated',
+    payloadVersion: 1,
+    useMetadata: true,
+  })
+  await appendReviewServingChangeDelta(tx, {
+    ...baseIdempotencyInput,
+    changeKind: 'judgment.llm.deleted',
+    payloadVersion: 1,
+    sourceMutationKey: 'judgment:judgment-1:v3',
+  })
+  const [metadataInsert = '', defaultInsert = ''] = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_change_delta')
+  })
+
+  expect(metadataInsert).toContain('system_prompt_variant,\n      use_metadata,')
+  expect(metadataInsert).toMatch(/'legacy',\s+TRUE,/)
+  expect(defaultInsert).toContain('use_metadata')
+  expect(defaultInsert).toMatch(/'legacy',\s+FALSE,/)
+})
+
+test('bulk review change deltas stage and copy the article metadata typed column', async () => {
+  const {statements, tx} = createFakeBulkLedgerTransaction()
+
+  await appendReviewServingChangeDeltas(tx, [
+    {...baseIdempotencyInput, changeKind: 'judgment.llm.created', payloadVersion: 1, useMetadata: true},
+  ])
+  const tempTable = statements.find((statement) => {
+    return statement.includes('CREATE TEMP TABLE temp_review_serving_delta_bulk_')
+  })
+  const tempRows = statements.find((statement) => {
+    return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+  })
+  const targetInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_change_delta')
+  })
+
+  expect(tempTable).toContain('use_metadata BOOLEAN')
+  expect(tempRows).toContain('system_prompt_variant, use_metadata')
+  expect(tempRows).toContain("'legacy', TRUE")
+  expect(targetInsert?.match(/use_metadata/g)).toHaveLength(2)
+})
+
 test('new review-serving outbox appends allocate monotonic source high-water marks per partition', async () => {
   const {tx} = createFakeLedgerTransaction()
   const first = await appendReviewServingSourceChangeOutbox(tx, {

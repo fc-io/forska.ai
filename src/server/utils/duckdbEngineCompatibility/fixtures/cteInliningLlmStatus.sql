@@ -52,7 +52,7 @@ WITH article_range_filter(chunk_start_article_id, chunk_end_article_id) AS (
          judgment.prompt_id,
          judgment.is_answered,
          ROW_NUMBER() OVER (
-           PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images, judgment.system_prompt_variant
+           PARTITION BY judgment.article_id, judgment.prompt_id, judgment.model_id, judgment.use_title, judgment.use_abstract, judgment.use_fulltext, judgment.use_fulltext_no_images, judgment.system_prompt_variant, judgment.use_metadata
            ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC
          ) AS judgment_rank
        FROM target_serving serving
@@ -66,6 +66,7 @@ WITH article_range_filter(chunk_start_article_id, chunk_end_article_id) AS (
         AND project.use_fulltext = judgment.use_fulltext
         AND project.use_fulltext_no_images = judgment.use_fulltext_no_images
         AND COALESCE(project.system_prompt_variant, 'legacy') = judgment.system_prompt_variant
+        AND COALESCE(project.use_metadata, FALSE) = judgment.use_metadata
        WHERE judgment.deleted_at IS NULL
      ),
      article_status AS (

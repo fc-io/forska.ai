@@ -33,6 +33,7 @@ export type ReviewJudgmentInputContentIdentityInput = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata?: boolean
   useTitle: boolean
 }
 
@@ -55,6 +56,7 @@ export type ReviewConfigHashInput = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata?: boolean
   useTitle: boolean
 }
 
@@ -214,6 +216,7 @@ export const buildReviewJudgmentInputContentIdentity = (input: ReviewJudgmentInp
       useAbstract: input.useAbstract,
       useFulltext: input.useFulltext,
       useFulltextNoImages: input.useFulltextNoImages,
+      useMetadata: input.useMetadata || undefined,
       useTitle: input.useTitle,
     },
   })
@@ -263,6 +266,7 @@ export const buildReviewConfigHash = (input: ReviewConfigHashInput) => {
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,
+    useMetadata: input.useMetadata || undefined,
     useTitle: input.useTitle,
   })}`
 }

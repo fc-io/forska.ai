@@ -252,6 +252,7 @@ const getFakeProjectReviewSettings = (stats: FakeStats): ReviewServingProjectRev
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
   }
 }
@@ -988,6 +989,8 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
   expect(joined).toContain('judgment.system_prompt_variant = project.system_prompt_variant')
   expect(joined).toContain("COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant")
+  expect(joined).toContain('judgment.use_metadata = project.use_metadata')
+  expect(joined).toContain('COALESCE(project.use_metadata, FALSE) AS use_metadata')
   expect(joined).toContain('FROM app.judgment_human_summary')
 })
 

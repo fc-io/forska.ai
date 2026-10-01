@@ -67,6 +67,7 @@ const searchFieldNames = ['articleSummary', 'articleTitle', 'fullText'] as const
 const titleFieldNames = ['articleTitle'] as const
 const abstractFieldNames = ['articleSummary'] as const
 const fullTextFieldNames = ['fullText', 'fullTextHtml', 'fullTextPDF'] as const
+const metadataFieldNames = ['articleCreatedAt', 'doi', 'publicationStatus', 'pubmedId', 'sourceMetadata'] as const
 
 const getChangedKnownFields = <TFieldName extends ArticleReviewServingFieldName>(
   changedFields: readonly ArticleReviewServingFieldName[],
@@ -90,6 +91,9 @@ const getArticleReviewServingDeltaPlans = (input: ArticleReviewServingDeltaInput
     }),
     ...getChangedKnownFields(uniqueChangedFields, fullTextFieldNames).flatMap(() => {
       return ['useFulltext' as const, 'useFulltextNoImages' as const]
+    }),
+    ...getChangedKnownFields(uniqueChangedFields, metadataFieldNames).map(() => {
+      return 'useMetadata' as const
     }),
   ]
   const uniqueAffectedContentFlags = Array.from(new Set(affectedContentFlags))

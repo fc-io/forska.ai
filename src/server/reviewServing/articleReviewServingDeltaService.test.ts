@@ -146,7 +146,26 @@ test('display search and judgment-input content identities advance independently
   expect(judgmentOnlyInserts).toContain('article.judgmentInput.updated')
 })
 
-test('url and metadata-only article updates emit display payload deltas', async () => {
+test('url-only article updates emit display payload deltas without judgment-input work', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendArticleReviewServingDeltas(tx, {
+    articleId: 'article-1',
+    changedFields: ['url'],
+    sourceMutationKey: 'source:url-change',
+    sourceOperation: 'update',
+  })
+
+  const bulkRows = getReviewChangeBulkRowStatements(statements).join('\n')
+
+  expect(bulkRows).toContain('article.display.updated')
+  expect(bulkRows).toContain('url')
+  expect(bulkRows).not.toContain('article.searchText.updated')
+  expect(bulkRows).not.toContain('article.judgmentInput.updated')
+  expect(bulkRows).not.toContain('useMetadata')
+})
+
+test('url and metadata-only article updates emit display payload and article-metadata judgment-input deltas', async () => {
   const {statements, tx} = createFakeLedgerTransaction()
 
   await appendArticleReviewServingDeltas(tx, {
@@ -165,7 +184,45 @@ test('url and metadata-only article updates emit display payload deltas', async 
   expect(bulkRows).toContain('sourceMetadata')
   expect(bulkRows).toContain('doi')
   expect(bulkRows).not.toContain('article.searchText.updated')
-  expect(bulkRows).not.toContain('article.judgmentInput.updated')
+  expect(bulkRows).toContain('article.judgmentInput.updated')
+  expect(bulkRows).toContain('"affectedContentFlags":["useMetadata"]')
+})
+
+test('each article metadata field affects only the article-metadata content flag', async () => {
+  const metadataFieldNames = ['articleCreatedAt', 'doi', 'publicationStatus', 'pubmedId', 'sourceMetadata'] as const
+  const bulkRowsByField = await Promise.all(
+    metadataFieldNames.map(async (fieldName) => {
+      const {statements, tx} = createFakeLedgerTransaction()
+
+      await appendArticleReviewServingDeltas(tx, {
+        articleId: 'article-1',
+        changedFields: [fieldName],
+        sourceMutationKey: `source:${fieldName}-change`,
+        sourceOperation: 'update',
+      })
+
+      return getReviewChangeBulkRowStatements(statements).join('\n')
+    }),
+  )
+  const authorsOnly = createFakeLedgerTransaction()
+
+  await appendArticleReviewServingDeltas(authorsOnly.tx, {
+    articleId: 'article-1',
+    changedFields: ['articleAuthors', 'arxivId', 'url'],
+    sourceMutationKey: 'source:authors-change',
+    sourceOperation: 'update',
+  })
+
+  expect(
+    bulkRowsByField.map((bulkRows) => {
+      return bulkRows.includes('"affectedContentFlags":["useMetadata"]')
+    }),
+  ).toEqual(
+    metadataFieldNames.map(() => {
+      return true
+    }),
+  )
+  expect(getReviewChangeBulkRowStatements(authorsOnly.statements).join('\n')).not.toContain('useMetadata')
 })
 
 test('article delta idempotency separates display search and judgment-input identities', () => {

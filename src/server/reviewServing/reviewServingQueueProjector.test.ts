@@ -337,6 +337,8 @@ test('queue rebuild matches LLM judgments to the project system prompt variant',
 
   expect(insertStatement).toContain("COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant")
   expect(insertStatement).toContain('AND project.system_prompt_variant = judgment.system_prompt_variant')
+  expect(insertStatement).toContain('COALESCE(project.use_metadata, FALSE) AS use_metadata')
+  expect(insertStatement).toContain('AND project.use_metadata = judgment.use_metadata')
 })
 
 test('prompt-mode queue rebuilds suppress synthetic summary human rows', async () => {

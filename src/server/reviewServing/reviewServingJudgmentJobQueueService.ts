@@ -372,6 +372,7 @@ const getJudgmentJobUnassessedPairsFromCurrentProjectTables = async (
         project.use_fulltext,
         project.use_fulltext_no_images,
         COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant,
+        COALESCE(project.use_metadata, FALSE) AS use_metadata,
         COALESCE(project.human_judgment_mode, 'prompt') AS human_judgment_mode,
         project.date_from,
         project.date_to
@@ -464,6 +465,7 @@ const getJudgmentJobUnassessedPairsFromCurrentProjectTables = async (
         AND judgment.use_fulltext = current_project.use_fulltext
         AND judgment.use_fulltext_no_images = current_project.use_fulltext_no_images
         AND judgment.system_prompt_variant = current_project.system_prompt_variant
+        AND judgment.use_metadata = current_project.use_metadata
         AND judgment.deleted_at IS NULL
     ),
     filtered_queue AS (
