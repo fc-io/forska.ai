@@ -4,6 +4,7 @@ import {format} from 'date-fns'
 import {createSignal, Match, Suspense, Switch} from 'solid-js'
 
 import {ProjectDetailsCuratedArticles} from '../../../../components/main/projectDetails/projectDetailsCuratedArticles'
+import {ProjectDetailsImportProgress} from '../../../../components/main/projectDetails/projectDetailsImportProgress.tsx'
 import {ProjectDetailsInformation} from '../../../../components/main/projectDetails/projectDetailsInformation'
 import {ProjectDetailsPrompts} from '../../../../components/main/projects/projectDetailsPrompts'
 import {Button} from '../../../../components/ui/button'
@@ -209,6 +210,8 @@ const ProjectDetail = () => {
             })
             return (
               <div class="space-y-4">
+                <ProjectDetailsImportProgress importRoutes={importRoutes} projectId={project.id} />
+
                 {/* Project Information - Suspense Boundary */}
                 <Suspense
                   fallback={

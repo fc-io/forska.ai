@@ -15,7 +15,11 @@ import {getDataSourceTrackingSpoolRepository} from '../services/dataSourceTracki
 import {getStructuredFileImportConfig} from '../services/structuredFileImportService.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
-import {getDataSourceImportStatesById, getDataSourceImportStatus} from './DataSourcesRoutes/dataSourceImportStatus.ts'
+import {
+  getDataSourceImportStateById,
+  getDataSourceImportStatesById,
+  getDataSourceImportStatus,
+} from './DataSourcesRoutes/dataSourceImportStatus.ts'
 
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
 type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
@@ -880,9 +884,16 @@ export const dataSourcesRoutes = new Elysia()
       throw new Error('Data source not found')
     }
 
-    const [normalizedEntry] = await normalizeDataSourceRows(getAppDatabaseService(), [entry])
+    const [[normalizedEntry], importState] = await Promise.all([
+      normalizeDataSourceRows(getAppDatabaseService(), [entry]),
+      getDataSourceImportStateById(
+        getAppDatabaseService(),
+        entry.id,
+        getDataSourcesWorkloadContext({maxResultRows: 1, operation: 'importState'}),
+      ),
+    ])
 
-    return {data: normalizedEntry}
+    return {data: {...normalizedEntry, importStatus: getDataSourceImportStatus(entry, importState)}}
   })
   .post(
     '/api/datasources',

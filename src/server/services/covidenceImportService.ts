@@ -20,9 +20,11 @@ import {resolveRuntimeFilePath, resolveRuntimeWritablePath} from '../utils/runti
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {
+  type ArticleImportBatchProgress,
   type ArticleImportStoreRow,
   type ArticleImportStoreTx,
   storeImportedArticles,
+  syncImportedArticlesInBatches,
   syncImportedArticlesWithTx,
 } from './articleImportStoreService.ts'
 import {getComparisonProjectServingInvalidationService} from './comparisonProjectServingInvalidationService.ts'
@@ -3416,4 +3418,25 @@ export const importCovidencePackageFromConfig = async (params: {
     packageRows: params.packageRows,
     tx: params.tx,
   })
+}
+
+export const importCovidencePackageInBatches = async (params: {
+  config: CovidencePackageConfig
+  importRoute: string
+  onBatchStored?: (progress: ArticleImportBatchProgress) => Promise<void>
+  packageRows: CovidenceReferenceMergeResult
+}): Promise<CovidenceImportResult> => {
+  const rows = getCovidenceImportRows(params)
+  const importRefreshState = await syncImportedArticlesInBatches({
+    importRoute: params.importRoute,
+    onBatchStored: params.onBatchStored,
+    rows,
+  })
+
+  return {
+    config: params.config,
+    importRouteIds: importRefreshState.importRouteIds,
+    packageRows: params.packageRows,
+    stats: {importedCount: rows.length, itemCount: rows.length},
+  }
 }

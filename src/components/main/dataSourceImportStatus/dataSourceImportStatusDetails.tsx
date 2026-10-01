@@ -6,7 +6,7 @@ import {
   getImportEtaLabel,
   getImportProgressLabel,
   getImportRetryLabel,
-} from './-importStatus.ts'
+} from './dataSourceImportStatus.ts'
 
 type ImportStatusProps = {importStatus: DataSourceImportStatusView}
 

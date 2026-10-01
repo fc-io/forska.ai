@@ -374,6 +374,10 @@ const createCovidenceImport = async (params: {
   })
 }
 
+const getCovidenceCreateRedirectPath = (result: CovidenceCreateResponse) => {
+  return result.data.covidenceProject ? `/projects/${result.data.covidenceProject.id}` : '/admin/datasources'
+}
+
 const AdminCovidenceImport = () => {
   const [mode, setMode] = createSignal<CovidenceImportMode>('title_abstract')
   const [projectName, setProjectName] = createSignal('')
@@ -449,8 +453,8 @@ const AdminCovidenceImport = () => {
   const createMutationState = createMutation(() => {
     return {
       mutationFn: createCovidenceImport,
-      onSuccess: () => {
-        globalThis.location.assign('/admin/datasources')
+      onSuccess: (result) => {
+        globalThis.location.assign(getCovidenceCreateRedirectPath(result))
       },
     }
   })
@@ -589,8 +593,8 @@ const AdminCovidenceImport = () => {
               <h1 class="text-3xl font-semibold tracking-tight text-stone-900">Covidence multi-file import</h1>
               <p class="max-w-2xl text-sm leading-6 text-stone-600">
                 Upload the required Covidence CSV exports, inspect the merged rows, then create the datasource, prompt,
-                and linked project. The articles and seeded judgments import in the background; the Data Sources page
-                shows the progress.
+                and linked project. The articles and seeded judgments import in the background; the project page shows
+                the progress.
               </p>
             </div>
             <Button as={Link} to="/admin/datasources" variant="outline" size="sm">

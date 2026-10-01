@@ -1,13 +1,17 @@
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
-import {articleImportStoreWorkloadContext} from '../../services/articleImportStoreService.ts'
+import {
+  type ArticleImportBatchProgress,
+  type ArticleImportStoreTx,
+  articleImportStoreWorkloadContext,
+} from '../../services/articleImportStoreService.ts'
 import {
   clearCovidenceSeededHumanJudgments,
   type CovidencePackageConfig,
   type CovidenceReferenceMergeResult,
   getCovidencePackageCursor,
-  importCovidencePackageFromConfig,
+  importCovidencePackageInBatches,
   seedCovidenceHumanJudgmentsFromConfig,
   syncCovidenceProjectScopeFromConfig,
 } from '../../services/covidenceImportService.ts'
@@ -52,51 +56,31 @@ const requestCovidenceProjectReviewServingBootstrap = (projectId: string | null)
   })
 }
 
-const recordCovidencePackageImportTotal = async (input: CovidencePackageImportRun) => {
-  const totalCount = input.packageRows.candidates.length
+const runCovidenceImportTransaction = <T>(work: (tx: ArticleImportStoreTx) => Promise<T>) => {
+  return getAppDatabaseService().transaction(work, articleImportStoreWorkloadContext)
+}
 
+const recordCovidencePackageImportProgress = async (dataSourceId: string, progress: ArticleImportBatchProgress) => {
   await getAppDatabaseService().run(
     getDataSourceImportPageSavedSql({
-      dataSourceId: input.dataSourceId,
+      dataSourceId,
       now: new Date(),
-      progress: {runFetchedCount: 0, runStoredCount: 0, totalCount},
+      progress: {
+        runFetchedCount: progress.storedCount,
+        runStoredCount: progress.storedCount,
+        totalCount: progress.totalCount,
+      },
     }),
-    getDataSourceImportStateWorkloadContext('markRunTotal'),
+    getDataSourceImportStateWorkloadContext('markRunProgress'),
   )
 }
 
-const runCovidencePackageImportTransaction = async (input: CovidencePackageImportRun) => {
+const finalizeCovidencePackageImport = async (input: CovidencePackageImportRun, importedCount: number) => {
   const importRoute = getCovidenceImportRoute(input.dataSourceId)
   const cursor = getCovidencePackageCursor(input.config)
+  const updatedAt = new Date()
 
-  return await getAppDatabaseService().transaction(async (tx) => {
-    await clearCovidenceSeededHumanJudgments({importRoute, tx})
-
-    const importResult = await importCovidencePackageFromConfig({
-      config: input.config,
-      datasourceId: input.dataSourceId,
-      importRoute,
-      packageRows: input.packageRows,
-      tx,
-    })
-    const importedCount = importResult.stats.importedCount
-    const updatedAt = new Date()
-
-    await syncCovidenceProjectScopeFromConfig({
-      config: input.config,
-      importRoute,
-      packageRows: importResult.packageRows,
-      projectId: input.projectId,
-      tx,
-    })
-    await seedCovidenceHumanJudgmentsFromConfig({
-      config: input.config,
-      importRoute,
-      packageRows: importResult.packageRows,
-      projectId: input.projectId,
-      tx,
-    })
-
+  await runCovidenceImportTransaction(async (tx) => {
     await tx.run(`
       UPDATE app.import_route
       SET name = ${getSqlLiteral(input.title)}
@@ -121,9 +105,50 @@ const runCovidencePackageImportTransaction = async (input: CovidencePackageImpor
       }),
     )
     await tx.run(getDataSourceImportCompletedSql({dataSourceId: input.dataSourceId, now: updatedAt}))
+  })
+}
 
-    return importResult.stats
-  }, articleImportStoreWorkloadContext)
+const runCovidencePackageImport = async (input: CovidencePackageImportRun) => {
+  const importRoute = getCovidenceImportRoute(input.dataSourceId)
+
+  await recordCovidencePackageImportProgress(input.dataSourceId, {
+    storedCount: 0,
+    totalCount: input.packageRows.candidates.length,
+  })
+  await runCovidenceImportTransaction(async (tx) => {
+    await clearCovidenceSeededHumanJudgments({importRoute, tx})
+  })
+
+  const importResult = await importCovidencePackageInBatches({
+    config: input.config,
+    importRoute,
+    onBatchStored: (progress) => {
+      return recordCovidencePackageImportProgress(input.dataSourceId, progress)
+    },
+    packageRows: input.packageRows,
+  })
+
+  await runCovidenceImportTransaction(async (tx) => {
+    await syncCovidenceProjectScopeFromConfig({
+      config: input.config,
+      importRoute,
+      packageRows: importResult.packageRows,
+      projectId: input.projectId,
+      tx,
+    })
+  })
+  await runCovidenceImportTransaction(async (tx) => {
+    await seedCovidenceHumanJudgmentsFromConfig({
+      config: input.config,
+      importRoute,
+      packageRows: importResult.packageRows,
+      projectId: input.projectId,
+      tx,
+    })
+  })
+  await finalizeCovidencePackageImport(input, importResult.stats.importedCount)
+
+  return importResult.stats
 }
 
 export const startCovidencePackageImportInBackground = async (input: CovidencePackageImportRun) => {
@@ -134,9 +159,8 @@ export const startCovidencePackageImportInBackground = async (input: CovidencePa
     trigger: input.trigger,
     runImport: async (markImportStarted) => {
       await markImportStarted()
-      await recordCovidencePackageImportTotal(input)
 
-      const stats = await runCovidencePackageImportTransaction(input)
+      const stats = await runCovidencePackageImport(input)
 
       requestCovidenceProjectReviewServingBootstrap(input.projectId)
 
