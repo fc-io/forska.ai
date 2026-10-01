@@ -27,6 +27,7 @@ type StoredJudgmentRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type AffectedLlmJudgmentProjectRow = {projectId: string}
@@ -68,6 +69,7 @@ const storeJudgmentForPrompt = async ({
   useAbstract,
   useFulltext,
   useFulltextNoImages,
+  useMetadata,
   useTitle,
 }: {
   articleId: string
@@ -83,6 +85,7 @@ const storeJudgmentForPrompt = async ({
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }) => {
   const shortId = getShortIdForPrompt(promptId, shortIdMapping)
@@ -104,6 +107,7 @@ const storeJudgmentForPrompt = async ({
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      use_metadata AS useMetadata,
       use_title AS useTitle,
       system_prompt_variant AS systemPromptVariant
     FROM app.judgment
@@ -114,6 +118,7 @@ const storeJudgmentForPrompt = async ({
       AND use_abstract = ${getSqlLiteral(useAbstract)}
       AND use_fulltext = ${getSqlLiteral(useFulltext)}
       AND use_fulltext_no_images = ${getSqlLiteral(useFulltextNoImages)}
+      AND use_metadata = ${getSqlLiteral(useMetadata)}
       AND system_prompt_variant = ${getSqlLiteral(systemPromptVariant)}
       AND deleted_at IS NULL
     LIMIT 1
@@ -144,6 +149,7 @@ const storeJudgmentForPrompt = async ({
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
+            use_metadata AS useMetadata,
             use_title AS useTitle,
             system_prompt_variant AS systemPromptVariant
         `)
@@ -160,6 +166,7 @@ const storeJudgmentForPrompt = async ({
             use_abstract,
             use_fulltext,
             use_fulltext_no_images,
+            use_metadata,
             system_prompt_variant,
             is_answered,
             answered_original,
@@ -181,6 +188,7 @@ const storeJudgmentForPrompt = async ({
             ${getSqlLiteral(useAbstract)},
             ${getSqlLiteral(useFulltext)},
             ${getSqlLiteral(useFulltextNoImages)},
+            ${getSqlLiteral(useMetadata)},
             ${getSqlLiteral(systemPromptVariant)},
             TRUE,
             ${getSqlLiteral(answeredOriginal)},
@@ -203,6 +211,7 @@ const storeJudgmentForPrompt = async ({
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
+            use_metadata AS useMetadata,
             use_title AS useTitle,
             system_prompt_variant AS systemPromptVariant
         `)
@@ -223,6 +232,7 @@ const getAffectedProjectIdsForStoredJudgment = async (runner: JudgmentStoreRunne
       AND project.use_abstract = ${getSqlLiteral(result.useAbstract)}
       AND project.use_fulltext = ${getSqlLiteral(result.useFulltext)}
       AND project.use_fulltext_no_images = ${getSqlLiteral(result.useFulltextNoImages)}
+      AND COALESCE(project.use_metadata, FALSE) = ${getSqlLiteral(result.useMetadata)}
       AND COALESCE(project.system_prompt_variant, 'legacy') = ${getSqlLiteral(result.systemPromptVariant)}
       AND (
         EXISTS (
@@ -277,6 +287,7 @@ export const judgeStoreJudgment = async (
             useAbstract: boolean
             useFulltext: boolean
             useFulltextNoImages: boolean
+            useMetadata: boolean | null
             systemPromptVariant: string | null
           }>(
             `
@@ -286,6 +297,7 @@ export const judgeStoreJudgment = async (
               use_abstract AS useAbstract,
               use_fulltext AS useFulltext,
               use_fulltext_no_images AS useFulltextNoImages,
+              use_metadata AS useMetadata,
               system_prompt_variant AS systemPromptVariant
             FROM app.project
             WHERE id = '${escapeSqlString(projectId)}'
@@ -329,6 +341,7 @@ export const judgeStoreJudgment = async (
             useAbstract: projectRow?.useAbstract ?? true,
             useFulltext: projectRow?.useFulltext ?? false,
             useFulltextNoImages: projectRow?.useFulltextNoImages ?? false,
+            useMetadata: projectRow?.useMetadata ?? false,
             useTitle: projectRow?.useTitle ?? true,
           })
 
@@ -363,6 +376,7 @@ export const judgeStoreJudgment = async (
                 useAbstract: result.useAbstract,
                 useFulltext: result.useFulltext,
                 useFulltextNoImages: result.useFulltextNoImages,
+                useMetadata: result.useMetadata,
                 useTitle: result.useTitle,
               }
             }),
@@ -380,6 +394,7 @@ export const judgeStoreJudgment = async (
               useAbstract: projectRow?.useAbstract ?? true,
               useFulltext: projectRow?.useFulltext ?? false,
               useFulltextNoImages: projectRow?.useFulltextNoImages ?? false,
+              useMetadata: projectRow?.useMetadata ?? false,
               useTitle: projectRow?.useTitle ?? true,
             }
           }),

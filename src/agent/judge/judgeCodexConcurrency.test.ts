@@ -65,7 +65,7 @@ const createModelConfig = (): JudgeSinglePromptInput['modelConfig'] => {
 }
 
 const createContentSettings = (): JudgeSinglePromptInput['contentSettings'] => {
-  return {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+  return {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useMetadata: false, useTitle: true}
 }
 
 const createJudgeSinglePromptInput = ({

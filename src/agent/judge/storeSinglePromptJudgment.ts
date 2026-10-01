@@ -122,6 +122,7 @@ const enqueueOwnerBackedCompletion = async ({
       useAbstract: contentSettings.useAbstract,
       useFulltext: contentSettings.useFulltext,
       useFulltextNoImages: contentSettings.useFulltextNoImages,
+      useMetadata: contentSettings.useMetadata,
       useTitle: contentSettings.useTitle,
     })
     await compactClosedOutRequestAttemptManifestEntries(completionRequestAttempts)
@@ -134,7 +135,13 @@ const enqueueOwnerBackedCompletion = async ({
 export const storeSinglePromptJudgment = async ({
   article,
   claimIdentity,
-  contentSettings = {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+  contentSettings = {
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useMetadata: false,
+    useTitle: true,
+  },
   judgmentsJobId,
   promptId,
   queueRecordId,
@@ -187,6 +194,7 @@ export const storeSinglePromptJudgment = async ({
     const useAbstract = contentSettings.useAbstract
     const useFulltext = contentSettings.useFulltext
     const useFulltextNoImages = contentSettings.useFulltextNoImages
+    const useMetadata = contentSettings.useMetadata
 
     const rawAnswer = judgment.answer
     const answeredOriginal = Array.isArray(rawAnswer) ? JSON.stringify(rawAnswer) : rawAnswer
@@ -206,6 +214,7 @@ export const storeSinglePromptJudgment = async ({
         AND use_abstract = ${useAbstract ? 'TRUE' : 'FALSE'}
         AND use_fulltext = ${useFulltext ? 'TRUE' : 'FALSE'}
         AND use_fulltext_no_images = ${useFulltextNoImages ? 'TRUE' : 'FALSE'}
+        AND use_metadata = ${useMetadata ? 'TRUE' : 'FALSE'}
         AND system_prompt_variant = '${escapeSqlString(systemPromptVariant)}'
         AND deleted_at IS NULL
       LIMIT 1
@@ -221,7 +230,7 @@ export const storeSinglePromptJudgment = async ({
       // To re-judge, the user must delete the existing judgment first.
       console.error(
         `${article.id} | Judgment already exists: promptId=${promptId}, modelId=${modelId}, `
-          + `content=[T:${useTitle},A:${useAbstract},F:${useFulltext},FNI:${useFulltextNoImages}], `
+          + `content=[T:${useTitle},A:${useAbstract},F:${useFulltext},FNI:${useFulltextNoImages},M:${useMetadata}], `
           + `systemPromptVariant=${systemPromptVariant}, `
           + `projectId=${projectId}, existingId=${existingId}, createdAt=${existingCreatedAt ?? 'unknown'}`,
       )
@@ -271,6 +280,7 @@ export const storeSinglePromptJudgment = async ({
           useAbstract,
           useFulltext,
           useFulltextNoImages,
+          useMetadata,
           useTitle,
         })
 

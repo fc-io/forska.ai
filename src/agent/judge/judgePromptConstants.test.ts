@@ -420,6 +420,33 @@ describe('screening_v1 prompt constants', () => {
     )
   })
 
+  test('describes the optional article_metadata block and keeps it out of the quote sources', () => {
+    const recordSentence =
+      'A record is the title and summary (abstract) of a scientific article, sometimes with its metadata (journal, year, publication type) and full text.'
+
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(
+      `You are screening records for a systematic review. The user is a medical or biomedical researcher. ${recordSentence} The eligibility criteria are split into sections`,
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC).toContain(
+      `You are screening records for a systematic review. ${recordSentence} The eligibility criteria are split into sections`,
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).not.toContain('sometimes with full text.')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(`You will receive:
+1. An article title
+2. An article summary
+3. A single question holding one section of the eligibility criteria
+4. Sometimes an article_metadata block (journal, year, volume, issue, pages, publication type, identifiers): use it for the setting, publication type and date, do not quote it
+5. The expected output_type for your answer
+
+How to judge:`)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(
+      '- Quotes may come only from article_title, article_summary, or article_fulltext.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).not.toContain('## article_metadata')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT).not.toContain('article_metadata')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC).not.toContain('article_metadata')
+  })
+
   test('asks for a Missing: part in maybe explanations', () => {
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(
       '(3) only when the answer is maybe: "Missing: " followed by the missing fact in one or two words',

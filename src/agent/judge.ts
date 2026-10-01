@@ -35,7 +35,7 @@ import {
   isWithinContextBudget,
   type JudgmentChunkingStrategy,
 } from './judge/judgeChunking.ts'
-import type {ContentSettings} from './judge/judgeGetPrompt.ts'
+import {type ContentSettings, getArticleMetadataPromptSection} from './judge/judgeGetPrompt.ts'
 import {getSinglePromptEvidenceSystemPromptForArticle, isFhirEhrPatientArticle} from './judge/judgePromptSelection.ts'
 import {captureJudgmentRequestEvidence} from './judge/judgeRequestEvidence.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
@@ -1185,10 +1185,10 @@ export const getChunkParallelLimit = ({
     : Math.max(1, Math.min(chunkCount, configured, providerCap))
 }
 
-const buildEvidenceUserPrompt = ({
+export const buildEvidenceUserPrompt = ({
   article,
   prompt,
-  contentSettings: _contentSettings,
+  contentSettings,
   provider,
   chunkField,
   chunkText,
@@ -1213,6 +1213,8 @@ const buildEvidenceUserPrompt = ({
 
   const titleSection = includeTitle ? `## article_title\n\n${wrapSourceText(titleText, provider)}\n\n` : ''
 
+  const metadataSection = contentSettings.useMetadata ? getArticleMetadataPromptSection(article, provider) : ''
+
   const summarySection = includeSummary ? `## article_summary\n\n${wrapSourceText(summaryText, provider)}\n\n` : ''
 
   const fullTextSection =
@@ -1222,7 +1224,7 @@ const buildEvidenceUserPrompt = ({
 
   const outputType = prompt.type ?? 'string'
 
-  return `${titleSection}${summarySection}${fullTextSection}## Question\n\n${prompt.originalText}\n\noutput_type: ${outputType}`
+  return `${titleSection}${metadataSection}${summarySection}${fullTextSection}## Question\n\n${prompt.originalText}\n\noutput_type: ${outputType}`
 }
 
 const buildChunkedFinalUserPrompt = ({

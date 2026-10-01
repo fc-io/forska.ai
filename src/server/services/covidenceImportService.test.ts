@@ -10,6 +10,7 @@ import {
   buildCovidencePromptDefinition,
   buildCovidencePromptDefinitionsForEligibilityFields,
   deleteCovidencePackageFiles,
+  getCovidenceBibliographicMetadata,
   getCovidencePackageConfig,
   getCovidencePackageCursor,
   getCovidencePackageFileContent,
@@ -783,12 +784,13 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
             p.use_title AS useTitle,
             p.use_abstract AS useAbstract,
             p.use_fulltext AS useFulltext,
-            p.use_fulltext_no_images AS useFulltextNoImages
+            p.use_fulltext_no_images AS useFulltextNoImages,
+            p.use_metadata AS useMetadata
           FROM app.project p
           WHERE p.id <> 'project-covidence-existing'
         \`)
         const existingProjectRows = await database.queryJson(\`
-          SELECT id, system_prompt_variant AS systemPromptVariant
+          SELECT id, system_prompt_variant AS systemPromptVariant, use_metadata AS useMetadata
           FROM app.project
           WHERE id = 'project-covidence-existing'
         \`)
@@ -852,10 +854,11 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }
-      existingProject: {created: boolean; id: string; systemPromptVariant: string}
-      existingProjectRows: Array<{id: string; systemPromptVariant: string | null}>
+      existingProject: {created: boolean; id: string; systemPromptVariant: string; useMetadata: boolean}
+      existingProjectRows: Array<{id: string; systemPromptVariant: string | null; useMetadata: boolean}>
       projectImportRouteRows: Array<{projectId: string; route: string}>
       projectPromptRows: Array<{enabled: boolean; projectId: string; promptId: string}>
       projectRows: Array<{
@@ -867,6 +870,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }>
       reusedProject: {
@@ -879,6 +883,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }
     }
@@ -893,14 +898,18 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
+      useMetadata: true,
       useTitle: true,
     })
     expect(parsed.existingProject).toMatchObject({
       created: false,
       id: 'project-covidence-existing',
       systemPromptVariant: 'legacy',
+      useMetadata: false,
     })
-    expect(parsed.existingProjectRows).toEqual([{id: 'project-covidence-existing', systemPromptVariant: null}])
+    expect(parsed.existingProjectRows).toEqual([
+      {id: 'project-covidence-existing', systemPromptVariant: null, useMetadata: false},
+    ])
     expect(parsed.reusedProject).toEqual({
       created: false,
       humanJudgmentMode: 'summary',
@@ -911,6 +920,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
+      useMetadata: true,
       useTitle: true,
     })
     expect(parsed.projectRows).toEqual([
@@ -923,6 +933,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         useAbstract: true,
         useFulltext: false,
         useFulltextNoImages: false,
+        useMetadata: true,
         useTitle: true,
       },
     ])
@@ -935,6 +946,11 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         return row.configFieldSet.split(',')
       }),
     ).toContain('systemPromptVariant')
+    expect(
+      parsed.configDeltaRows.flatMap((row) => {
+        return row.configFieldSet.split(',')
+      }),
+    ).toContain('useMetadata')
   } finally {
     ;[
       duckdbPath,
@@ -1025,7 +1041,8 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
             use_title AS useTitle,
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
-            use_fulltext_no_images AS useFulltextNoImages
+            use_fulltext_no_images AS useFulltextNoImages,
+            use_metadata AS useMetadata
           FROM app.project
         \`)
         const projectArticleRows = await database.queryJson(\`
@@ -1102,6 +1119,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }
       projectArticleRows: Array<{
@@ -1119,6 +1137,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }>
       refreshArticleStateRows: Array<{
@@ -1138,6 +1157,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }
     }
@@ -1152,6 +1172,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
       useAbstract: true,
       useFulltext: true,
       useFulltextNoImages: false,
+      useMetadata: true,
       useTitle: true,
     })
     expect(parsed.reusedProject).toEqual({
@@ -1164,6 +1185,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
       useAbstract: true,
       useFulltext: true,
       useFulltextNoImages: false,
+      useMetadata: true,
       useTitle: true,
     })
     expect(parsed.projectRows).toEqual([
@@ -1176,6 +1198,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         useAbstract: true,
         useFulltext: true,
         useFulltextNoImages: false,
+        useMetadata: true,
         useTitle: true,
       },
     ])
@@ -2804,13 +2827,26 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
         }
 
         const config = await createConfig(
-          'Title,Authors,Abstract,Year,DOI,Tags,Notes\\nStudy A,"Doe, Jane",Summary A,2024,https://dx.doi.org/10.1000/Alpha,tag-a,first note\\nStudy B,"Roe, John",Summary B,2023,https://dx.doi.org/0161903/AIM.009,tag-b,second note\\n',
+          'Title,Authors,Abstract,Published Year,Published Month,Journal,Volume,Issue,Pages,Accession Number,DOI,Tags,Notes\\nStudy A,"Doe, Jane",Summary A,2024,Mar,BMJ Open,14,3,e081234,38500000,https://dx.doi.org/10.1000/Alpha,tag-a,first note\\nStudy B,"Roe, John",Summary B,2023,,,,,,,https://dx.doi.org/0161903/AIM.009,tag-b,second note\\n',
           'Title,Authors,Year,DOI\\nStudy B,"Roe, John",2023,https://dx.doi.org/0161903/AIM.009\\n',
         )
 
         await database.transaction(async (tx) => {
           await covidenceImportService.importCovidencePackageFromConfig({config, datasourceId, importRoute, tx})
         })
+        const sourceRecords = await database.queryJson(\`
+          SELECT
+            TO_JSON(source_record.import_metadata) AS importMetadata,
+            hot.publication_year AS hotPublicationYear,
+            hot.journal_title AS hotJournalTitle
+          FROM app.article_import_route_source_record source_record
+          INNER JOIN app.import_route ir ON ir.id = source_record.import_route_id
+          LEFT JOIN app.review_import_article_hot_field hot
+            ON hot.import_route_id = source_record.import_route_id
+            AND hot.source_record_key = source_record.source_record_key
+          WHERE ir.route = '\${importRoute}'
+          ORDER BY json_extract_string(source_record.raw_payload, '$.covidence.citation.title') ASC
+        \`)
 
         const articles = await database.queryJson(\`
           SELECT
@@ -2847,7 +2883,15 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
           }
         })
 
-        console.log(JSON.stringify({articles: normalizedArticles, linkedArticles}))
+        const normalizedSourceRecords = sourceRecords.map((sourceRecord) => {
+          return {
+            ...sourceRecord,
+            importMetadata:
+              typeof sourceRecord.importMetadata === 'string' ? JSON.parse(sourceRecord.importMetadata) : sourceRecord.importMetadata,
+          }
+        })
+
+        console.log(JSON.stringify({articles: normalizedArticles, linkedArticles, sourceRecords: normalizedSourceRecords}))
         covidenceImportService.deleteCovidencePackageFiles(datasourceId)
         await database.close()
       `,
@@ -2886,12 +2930,26 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
         articleUrl: string | null
         canonicalLegacyArticleId: string | null
         doi: string | null
-        importMetadata: {covidence: {mode: string; stageMembership: Record<string, boolean>}}
+        importMetadata: {covidence: {mode: string; stageMembership: Record<string, boolean>}} & Record<string, unknown>
         originalData: {covidence: {citation: {title: string}; sourceRows: Array<{sourceFileName: string}>}}
         pubmedId: string | null
-        sourceMetadata: {journalTitle: string | null}
+        sourceMetadata: {journalTitle: string | null} & Record<string, unknown>
       }>
       linkedArticles: Array<{count: number}>
+      sourceRecords: Array<{
+        hotJournalTitle: string | null
+        hotPublicationYear: number | null
+        importMetadata: Record<string, unknown>
+      }>
+    }
+    const studyAMetadata = {
+      accessionNumber: '38500000',
+      issue: '3',
+      journalTitle: 'BMJ Open',
+      pages: 'e081234',
+      publicationMonth: 'Mar',
+      publicationYear: 2024,
+      volume: '14',
     }
 
     expect(parsed.articles).toHaveLength(2)
@@ -2904,8 +2962,22 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
     expect(parsed.articles[0]?.articleUrl).toBe('https://doi.org/10.1000/alpha')
     expect(parsed.articles[0]?.originalData.covidence.citation.title).toBe('Study A')
     expect(parsed.articles[0]?.originalData.covidence.sourceRows).toHaveLength(2)
-    expect(parsed.articles[0]?.sourceMetadata).toMatchObject({journalTitle: null})
+    expect(parsed.articles[0]?.sourceMetadata).toMatchObject(studyAMetadata)
     expect('covidence' in (parsed.articles[0]?.sourceMetadata ?? {})).toBe(false)
+    expect('publicationType' in (parsed.articles[0]?.sourceMetadata ?? {})).toBe(false)
+    expect(parsed.articles[0]?.importMetadata).toMatchObject(studyAMetadata)
+    expect(parsed.articles[1]?.sourceMetadata).toMatchObject({journalTitle: null, publicationYear: 2023})
+    expect(
+      ['publicationMonth', 'volume', 'issue', 'pages', 'publicationType', 'accessionNumber'].filter((key) => {
+        return key in (parsed.articles[1]?.sourceMetadata ?? {}) || key in (parsed.articles[1]?.importMetadata ?? {})
+      }),
+    ).toEqual([])
+    expect(parsed.sourceRecords).toHaveLength(2)
+    expect(parsed.sourceRecords[0]?.importMetadata).toMatchObject(studyAMetadata)
+    expect(parsed.sourceRecords[0]?.hotPublicationYear).toBe(2024)
+    expect(parsed.sourceRecords[0]?.hotJournalTitle).toBe('BMJ Open')
+    expect(parsed.sourceRecords[1]?.importMetadata).toMatchObject({journalTitle: null, publicationYear: 2023})
+    expect(parsed.sourceRecords[1]?.hotPublicationYear).toBe(2023)
     expect(parsed.articles[0]?.importMetadata.covidence.mode).toBe('title_abstract')
     expect(parsed.articles[0]?.importMetadata.covidence.stageMembership).toEqual({
       all: true,
@@ -3697,6 +3769,55 @@ test('parseCovidenceReferenceRows parses Covidence RIS rows into the same downst
       ],
     },
   ])
+})
+
+test('getCovidenceBibliographicMetadata normalizes RIS citation fields including the reference type', () => {
+  const parsed = parseCovidenceReferenceRows({
+    content: [
+      'TY  - JOUR',
+      'TI  - Study A',
+      'PY  - 2019',
+      'Y1  - 2019/03/01/',
+      'JO  - BMJ Open',
+      'VL  - 9',
+      'IS  - 3',
+      'SP  - 100',
+      'EP  - 110',
+      'AN  - 30800000',
+      'ER  - ',
+    ].join('\n'),
+    fileRole: 'all',
+    format: 'ris',
+    sourceFileName: 'all.ris',
+  })
+  const citation = parsed.ok ? (parsed.rows[0]?.citation ?? {}) : {}
+
+  expect(citation.journal).toBe('BMJ Open')
+  expect(getCovidenceBibliographicMetadata(citation)).toEqual({
+    issue: '3',
+    pages: '100-110',
+    publicationType: 'JOUR',
+    publicationYear: 2019,
+    volume: '9',
+  })
+})
+
+test('getCovidenceBibliographicMetadata reads Covidence csv columns and omits missing values', () => {
+  expect(
+    getCovidenceBibliographicMetadata({
+      accession_number: '38500000',
+      issue: null,
+      journal: 'Lancet',
+      pages: '  e12  ',
+      published_month: 'Mar',
+      published_year: '2024',
+      volume: '14',
+      year: 'n.d.',
+    }),
+  ).toEqual({accessionNumber: '38500000', pages: 'e12', publicationMonth: 'Mar', publicationYear: 2024, volume: '14'})
+  expect(getCovidenceBibliographicMetadata({sp: '45-50', ep: '50'})).toEqual({pages: '45-50'})
+  expect(getCovidenceBibliographicMetadata({sp: '7'})).toEqual({pages: '7'})
+  expect(getCovidenceBibliographicMetadata({published_year: 'unknown', title: 'No metadata'})).toEqual({})
 })
 
 test('parseCovidenceReferenceRows returns stable RIS parse errors for malformed inputs', () => {
