@@ -98,6 +98,12 @@ downgrade, or fall back to another provider or model.
       required.
 - [x] Ensure the gate preserves the requested model, provider, thinking level,
       and content flags in all assertions.
+- [x] Cover the fifth content flag `useMetadata`: a judge-worker prompt for a
+      `use_metadata` project (the Covidence default) reaches `judgeSinglePrompt`
+      with `contentSettings.useMetadata = true`, the snapshot payload's
+      `pubmedId` and `sourceMetadata`, and a user prompt ordered
+      `## article_title`, `## article_metadata` (with the journal), then
+      `## article_summary` (`judgmentsRequestRuntime.test.ts`).
 - [x] Document the command and its coverage in `TESTS.md`.
 - [x] Keep the gate isolated from the primary database, normal job storage, and
       network providers.
@@ -132,7 +138,7 @@ Acceptance criteria:
 - [x] Read and assert the canonical `app.judgment` row immediately after the
       DuckDB commit using the complete identity key:
       `(articleId, promptId, modelId, useTitle, useAbstract, useFulltext,
-useFulltextNoImages, systemPromptVariant)`.
+useFulltextNoImages, useMetadata, systemPromptVariant)`.
 - [x] Assert the project review-serving read remains stale before its target
       dirty token is completed and exposes the judgment only after projector
       completion. Assert the SQLite visibility acknowledgement token separately
@@ -472,8 +478,9 @@ Acceptance criteria:
       admission and observe/stop the run, but must not claim or dispatch records or
       invoke cron stages itself.
 - [x] Judge each article using title and abstract only. Assert
-      `useTitle = true`, `useAbstract = true`, `useFulltext = false`, and
-      `useFulltextNoImages = false` at job creation, dispatch, persistence, and
+      `useTitle = true`, `useAbstract = true`, `useFulltext = false`,
+      `useFulltextNoImages = false`, and `useMetadata = false` at job creation,
+      dispatch, persistence, and
       canonical lookup. At test seeding time, give each temporary article a unique
       synthetic full-text sentinel and image URL that are not part of the committed
       real-article snapshot. Assert the production execution snapshot/rendered
