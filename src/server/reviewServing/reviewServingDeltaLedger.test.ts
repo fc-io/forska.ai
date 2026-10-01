@@ -642,6 +642,58 @@ test('review delete deltas default to tombstones for replay after source deletes
   expect(insertStatement).toContain('TRUE')
 })
 
+test('review change deltas write the system prompt variant typed column and default it to legacy', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendReviewServingChangeDelta(tx, {
+    ...baseIdempotencyInput,
+    changeKind: 'judgment.llm.updated',
+    payloadVersion: 1,
+    systemPromptVariant: 'screening_v1',
+  })
+  await appendReviewServingChangeDelta(tx, {
+    ...baseIdempotencyInput,
+    changeKind: 'judgment.llm.deleted',
+    payloadVersion: 1,
+    sourceMutationKey: 'judgment:judgment-1:v3',
+  })
+  const [screeningInsert = '', legacyInsert = ''] = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_change_delta')
+  })
+
+  expect(screeningInsert).toContain('system_prompt_variant')
+  expect(screeningInsert).toContain("'screening_v1'")
+  expect(legacyInsert).toContain('system_prompt_variant')
+  expect(legacyInsert).toContain("'legacy'")
+})
+
+test('bulk review change deltas stage and copy the system prompt variant typed column', async () => {
+  const {statements, tx} = createFakeBulkLedgerTransaction()
+
+  await appendReviewServingChangeDeltas(tx, [
+    {
+      ...baseIdempotencyInput,
+      changeKind: 'judgment.llm.created',
+      payloadVersion: 1,
+      systemPromptVariant: 'screening_v1',
+    },
+  ])
+  const tempTable = statements.find((statement) => {
+    return statement.includes('CREATE TEMP TABLE temp_review_serving_delta_bulk_')
+  })
+  const tempRows = statements.find((statement) => {
+    return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+  })
+  const targetInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_change_delta')
+  })
+
+  expect(tempTable).toContain('system_prompt_variant VARCHAR')
+  expect(tempRows).toContain('system_prompt_variant')
+  expect(tempRows).toContain("'screening_v1'")
+  expect(targetInsert?.match(/system_prompt_variant/g)).toHaveLength(2)
+})
+
 test('new review-serving outbox appends allocate monotonic source high-water marks per partition', async () => {
   const {tx} = createFakeLedgerTransaction()
   const first = await appendReviewServingSourceChangeOutbox(tx, {

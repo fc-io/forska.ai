@@ -1469,6 +1469,7 @@ test('judgment payload rebuild ranges replace a snapshot range only when asked t
             useAbstract: true,
             useFulltext: false,
             useFulltextNoImages: false,
+            systemPromptVariant: 'legacy',
             useTitle: true,
           },
         ],

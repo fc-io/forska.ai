@@ -404,6 +404,25 @@ test('buildReviewConfigHash changes when human judgment mode changes', () => {
   expect(summaryHash).not.toBe(baseHash)
 })
 
+test('buildReviewConfigHash keeps the legacy system prompt variant hash byte-identical and separates screening_v1', () => {
+  const input = {
+    humanJudgmentMode: 'prompt',
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
+    modelId: 'model-a',
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a', promptOrder: 1}],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  } as const
+  const pinnedLegacyHash = 'review:a62efbdc412d01bbaaee603e490e1538ef56100435231d4e625c57135955874a'
+
+  expect(buildReviewConfigHash(input)).toBe(pinnedLegacyHash)
+  expect(buildReviewConfigHash({...input, systemPromptVariant: undefined})).toBe(pinnedLegacyHash)
+  expect(buildReviewConfigHash({...input, systemPromptVariant: 'legacy'})).toBe(pinnedLegacyHash)
+  expect(buildReviewConfigHash({...input, systemPromptVariant: 'screening_v1'})).not.toBe(pinnedLegacyHash)
+})
+
 test('buildSummaryDefinitionIdentity sorts contribution keys before hashing', () => {
   const left = buildSummaryDefinitionIdentity({
     contributionKeys: ['answer:yes', 'answer:no'],

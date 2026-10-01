@@ -162,6 +162,53 @@ test('production review-serving rebuild code keeps multi-writer append transacti
   expect(offenders).toEqual([])
 })
 
+test('review-serving judgment content-flag matches also match the system prompt variant', () => {
+  const result = globalThis.Bun.spawnSync([
+    'rg',
+    '-n',
+    '--no-heading',
+    'use_fulltext_no_images\\s*=|system_prompt_variant',
+    'src/server/workers/reviewServingProjectorWorker.ts',
+    'src/server/reviewServing',
+    '-g',
+    '*.ts',
+    '-g',
+    '!*.test.ts',
+  ])
+  const lines = result.stdout.toString().trim().replaceAll('\\', '/').split('\n').filter(Boolean)
+  const getFilePath = (line: string) => {
+    return line.split(':')[0] ?? ''
+  }
+  const isFlagComparison = (line: string) => {
+    return /use_fulltext_no_images\s*=/u.test(line)
+  }
+  const isVariantComparison = (line: string) => {
+    return /system_prompt_variant/u.test(line) && /\s=\s/u.test(line) && !/\bAS\b/iu.test(line)
+  }
+  const countsByFile = lines.reduce<Record<string, {flag: number; variant: number}>>((counts, line) => {
+    const filePath = getFilePath(line)
+    const current = counts[filePath] ?? {flag: 0, variant: 0}
+
+    return {
+      ...counts,
+      [filePath]: {
+        flag: current.flag + (isFlagComparison(line) ? 1 : 0),
+        variant: current.variant + (isVariantComparison(line) ? 1 : 0),
+      },
+    }
+  }, {})
+  const offenders = Object.entries(countsByFile)
+    .filter(([, counts]) => {
+      return counts.variant < counts.flag
+    })
+    .map(([filePath, counts]) => {
+      return `${filePath}: ${counts.flag} flag matches, ${counts.variant} variant matches`
+    })
+
+  expect(Object.keys(countsByFile).length).toBeGreaterThan(0)
+  expect(offenders).toEqual([])
+})
+
 test('Phase 5B package commands do not expose normal legacy rebuild workers', async () => {
   const packageJson = (await globalThis.Bun.file(join(projectRoot, 'package.json')).json()) as {
     scripts: Record<string, string>

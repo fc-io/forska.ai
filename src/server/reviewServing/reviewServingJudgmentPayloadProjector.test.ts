@@ -47,7 +47,14 @@ const createJudgmentPayloadDatabase = (input?: {humanCount?: number; llmCount?: 
 
       if (statement.includes('FROM app.project')) {
         return [
-          {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+          {
+            modelId: 'model-1',
+            systemPromptVariant: 'screening_v1',
+            useAbstract: true,
+            useFulltext: false,
+            useFulltextNoImages: false,
+            useTitle: true,
+          },
         ] as T[]
       }
 
@@ -72,6 +79,7 @@ const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[] = []) => {
     projectId: 'project-1',
     reviewConfigHash: 'review-config-1',
     snapshotId: 'snapshot-1',
+    systemPromptVariant: 'legacy' as const,
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
@@ -128,6 +136,7 @@ test('judgment payload projection writes llm and human payload kinds with SQL-na
   expect(inserts.join('\n')).not.toContain('DO UPDATE SET')
   expect(inserts.join('\n')).not.toContain('judgment_payload_json = excluded.judgment_payload_json')
   expect(llmInsert).toContain('payload.answered_original_as_array')
+  expect(llmInsert).toContain("AND judgment.system_prompt_variant = 'legacy'")
   expect(humanInsert).toContain('payload.answer AS answered_original')
   expect(humanInsert).toContain('NULL AS answered_original_as_array')
   expect(humanInsert).not.toContain('[payload.answer]')
@@ -403,4 +412,36 @@ test('lazy article-set judgment payload ensure builds only requested visible art
   expect(joined).toContain("article_id IN ('article-2', 'article-1')")
   expect(joined).not.toContain("SET status = 'completed', lifecycle_reason = 'projected'")
   expect(joined).toContain('WHERE NOT EXISTS')
+  expect(joined).toContain("COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant")
+  expect(joined).toContain("AND judgment.system_prompt_variant = 'screening_v1'")
+  expect(joined).not.toContain("AND judgment.system_prompt_variant = 'legacy'")
+})
+
+test('claimless judgment payload range batches with different system prompt variants filter each range separately', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase()
+
+  await projectReviewServingJudgmentPayloadArticleRanges(
+    {
+      ranges: [
+        {...projectInput(), chunkEndArticleId: 'article-050', chunkStartArticleId: 'article-001'},
+        {
+          ...projectInput(),
+          chunkEndArticleId: 'article-099',
+          chunkStartArticleId: 'article-051',
+          systemPromptVariant: 'screening_v1',
+        },
+      ],
+    },
+    database,
+  )
+  const llmInserts = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+      && statement.includes("'llm' AS payload_kind")
+    )
+  })
+
+  expect(llmInserts).toHaveLength(2)
+  expect(llmInserts[0]).toContain("AND judgment.system_prompt_variant = 'legacy'")
+  expect(llmInserts[1]).toContain("AND judgment.system_prompt_variant = 'screening_v1'")
 })

@@ -109,6 +109,7 @@ const projectSettingsRow = () => {
     modelProviderKind: 'openai-compatible',
     modelRemoteModelId: 'remote-model-1',
     modelVariant: 'thinking',
+    systemPromptVariant: 'legacy' as const,
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,

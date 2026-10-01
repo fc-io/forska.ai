@@ -148,6 +148,9 @@ test('LLM judgment deltas update serving directly from persisted benchmark confi
   expect(selectStatement).toContain('judgment.prompt_id = delta.prompt_id')
   expect(selectStatement).toContain('judgment.model_id = delta.model_id')
   expect(selectStatement).toContain('judgment.use_fulltext_no_images = delta.use_fulltext_no_images')
+  expect(selectStatement).toContain("judgment.system_prompt_variant = COALESCE(delta.system_prompt_variant, 'legacy')")
+  expect(selectStatement).toContain('newer_judgment.system_prompt_variant = judgment.system_prompt_variant')
+  expect(selectStatement).toContain("COALESCE(delta.system_prompt_variant, 'legacy') AS systemPromptVariant")
   expect(selectStatement).toContain('FROM app."judgment" newer_judgment')
   expect(selectStatement).not.toContain('judgment.id = delta.judgment_id')
   expect(selectStatement).toContain("VALUES ('article-1')")
@@ -275,6 +278,12 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   expect(projectSelect).toContain('judgment.judgment_rank = 1')
   expect(projectSelect).toContain('judgment.model_id = project.model_id')
   expect(projectSelect).toContain('judgment.use_title = project.use_title')
+  expect(projectSelect).toContain("judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')")
+  expect(projectSelect).toContain(
+    "COALESCE(project_judgment.system_prompt_variant, 'legacy') = judgment.system_prompt_variant",
+  )
+  expect(projectSelect).toContain('judgment.use_fulltext_no_images, judgment.system_prompt_variant')
+  expect(projectSelect).toContain("COALESCE(project.system_prompt_variant, 'legacy') AS systemPromptVariant")
   expect(projectSelect).toContain(
     'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
   )
@@ -446,6 +455,8 @@ test('LLM range rebuild batches write one SQL-native serving replacement stateme
   expect(joined).toContain('INNER JOIN app."judgment" judgment')
   expect(joined).toContain('judgment.article_id = serving.article_id')
   expect(joined).toContain('judgment.is_answered')
+  expect(joined).toContain("COALESCE(project.system_prompt_variant, 'legacy') = judgment.system_prompt_variant")
+  expect(joined).toContain('judgment.use_fulltext_no_images, judgment.system_prompt_variant')
   expect(joined).not.toContain('judgment.*')
 })
 
@@ -465,6 +476,11 @@ test('article judgment-input claims rebuild article-scoped LLM status rows', asy
   expect(articleSelect).toContain('FROM app."judgment"')
   expect(articleSelect).toContain('judgment.judgment_rank = 1')
   expect(articleSelect).toContain('judgment.article_id = dirty.article_id')
+  expect(articleSelect).toContain("judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')")
+  expect(articleSelect).toContain(
+    "COALESCE(project_judgment.system_prompt_variant, 'legacy') = judgment.system_prompt_variant",
+  )
+  expect(articleSelect).toContain('judgment.use_fulltext_no_images, judgment.system_prompt_variant')
 })
 
 test('newly scoped articles emit unanswered status rows for enabled prompts', async () => {
@@ -531,4 +547,29 @@ test('LLM judgment delta lookup matches claim watermark ranges through one claim
   expect(selectStatement).toContain("('import-route:route-1', 1500, 1501)")
   expect(selectStatement).toContain('delta.source_high_water_mark >= claim_range.first_source_high_water_mark')
   expect(selectStatement).not.toContain('OR (delta.source_partition')
+})
+
+const getProjectedReviewConfigHashes = async (systemPromptVariant: string | undefined) => {
+  const {database, statements} = createLlmStatusDatabase({judgmentRows: [llmStatusRow({systemPromptVariant})]})
+
+  await projectReviewServingLlmStatusPatches(projectInput([llmClaim()]), database)
+
+  const updateStatement = statements.find((statement) => {
+    return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+  })
+
+  return decodeReviewServingJsonRows(updateStatement ?? '').map((row) => {
+    return row.review_config_hash
+  })
+}
+
+test('LLM status rows hash the system prompt variant only when it is not legacy', async () => {
+  const withoutVariant = await getProjectedReviewConfigHashes(undefined)
+  const legacy = await getProjectedReviewConfigHashes('legacy')
+  const screening = await getProjectedReviewConfigHashes('screening_v1')
+
+  expect(withoutVariant).toHaveLength(1)
+  expect(legacy).toEqual(withoutVariant)
+  expect(screening).toHaveLength(1)
+  expect(screening).not.toEqual(legacy)
 })

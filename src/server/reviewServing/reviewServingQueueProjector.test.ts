@@ -317,6 +317,28 @@ test('summary-mode queue rebuild uses a synthetic human summary prompt without e
   expect(insertStatement).not.toContain('CASE WHEN project_settings.human_judgment_mode =')
 })
 
+test('queue rebuild matches LLM judgments to the project system prompt variant', async () => {
+  const {database, statements} = createQueueDatabase()
+
+  await projectReviewServingQueueRebuildRows(
+    {
+      baseGeneration: 5,
+      projectId: 'project-1',
+      projectScopeIdentity: 'project-scope-1',
+      reviewConfigHash: 'review-config-1',
+      selectedImportSnapshotId: 'selected-snapshot-1',
+      snapshotId: 'snapshot-1',
+    },
+    database,
+  )
+  const insertStatement = statements.find((statement) => {
+    return statement.includes('INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4')
+  })
+
+  expect(insertStatement).toContain("COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant")
+  expect(insertStatement).toContain('AND project.system_prompt_variant = judgment.system_prompt_variant')
+})
+
 test('prompt-mode queue rebuilds suppress synthetic summary human rows', async () => {
   const {database, statements} = createQueueDatabase({
     queueRows: [queueRow({promptId: 'prompt-1', queueKind: 'human-unreviewed'})],

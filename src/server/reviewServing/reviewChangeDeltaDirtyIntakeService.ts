@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto'
 
+import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getIntegerValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
@@ -51,6 +52,7 @@ type ReviewChangeDeltaRow = {
   promptId: string | null
   sourceHighWaterMark: bigint | number | string
   sourcePartition: string
+  systemPromptVariant?: string | null
   useAbstract: boolean | null
   useFulltext: boolean | null
   useFulltextNoImages: boolean | null
@@ -113,6 +115,7 @@ const getContentFlags = (row: ReviewChangeDeltaRow) => {
     || row.useFulltextNoImages === null
     ? undefined
     : {
+        systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
         useAbstract: row.useAbstract,
         useFulltext: row.useFulltext,
         useFulltextNoImages: row.useFulltextNoImages,
@@ -354,6 +357,7 @@ const getReviewChangeDeltaRows = async (
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant,
           judgment_id AS judgmentId,
           human_judgment_key AS humanJudgmentKey,
           config_field_set AS configFieldSet,
