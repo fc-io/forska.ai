@@ -1072,3 +1072,52 @@ test('comparison serving rebuild retains old generations after a successful prom
     }),
   ).toBe(true)
 })
+
+test('comparison serving rebuild persists the discovered system prompt variants with each generation', () => {
+  const result = runScript<{
+    firstStatus: {activeGeneration: number | null; activeSystemPromptVariants: string[]}
+    secondStatus: {activeGeneration: number | null; activeSystemPromptVariants: string[]}
+    servedVariantRows: Array<{generation: string; systemPromptVariant: string}>
+  }>(`
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+    const firstStatus = await service.getComparisonProjectServingStatus(comparisonProjectId)
+
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        is_answered,
+        answered_original,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        system_prompt_variant
+      ) VALUES ('judgment-alpha-a-screening', 'article-alpha', 'prompt-a', 'model-a', TRUE, 'no', TRUE, TRUE, FALSE, FALSE, 'screening_v1')
+    \`)
+    await service.markComparisonProjectServingStale(comparisonProjectId)
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+    const secondStatus = await service.getComparisonProjectServingStatus(comparisonProjectId)
+    const servedVariantRows = await database.queryJson(\`
+      SELECT CAST(generation AS VARCHAR) AS generation, system_prompt_variant AS systemPromptVariant
+      FROM mart.comparison_system_prompt_variant_serving
+      WHERE comparison_project_id = '\${comparisonProjectId}'
+      ORDER BY generation ASC, system_prompt_variant ASC
+    \`)
+
+    console.log(JSON.stringify({firstStatus, secondStatus, servedVariantRows}))
+    await database.close()
+  `)
+
+  expect(result.firstStatus.activeGeneration).toBe(1)
+  expect(result.firstStatus.activeSystemPromptVariants).toEqual(['legacy'])
+  expect(result.secondStatus.activeGeneration).toBe(2)
+  expect(result.secondStatus.activeSystemPromptVariants).toEqual(['legacy', 'screening_v1'])
+  expect(result.servedVariantRows).toEqual([
+    {generation: '1', systemPromptVariant: 'legacy'},
+    {generation: '2', systemPromptVariant: 'legacy'},
+    {generation: '2', systemPromptVariant: 'screening_v1'},
+  ])
+})

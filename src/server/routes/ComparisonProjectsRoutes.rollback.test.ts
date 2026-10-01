@@ -34,6 +34,7 @@ const userConfigQueryServiceModulePath = new URL('../services/userConfigQuerySer
 
 type MockServingStatus = {
   activeGeneration: number | null
+  activeSystemPromptVariants?: string[]
   generationUpdatedAt: Date | null
   servingCompletedAt: Date | null
   servingError: string | null
@@ -8564,4 +8565,57 @@ test('summary comparison source project columns use only that source project sys
     ['llm:source-project-2:model-2:1100-screening_v1:summary', 'source-project-2'],
     ['human:summary', 'source-project-1'],
   ])
+})
+
+test('comparison metadata uses the system prompt variants served by the active generation for route-scoped comparisons', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    servingStatus: getMockServingStatus({
+      activeGeneration: 1,
+      activeSystemPromptVariants: ['legacy', 'screening_v1'],
+      generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingCompletedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingStatus: 'ready',
+    }),
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+  const state = getMockDatabaseState()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.contentLabel]
+    }),
+  ).toEqual([
+    ['llm:model-1:1100:prompt-1', 'Article Title and Abstract · System prompt variant: legacy'],
+    ['llm:model-1:1100-screening_v1:prompt-1', 'Article Title and Abstract · System prompt variant: screening_v1'],
+  ])
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM app.judgment j')
+    }),
+  ).toBe(false)
+})
+
+test('comparison metadata keeps legacy-only columns for a generation served with only the legacy variant', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    servingStatus: getMockServingStatus({
+      activeGeneration: 1,
+      activeSystemPromptVariants: ['legacy'],
+      generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingCompletedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingStatus: 'ready',
+    }),
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.contentLabel]
+    }),
+  ).toEqual([['llm:model-1:1100:prompt-1', 'Article Title and Abstract']])
 })

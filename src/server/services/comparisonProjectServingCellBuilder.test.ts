@@ -1018,6 +1018,7 @@ test('prompt-mode cell inserts are split by discovered article batches', async (
 type SystemPromptVariantServingCellsResult = {
   actualRows: Array<{articleId: string; columnId: string; comparisonProjectId: string; displayAnswer: string | null}>
   requiredColumnIds: Record<string, string[]>
+  servedSystemPromptVariants: Record<string, string[]>
 }
 
 const getSystemPromptVariantServingCellsScript = () => {
@@ -1061,7 +1062,9 @@ const getSystemPromptVariantServingCellsScript = () => {
 
     await database.run(\`
       INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash, created_at)
-      VALUES ('prompt-v', 'Prompt V', 'Prompt V', NULL, 'prompt-v-hash', TIMESTAMPTZ '2026-06-01T00:00:00.000Z')
+      VALUES
+        ('prompt-v', 'Prompt V', 'Prompt V', NULL, 'prompt-v-hash', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('prompt-l', 'Prompt L', 'Prompt L', NULL, 'prompt-l-hash', TIMESTAMPTZ '2026-06-01T00:00:00.000Z')
     \`)
 
     await database.run(\`
@@ -1107,6 +1110,7 @@ const getSystemPromptVariantServingCellsScript = () => {
       ) VALUES
         ('comparison-variant-ab', 'Variant AB', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
         ('comparison-variant-legacy', 'Variant Legacy', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('comparison-variant-route', 'Variant Route', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
         ('comparison-variant-summary', 'Variant Summary', NULL, ['model-a'], TRUE, 'summary', NULL, TRUE, TRUE, FALSE, FALSE)
     \`)
 
@@ -1114,7 +1118,8 @@ const getSystemPromptVariantServingCellsScript = () => {
       INSERT INTO app.comparison_project_prompt (id, comparison_project_id, prompt_id, prompt_order, criteria_disposition)
       VALUES
         ('comparison-variant-ab-prompt-v', 'comparison-variant-ab', 'prompt-v', 0, NULL),
-        ('comparison-variant-legacy-prompt-v', 'comparison-variant-legacy', 'prompt-v', 0, NULL),
+        ('comparison-variant-legacy-prompt-l', 'comparison-variant-legacy', 'prompt-l', 0, NULL),
+        ('comparison-variant-route-prompt-v', 'comparison-variant-route', 'prompt-v', 0, NULL),
         ('comparison-variant-summary-prompt-v', 'comparison-variant-summary', 'prompt-v', 0, 'include')
     \`)
 
@@ -1147,11 +1152,13 @@ const getSystemPromptVariantServingCellsScript = () => {
         updated_at
       ) VALUES
         ('judgment-v-legacy', 'article-v', 'prompt-v', 'model-a', 'source-legacy', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, 'legacy', TIMESTAMPTZ '2026-06-03T00:00:00.000Z', TIMESTAMPTZ '2026-06-03T01:00:00.000Z'),
-        ('judgment-v-screening', 'article-v', 'prompt-v', 'model-a', 'source-screening', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, 'screening_v1', TIMESTAMPTZ '2026-06-04T00:00:00.000Z', TIMESTAMPTZ '2026-06-04T01:00:00.000Z')
+        ('judgment-v-screening', 'article-v', 'prompt-v', 'model-a', 'source-screening', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, 'screening_v1', TIMESTAMPTZ '2026-06-04T00:00:00.000Z', TIMESTAMPTZ '2026-06-04T01:00:00.000Z'),
+        ('judgment-l-legacy', 'article-v', 'prompt-l', 'model-a', 'source-legacy', TRUE, 'maybe', NULL, TRUE, TRUE, FALSE, FALSE, 'legacy', TIMESTAMPTZ '2026-06-03T00:00:00.000Z', TIMESTAMPTZ '2026-06-03T01:00:00.000Z')
     \`)
 
     await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: 'comparison-variant-ab', generation: 1}, runner)
     await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: 'comparison-variant-legacy', generation: 1}, runner)
+    await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: 'comparison-variant-route', generation: 1}, runner)
     await builder.insertSummaryModeComparisonProjectLlmCells({comparisonProjectId: 'comparison-variant-summary', generation: 1}, runner)
 
     const actualRows = await database.queryJson(\`
@@ -1173,15 +1180,28 @@ const getSystemPromptVariantServingCellsScript = () => {
     const requiredColumnIds = requiredColumnRows.reduce((columnMap, row) => {
       return {...columnMap, [row.comparisonProjectId]: [...(columnMap[row.comparisonProjectId] ?? []), row.columnId]}
     }, {})
+    const servedVariantRows = await database.queryJson(\`
+      SELECT comparison_project_id AS comparisonProjectId, system_prompt_variant AS systemPromptVariant
+      FROM mart.comparison_system_prompt_variant_serving
+      WHERE generation = 1
+      ORDER BY comparison_project_id ASC, system_prompt_variant ASC
+    \`)
+    const servedSystemPromptVariants = servedVariantRows.reduce((variantMap, row) => {
+      return {
+        ...variantMap,
+        [row.comparisonProjectId]: [...(variantMap[row.comparisonProjectId] ?? []), row.systemPromptVariant],
+      }
+    }, {})
 
-    console.log(JSON.stringify({actualRows, requiredColumnIds}))
+    console.log(JSON.stringify({actualRows, requiredColumnIds, servedSystemPromptVariants}))
   `
 }
 
-test('system prompt variants become separate comparison sources keyed like the TypeScript content key', () => {
+test('system prompt variants discovered in scope become separate comparison sources keyed like the TypeScript content key', () => {
   const result = runScript<SystemPromptVariantServingCellsResult>(getSystemPromptVariantServingCellsScript())
   const screeningContentKey = getComparisonProjectContentKey({...contentSettings, systemPromptVariant: 'screening_v1'})
   const legacyPromptColumnId = getComparisonProjectColumnId('llm', 'prompt-v', 'model-a', contentKey)
+  const legacyOnlyPromptColumnId = getComparisonProjectColumnId('llm', 'prompt-l', 'model-a', contentKey)
   const screeningPromptColumnId = getComparisonProjectColumnId('llm', 'prompt-v', 'model-a', screeningContentKey)
   const legacySummaryColumnId = getComparisonProjectColumnId(
     'llm',
@@ -1216,8 +1236,20 @@ test('system prompt variants become separate comparison sources keyed like the T
     },
     {
       articleId: 'article-v',
-      columnId: legacyPromptColumnId,
+      columnId: legacyOnlyPromptColumnId,
       comparisonProjectId: 'comparison-variant-legacy',
+      displayAnswer: 'maybe',
+    },
+    {
+      articleId: 'article-v',
+      columnId: screeningPromptColumnId,
+      comparisonProjectId: 'comparison-variant-route',
+      displayAnswer: 'no',
+    },
+    {
+      articleId: 'article-v',
+      columnId: legacyPromptColumnId,
+      comparisonProjectId: 'comparison-variant-route',
       displayAnswer: 'yes',
     },
     {
@@ -1235,7 +1267,14 @@ test('system prompt variants become separate comparison sources keyed like the T
   ])
   expect(result.requiredColumnIds).toEqual({
     'comparison-variant-ab': [screeningPromptColumnId, legacyPromptColumnId],
-    'comparison-variant-legacy': [legacyPromptColumnId],
+    'comparison-variant-legacy': [legacyOnlyPromptColumnId],
+    'comparison-variant-route': [screeningPromptColumnId, legacyPromptColumnId],
     'comparison-variant-summary': ['human:summary', legacySummaryColumnId, screeningSummaryColumnId],
+  })
+  expect(result.servedSystemPromptVariants).toEqual({
+    'comparison-variant-ab': ['legacy', 'screening_v1'],
+    'comparison-variant-legacy': ['legacy'],
+    'comparison-variant-route': ['legacy', 'screening_v1'],
+    'comparison-variant-summary': ['legacy', 'screening_v1'],
   })
 })

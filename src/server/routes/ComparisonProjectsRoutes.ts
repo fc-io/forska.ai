@@ -968,6 +968,17 @@ const getComparisonProjectSystemPromptVariants = (
   return comparisonSystemPromptVariants.length > 0 ? comparisonSystemPromptVariants : [defaultSystemPromptVariant]
 }
 
+const getServedComparisonProjectSystemPromptVariants = (
+  servingStatus: Pick<ComparisonProjectServingStatusRow, 'activeSystemPromptVariants'> | null,
+  sourceProjects: ReadonlyArray<{systemPromptVariant: SystemPromptVariant}>,
+) => {
+  const servedSystemPromptVariants = servingStatus?.activeSystemPromptVariants ?? []
+
+  return servedSystemPromptVariants.length > 0
+    ? servedSystemPromptVariants
+    : getComparisonProjectSystemPromptVariants(sourceProjects)
+}
+
 const getComparisonProjectContentVariantLabel = (
   contentFlags: ComparisonProjectContentFlags,
   systemPromptVariant: SystemPromptVariant,
@@ -3276,7 +3287,7 @@ const getComparisonProjectScope = async (
   const sourceProjects = await getComparisonProjectSourceProjects(sourceProjectIds, queryRunner)
   const contentVariants = getComparisonProjectContentVariants(
     normalizedComparisonProjectRow,
-    getComparisonProjectSystemPromptVariants(useImportRoutesForScope ? [] : sourceProjects),
+    getServedComparisonProjectSystemPromptVariants(servingStatus, useImportRoutesForScope ? [] : sourceProjects),
   )
   const modelRows = await getComparisonProjectModels(
     {...normalizedComparisonProjectRow, sourceProjectIds, useImportRoutesForScope, contentVariants},

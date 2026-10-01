@@ -1,6 +1,7 @@
+import {type SystemPromptVariant, systemPromptVariants} from '../../agent/judge/systemPromptVariant.ts'
 import type {ComparisonProjectServingStatus} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getDateValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
+import {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 import {getComparisonProjectServingCellBuilder} from './comparisonProjectServingCellBuilder.ts'
 import {getComparisonProjectServingGenerationService} from './comparisonProjectServingGenerationService.ts'
 import {
@@ -82,6 +83,7 @@ type ComparisonProjectServingProgressTotals = Pick<
 
 type ComparisonProjectServingStatusRow = {
   activeGeneration: number | null
+  activeSystemPromptVariants: SystemPromptVariant[]
   generationUpdatedAt: Date | null
   servingCompletedAt: Date | null
   servingError: string | null
@@ -102,6 +104,7 @@ type ComparisonProjectServingStatusRow = {
 
 type ComparisonProjectServingStatusRecordRow = {
   activeGeneration: unknown
+  activeSystemPromptVariants?: unknown
   generationUpdatedAt: unknown
   servingCompletedAt: unknown
   servingError: string | null
@@ -222,11 +225,21 @@ const getComparisonProjectServingRebuildRetryableFailedBefore = (now: Date) => {
   return getComparisonProjectServingRebuildClaimExpiredBefore(now)
 }
 
+const getComparisonProjectServingSystemPromptVariantsValue = (value: unknown): SystemPromptVariant[] => {
+  const parsedValue = getJsonValue(value)
+  const servedSystemPromptVariants = new Set(Array.isArray(parsedValue) ? parsedValue : [])
+
+  return systemPromptVariants.filter((systemPromptVariant) => {
+    return servedSystemPromptVariants.has(systemPromptVariant)
+  })
+}
+
 const getComparisonProjectServingStatusRowValue = (
   row: ComparisonProjectServingStatusRecordRow | null,
 ): ComparisonProjectServingStatusRow => {
   return {
     activeGeneration: getComparisonProjectServingGenerationValue(row?.activeGeneration),
+    activeSystemPromptVariants: getComparisonProjectServingSystemPromptVariantsValue(row?.activeSystemPromptVariants),
     generationUpdatedAt: getDateValue(row?.generationUpdatedAt),
     servingCompletedAt: getDateValue(row?.servingCompletedAt),
     servingError: row?.servingError ?? null,
@@ -280,6 +293,11 @@ const getComparisonProjectServingNextGenerationSql = () => {
       COALESCE((
         SELECT MAX(generation)
         FROM mart.comparison_filter_stats
+        WHERE comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+      ), 0),
+      COALESCE((
+        SELECT MAX(generation)
+        FROM mart.comparison_system_prompt_variant_serving
         WHERE comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
       ), 0)
     ) + 1
@@ -1009,6 +1027,12 @@ const getComparisonProjectServingStatus = async (
   const [row = null] = await database.queryJson<ComparisonProjectServingStatusRecordRow>(`
     SELECT
       CAST(active_generation AS INTEGER) AS activeGeneration,
+      TO_JSON((
+        SELECT LIST(DISTINCT served_variant.system_prompt_variant)
+        FROM mart.comparison_system_prompt_variant_serving served_variant
+        WHERE served_variant.comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+          AND served_variant.generation = ${comparisonProjectServingGenerationTable}.active_generation
+      )) AS activeSystemPromptVariants,
       generation_updated_at AS generationUpdatedAt,
       serving_status AS servingStatus,
       CAST(serving_generation AS INTEGER) AS servingGeneration,

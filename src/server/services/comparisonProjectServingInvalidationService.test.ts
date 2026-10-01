@@ -248,89 +248,64 @@ const runScript = <T>(body: string) => {
   }
 }
 
+const overlappingComparisonProjectIds = [
+  'cp-human-prompt-match',
+  'cp-human-summary-match',
+  'cp-human-summary-wrong-source',
+  'cp-llm-match',
+  'cp-llm-variant-ab',
+  'cp-llm-variant-screening',
+  'cp-summary-llm-match',
+]
+
+const getLlmJudgmentChangeScript = (systemPromptVariant: string) => {
+  return `
+    const markedIds = await service.markComparisonProjectsServingStaleForLlmJudgments([
+      {
+        articleId: 'article-in',
+        promptId: 'prompt-a',
+        modelId: 'model-a',
+        systemPromptVariant: '${systemPromptVariant}',
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      },
+    ])
+    console.log(JSON.stringify({markedIds, staleIds: await getStaleIds()}))
+  `
+}
+
 test('LLM judgment changes stale comparison projects only when dependencies overlap', () => {
-  const result = runScript<InvalidationResult>(`
-    const markedIds = await service.markComparisonProjectsServingStaleForLlmJudgments([
-      {
-        articleId: 'article-in',
-        promptId: 'prompt-a',
-        modelId: 'model-a',
-        systemPromptVariant: 'legacy',
-        useTitle: true,
-        useAbstract: true,
-        useFulltext: false,
-        useFulltextNoImages: false,
-      },
-    ])
-    console.log(JSON.stringify({markedIds, staleIds: await getStaleIds()}))
-  `)
+  const result = runScript<InvalidationResult>(getLlmJudgmentChangeScript('legacy'))
 
-  expect(result.markedIds).toEqual([
-    'cp-human-prompt-match',
-    'cp-human-summary-match',
-    'cp-human-summary-wrong-source',
-    'cp-llm-match',
-    'cp-llm-variant-ab',
-    'cp-summary-llm-match',
-  ])
-  expect(result.staleIds).toEqual([
-    'cp-human-prompt-match',
-    'cp-human-summary-match',
-    'cp-human-summary-wrong-source',
-    'cp-llm-match',
-    'cp-llm-variant-ab',
-    'cp-summary-llm-match',
-  ])
+  expect(result.markedIds).toEqual(overlappingComparisonProjectIds)
+  expect(result.staleIds).toEqual(overlappingComparisonProjectIds)
 })
 
-test('LLM judgment changes stale comparison projects only when a linked source project uses the judgment variant', () => {
-  const result = runScript<InvalidationResult>(`
-    const markedIds = await service.markComparisonProjectsServingStaleForLlmJudgments([
-      {
-        articleId: 'article-in',
-        promptId: 'prompt-a',
-        modelId: 'model-a',
-        systemPromptVariant: 'screening_v1',
-        useTitle: true,
-        useAbstract: true,
-        useFulltext: false,
-        useFulltextNoImages: false,
-      },
-    ])
-    console.log(JSON.stringify({markedIds, staleIds: await getStaleIds()}))
-  `)
+test('LLM judgment changes of a variant missing from a comparison still stale it so the variant column can appear', () => {
+  const result = runScript<InvalidationResult>(getLlmJudgmentChangeScript('screening_v1'))
 
-  expect(result.markedIds).toEqual(['cp-llm-variant-ab', 'cp-llm-variant-screening'])
-  expect(result.staleIds).toEqual(['cp-llm-variant-ab', 'cp-llm-variant-screening'])
+  expect(result.markedIds).toEqual(overlappingComparisonProjectIds)
+  expect(result.staleIds).toEqual(overlappingComparisonProjectIds)
 })
 
-test('LLM judgment changes that differ only by system prompt variant are not deduplicated', () => {
-  const result = runScript<InvalidationResult>(`
-    const change = {
-      articleId: 'article-in',
-      promptId: 'prompt-a',
-      modelId: 'model-a',
-      useTitle: true,
-      useAbstract: true,
-      useFulltext: false,
-      useFulltextNoImages: false,
-    }
-    const markedIds = await service.markComparisonProjectsServingStaleForLlmJudgments([
-      {...change, systemPromptVariant: 'legacy'},
-      {...change, systemPromptVariant: 'screening_v1'},
+test('source project changes stale only active comparison projects linking those projects', () => {
+  const result = runScript<InvalidationResult & {emptyIds: string[]}>(`
+    await database.run(\`
+      UPDATE app.comparison_project SET archived = TRUE WHERE id = 'cp-llm-variant-ab'
+    \`)
+    const emptyIds = await service.markComparisonProjectsServingStaleForSourceProjects([])
+    const markedIds = await service.markComparisonProjectsServingStaleForSourceProjects([
+      'source-project-screening',
+      'source-project-screening',
     ])
-    console.log(JSON.stringify({markedIds, staleIds: await getStaleIds()}))
+    console.log(JSON.stringify({emptyIds, markedIds, staleIds: await getStaleIds()}))
   `)
 
-  expect(result.markedIds).toEqual([
-    'cp-human-prompt-match',
-    'cp-human-summary-match',
-    'cp-human-summary-wrong-source',
-    'cp-llm-match',
-    'cp-llm-variant-ab',
-    'cp-llm-variant-screening',
-    'cp-summary-llm-match',
-  ])
+  expect(result.emptyIds).toEqual([])
+  expect(result.markedIds).toEqual(['cp-llm-variant-screening'])
+  expect(result.staleIds).toEqual(['cp-llm-variant-screening'])
 })
 
 test('human prompt judgment changes stale prompt-mode comparison projects only', () => {
