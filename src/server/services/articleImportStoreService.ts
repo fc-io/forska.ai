@@ -2817,6 +2817,10 @@ const getAcceptedImportRouteSourceRecordKeys = (
   )
 }
 
+const getSyncedImportRouteIds = (importRouteId: string | undefined, importRouteIds: string[]) => {
+  return importRouteId && !importRouteIds.includes(importRouteId) ? [...importRouteIds, importRouteId] : importRouteIds
+}
+
 const syncImportedArticlesInTx = async (params: {
   importRoute: string
   rows: ArticleImportStoreRow[]
@@ -2842,10 +2846,7 @@ const syncImportedArticlesInTx = async (params: {
 
   return {
     acceptedCount: importRefreshState.acceptedCount,
-    importRouteIds:
-      importRouteId && !importRefreshState.importRouteIds.includes(importRouteId)
-        ? [...importRefreshState.importRouteIds, importRouteId]
-        : importRefreshState.importRouteIds,
+    importRouteIds: getSyncedImportRouteIds(importRouteId, importRefreshState.importRouteIds),
   }
 }
 
@@ -3019,6 +3020,68 @@ export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
   return getAppDatabaseService().transaction(async (tx) => {
     return storeImportedArticlesWithTx(tx, rows)
   }, articleImportStoreWorkloadContext)
+}
+
+export type ArticleImportBatchProgress = {storedCount: number; totalCount: number}
+
+const clearStaleImportRouteLinksForRoute = async (
+  tx: ArticleImportStoreTx,
+  importRoute: string,
+  acceptedSourceRecords: ArticleImportRouteSourceRecordLookup[],
+) => {
+  const routeIdMap = await ensureImportRoutes(tx, importRoute === '' ? [] : [importRoute])
+  const importRouteId = routeIdMap.get(importRoute)
+
+  if (importRouteId) {
+    const seenSourceRecordKeyTableName = await createReconciliationSeenSourceRecordKeyTable(
+      tx,
+      getAcceptedImportRouteSourceRecordKeys(acceptedSourceRecords, importRouteId),
+      undefined,
+    )
+
+    await clearStaleImportRouteLinks(tx, importRouteId, [], {seenSourceRecordKeyTableName})
+  }
+
+  return importRouteId
+}
+
+export const syncImportedArticlesInBatches = async (params: {
+  batchSize?: number
+  importRoute: string
+  onBatchStored?: (progress: ArticleImportBatchProgress) => Promise<void>
+  rows: ArticleImportStoreRow[]
+}) => {
+  const importRoute = params.importRoute.trim()
+  const importRunId = globalThis.crypto.randomUUID()
+  const rows = params.rows.map((row) => {
+    return {...row, importRunId: row.importRunId ?? importRunId}
+  })
+  const rowBatches = getValueChunks(rows, params.batchSize ?? articleImportBatchSize)
+  const states = await rowBatches.reduce<Promise<ArticleImportRefreshState[]>>(
+    async (statesPromise, rowBatch, batchIndex) => {
+      const states = await statesPromise
+      const state = await getAppDatabaseService().transaction(async (tx) => {
+        return storeImportedArticlesInTx(tx, rowBatch)
+      }, articleImportStoreWorkloadContext)
+      const storedCount = rowBatches.slice(0, batchIndex + 1).reduce((sum, batch) => {
+        return sum + batch.length
+      }, 0)
+
+      await params.onBatchStored?.({storedCount, totalCount: rows.length})
+
+      return [...states, state]
+    },
+    Promise.resolve([]),
+  )
+  const mergedState = getMergedImportRefreshState(states)
+  const importRouteId = await getAppDatabaseService().transaction(async (tx) => {
+    return clearStaleImportRouteLinksForRoute(tx, importRoute, mergedState.acceptedSourceRecords)
+  }, articleImportStoreWorkloadContext)
+
+  return {
+    acceptedCount: mergedState.acceptedCount,
+    importRouteIds: getSyncedImportRouteIds(importRouteId, mergedState.importRouteIds),
+  }
 }
 
 export type {ArticleImportStoreRow}

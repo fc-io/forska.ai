@@ -10,7 +10,7 @@ import {
   getDataSourcesRefetchInterval,
   getImportEtaLabel,
   getImportProgressLabel,
-} from './-importStatus.ts'
+} from '../../../../components/main/dataSourceImportStatus/dataSourceImportStatus.ts'
 
 type MockLinkProps = ParentProps<{class?: string; params?: {id?: string}; to: string}>
 

@@ -84,7 +84,7 @@ type DataSourceImportStatusResponse = {
 type DataSourceListResponse = {
   data: Array<DataSourceResponseEntry & {importStatus: DataSourceImportStatusResponse | null}>
 }
-type DataSourceDetailResponse = {data: DataSourceResponseEntry}
+type DataSourceDetailResponse = {data: DataSourceResponseEntry & {importStatus: DataSourceImportStatusResponse | null}}
 type MockQueryRow = {
   archived: boolean
   createdAt: string
@@ -575,6 +575,7 @@ test('datasource detail responses omit raw cursor while including structured fil
       id: 'datasource-1',
       immutable: true,
       importRoute: 'imported-file:Created datasource',
+      importStatus: null,
       itemsAfterLastImport: 2,
       lastImportAt: '2026-01-02T00:00:00.000Z',
       linkedProjectId: null,
@@ -644,6 +645,7 @@ test('covidence datasource responses expose package config and linked project an
       id: 'datasource-2',
       immutable: true,
       importRoute: 'covidence:datasource-2',
+      importStatus: null,
       itemsAfterLastImport: 4,
       lastImportAt: '2026-02-02T00:00:00.000Z',
       linkedProjectId: 'project-covidence-1',

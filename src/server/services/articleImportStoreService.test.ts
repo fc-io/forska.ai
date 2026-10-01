@@ -1846,3 +1846,137 @@ test('syncImportedArticlesWithTx emits import deltas and hot fields without affe
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
+
+test('syncImportedArticlesInBatches commits each batch on its own, reports progress, and clears stale links at the end', async () => {
+  const duckdbPath = `/tmp/f1-article-import-batches-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, {syncImportedArticlesInBatches}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/articleImportStoreService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = 'covidence:batch-test'
+        const createRow = (index) => ({
+          articleAuthors: ['Alice Example'],
+          articleId: 'batch-article-' + index,
+          articleSummary: 'Batch summary ' + index,
+          articleTitle: 'Batch article ' + index,
+          doi: '10.1000/batch-article-' + index,
+          externalArticleId: 'external-batch-' + index,
+          importMetadata: {publicationYear: 2026, title: 'Batch article ' + index},
+          importRoute,
+          sourceKind: 'covidence',
+          sourceRecordHash: 'hash-batch-' + index,
+          sourceRecordKey: 'batch-source-' + index,
+        })
+        const progress = []
+        const countLinkedArticles = async () => {
+          const [row] = await database.queryJson(
+            "SELECT COUNT(*)::INTEGER AS count FROM app.article_import_route air INNER JOIN app.import_route ir ON ir.id = air.import_route_id WHERE ir.route = '" + importRoute + "'"
+          )
+          return row.count
+        }
+        const linkedDuringBatches = []
+
+        const first = await syncImportedArticlesInBatches({
+          batchSize: 2,
+          importRoute,
+          onBatchStored: async (batchProgress) => {
+            progress.push(batchProgress)
+            linkedDuringBatches.push(await countLinkedArticles())
+          },
+          rows: [createRow(1), createRow(2), createRow(3)],
+        })
+        const linkedAfterFirst = await countLinkedArticles()
+        const [runRow] = await database.queryJson(
+          "SELECT COUNT(DISTINCT import_run_id)::INTEGER AS runCount FROM app.article_import_route air INNER JOIN app.import_route ir ON ir.id = air.import_route_id WHERE ir.route = '" + importRoute + "'"
+        )
+
+        const second = await syncImportedArticlesInBatches({
+          batchSize: 2,
+          importRoute,
+          rows: [createRow(1), createRow(3)],
+        })
+        const linkedAfterSecond = await countLinkedArticles()
+        const remainingRows = await database.queryJson(
+          "SELECT air.external_article_id AS externalArticleId FROM app.article_import_route air INNER JOIN app.import_route ir ON ir.id = air.import_route_id WHERE ir.route = '" + importRoute + "' ORDER BY air.external_article_id ASC"
+        )
+
+        console.log(JSON.stringify({first, linkedAfterFirst, linkedAfterSecond, linkedDuringBatches, progress, remainingRows, runRow, second}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to sync imported articles in batches',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      first: {acceptedCount: number; importRouteIds: string[]}
+      linkedAfterFirst: number
+      linkedAfterSecond: number
+      linkedDuringBatches: number[]
+      progress: Array<{storedCount: number; totalCount: number}>
+      remainingRows: Array<{externalArticleId: string}>
+      runRow: {runCount: number}
+      second: {acceptedCount: number; importRouteIds: string[]}
+    }
+
+    expect(parsed.progress).toEqual([
+      {storedCount: 2, totalCount: 3},
+      {storedCount: 3, totalCount: 3},
+    ])
+    expect(parsed.linkedDuringBatches).toEqual([2, 3])
+    expect(parsed.first.acceptedCount).toBe(3)
+    expect(parsed.first.importRouteIds).toHaveLength(1)
+    expect(parsed.linkedAfterFirst).toBe(3)
+    expect(parsed.runRow.runCount).toBe(1)
+    expect(parsed.second.acceptedCount).toBe(2)
+    expect(parsed.second.importRouteIds).toEqual(parsed.first.importRouteIds)
+    expect(parsed.linkedAfterSecond).toBe(2)
+    expect(parsed.remainingRows).toEqual([
+      {externalArticleId: 'external-batch-1'},
+      {externalArticleId: 'external-batch-3'},
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})

@@ -1,4 +1,4 @@
-import {getDateValue} from '../../services/appQueryHelpers.ts'
+import {getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {
   isFreshDataSourceImportCursor,
   resumableDataSourceImportRoutes,
@@ -27,6 +27,27 @@ type DataSourceImportStateRow = {
 type DataSourceImportStateQueryRunner = {
   queryJson: <T>(statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<T[]>
 }
+
+const dataSourceImportStateSelectSql = `
+    SELECT
+      data_source_id AS dataSourceId,
+      status,
+      run_trigger AS runTrigger,
+      started_at AS startedAt,
+      run_started_at AS runStartedAt,
+      last_progress_at AS lastProgressAt,
+      completed_at AS completedAt,
+      failed_at AS failedAt,
+      consecutive_failure_count AS consecutiveFailureCount,
+      last_error AS lastError,
+      next_retry_at AS nextRetryAt,
+      total_count AS totalCount,
+      fetched_count AS fetchedCount,
+      stored_count AS storedCount,
+      run_start_fetched_count AS runStartFetchedCount,
+      progress_from_start AS progressFromStart
+    FROM app.data_source_import_state
+`
 
 type RecordedDataSourceImportStatus = 'completed' | 'failed' | 'running'
 
@@ -111,33 +132,28 @@ export const getDataSourceImportStatesById = async (
   db: DataSourceImportStateQueryRunner,
   workloadContext: DuckdbWorkloadContext,
 ) => {
-  const rows = await db.queryJson<DataSourceImportStateRow>(
-    `
-    SELECT
-      data_source_id AS dataSourceId,
-      status,
-      run_trigger AS runTrigger,
-      started_at AS startedAt,
-      run_started_at AS runStartedAt,
-      last_progress_at AS lastProgressAt,
-      completed_at AS completedAt,
-      failed_at AS failedAt,
-      consecutive_failure_count AS consecutiveFailureCount,
-      last_error AS lastError,
-      next_retry_at AS nextRetryAt,
-      total_count AS totalCount,
-      fetched_count AS fetchedCount,
-      stored_count AS storedCount,
-      run_start_fetched_count AS runStartFetchedCount,
-      progress_from_start AS progressFromStart
-    FROM app.data_source_import_state
-  `,
-    workloadContext,
-  )
+  const rows = await db.queryJson<DataSourceImportStateRow>(dataSourceImportStateSelectSql, workloadContext)
 
   return new Map(
     rows.map((row) => {
       return [row.dataSourceId, row]
     }),
   )
+}
+
+export const getDataSourceImportStateById = async (
+  db: DataSourceImportStateQueryRunner,
+  dataSourceId: string,
+  workloadContext: DuckdbWorkloadContext,
+) => {
+  const [row] = await db.queryJson<DataSourceImportStateRow>(
+    `
+    ${dataSourceImportStateSelectSql}
+    WHERE data_source_id = ${getSqlLiteral(dataSourceId)}
+    LIMIT 1
+  `,
+    workloadContext,
+  )
+
+  return row
 }

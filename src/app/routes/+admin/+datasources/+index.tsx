@@ -3,16 +3,16 @@ import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
-import {Button} from '../../../../components/ui/button'
-import {apiClient} from '../../../../services/apiClient.ts'
-import {getApiErrorMessage} from '../../../../services/utils/handleApiResponse.ts'
 import {
   type DataSourceImportStatusView,
   getDataSourcesRefetchInterval,
   getImportActionLabel,
   normalizeDataSourceImportStatus,
-} from './-importStatus.ts'
-import {DataSourceImportStatusDetails} from './-importStatusDetails.tsx'
+} from '../../../../components/main/dataSourceImportStatus/dataSourceImportStatus.ts'
+import {DataSourceImportStatusDetails} from '../../../../components/main/dataSourceImportStatus/dataSourceImportStatusDetails.tsx'
+import {Button} from '../../../../components/ui/button'
+import {apiClient} from '../../../../services/apiClient.ts'
+import {getApiErrorMessage} from '../../../../services/utils/handleApiResponse.ts'
 import {isBuiltInImportRoute} from './dataSourceImportRouteOptions.ts'
 
 type StructuredFileConfig = {

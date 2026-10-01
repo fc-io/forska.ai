@@ -159,11 +159,13 @@ const covidenceRouteHarnessScript = `
       getOrCreateCovidencePrompt: async () => {
         return null
       },
-      importCovidencePackageFromConfig: async (params) => {
+      importCovidencePackageInBatches: async (params) => {
         const deferred = Promise.withResolvers()
         state.importCalls.push({candidateCount: params.packageRows.candidates.length, importRoute: params.importRoute})
         state.imports.push(deferred)
-        return await deferred.promise
+        const result = await deferred.promise
+        await params.onBatchStored?.({storedCount: 3, totalCount: 3})
+        return result
       },
       seedCovidenceHumanJudgmentsFromConfig: async () => {},
       storeCovidencePackageFiles: async (params) => {
@@ -382,8 +384,11 @@ test('Covidence create and reimport answer before the package import finishes an
 
   expect(result.completedStatementsAfterCreate).toBe(1)
   expect(result.rebuildRequests).toEqual([{projectId: 'project-1', reason: 'missingReviewServingSnapshot'}])
-  expect(result.totalStatements).toHaveLength(2)
+  expect(result.totalStatements).toHaveLength(3)
+  expect(result.totalStatements[0]).toContain('fetched_count = run_start_fetched_count + 0')
   expect(result.totalStatements[0]).toContain('total_count = 3')
+  expect(result.totalStatements[1]).toContain('fetched_count = run_start_fetched_count + 3')
+  expect(result.totalStatements[2]).toContain('fetched_count = run_start_fetched_count + 0')
   expect(
     result.txStatements.slice(2, 6).map((statement) => {
       return statement.trim().split(/\s+/).slice(0, 3).join(' ')
