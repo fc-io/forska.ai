@@ -1,3 +1,4 @@
+import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {
   buildPromptConfigHash,
   buildReviewConfigHash,
@@ -25,6 +26,7 @@ export const getCurrentReviewConfigHash = async (
     modelProviderKind: string | null
     modelRemoteModelId: string | null
     modelVariant: string | null
+    systemPromptVariant: string | null
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
@@ -43,7 +45,8 @@ export const getCurrentReviewConfigHash = async (
       app.project.use_title AS useTitle,
       app.project.use_abstract AS useAbstract,
       app.project.use_fulltext AS useFulltext,
-      app.project.use_fulltext_no_images AS useFulltextNoImages
+      app.project.use_fulltext_no_images AS useFulltextNoImages,
+      app.project.system_prompt_variant AS systemPromptVariant
     FROM app.project
     LEFT JOIN app.model model
       ON model.id = app.project.model_id
@@ -103,6 +106,7 @@ export const getCurrentReviewConfigHash = async (
             promptOrder: row.promptOrder ?? index,
           }
         }),
+        systemPromptVariant: getSystemPromptVariant(project.systemPromptVariant),
         useAbstract: project.useAbstract,
         useFulltext: project.useFulltext,
         useFulltextNoImages: project.useFulltextNoImages,

@@ -1,3 +1,4 @@
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getReviewServingArticlesInRunningRebuildChunks} from './reviewServingCandidateRebuildCoverage.ts'
@@ -27,6 +28,7 @@ export type ProjectReviewServingJudgmentPayloadInput = {
   reviewConfigHash: string
   skipReplacementDeletes?: boolean
   snapshotId: string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -41,6 +43,7 @@ export type ProjectReviewServingJudgmentPayloadArticleRangeInput = ProjectReview
 type JudgmentPayloadKind = 'human' | 'llm'
 type ProjectReviewServingJudgmentPayloadProjectSettings = {
   modelId: string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -380,6 +383,7 @@ const getLlmJudgmentDirectInsertStatement = (
           AND judgment.use_abstract = ${getSqlLiteral(input.useAbstract)}
           AND judgment.use_fulltext = ${getSqlLiteral(input.useFulltext)}
           AND judgment.use_fulltext_no_images = ${getSqlLiteral(input.useFulltextNoImages)}
+          AND judgment.system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(input.systemPromptVariant))}
           AND judgment.deleted_at IS NULL
       ),
       payload AS (
@@ -691,7 +695,8 @@ const getProjectReviewServingJudgmentPayloadProjectSettings = async (
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
-      use_fulltext_no_images AS useFulltextNoImages
+      use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant
     FROM app.project
     WHERE id = ${getSqlLiteral(projectId)}
     LIMIT 1
@@ -733,6 +738,7 @@ export const ensureReviewServingJudgmentPayloadRowsForArticleSet = async (
       projectId: input.projectId,
       reviewConfigHash: input.reviewConfigHash,
       snapshotId: input.snapshotId,
+      systemPromptVariant: project.systemPromptVariant,
       useAbstract: project.useAbstract,
       useFulltext: project.useFulltext,
       useFulltextNoImages: project.useFulltextNoImages,
@@ -792,6 +798,7 @@ const canUseSetBasedJudgmentPayloadRangeInsert = (
         && range.projectId === firstRange.projectId
         && range.reviewConfigHash === firstRange.reviewConfigHash
         && range.snapshotId === firstRange.snapshotId
+        && range.systemPromptVariant === firstRange.systemPromptVariant
         && range.useAbstract === firstRange.useAbstract
         && range.useFulltext === firstRange.useFulltext
         && range.useFulltextNoImages === firstRange.useFulltextNoImages

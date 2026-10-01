@@ -37,6 +37,8 @@ test('lazy prompt-answer fallback reads eager judgment sources and preserves lis
   expect(sql).toContain("WHEN prompt.criteria_disposition = 'include'")
   expect(sql).toContain("THEN llm.normalized_summary_answer = 'no'")
   expect(sql).toContain('json_each(TRY_CAST(array_answer.answered_original AS JSON))')
+  expect(sql).toContain("COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant")
+  expect(sql).toContain('AND project.system_prompt_variant = judgment.system_prompt_variant')
 })
 
 test('lazy prompt-answer fallback preserves human prompt-vs-summary semantics', () => {
@@ -300,7 +302,8 @@ test('lazy prompt-answer cache write executes against compact article_ids postin
         use_abstract BOOLEAN,
         use_fulltext BOOLEAN,
         use_fulltext_no_images BOOLEAN,
-        human_judgment_mode VARCHAR
+        human_judgment_mode VARCHAR,
+        system_prompt_variant VARCHAR
       );
       CREATE TABLE app.prompt (
         id VARCHAR,
@@ -325,7 +328,8 @@ test('lazy prompt-answer cache write executes against compact article_ids postin
         answered_original VARCHAR,
         answered_original_as_array VARCHAR[],
         created_at TIMESTAMPTZ,
-        deleted_at TIMESTAMPTZ
+        deleted_at TIMESTAMPTZ,
+        system_prompt_variant VARCHAR NOT NULL DEFAULT 'legacy'
       );
       CREATE TABLE app."judgment_human" (
         article_id VARCHAR,
@@ -356,7 +360,7 @@ test('lazy prompt-answer cache write executes against compact article_ids postin
         filter_value VARCHAR,
         list_mode_key VARCHAR
       );
-      INSERT INTO app.project VALUES ('project-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'prompt');
+      INSERT INTO app.project VALUES ('project-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'prompt', NULL);
       INSERT INTO app.prompt VALUES ('prompt-1', FALSE), ('prompt-2', FALSE);
       INSERT INTO app.project_prompt VALUES
         ('project-1', 'prompt-1', TRUE, FALSE, 'include'),
@@ -366,12 +370,13 @@ test('lazy prompt-answer cache write executes against compact article_ids postin
         ('project-1', 'review-config-1', 'snapshot-1', 'article-2', TRUE, FALSE, FALSE),
         ('project-1', 'review-config-1', 'snapshot-1', 'article-3', TRUE, FALSE, FALSE);
       INSERT INTO app."judgment" VALUES
-        ('judgment-1', 'article-1', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', NULL),
-        ('judgment-1b', 'article-1', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, NULL, [' no '], TIMESTAMPTZ '2026-01-01T00:00:00Z', NULL),
-        ('judgment-2', 'article-2', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMPTZ '2026-01-02T00:00:00Z', NULL),
-        ('judgment-2b', 'article-2', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, '["yes"]', NULL, TIMESTAMPTZ '2026-01-02T00:00:00Z', NULL),
-        ('judgment-3', 'article-3', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'no', NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z', NULL),
-        ('judgment-3b', 'article-3', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, 'no', NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z', NULL);
+        ('judgment-1', 'article-1', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', NULL, 'legacy'),
+        ('judgment-1b', 'article-1', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, NULL, [' no '], TIMESTAMPTZ '2026-01-01T00:00:00Z', NULL, 'legacy'),
+        ('judgment-2', 'article-2', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMPTZ '2026-01-02T00:00:00Z', NULL, 'legacy'),
+        ('judgment-2b', 'article-2', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, '["yes"]', NULL, TIMESTAMPTZ '2026-01-02T00:00:00Z', NULL, 'legacy'),
+        ('judgment-3', 'article-3', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'no', NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z', NULL, 'legacy'),
+        ('judgment-3b', 'article-3', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, 'no', NULL, TIMESTAMPTZ '2026-01-03T00:00:00Z', NULL, 'legacy'),
+        ('judgment-3-screening', 'article-3', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'yes', NULL, TIMESTAMPTZ '2026-01-04T00:00:00Z', NULL, 'screening_v1');
     `)
 
     const firstResult = await ensureReviewServingLazyPromptAnswerPostingBuckets({

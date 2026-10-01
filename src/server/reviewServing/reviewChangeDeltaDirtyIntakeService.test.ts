@@ -621,3 +621,33 @@ test('delta intake commits bounded groups and stops at a spent deadline after th
   expect(completed).toEqual({dirtyWorkCount: deltaCount * 5, maxSourceHighWaterMark: deltaCount, status: 'converted'})
   expect(getReconciledStatements(unbounded.statements)).toHaveLength(2)
 })
+
+test('delta intake reads the typed system prompt variant with the content flags when the payload omits them', async () => {
+  const {database, statements} = createFakeIntakeDatabase([
+    createReviewChangeDelta({
+      articleId: 'article-1',
+      judgmentId: 'judgment-1',
+      modelId: 'model-1',
+      payloadJson: {articleId: 'article-1', judgmentId: 'judgment-1', projectId: 'project-1', promptId: 'prompt-1'},
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      sourceHighWaterMark: 7,
+      systemPromptVariant: 'screening_v1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }),
+  ])
+
+  const result = await intakeReviewChangeDeltasToDirtyWork(
+    {endSourceHighWaterMark: 7, limit: 10, sourcePartition: 'reviewChange:project-1', startSourceHighWaterMark: 1},
+    database,
+  )
+  const deltaSelect = statements.find((statement) => {
+    return statement.includes('FROM app.review_change_delta')
+  })
+
+  expect(result).toMatchObject({dirtyWorkCount: 5, maxSourceHighWaterMark: 7, status: 'converted'})
+  expect(deltaSelect).toContain("COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant")
+})

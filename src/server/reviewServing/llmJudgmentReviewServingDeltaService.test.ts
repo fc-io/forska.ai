@@ -73,6 +73,7 @@ test('LLM judgment deltas preserve persisted benchmark-critical model and conten
       sourceMutationKey: 'judgment-1:persisted-version-7',
       sourceOperation: 'upsert',
       sourceUpdatedAt: '2026-06-20T12:00:00.000Z',
+      systemPromptVariant: 'legacy',
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: true,
@@ -97,4 +98,37 @@ test('LLM judgment deltas preserve persisted benchmark-critical model and conten
   expect(bulkRows).toContain('llmJudgment:article-1')
   expect(bulkRows).not.toContain('retry')
   expect(bulkRows).not.toContain('fallback')
+})
+
+test('LLM judgment deltas carry the system prompt variant in the typed column and payload content flags', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendLlmJudgmentReviewServingDeltas(tx, [
+    {
+      articleId: 'article-1',
+      changeKind: 'judgment.llm.created',
+      judgmentId: 'judgment-screening',
+      modelId: 'model-1',
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      sourceMutationKey: 'judgment-screening:created',
+      sourceOperation: 'insert',
+      systemPromptVariant: 'screening_v1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    },
+  ])
+
+  const bulkRows = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+    })
+    .join('\n')
+  const reviewChangeInsert = getReviewChangeInsertStatements(statements).join('\n')
+
+  expect(bulkRows).toContain("'screening_v1'")
+  expect(bulkRows).toContain('"systemPromptVariant":"screening_v1"')
+  expect(reviewChangeInsert).toContain('system_prompt_variant')
 })

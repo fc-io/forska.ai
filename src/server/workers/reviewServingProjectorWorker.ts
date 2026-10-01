@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto'
 import {hostname} from 'node:os'
 
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {sleep} from '../../utils/sleep.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {publishProjectedJudgmentJobVisibility} from '../reviewServing/judgmentJobReviewServingVisibilityService.ts'
@@ -531,6 +532,7 @@ type ProjectReviewSettingsRow = {
   modelProviderKind: string | null
   modelRemoteModelId: string | null
   modelVariant: string | null
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -2138,6 +2140,7 @@ const runPayloadRebuildChunk = async (
                   replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(input.chunk.inputDigest),
                   reviewConfigHash: requireReviewConfigHash(snapshot),
                   snapshotId: snapshot.snapshotId,
+                  systemPromptVariant: project.systemPromptVariant,
                   useAbstract: project.useAbstract,
                   useFulltext: project.useFulltext,
                   useFulltextNoImages: project.useFulltextNoImages,
@@ -2929,6 +2932,7 @@ const runJudgmentInputContentRebuildChunk = async (
                     replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(input.chunk.inputDigest),
                     reviewConfigHash: requireReviewConfigHash(snapshot),
                     snapshotId: snapshot.snapshotId,
+                    systemPromptVariant: project.systemPromptVariant,
                     useAbstract: project.useAbstract,
                     useFulltext: project.useFulltext,
                     useFulltextNoImages: project.useFulltextNoImages,
@@ -3911,6 +3915,7 @@ const runPayloadRebuildChunkBatch = async (
               replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(chunk.inputDigest),
               reviewConfigHash: requireReviewConfigHash(snapshot),
               snapshotId: snapshot.snapshotId,
+              systemPromptVariant: project.systemPromptVariant,
               useAbstract: project.useAbstract,
               useFulltext: project.useFulltext,
               useFulltextNoImages: project.useFulltextNoImages,
@@ -4309,6 +4314,7 @@ const runJudgmentInputContentRebuildChunkBatch = async (
               replaceExistingRows: isInPlaceReviewServingRebuildChunkInputDigest(chunk.inputDigest),
               reviewConfigHash: requireReviewConfigHash(snapshot),
               snapshotId: snapshot.snapshotId,
+              systemPromptVariant: project.systemPromptVariant,
               useAbstract: project.useAbstract,
               useFulltext: project.useFulltext,
               useFulltextNoImages: project.useFulltextNoImages,
@@ -4903,7 +4909,9 @@ const getSelectedImportBaseProjectionResult = async (
 }
 
 const getProjectReviewSettings = async (projectId: string, database: ReviewServingProjectorWorkerDatabase) => {
-  const rows = await database.queryJson<ProjectReviewSettingsRow>(`
+  const rows = await database.queryJson<
+    Omit<ProjectReviewSettingsRow, 'systemPromptVariant'> & {systemPromptVariant: string | null}
+  >(`
     SELECT
       COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
       project.model_id AS modelId,
@@ -4916,7 +4924,8 @@ const getProjectReviewSettings = async (projectId: string, database: ReviewServi
       project.use_title AS useTitle,
       project.use_abstract AS useAbstract,
       project.use_fulltext AS useFulltext,
-      project.use_fulltext_no_images AS useFulltextNoImages
+      project.use_fulltext_no_images AS useFulltextNoImages,
+      project.system_prompt_variant AS systemPromptVariant
     FROM app.project project
     LEFT JOIN app.model model
       ON model.id = project.model_id
@@ -4931,7 +4940,7 @@ const getProjectReviewSettings = async (projectId: string, database: ReviewServi
     throw new Error(`cannot run projector without review settings for project ${projectId}`)
   }
 
-  return row
+  return {...row, systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant)}
 }
 
 const getProjectPromptConfigRows = async (projectId: string, database: ReviewServingProjectorWorkerDatabase) => {
@@ -4982,6 +4991,7 @@ const getReviewConfigHash = (
     promptConfigs: input.promptConfigRows.map((row, index) => {
       return {promptConfigHash: getPromptConfigHash(row), promptId: row.promptId, promptOrder: row.promptOrder ?? index}
     }),
+    systemPromptVariant: input.systemPromptVariant,
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,
@@ -5474,6 +5484,7 @@ const getUngatedReviewServingProjectorRunners = (database: ReviewServingProjecto
             projectionIdentity: manifest.projectionIdentity,
             reviewConfigHash: requireReviewConfigHash(snapshot),
             snapshotId: snapshot.snapshotId,
+            systemPromptVariant: project.systemPromptVariant,
             useAbstract: project.useAbstract,
             useFulltext: project.useFulltext,
             useFulltextNoImages: project.useFulltextNoImages,

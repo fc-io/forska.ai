@@ -1,3 +1,4 @@
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
@@ -28,6 +29,7 @@ export type ReviewServingProjectReviewSettingsRow = {
   modelProviderKind: string | null
   modelRemoteModelId: string | null
   modelVariant: string | null
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -80,7 +82,8 @@ export const getReviewServingProjectReviewSettings = async (
       project.use_title AS useTitle,
       project.use_abstract AS useAbstract,
       project.use_fulltext AS useFulltext,
-      project.use_fulltext_no_images AS useFulltextNoImages
+      project.use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(project.system_prompt_variant, 'legacy') AS systemPromptVariant
     FROM app.project project
     LEFT JOIN app.model model
       ON model.id = project.model_id
@@ -132,6 +135,7 @@ export const getReviewServingReviewConfigHash = (
         promptOrder: row.promptOrder ?? index,
       }
     }),
+    systemPromptVariant: getSystemPromptVariant(input.systemPromptVariant),
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,

@@ -1,3 +1,4 @@
+import type {SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {
   appendReviewServingChangeDelta,
   appendReviewServingChangeDeltas,
@@ -15,6 +16,7 @@ export type LlmJudgmentReviewServingDeltaRow = {
   projectId: string | null
   promptId: string
   sourceUpdatedAt?: Date | string | null
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -32,6 +34,7 @@ export type AppendLlmJudgmentReviewServingDeltaInput = LlmJudgmentReviewServingD
 
 const getContentFlags = (input: LlmJudgmentReviewServingDeltaRow) => {
   return {
+    systemPromptVariant: input.systemPromptVariant,
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,
@@ -66,6 +69,7 @@ const getLlmJudgmentReviewServingDeltaInput = (
     sourceRowId: input.sourceRowId ?? input.judgmentId,
     sourceTable: input.sourceTable ?? 'app.judgment',
     sourceUpdatedAt: input.sourceUpdatedAt,
+    systemPromptVariant: input.systemPromptVariant,
     typedKey: {
       articleId: input.articleId,
       contentFlags,

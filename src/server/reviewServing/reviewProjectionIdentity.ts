@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto'
 
+import {defaultSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import type {ReviewServingProjectionComponent, ReviewServingReadContractKey} from './reviewServingContracts.ts'
 
 type ReviewServingIdentityPrimitive = boolean | null | number | string
@@ -50,6 +51,7 @@ export type ReviewConfigHashInput = {
   modelExecutionIdentity: ReviewServingIdentityValue
   modelId: string | null
   promptConfigs: readonly {promptConfigHash: string; promptId: string; promptOrder: number}[]
+  systemPromptVariant?: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -235,6 +237,10 @@ export const buildPromptConfigHash = (input: PromptConfigHashInput) => {
   })}`
 }
 
+const getReviewConfigHashSystemPromptVariant = (systemPromptVariant: SystemPromptVariant | undefined) => {
+  return systemPromptVariant === defaultSystemPromptVariant ? undefined : systemPromptVariant
+}
+
 export const buildReviewConfigHash = (input: ReviewConfigHashInput) => {
   const promptConfigs = input.promptConfigs
     .map((promptConfig) => {
@@ -253,6 +259,7 @@ export const buildReviewConfigHash = (input: ReviewConfigHashInput) => {
     modelExecutionIdentity: input.modelExecutionIdentity,
     modelId: input.modelId,
     promptConfigs,
+    systemPromptVariant: getReviewConfigHashSystemPromptVariant(input.systemPromptVariant),
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,

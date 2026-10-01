@@ -248,6 +248,7 @@ const getFakeProjectReviewSettings = (stats: FakeStats): ReviewServingProjectRev
     modelProviderKind: null,
     modelRemoteModelId: null,
     modelVariant: null,
+    systemPromptVariant: 'legacy',
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
@@ -985,6 +986,8 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain('judgment.model_id = project.model_id')
   expect(joined).not.toContain('judgment.project_id = project.id')
   expect(joined).toContain('judgment.use_fulltext_no_images = project.use_fulltext_no_images')
+  expect(joined).toContain('judgment.system_prompt_variant = project.system_prompt_variant')
+  expect(joined).toContain("COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant")
   expect(joined).toContain('FROM app.judgment_human_summary')
 })
 
