@@ -481,6 +481,7 @@ const getAppJudgmentRow = () => {
     judgmentUpdatedAt: '2024-01-04T00:00:00.000Z',
     judgmentUseAbstract: true,
     judgmentUseFulltext: false,
+    judgmentSystemPromptVariant: 'legacy',
     judgmentUseFulltextNoImages: false,
     judgmentUseTitle: true,
     modelMetadataJson: null,
@@ -734,6 +735,8 @@ test('legacy judgment fallback does not cap visible project judgment history', (
   expect(legacyQuery).not.toContain('LIMIT ${detailReaderPageSize}')
   expect(legacyQuery).not.toContain('maxResultRows')
   expect(legacyQuery).toContain('ORDER BY j.created_at DESC NULLS LAST, j.id ASC')
+  expect(legacyQuery).toContain('getProjectVisibleJudgmentScopeSql')
+  expect(legacyQuery).toContain('j.system_prompt_variant AS judgmentSystemPromptVariant')
 })
 
 test('covidence related records expose an overflow sentinel instead of silently truncating', () => {

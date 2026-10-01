@@ -1,3 +1,4 @@
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {type ArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
@@ -98,6 +99,7 @@ type ProjectReviewConfig = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant: SystemPromptVariant
 }
 
 type ProjectPromptRow = {id: string; promptHeading: string | null; originalText: string; type: string | null}
@@ -546,6 +548,7 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
         useAbstract: boolean | null
         useFulltext: boolean | null
         useFulltextNoImages: boolean | null
+        systemPromptVariant: string | null
       }>(
         `
         SELECT
@@ -556,7 +559,8 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
           use_title AS useTitle,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
-          use_fulltext_no_images AS useFulltextNoImages
+          use_fulltext_no_images AS useFulltextNoImages,
+          ${getOptionalColumnSelect({alias: 'systemPromptVariant', columnName: 'system_prompt_variant', columnNames})}
         FROM app.project
         WHERE id = '${escapeSqlString(projectId)}'
         LIMIT 1
@@ -587,6 +591,7 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
           useAbstract: projectConfig.useAbstract ?? true,
           useFulltext: projectConfig.useFulltext ?? false,
           useFulltextNoImages: projectConfig.useFulltextNoImages ?? false,
+          systemPromptVariant: getSystemPromptVariant(projectConfig.systemPromptVariant),
         }
       : null
   }

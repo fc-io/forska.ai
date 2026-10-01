@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import type {SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getApiReadOnlyAppDatabaseService} from '../services/appReadOnlyDatabaseService.ts'
@@ -270,6 +271,7 @@ type ProjectScope = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant: SystemPromptVariant
   dateFrom: Date | null
   dateTo: Date | null
   importRouteIds: string[]
@@ -330,6 +332,7 @@ const getProjectJudgmentClause = (projectScope: ProjectScope | null, judgmentAli
     `${judgmentAlias}.use_abstract = ${appQueryHelpers.getSqlLiteral(projectScope.useAbstract)}`,
     `${judgmentAlias}.use_fulltext = ${appQueryHelpers.getSqlLiteral(projectScope.useFulltext)}`,
     `${judgmentAlias}.use_fulltext_no_images = ${appQueryHelpers.getSqlLiteral(projectScope.useFulltextNoImages)}`,
+    `${judgmentAlias}.system_prompt_variant = ${appQueryHelpers.getSqlLiteral(projectScope.systemPromptVariant)}`,
     routeOrCuratedClause ? `EXISTS (SELECT 1 FROM app.article a WHERE ${routeOrCuratedClause})` : null,
   ])
 }
@@ -420,6 +423,7 @@ const fetchProjectScope = async (projectId: string): Promise<ProjectScope | null
         useAbstract: projectConfig.useAbstract,
         useFulltext: projectConfig.useFulltext,
         useFulltextNoImages: projectConfig.useFulltextNoImages,
+        systemPromptVariant: projectConfig.systemPromptVariant,
         dateFrom: projectConfig.dateFrom,
         dateTo: projectConfig.dateTo,
         importRouteIds: projectConfig.importRouteIds,

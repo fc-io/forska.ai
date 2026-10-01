@@ -1,5 +1,6 @@
 import {writeFile} from 'node:fs/promises'
 
+import {getSystemPromptVariant, type SystemPromptVariant} from '../src/agent/judge/systemPromptVariant.ts'
 import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmentJobPaths.ts'
 import {
   importRecoveredJudgmentJobSqliteOutboxEntries,
@@ -33,6 +34,7 @@ type ExportedOutboxRow = {
   rawResponseJson: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
+  systemPromptVariant: string | null
   updatedAt: string
   useAbstract: number
   useFulltext: number
@@ -41,6 +43,7 @@ type ExportedOutboxRow = {
 }
 type JobInfoRow = {
   modelId: string
+  systemPromptVariant: string | null
   useAbstract: number
   useFulltext: number
   useFulltextNoImages: number
@@ -86,6 +89,7 @@ type JudgmentJobOutboxEntry = {
   rawResponseJson: unknown
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
+  systemPromptVariant: SystemPromptVariant
   updatedAt: Date
   useAbstract: boolean
   useFulltext: boolean
@@ -162,7 +166,28 @@ const runSqliteScript = (sqlitePath: string, sqlPath: string) => {
   }
 }
 
-const getOutboxExportSql = (jobId: string) => {
+const getSqliteColumnNames = (sqlitePath: string, tableName: string) => {
+  return new Set(
+    runSqliteJsonQuery<{name: string}>(
+      sqlitePath,
+      `SELECT name FROM pragma_table_info(${getSqlLiteral(tableName)})`,
+    ).map((row) => {
+      return row.name
+    }),
+  )
+}
+
+const getOutboxSystemPromptVariantSql = (sqlitePath: string) => {
+  const jobInfoVariantSql = getSqliteColumnNames(sqlitePath, 'job_info').has('system_prompt_variant')
+    ? '(SELECT ji.system_prompt_variant FROM job_info ji WHERE ji.job_id = judgment_outbox.job_id)'
+    : 'NULL'
+
+  return getSqliteColumnNames(sqlitePath, 'judgment_outbox').has('system_prompt_variant')
+    ? `COALESCE(system_prompt_variant, ${jobInfoVariantSql})`
+    : jobInfoVariantSql
+}
+
+const getOutboxExportSql = (jobId: string, systemPromptVariantSql: string) => {
   return `
     SELECT
       answered_original AS answeredOriginal,
@@ -184,6 +209,7 @@ const getOutboxExportSql = (jobId: string) => {
       raw_response_json AS rawResponseJson,
       snapshot_project_id AS snapshotProjectId,
       snapshot_project_model_name AS snapshotProjectModelName,
+      ${systemPromptVariantSql} AS systemPromptVariant,
       updated_at AS updatedAt,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
@@ -196,10 +222,11 @@ const getOutboxExportSql = (jobId: string) => {
   `
 }
 
-const getJobInfoSql = (jobId: string) => {
+const getJobInfoSql = (jobId: string, jobInfoColumnNames: Set<string>) => {
   return `
     SELECT
       model_id AS modelId,
+      ${jobInfoColumnNames.has('system_prompt_variant') ? 'system_prompt_variant' : 'NULL'} AS systemPromptVariant,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
@@ -248,6 +275,7 @@ const mapExportedOutboxRow = (row: ExportedOutboxRow): JudgmentJobOutboxEntry =>
     rawResponseJson: parseJsonText(row.rawResponseJson),
     snapshotProjectId: row.snapshotProjectId,
     snapshotProjectModelName: row.snapshotProjectModelName,
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
     updatedAt: new Date(row.updatedAt),
     useAbstract: toBoolean(row.useAbstract),
     useFulltext: toBoolean(row.useFulltext),
@@ -299,6 +327,7 @@ const getExistingJudgmentPairs = async ({jobInfo, rows}: {jobInfo: JobInfoRow; r
         AND use_abstract = ${getSqlLiteral(toBoolean(jobInfo.useAbstract))}
         AND use_fulltext = ${getSqlLiteral(toBoolean(jobInfo.useFulltext))}
         AND use_fulltext_no_images = ${getSqlLiteral(toBoolean(jobInfo.useFulltextNoImages))}
+        AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(jobInfo.systemPromptVariant))}
         AND delete_generation = 0
         AND deleted_at IS NULL
         AND (${chunk
@@ -485,8 +514,14 @@ const recoverJudgmentJob = async (jobId: string): Promise<RecoverySummary> => {
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
   const exportPath = `${sqlitePath}.recovery-export.json`
   const sqlUpdatePath = `${sqlitePath}.recovery-update.sql`
-  const exportedRows = runSqliteJsonQuery<ExportedOutboxRow>(sqlitePath, getOutboxExportSql(jobId))
-  const jobInfo = runSqliteJsonQuery<JobInfoRow>(sqlitePath, getJobInfoSql(jobId))[0]
+  const exportedRows = runSqliteJsonQuery<ExportedOutboxRow>(
+    sqlitePath,
+    getOutboxExportSql(jobId, getOutboxSystemPromptVariantSql(sqlitePath)),
+  )
+  const jobInfo = runSqliteJsonQuery<JobInfoRow>(
+    sqlitePath,
+    getJobInfoSql(jobId, getSqliteColumnNames(sqlitePath, 'job_info')),
+  )[0]
 
   if (!jobInfo) {
     throw new Error(`Missing job_info for ${jobId}`)

@@ -1,3 +1,4 @@
+import {getSystemPromptVariant} from '../src/agent/judge/systemPromptVariant.ts'
 import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmentJobPaths.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
@@ -7,6 +8,7 @@ import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbSer
 type CliOptions = {jobId: string | null}
 type JobInfoRow = {
   modelId: string
+  systemPromptVariant: string | null
   useAbstract: number
   useFulltext: number
   useFulltextNoImages: number
@@ -48,10 +50,22 @@ const runSqliteJsonQuery = <T>(sqlitePath: string, sql: string): T[] => {
   return JSON.parse(getTrimmedStdout(result.stdout.toString())) as T[]
 }
 
-const getJobInfoSql = (jobId: string) => {
+const getSqliteColumnNames = (sqlitePath: string, tableName: string) => {
+  return new Set(
+    runSqliteJsonQuery<{name: string}>(
+      sqlitePath,
+      `SELECT name FROM pragma_table_info(${getSqlLiteral(tableName)})`,
+    ).map((row) => {
+      return row.name
+    }),
+  )
+}
+
+const getJobInfoSql = (jobId: string, jobInfoColumnNames: Set<string>) => {
   return `
     SELECT
       model_id AS modelId,
+      ${jobInfoColumnNames.has('system_prompt_variant') ? 'system_prompt_variant' : 'NULL'} AS systemPromptVariant,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
@@ -89,7 +103,10 @@ export const runAnalyzeRecoveredJobOrphans = async () => {
   }
 
   const sqlitePath = getJudgmentJobSqlitePath(options.jobId)
-  const [jobInfo] = runSqliteJsonQuery<JobInfoRow>(sqlitePath, getJobInfoSql(options.jobId))
+  const [jobInfo] = runSqliteJsonQuery<JobInfoRow>(
+    sqlitePath,
+    getJobInfoSql(options.jobId, getSqliteColumnNames(sqlitePath, 'job_info')),
+  )
   const orphanRows = runSqliteJsonQuery<OrphanQueuePromptRow>(sqlitePath, getOrphanQueuePromptSql())
 
   if (!jobInfo) {
@@ -127,6 +144,7 @@ export const runAnalyzeRecoveredJobOrphans = async () => {
             AND use_abstract = ${getSqlLiteral(Boolean(jobInfo.useAbstract))}
             AND use_fulltext = ${getSqlLiteral(Boolean(jobInfo.useFulltext))}
             AND use_fulltext_no_images = ${getSqlLiteral(Boolean(jobInfo.useFulltextNoImages))}
+            AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(jobInfo.systemPromptVariant))}
             AND delete_generation = 0
             AND deleted_at IS NULL
             AND (${pairPredicate})

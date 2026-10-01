@@ -217,6 +217,7 @@ type ProjectPromptLlmCleanupCandidateRow = {
   projectId: string | null
   promptId: string
   sharedProjectReferenced: boolean
+  systemPromptVariant: SystemPromptVariant
   updatedAt: string | null
   useAbstract: boolean
   useFulltext: boolean
@@ -641,6 +642,7 @@ const getChangedReviewConfigFields = (params: {
     dateFrom?: string | null
     dateTo?: string | null
     humanJudgmentMode?: 'prompt' | 'summary'
+    systemPromptVariant?: SystemPromptVariant
     useAbstract?: boolean
     useFulltext?: boolean
     useFulltextNoImages?: boolean
@@ -664,6 +666,9 @@ const getChangedReviewConfigFields = (params: {
     params.body.useFulltextNoImages !== undefined
     && params.body.useFulltextNoImages !== params.currentProject.useFulltextNoImages
       ? 'useFulltextNoImages'
+      : null,
+    hasSystemPromptVariantEditChanged(params.body.systemPromptVariant, params.currentProject)
+      ? 'systemPromptVariant'
       : null,
     params.body.humanJudgmentMode !== undefined
     && params.body.humanJudgmentMode !== (params.currentProject.humanJudgmentMode ?? 'prompt')
@@ -765,7 +770,8 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
         judgment.use_abstract,
         judgment.use_fulltext,
         judgment.use_fulltext_no_images,
-        judgment.use_title
+        judgment.use_title,
+        judgment.system_prompt_variant
       FROM app.judgment judgment
       INNER JOIN old_prompt ON old_prompt.prompt_id = judgment.prompt_id
       INNER JOIN app.project project ON project.id = '${escapeSqlString(params.projectId)}'
@@ -776,6 +782,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
         AND judgment.use_abstract = project.use_abstract
         AND judgment.use_fulltext = project.use_fulltext
         AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
+        AND judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')
         AND project.archived = FALSE
         AND project.delete_pending_at IS NULL
         AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
@@ -814,6 +821,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
       candidate.use_fulltext AS useFulltext,
       candidate.use_fulltext_no_images AS useFulltextNoImages,
       candidate.use_title AS useTitle,
+      candidate.system_prompt_variant AS systemPromptVariant,
       EXISTS (
         SELECT 1
         FROM app.comparison_project_prompt comparison_prompt
@@ -848,6 +856,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
           AND other_project.use_fulltext_no_images = (
             SELECT project.use_fulltext_no_images FROM app.project project WHERE project.id = '${escapeSqlString(params.projectId)}'
           )
+          AND COALESCE(other_project.system_prompt_variant, 'legacy') = candidate.system_prompt_variant
           AND (other_project.date_from IS NULL OR other_article.article_created_at >= other_project.date_from)
           AND (other_project.date_to IS NULL OR other_article.article_created_at <= other_project.date_to)
           AND NOT EXISTS (
@@ -918,6 +927,7 @@ const softDeleteProjectPromptLlmJudgmentsTx = async (
             sourceMutationKey: `projectPromptCleanup|${params.projectId}|${row.id}`,
             sourceOperation: 'delete' as const,
             sourceUpdatedAt: row.updatedAt,
+            systemPromptVariant: row.systemPromptVariant,
             useAbstract: row.useAbstract,
             useFulltext: row.useFulltext,
             useFulltextNoImages: row.useFulltextNoImages,
@@ -939,6 +949,7 @@ const softDeleteProjectPromptLlmJudgmentsTx = async (
               AND existing.use_abstract = judgment.use_abstract
               AND existing.use_fulltext = judgment.use_fulltext
               AND existing.use_fulltext_no_images = judgment.use_fulltext_no_images
+              AND existing.system_prompt_variant = judgment.system_prompt_variant
           )
       WHERE judgment.id IN (${getQuotedStringList(softDeleteIds).join(', ')})
     `)
@@ -1700,6 +1711,7 @@ export const projectsRoutes = new Elysia()
             'useAbstract',
             'useFulltext',
             'useFulltextNoImages',
+            'systemPromptVariant',
             ...(dateFrom ? (['dateFrom'] as const) : []),
             ...(dateTo ? (['dateTo'] as const) : []),
             ...(body.prompts?.length || body.existingPromptIds?.length ? (['promptMembership'] as const) : []),
@@ -2662,6 +2674,7 @@ export const projectsRoutes = new Elysia()
           'useAbstract',
           'useFulltext',
           'useFulltextNoImages',
+          'systemPromptVariant',
           ...(sourceProject.dateFrom ? (['dateFrom'] as const) : []),
           ...(sourceProject.dateTo ? (['dateTo'] as const) : []),
           ...(sourcePrompts.length > 0 ? (['promptMembership'] as const) : []),

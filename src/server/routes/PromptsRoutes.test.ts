@@ -338,6 +338,62 @@ test('merging a prompt deletes colliding judgment rows before rewriting prompt i
   expect(remainingJudgments).toEqual([{id: `${keepPromptId}-judgment`, promptId: keepPromptId}])
 })
 
+test('merging a prompt keeps judgments of a different system prompt variant', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const suffix = `${Date.now()}-variant`
+  const keepPromptId = `keep-variant-judgment-prompt-${suffix}`
+  const mergePromptId = `merge-variant-judgment-prompt-${suffix}`
+  const articleId = `variant-judgment-article-${suffix}`
+  const connectionId = `variant-judgment-connection-${suffix}`
+  const modelId = `variant-judgment-model-${suffix}`
+
+  await insertPromptFixture({promptId: keepPromptId})
+  await insertPromptFixture({promptId: mergePromptId})
+  await insertModelFixture({connectionId, modelId})
+  await insertArticleFixture({articleId})
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      system_prompt_variant,
+      delete_generation,
+      is_answered,
+      explanation
+    ) VALUES
+      ('${keepPromptId}-judgment', '${articleId}', '${keepPromptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE, 'legacy', 0, TRUE, 'keep'),
+      ('${mergePromptId}-judgment', '${articleId}', '${mergePromptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE, 'screening_v1', 0, TRUE, 'merge')
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/prompts/merge', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({keepPromptId, mergePromptIds: [mergePromptId]}),
+    }),
+  )
+  const remainingJudgments = await queryDatabase<{id: string; promptId: string; systemPromptVariant: string}>(`
+    SELECT id, prompt_id AS promptId, system_prompt_variant AS systemPromptVariant
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+    ORDER BY id
+  `)
+
+  expect(response.status).toBe(200)
+  expect(remainingJudgments).toEqual([
+    {id: `${keepPromptId}-judgment`, promptId: keepPromptId, systemPromptVariant: 'legacy'},
+    {id: `${mergePromptId}-judgment`, promptId: keepPromptId, systemPromptVariant: 'screening_v1'},
+  ])
+})
+
 test('merging a prompt deletes colliding human judgment rows before rewriting prompt ids', async () => {
   if (!app || !queryDatabase) {
     throw new Error('Test app not initialized')
@@ -430,6 +486,7 @@ test('deleting invalid judgments records a V4 deleted-judgment delta', async () 
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      system_prompt_variant,
       delete_generation,
       is_answered,
       answered_original
@@ -443,6 +500,7 @@ test('deleting invalid judgments records a V4 deleted-judgment delta', async () 
       TRUE,
       FALSE,
       FALSE,
+      'screening_v1',
       0,
       TRUE,
       'invalid'
@@ -463,11 +521,17 @@ test('deleting invalid judgments records a V4 deleted-judgment delta', async () 
     WHERE id = '${judgmentId}'
     LIMIT 1
   `)
-  const [deletedDelta] = await queryDatabase<{articleId: string; changeKind: string; projectId: string}>(`
+  const [deletedDelta] = await queryDatabase<{
+    articleId: string
+    changeKind: string
+    projectId: string
+    systemPromptVariant: string
+  }>(`
     SELECT
       article_id AS articleId,
       change_kind AS changeKind,
-      project_id AS projectId
+      project_id AS projectId,
+      system_prompt_variant AS systemPromptVariant
     FROM app.review_change_delta
     WHERE project_id = '${projectId}'
       AND article_id = '${articleId}'
@@ -483,6 +547,11 @@ test('deleting invalid judgments records a V4 deleted-judgment delta', async () 
   expect(response.status).toBe(200)
   expect(body).toEqual({data: {deletedCount: 1}, success: true})
   expect(deletedJudgment?.deletedAt).toBeTruthy()
-  expect(deletedDelta).toEqual({articleId, changeKind: 'judgment.llm.deleted', projectId})
+  expect(deletedDelta).toEqual({
+    articleId,
+    changeKind: 'judgment.llm.deleted',
+    projectId,
+    systemPromptVariant: 'screening_v1',
+  })
   expect(Number(dirtyArticleCount?.count ?? 0)).toBe(0)
 })

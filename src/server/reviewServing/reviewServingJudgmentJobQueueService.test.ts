@@ -380,6 +380,8 @@ test('judgment job refill falls back to current project tables when no serving s
   expect(refillStatement ?? '').toContain('INNER JOIN app.article_import_route article_route')
   expect(refillStatement ?? '').toContain('INNER JOIN app.project_article project_article')
   expect(refillStatement ?? '').toContain('FROM app.judgment judgment')
+  expect(refillStatement ?? '').toContain("COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant")
+  expect(refillStatement ?? '').toContain('AND judgment.system_prompt_variant = current_project.system_prompt_variant')
   expect(refillStatement ?? '').not.toContain('queue_union AS')
   expect(refillStatement ?? '').not.toContain('FROM mart.project_scope_article')
   expect(fallbackWorkloadContext).toMatchObject({maxResultRows: 11, timeoutMs: 15000, timeoutScope: 'execution'})

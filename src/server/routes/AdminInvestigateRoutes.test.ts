@@ -66,6 +66,7 @@ test('admin append metrics route returns append lane metrics', () => {
             quotes: ['quote'],
             snapshotProjectId: null,
             snapshotProjectModelName: null,
+            systemPromptVariant: 'legacy',
             updatedAt: now,
             useAbstract: true,
             useFulltext: false,
@@ -735,6 +736,114 @@ test('admin worker runtime diagnostics route reports local capabilities, registr
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
     removeFileIfExists(`${duckdbPath}.worker-registry`)
+  }
+})
+
+test('admin unexpected answers route counts only judgments with the project system prompt variant', () => {
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const duckdbPath = join(tmpdir(), `f1-admin-unexpected-variant-${runId}.duckdb`)
+  const outputPath = join(tmpdir(), `f1-admin-unexpected-variant-${runId}.json`)
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {writeFileSync} = await import('node:fs')
+        const {Elysia} = await import('elysia')
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('variant-connection', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('variant-model', 'variant-connection', 'Variant model', 'variant-model', 'Variant model', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant)
+          VALUES ('variant-project', 'Variant project', 'variant-model', TRUE, TRUE, FALSE, FALSE, 'screening_v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash, type)
+          VALUES ('variant-prompt', 'Include?', 'variant-prompt-hash', '"yes" | "no"')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('variant-project-prompt', 'variant-project', 'variant-prompt', 0, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title)
+          VALUES ('variant-article-1', 'One'), ('variant-article-2', 'Two')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES
+            ('variant-project-article-1', 'variant-project', 'variant-article-1'),
+            ('variant-project-article-2', 'variant-project', 'variant-article-2')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+            system_prompt_variant, answered_original
+          )
+          VALUES
+            ('variant-screening-1', 'variant-article-1', 'variant-prompt', 'variant-model', TRUE, TRUE, FALSE, FALSE, 'screening_v1', 'yes'),
+            ('variant-screening-2', 'variant-article-2', 'variant-prompt', 'variant-model', TRUE, TRUE, FALSE, FALSE, 'screening_v1', 'maybe'),
+            ('variant-legacy-1', 'variant-article-1', 'variant-prompt', 'variant-model', TRUE, TRUE, FALSE, FALSE, 'legacy', 'maybe'),
+            ('variant-legacy-2', 'variant-article-2', 'variant-prompt', 'variant-model', TRUE, TRUE, FALSE, FALSE, 'legacy', 'other')
+        \`)
+
+        const app = new Elysia().use(adminInvestigateRoutes)
+        const response = await app.handle(
+          new Request('http://localhost/api/admin/investigate-unexpected-answers?projectId=variant-project&promptId=variant-prompt'),
+        )
+        writeFileSync(process.env.ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH, await response.text())
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        ADMIN_INVESTIGATE_ROUTE_TEST_OUTPUT_PATH: outputPath,
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
+    },
+  )
+
+  try {
+    if (runRoute.exitCode !== 0) {
+      throw new Error(
+        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin unexpected answers route test failed',
+      )
+    }
+
+    const responseBody = JSON.parse(readFileSync(outputPath, 'utf8')) as {
+      result: {unexpectedAnswers: Array<{count: number | string; value: string | null}>} | null
+    }
+    const unexpectedAnswers = responseBody.result?.unexpectedAnswers.map((answer) => {
+      return {count: Number(answer.count), value: answer.value}
+    })
+
+    expect(unexpectedAnswers).toEqual([{count: 1, value: 'maybe'}])
+  } finally {
+    removeFileIfExists(outputPath)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 

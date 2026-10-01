@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {
@@ -42,6 +43,7 @@ type ProjectBound = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant: SystemPromptVariant
 }
 
 type PromptFilter = {promptId: string; types: string[]}
@@ -117,6 +119,7 @@ const queryArticlesWithPromptFilters = async (
         useAbstract: project.useAbstract,
         useFulltext: project.useFulltext,
         useFulltextNoImages: project.useFulltextNoImages,
+        systemPromptVariant: project.systemPromptVariant,
       }
     }),
   })
@@ -333,6 +336,7 @@ export const subprojectsRoutes = new Elysia()
                 useAbstract: boolean | null
                 useFulltext: boolean | null
                 useFulltextNoImages: boolean | null
+                systemPromptVariant: string | null
               }>(`
                 SELECT
                   id,
@@ -342,7 +346,8 @@ export const subprojectsRoutes = new Elysia()
                   use_title AS useTitle,
                   use_abstract AS useAbstract,
                   use_fulltext AS useFulltext,
-                  use_fulltext_no_images AS useFulltextNoImages
+                  use_fulltext_no_images AS useFulltextNoImages,
+                  system_prompt_variant AS systemPromptVariant
                 FROM app.project
                 WHERE id IN (${appQueryHelpers.getQuotedStringList(body.sourceProjectIds).join(', ')})
               `),
@@ -357,6 +362,7 @@ export const subprojectsRoutes = new Elysia()
           useAbstract: row.useAbstract ?? true,
           useFulltext: row.useFulltext ?? false,
           useFulltextNoImages: row.useFulltextNoImages ?? false,
+          systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
         }
       })
       const importRouteIdsByProjectId = projectImportRoutes.reduce<Map<string, string[]>>((map, row) => {
@@ -526,6 +532,7 @@ export const subprojectsRoutes = new Elysia()
             'useAbstract',
             'useFulltext',
             'useFulltextNoImages',
+            'systemPromptVariant',
             ...(body.dateFrom ? (['dateFrom'] as const) : []),
             ...(body.dateTo ? (['dateTo'] as const) : []),
             ...(linkedPromptIds.length > 0 ? (['promptMembership'] as const) : []),
