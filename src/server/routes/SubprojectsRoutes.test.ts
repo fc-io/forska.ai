@@ -28,10 +28,12 @@ const insertProjectFixture = async ({
   connectionId,
   modelId,
   projectId,
+  systemPromptVariant = null,
 }: {
   connectionId: string
   modelId: string
   projectId: string
+  systemPromptVariant?: string | null
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -46,8 +48,8 @@ const insertProjectFixture = async ({
     VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
   `)
   await runDatabase(`
-    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-    VALUES ('${projectId}', 'Subproject Source', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant)
+    VALUES ('${projectId}', 'Subproject Source', '${modelId}', TRUE, TRUE, FALSE, FALSE, ${getSqlLiteral(systemPromptVariant)})
   `)
 }
 
@@ -226,4 +228,71 @@ test('subproject route reuses selected prompt ids from source projects', async (
   })
 
   await flushMartRefreshes()
+})
+
+test('subproject prompt filters only match source judgments with the source system prompt variant', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'subproject-variant-connection'
+  const modelId = 'subproject-variant-model'
+  const sourceProjectId = 'subproject-variant-source-project'
+  const sourcePromptId = 'subproject-variant-source-prompt'
+  const legacyArticleId = 'subproject-variant-legacy-article'
+  const screeningArticleId = 'subproject-variant-screening-article'
+
+  await insertProjectFixture({connectionId, modelId, projectId: sourceProjectId, systemPromptVariant: 'screening_v1'})
+  await insertProjectPromptFixture({
+    originalText: 'Is this about screening variants?',
+    projectId: sourceProjectId,
+    projectPromptId: 'subproject-variant-project-prompt',
+    promptId: sourcePromptId,
+  })
+  await insertArticleFixture({articleId: legacyArticleId, projectId: sourceProjectId})
+  await insertArticleFixture({articleId: screeningArticleId, projectId: sourceProjectId})
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id, article_id, prompt_id, model_id, project_id,
+      use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant, answered_original
+    )
+    VALUES
+      ('subproject-variant-legacy-judgment', '${legacyArticleId}', '${sourcePromptId}', '${modelId}', '${sourceProjectId}', TRUE, TRUE, FALSE, FALSE, 'legacy', 'Include'),
+      ('subproject-variant-screening-judgment', '${screeningArticleId}', '${sourcePromptId}', '${modelId}', '${sourceProjectId}', TRUE, TRUE, FALSE, FALSE, 'screening_v1', 'Include')
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/subprojects', {
+      body: JSON.stringify({
+        name: 'Variant subproject',
+        modelId,
+        promptSelections: [{promptId: sourcePromptId, types: ['Include']}],
+        sourceProjectIds: [sourceProjectId],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {articleCount: number; project: {id: string}}}
+  const subprojectId = body.data.project.id
+
+  expect(response.status).toBe(200)
+
+  const articleRows = await queryDatabase<{articleId: string}>(`
+    SELECT article_id AS articleId
+    FROM app.project_article
+    WHERE project_id = '${subprojectId}'
+    ORDER BY article_id
+  `)
+  const [configDelta] = await queryDatabase<{configFieldSet: string}>(`
+    SELECT config_field_set AS configFieldSet
+    FROM app.review_change_delta
+    WHERE project_id = '${subprojectId}'
+      AND change_kind = 'project.reviewConfig.updated'
+    LIMIT 1
+  `)
+
+  expect(body.data.articleCount).toBe(1)
+  expect(articleRows).toEqual([{articleId: screeningArticleId}])
+  expect(configDelta?.configFieldSet.split(',')).toContain('systemPromptVariant')
 })

@@ -99,6 +99,7 @@ const getSourceCountRows = async (projectIds: readonly string[]) => {
         project.use_abstract,
         project.use_fulltext,
         project.use_fulltext_no_images,
+        COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant,
         COALESCE(project.human_judgment_mode, 'prompt') AS human_judgment_mode
       FROM app.project project
       WHERE project.id IN (${projectIdList})
@@ -155,6 +156,7 @@ const getSourceCountRows = async (projectIds: readonly string[]) => {
        AND judgment.use_abstract = project.use_abstract
        AND judgment.use_fulltext = project.use_fulltext
        AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
+       AND judgment.system_prompt_variant = project.system_prompt_variant
        AND judgment.deleted_at IS NULL
     ),
     llm_article_status AS (
@@ -566,10 +568,7 @@ export const closeReviewServingCurrentDbTabCountParityRuntime = async (
 export const runReviewServingCurrentDbTabCountParity = async ({
   closeDuckdbService = closeDuckdbRuntimeService,
   work = main,
-}: {
-  closeDuckdbService?: CloseDuckdbService
-  work?: () => Promise<void>
-} = {}) => {
+}: {closeDuckdbService?: CloseDuckdbService; work?: () => Promise<void>} = {}) => {
   let workFailed = false
   let workError: unknown
 

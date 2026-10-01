@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import type {SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import type {PromptRecord} from '../../db/schemaTypes.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../reviewServing/llmJudgmentReviewServingDeltaService.ts'
@@ -41,6 +42,7 @@ type JudgmentPromptCollisionRow = {
   modelId: string
   projectId: string | null
   promptId: string
+  systemPromptVariant: SystemPromptVariant
   updatedAt: string | null
   useAbstract: boolean
   useFulltext: boolean
@@ -177,7 +179,8 @@ const getJudgmentPromptCollisions = async ({
            merge_row.use_abstract AS useAbstract,
            merge_row.use_fulltext AS useFulltext,
            merge_row.use_fulltext_no_images AS useFulltextNoImages,
-           merge_row.use_title AS useTitle
+           merge_row.use_title AS useTitle,
+           merge_row.system_prompt_variant AS systemPromptVariant
     FROM app.judgment merge_row
     INNER JOIN app.judgment keep_row
       ON keep_row.article_id = merge_row.article_id
@@ -187,6 +190,7 @@ const getJudgmentPromptCollisions = async ({
      AND keep_row.use_abstract = merge_row.use_abstract
      AND keep_row.use_fulltext = merge_row.use_fulltext
      AND keep_row.use_fulltext_no_images = merge_row.use_fulltext_no_images
+     AND keep_row.system_prompt_variant = merge_row.system_prompt_variant
      AND keep_row.delete_generation = merge_row.delete_generation
     WHERE merge_row.prompt_id = '${escapeSqlString(mergeId)}'
   `)
@@ -272,6 +276,7 @@ const resolveJudgmentPromptCollisions = async ({
           sourceMutationKey: `promptMerge|${mergeId}|${keepPromptId}|${collision.mergeJudgmentId}|${projectId}`,
           sourceOperation: 'delete',
           sourceUpdatedAt: collision.updatedAt,
+          systemPromptVariant: collision.systemPromptVariant,
           useAbstract: collision.useAbstract,
           useFulltext: collision.useFulltext,
           useFulltextNoImages: collision.useFulltextNoImages,
@@ -872,6 +877,7 @@ const promptsAdminRoutes = new Elysia()
           modelId: string | null
           projectId: string | null
           promptId: string | null
+          systemPromptVariant: SystemPromptVariant
           useAbstract: boolean
           useFulltext: boolean
           useFulltextNoImages: boolean
@@ -886,7 +892,8 @@ const promptsAdminRoutes = new Elysia()
             COALESCE(use_abstract, FALSE) AS useAbstract,
             COALESCE(use_fulltext, FALSE) AS useFulltext,
             COALESCE(use_fulltext_no_images, FALSE) AS useFulltextNoImages,
-            COALESCE(use_title, FALSE) AS useTitle
+            COALESCE(use_title, FALSE) AS useTitle,
+            system_prompt_variant AS systemPromptVariant
           FROM app.judgment
           WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
         `)
@@ -915,6 +922,7 @@ const promptsAdminRoutes = new Elysia()
                 sourceMutationKey: `PromptsRoutes.deleteInvalidJudgments|${judgment.judgmentId}|${now.toISOString()}`,
                 sourceOperation: 'delete' as const,
                 sourceUpdatedAt: now,
+                systemPromptVariant: judgment.systemPromptVariant,
                 useAbstract: judgment.useAbstract,
                 useFulltext: judgment.useFulltext,
                 useFulltextNoImages: judgment.useFulltextNoImages,

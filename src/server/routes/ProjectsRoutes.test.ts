@@ -480,7 +480,11 @@ afterAll(async () => {
   mock.restore()
 })
 
-const insertReadyPromptPreviewFixture = async (input: {key: string; promptText: string}) => {
+const insertReadyPromptPreviewFixture = async (input: {
+  key: string
+  promptText: string
+  systemPromptVariant?: 'legacy' | 'screening_v1'
+}) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
@@ -496,6 +500,11 @@ const insertReadyPromptPreviewFixture = async (input: {key: string; promptText: 
     modelId: `preview-model-${input.key}`,
     projectId,
   })
+  await runDatabase(`
+    UPDATE app.project
+    SET system_prompt_variant = ${input.systemPromptVariant ? `'${input.systemPromptVariant}'` : 'NULL'}
+    WHERE id = '${projectId}'
+  `)
   await insertProjectPromptFixture({
     contentHash: computePromptContentHash(input.promptText, null, 'Healthcare', `'yes' | 'no' | 'unsure'`),
     originalText: input.promptText,
@@ -698,13 +707,17 @@ test('project prompt preview shows the system prompt of the project system promp
     throw new Error('Test app not initialized')
   }
 
-  const {projectId, promptId} = await insertReadyPromptPreviewFixture({
-    key: 'variant',
+  const legacyFixture = await insertReadyPromptPreviewFixture({
+    key: 'variant-legacy',
     promptText: 'Is this study about screening variants?',
   })
-  const legacyPreview = await requestPromptPreview(projectId, promptId)
-  await runDatabase(`UPDATE app.project SET system_prompt_variant = 'screening_v1' WHERE id = '${projectId}'`)
-  const screeningPreview = await requestPromptPreview(projectId, promptId)
+  const screeningFixture = await insertReadyPromptPreviewFixture({
+    key: 'variant-screening',
+    promptText: 'Is this study about screening variants in the screening project?',
+    systemPromptVariant: 'screening_v1',
+  })
+  const legacyPreview = await requestPromptPreview(legacyFixture.projectId, legacyFixture.promptId)
+  const screeningPreview = await requestPromptPreview(screeningFixture.projectId, screeningFixture.promptId)
 
   expect(legacyPreview.status).toBe(200)
   expect(legacyPreview.payload.data.status).toBe('ready')
@@ -717,7 +730,9 @@ test('project prompt preview shows the system prompt of the project system promp
   expect(screeningPreview.payload.data.systemPrompt).toContain('You are screening records for a systematic review')
   expect(screeningPreview.payload.data.systemPrompt).not.toContain('You are a helpful deep research assistant.')
   expect(screeningPreview.payload.data.previewText).toContain('You are screening records for a systematic review')
-  expect(screeningPreview.payload.data.userPrompt).toContain('Is this study about screening variants?')
+  expect(screeningPreview.payload.data.userPrompt).toContain(
+    'Is this study about screening variants in the screening project?',
+  )
 })
 
 test('project prompt preview builds article records from the prompt preview serving read', () => {
@@ -1926,6 +1941,15 @@ test('edit route switches the system prompt variant before a judgment job exists
 
   expect(revertResponse.status).toBe(200)
   expect(revertBody.data.project.systemPromptVariant).toBe('legacy')
+
+  const configDeltaRows = await queryDatabase<{configFieldSet: string}>(`
+    SELECT config_field_set AS configFieldSet
+    FROM app.review_change_delta
+    WHERE project_id = '${projectId}'
+      AND change_kind = 'project.reviewConfig.updated'
+  `)
+
+  expect(configDeltaRows).toEqual([{configFieldSet: 'systemPromptVariant'}, {configFieldSet: 'systemPromptVariant'}])
 })
 
 test('edit route rejects a system prompt variant change when a judgment job exists', async () => {
@@ -3402,6 +3426,123 @@ test('edit route keeps old prompt LLM judgments used by another active curated p
   `)
 
   expect(judgmentRow?.deletedAt).toBe(null)
+})
+
+test('edit route old prompt LLM cleanup matches the project system prompt variant', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-variant-llm-connection'
+  const modelId = 'edit-job-variant-llm-model'
+  const projectId = 'edit-job-variant-llm-project'
+  const otherProjectId = 'edit-job-variant-llm-other-project'
+  const oldPromptId = 'edit-job-variant-llm-old-prompt'
+  const oldPromptText = 'Variant cleanup old prompt text'
+  const articleId = 'edit-job-variant-llm-article'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      system_prompt_variant,
+      archived
+    )
+    VALUES ('${otherProjectId}', 'Other variant project', '${modelId}', 'prompt', TRUE, TRUE, FALSE, FALSE, 'screening_v1', FALSE)
+  `)
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-variant-llm-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES ('edit-job-variant-llm-other-project-prompt', '${otherProjectId}', '${oldPromptId}', 0, FALSE, TRUE, NULL)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Variant cleanup LLM article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('edit-job-variant-llm-project-article', '${projectId}', '${articleId}'),
+      ('edit-job-variant-llm-other-project-article', '${otherProjectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      system_prompt_variant,
+      delete_generation,
+      is_answered,
+      answered_original
+    )
+    VALUES
+      ('edit-job-variant-llm-legacy-judgment', '${articleId}', '${oldPromptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, 'legacy', 0, TRUE, 'yes'),
+      ('edit-job-variant-llm-screening-judgment', '${articleId}', '${oldPromptId}', '${modelId}', '${otherProjectId}', TRUE, TRUE, FALSE, FALSE, 'screening_v1', 3, TRUE, 'no')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-variant-llm-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-variant-llm-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: oldPromptId,
+            originalText: 'Variant cleanup new prompt text',
+            promptHeading: 'new',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {promptCleanupSummary: {keptSharedLlmJudgments: number; softDeletedLlmJudgments: number}}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary.keptSharedLlmJudgments).toBe(0)
+  expect(body.data.promptCleanupSummary.softDeletedLlmJudgments).toBe(1)
+
+  const judgmentRows = await queryDatabase<{deleteGeneration: number; deleted: boolean; id: string}>(`
+    SELECT id, CAST(delete_generation AS INTEGER) AS deleteGeneration, deleted_at IS NOT NULL AS deleted
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+    ORDER BY id
+  `)
+
+  expect(judgmentRows).toEqual([
+    {deleteGeneration: 1, deleted: true, id: 'edit-job-variant-llm-legacy-judgment'},
+    {deleteGeneration: 3, deleted: false, id: 'edit-job-variant-llm-screening-judgment'},
+  ])
 })
 
 test('edit route keeps old prompt LLM judgments referenced by an active comparison project', async () => {
@@ -5506,6 +5647,18 @@ test('cloning a project appends V4 deltas for copied article scope and review co
   expect(Number(cloneDeltaCounts?.scopeDeltaRows ?? 0)).toBe(1)
   expect(Number(cloneDeltaCounts?.configDeltaRows ?? 0)).toBeGreaterThanOrEqual(1)
   expect(Number(cloneDeltaCounts?.cloneProjectDirtyArticleRows ?? 0)).toBe(0)
+
+  const cloneConfigDeltaRows = await queryDatabase<{configFieldSet: string}>(`
+    SELECT config_field_set AS configFieldSet
+    FROM app.review_change_delta
+    WHERE project_id = '${clonedProjectId}'
+      AND change_kind = 'project.reviewConfig.updated'
+  `)
+  const cloneConfigFields = cloneConfigDeltaRows.flatMap((row) => {
+    return row.configFieldSet.split(',')
+  })
+
+  expect(cloneConfigFields).toContain('systemPromptVariant')
   expect(Number(cloneDeltaCounts?.legacyDirtyMaterializationRows ?? 0)).toBe(0)
 })
 
@@ -5628,6 +5781,16 @@ test('create route stores the requested system prompt variant and defaults to le
       return left.id.localeCompare(right.id)
     }),
   )
+
+  const [screeningConfigDelta] = await queryDatabase<{configFieldSet: string}>(`
+    SELECT config_field_set AS configFieldSet
+    FROM app.review_change_delta
+    WHERE project_id = '${screeningBody.data.id}'
+      AND change_kind = 'project.reviewConfig.updated'
+    LIMIT 1
+  `)
+
+  expect(screeningConfigDelta?.configFieldSet.split(',')).toContain('systemPromptVariant')
 
   await flushMartRefreshes()
 })

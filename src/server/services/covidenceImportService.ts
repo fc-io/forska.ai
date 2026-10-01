@@ -2666,6 +2666,7 @@ export const getOrCreateCovidenceProject = async (params: {
       'useAbstract',
       'useFulltext',
       'useFulltextNoImages',
+      'systemPromptVariant',
       ...(params.promptId ? (['promptMembership'] as const) : []),
       'importRoutes',
     ],

@@ -216,6 +216,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        systemPromptVariant: string
       }
       reviewHydrationRow: {
         articleId: string
@@ -273,6 +274,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
+      systemPromptVariant: 'legacy',
     })
     expect(parsed.reviewHydrationRow.articleId).toBe('A-1')
     expect(parsed.reviewHydrationRow.fullTextPDF).toBe('/tmp/a.pdf')

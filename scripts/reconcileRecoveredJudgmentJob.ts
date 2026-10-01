@@ -1,5 +1,6 @@
 import {writeFile} from 'node:fs/promises'
 
+import {getSystemPromptVariant} from '../src/agent/judge/systemPromptVariant.ts'
 import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmentJobPaths.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
@@ -9,6 +10,7 @@ import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbSer
 type CliOptions = {jobId: string | null}
 type JobInfoRow = {
   modelId: string
+  systemPromptVariant: string | null
   useAbstract: number
   useFulltext: number
   useFulltextNoImages: number
@@ -70,10 +72,22 @@ const runSqliteScript = (sqlitePath: string, sqlPath: string) => {
   }
 }
 
-const getJobInfoSql = (jobId: string) => {
+const getSqliteColumnNames = (sqlitePath: string, tableName: string) => {
+  return new Set(
+    runSqliteJsonQuery<{name: string}>(
+      sqlitePath,
+      `SELECT name FROM pragma_table_info(${getSqlLiteral(tableName)})`,
+    ).map((row) => {
+      return row.name
+    }),
+  )
+}
+
+const getJobInfoSql = (jobId: string, jobInfoColumnNames: Set<string>) => {
   return `
     SELECT
       model_id AS modelId,
+      ${jobInfoColumnNames.has('system_prompt_variant') ? 'system_prompt_variant' : 'NULL'} AS systemPromptVariant,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
@@ -137,6 +151,7 @@ const getExistingJudgmentPairs = async ({jobInfo, rows}: {jobInfo: JobInfoRow; r
         AND use_abstract = ${getSqlLiteral(Boolean(jobInfo.useAbstract))}
         AND use_fulltext = ${getSqlLiteral(Boolean(jobInfo.useFulltext))}
         AND use_fulltext_no_images = ${getSqlLiteral(Boolean(jobInfo.useFulltextNoImages))}
+        AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(jobInfo.systemPromptVariant))}
         AND delete_generation = 0
         AND deleted_at IS NULL
         AND (${chunk
@@ -255,7 +270,10 @@ const updateRecoveredJobState = async ({
 const reconcileRecoveredJob = async (jobId: string): Promise<RecoverySummary> => {
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
   const sqlUpdatePath = `${sqlitePath}.recovery-reconcile.sql`
-  const [jobInfo] = runSqliteJsonQuery<JobInfoRow>(sqlitePath, getJobInfoSql(jobId))
+  const [jobInfo] = runSqliteJsonQuery<JobInfoRow>(
+    sqlitePath,
+    getJobInfoSql(jobId, getSqliteColumnNames(sqlitePath, 'job_info')),
+  )
   const [initialCounts] = runSqliteJsonQuery<{
     lastAckSeq: number | null
     maxOutboxSeq: number | null

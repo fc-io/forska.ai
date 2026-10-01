@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto'
 
 import {Elysia, t} from 'elysia'
 
+import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {appendArticleReviewServingDeltasForIds} from '../reviewServing/articleReviewServingDeltaService.ts'
 import {
@@ -36,6 +37,7 @@ type ArticleJudgmentRow = {
   judgmentUseAbstract: boolean | null
   judgmentUseFulltext: boolean | null
   judgmentUseFulltextNoImages: boolean | null
+  judgmentSystemPromptVariant: string | null
   judgmentChunkingStrategy: string | null
   judgmentIsAnswered: boolean | null
   judgmentAnsweredOriginal: string | null
@@ -100,6 +102,7 @@ const getArticleJudgmentValue = (row: ArticleJudgmentRow) => {
     useAbstract: row.judgmentUseAbstract ?? true,
     useFulltext: row.judgmentUseFulltext ?? false,
     useFulltextNoImages: row.judgmentUseFulltextNoImages ?? false,
+    systemPromptVariant: getSystemPromptVariant(row.judgmentSystemPromptVariant),
     chunkingStrategy: row.judgmentChunkingStrategy,
     isAnswered: row.judgmentIsAnswered ?? false,
     answeredOriginal: row.judgmentAnsweredOriginal,
@@ -591,6 +594,7 @@ export const articlesRoutes = new Elysia()
           j.use_abstract AS judgmentUseAbstract,
           j.use_fulltext AS judgmentUseFulltext,
           j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
+          j.system_prompt_variant AS judgmentSystemPromptVariant,
           j.chunking_strategy AS judgmentChunkingStrategy,
           j.is_answered AS judgmentIsAnswered,
           j.answered_original AS judgmentAnsweredOriginal,

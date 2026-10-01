@@ -1,5 +1,6 @@
 import {readFile} from 'node:fs/promises'
 
+import {getSystemPromptVariant} from '../src/agent/judge/systemPromptVariant.ts'
 import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmentJobPaths.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
@@ -12,6 +13,7 @@ type ExportedOutboxRow = {
   modelId: string
   outboxSeq: number
   promptId: string
+  systemPromptVariant?: string | null
   useAbstract: number
   useFulltext: number
   useFulltextNoImages: number
@@ -60,6 +62,7 @@ const checkBatch = async ({jobId, limit, offset}: {jobId: string; limit: number;
             AND use_abstract = ${getSqlLiteral(row.useAbstract === 1)}
             AND use_fulltext = ${getSqlLiteral(row.useFulltext === 1)}
             AND use_fulltext_no_images = ${getSqlLiteral(row.useFulltextNoImages === 1)}
+            AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(row.systemPromptVariant))}
             AND delete_generation = 0
             AND deleted_at IS NULL
         `,

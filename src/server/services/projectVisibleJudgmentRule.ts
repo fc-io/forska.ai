@@ -14,6 +14,7 @@ export const getProjectVisibleJudgmentNaturalKeySql = ({
     AND ${judgmentAlias}.use_abstract = ${projectAlias}.use_abstract
     AND ${judgmentAlias}.use_fulltext = ${projectAlias}.use_fulltext
     AND ${judgmentAlias}.use_fulltext_no_images = ${projectAlias}.use_fulltext_no_images
+    AND ${judgmentAlias}.system_prompt_variant = COALESCE(${projectAlias}.system_prompt_variant, 'legacy')
   )`
 }
 

@@ -26,6 +26,7 @@ export type ProjectReviewConfigReviewServingField =
   | 'modelExecutionIdentity'
   | 'modelId'
   | 'promptMembership'
+  | 'systemPromptVariant'
   | 'useAbstract'
   | 'useFulltext'
   | 'useFulltextNoImages'

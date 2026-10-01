@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import type {
@@ -65,6 +66,7 @@ type ProjectReviewConfig = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant?: SystemPromptVariant
 }
 
 const detailReadinessReviewServingRepairPriority = 1_000
@@ -100,6 +102,7 @@ type ProjectReviewDetailJudgmentRow = {
   judgmentUseAbstract: boolean | null
   judgmentUseFulltext: boolean | null
   judgmentUseFulltextNoImages: boolean | null
+  judgmentSystemPromptVariant: string | null
   judgmentChunkingStrategy: string | null
   judgmentIsAnswered: boolean | null
   judgmentAnsweredOriginal: string | null
@@ -429,6 +432,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
         judgmentUseAbstract: params.projectReviewConfig.useAbstract,
         judgmentUseFulltext: params.projectReviewConfig.useFulltext,
         judgmentUseFulltextNoImages: params.projectReviewConfig.useFulltextNoImages,
+        judgmentSystemPromptVariant: getSystemPromptVariant(params.projectReviewConfig.systemPromptVariant),
         judgmentChunkingStrategy: row.chunking_strategy ?? null,
         judgmentIsAnswered: row.is_answered ?? false,
         judgmentAnsweredOriginal: row.answered_original ?? null,
@@ -591,6 +595,7 @@ const getArticleJudgmentRows = async (params: {
       j.use_abstract AS judgmentUseAbstract,
       j.use_fulltext AS judgmentUseFulltext,
       j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
+      j.system_prompt_variant AS judgmentSystemPromptVariant,
       j.chunking_strategy AS judgmentChunkingStrategy,
       j.is_answered AS judgmentIsAnswered,
       j.answered_original AS judgmentAnsweredOriginal,
@@ -647,6 +652,7 @@ const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow
     useAbstract: row.judgmentUseAbstract ?? true,
     useFulltext: row.judgmentUseFulltext ?? false,
     useFulltextNoImages: row.judgmentUseFulltextNoImages ?? false,
+    systemPromptVariant: getSystemPromptVariant(row.judgmentSystemPromptVariant),
     chunkingStrategy: row.judgmentChunkingStrategy as JudgmentChunkingStrategy,
     isAnswered: row.judgmentIsAnswered ?? false,
     answeredOriginal: row.judgmentAnsweredOriginal,

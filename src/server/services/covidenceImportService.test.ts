@@ -803,8 +803,14 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
           FROM app.project_prompt
           WHERE project_id <> 'project-covidence-existing'
         \`)
+        const configDeltaRows = await database.queryJson(\`
+          SELECT config_field_set AS configFieldSet
+          FROM app.review_change_delta
+          WHERE project_id = '\${createdProject.id}'
+            AND change_kind = 'project.reviewConfig.updated'
+        \`)
 
-        console.log(JSON.stringify({createdProject, existingProject, existingProjectRows, projectImportRouteRows, projectPromptRows, projectRows, reusedProject}))
+        console.log(JSON.stringify({configDeltaRows, createdProject, existingProject, existingProjectRows, projectImportRouteRows, projectPromptRows, projectRows, reusedProject}))
         await database.close()
       `,
     ],
@@ -835,6 +841,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         return line.length > 0
       })
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      configDeltaRows: Array<{configFieldSet: string}>
       createdProject: {
         created: boolean
         humanJudgmentMode: string
@@ -923,6 +930,11 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
     expect(parsed.projectPromptRows).toHaveLength(1)
     expect(parsed.projectPromptRows[0]?.projectId).toBe(parsed.createdProject.id)
     expect(parsed.projectPromptRows[0]?.enabled).toBe(true)
+    expect(
+      parsed.configDeltaRows.flatMap((row) => {
+        return row.configFieldSet.split(',')
+      }),
+    ).toContain('systemPromptVariant')
   } finally {
     ;[
       duckdbPath,
