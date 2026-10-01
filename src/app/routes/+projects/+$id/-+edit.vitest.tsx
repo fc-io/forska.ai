@@ -21,6 +21,7 @@ type MockProjectDetails = {
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
+    useMetadata: boolean
     useTitle: boolean
   }
   prompts: Array<{
@@ -89,6 +90,7 @@ const buildProjectDetails = (projectId: string): MockProjectDetails => {
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
+      useMetadata: false,
       useTitle: true,
     },
     prompts: [
@@ -146,6 +148,13 @@ const setFormValue = (element: HTMLInputElement | HTMLTextAreaElement | null, va
   }
   element.value = value
   element.dispatchEvent(new Event('input', {bubbles: true}))
+}
+
+const getMetadataCheckbox = (container: HTMLElement) => {
+  const label = Array.from(container.querySelectorAll<HTMLLabelElement>('label')).find((element) => {
+    return element.textContent?.includes('Article metadata (journal, year, publication type)')
+  })
+  return label?.querySelector<HTMLInputElement>('input[type="checkbox"]') ?? null
 }
 
 const expectNoEditRouteFetches = () => {
@@ -469,6 +478,7 @@ describe('project edit route regressions', () => {
         return button.textContent?.includes('×')
       })
       const submitButton = container.querySelector<HTMLButtonElement>('button[type="submit"]')
+      const metadataCheckbox = getMetadataCheckbox(container)
 
       expect(text).toContain('Judgment Settings Locked')
       expect(text).not.toContain('Project Locked for Editing')
@@ -479,6 +489,8 @@ describe('project edit route regressions', () => {
           return checkbox.disabled
         }),
       ).toBe(true)
+      expect(metadataCheckbox).not.toBeNull()
+      expect(metadataCheckbox?.disabled).toBe(true)
       expect(dateInput?.disabled).toBe(true)
       expect(projectNameInput?.disabled).toBe(false)
       expect(descriptionInput?.disabled).toBe(false)
@@ -492,6 +504,85 @@ describe('project edit route regressions', () => {
       browserFailures.assertNoFailures()
     } finally {
       browserFailures.dispose()
+      queryClient.clear()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('project edit loads the article metadata flag into its checkbox', async () => {
+    const projectId = 'project-metadata-load-test'
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
+    const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
+    const details = buildProjectDetails(projectId)
+
+    mockState.projectDetailsById[projectId] = {...details, project: {...details.project, useMetadata: true}}
+    queryClient.clear()
+    seedEditRouteQueries(queryClient, projectId)
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: `/projects/${projectId}/edit`,
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      const metadataCheckbox = getMetadataCheckbox(container)
+
+      expect(metadataCheckbox).not.toBeNull()
+      expect(metadataCheckbox?.checked).toBe(true)
+      expect(metadataCheckbox?.disabled).toBe(false)
+    } finally {
+      queryClient.clear()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('project edit submit sends the changed article metadata flag', async () => {
+    const projectId = 'project-metadata-submit-test'
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
+    const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
+
+    queryClient.clear()
+    seedEditRouteQueries(queryClient, projectId)
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: `/projects/${projectId}/edit`,
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      const form = container.querySelector<HTMLFormElement>('form')
+      const metadataCheckbox = getMetadataCheckbox(container)
+
+      expect(metadataCheckbox?.checked).toBe(false)
+      metadataCheckbox?.click()
+      await waitForUpdates()
+      expect(metadataCheckbox?.checked).toBe(true)
+
+      form?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await waitForUpdates()
+
+      const payload = mockState.editPayloads[0] as Record<string, unknown>
+
+      expect(payload.useMetadata).toBe(true)
+      expect(payload.useTitle).toBe(true)
+      expect(payload.useAbstract).toBe(true)
+      expect(payload.useFulltext).toBe(false)
+      expect(payload.useFulltextNoImages).toBe(false)
+    } finally {
       queryClient.clear()
       providerQueryClient.clear()
       dispose()
@@ -543,6 +634,7 @@ describe('project edit route regressions', () => {
       expect(Object.prototype.hasOwnProperty.call(payload, 'useAbstract')).toBe(false)
       expect(Object.prototype.hasOwnProperty.call(payload, 'useFulltext')).toBe(false)
       expect(Object.prototype.hasOwnProperty.call(payload, 'useFulltextNoImages')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(payload, 'useMetadata')).toBe(false)
     } finally {
       queryClient.clear()
       providerQueryClient.clear()

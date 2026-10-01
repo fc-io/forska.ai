@@ -195,6 +195,7 @@ const CreateProject = () => {
   const [useAbstract, setUseAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
   const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
+  const [useMetadata, setUseMetadata] = createSignal(false)
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -377,6 +378,7 @@ const CreateProject = () => {
       useAbstract: useAbstract(),
       useFulltext: useFulltext(),
       useFulltextNoImages: useFulltextNoImages(),
+      useMetadata: useMetadata(),
     })
 
     const result = handleApiResponse(response, 'Failed to create project')
@@ -678,6 +680,19 @@ const CreateProject = () => {
                     <p class="text-xs text-gray-500 mt-0.5">
                       Include article text but strip embedded base64 images to reduce token usage
                     </p>
+                  </div>
+                </label>
+                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    class="mt-1"
+                    checked={useMetadata()}
+                    onChange={(e) => {
+                      return setUseMetadata(e.currentTarget.checked)
+                    }}
+                  />
+                  <div class="flex-1">
+                    <p class="text-sm font-medium text-gray-900">Article metadata (journal, year, publication type)</p>
                   </div>
                 </label>
               </div>

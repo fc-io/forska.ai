@@ -24,6 +24,7 @@ type Judgment = {
   useAbstract?: boolean
   useFulltext?: boolean
   useFulltextNoImages?: boolean
+  useMetadata?: boolean
   chunkingStrategy?: string | null
 }
 

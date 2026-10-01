@@ -223,6 +223,7 @@ type ProjectPromptLlmCleanupCandidateRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -244,6 +245,7 @@ type ProjectEditCurrentProject = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -264,6 +266,7 @@ type ProjectRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   systemPromptVariant?: string | null
   dateFrom: unknown
   dateTo: unknown
@@ -294,6 +297,7 @@ const getProjectRowSql = (projectId: string) => {
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(use_metadata, FALSE) AS useMetadata,
       human_judgment_mode AS humanJudgmentMode,
       system_prompt_variant AS systemPromptVariant,
       date_from AS dateFrom,
@@ -417,6 +421,7 @@ const getChangedProtectedProjectEditFields = ({
     useAbstract?: boolean
     useFulltext?: boolean
     useFulltextNoImages?: boolean
+    useMetadata?: boolean
     useTitle?: boolean
   }
   currentImportRoutes: string[]
@@ -433,6 +438,7 @@ const getChangedProtectedProjectEditFields = ({
     body.useFulltextNoImages !== undefined && body.useFulltextNoImages !== currentProject.useFulltextNoImages
       ? 'useFulltextNoImages'
       : null,
+    body.useMetadata !== undefined && body.useMetadata !== currentProject.useMetadata ? 'useMetadata' : null,
     body.humanJudgmentMode !== undefined && body.humanJudgmentMode !== (currentProject.humanJudgmentMode ?? 'prompt')
       ? 'humanJudgmentMode'
       : null,
@@ -647,6 +653,7 @@ const getChangedReviewConfigFields = (params: {
     useAbstract?: boolean
     useFulltext?: boolean
     useFulltextNoImages?: boolean
+    useMetadata?: boolean
     useTitle?: boolean
   }
   parsedDateFrom?: Date | null
@@ -667,6 +674,9 @@ const getChangedReviewConfigFields = (params: {
     params.body.useFulltextNoImages !== undefined
     && params.body.useFulltextNoImages !== params.currentProject.useFulltextNoImages
       ? 'useFulltextNoImages'
+      : null,
+    params.body.useMetadata !== undefined && params.body.useMetadata !== params.currentProject.useMetadata
+      ? 'useMetadata'
       : null,
     hasSystemPromptVariantEditChanged(params.body.systemPromptVariant, params.currentProject)
       ? 'systemPromptVariant'
@@ -771,6 +781,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
         judgment.use_abstract,
         judgment.use_fulltext,
         judgment.use_fulltext_no_images,
+        judgment.use_metadata,
         judgment.use_title,
         judgment.system_prompt_variant
       FROM app.judgment judgment
@@ -783,6 +794,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
         AND judgment.use_abstract = project.use_abstract
         AND judgment.use_fulltext = project.use_fulltext
         AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
+        AND judgment.use_metadata = COALESCE(project.use_metadata, FALSE)
         AND judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')
         AND project.archived = FALSE
         AND project.delete_pending_at IS NULL
@@ -821,6 +833,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
       candidate.use_abstract AS useAbstract,
       candidate.use_fulltext AS useFulltext,
       candidate.use_fulltext_no_images AS useFulltextNoImages,
+      candidate.use_metadata AS useMetadata,
       candidate.use_title AS useTitle,
       candidate.system_prompt_variant AS systemPromptVariant,
       EXISTS (
@@ -857,6 +870,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
           AND other_project.use_fulltext_no_images = (
             SELECT project.use_fulltext_no_images FROM app.project project WHERE project.id = '${escapeSqlString(params.projectId)}'
           )
+          AND COALESCE(other_project.use_metadata, FALSE) = candidate.use_metadata
           AND COALESCE(other_project.system_prompt_variant, 'legacy') = candidate.system_prompt_variant
           AND (other_project.date_from IS NULL OR other_article.article_created_at >= other_project.date_from)
           AND (other_project.date_to IS NULL OR other_article.article_created_at <= other_project.date_to)
@@ -932,6 +946,7 @@ const softDeleteProjectPromptLlmJudgmentsTx = async (
             useAbstract: row.useAbstract,
             useFulltext: row.useFulltext,
             useFulltextNoImages: row.useFulltextNoImages,
+            useMetadata: row.useMetadata,
             useTitle: row.useTitle,
           }
         }),
@@ -950,6 +965,7 @@ const softDeleteProjectPromptLlmJudgmentsTx = async (
               AND existing.use_abstract = judgment.use_abstract
               AND existing.use_fulltext = judgment.use_fulltext
               AND existing.use_fulltext_no_images = judgment.use_fulltext_no_images
+              AND existing.use_metadata = judgment.use_metadata
               AND existing.system_prompt_variant = judgment.system_prompt_variant
           )
       WHERE judgment.id IN (${getQuotedStringList(softDeleteIds).join(', ')})
@@ -1140,6 +1156,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         humanJudgmentMode: 'prompt' | 'summary' | null
         systemPromptVariant: string | null
         dateFrom: unknown
@@ -1162,6 +1179,7 @@ export const projectsRoutes = new Elysia()
         p.use_abstract AS useAbstract,
         p.use_fulltext AS useFulltext,
         p.use_fulltext_no_images AS useFulltextNoImages,
+        COALESCE(p.use_metadata, FALSE) AS useMetadata,
         p.human_judgment_mode AS humanJudgmentMode,
         p.system_prompt_variant AS systemPromptVariant,
         p.date_from AS dateFrom,
@@ -1221,6 +1239,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         humanJudgmentMode: 'prompt' | 'summary' | null
         systemPromptVariant: string | null
         dateFrom: unknown
@@ -1243,6 +1262,7 @@ export const projectsRoutes = new Elysia()
         p.use_abstract AS useAbstract,
         p.use_fulltext AS useFulltext,
         p.use_fulltext_no_images AS useFulltextNoImages,
+        COALESCE(p.use_metadata, FALSE) AS useMetadata,
         p.human_judgment_mode AS humanJudgmentMode,
         p.system_prompt_variant AS systemPromptVariant,
         p.date_from AS dateFrom,
@@ -1316,6 +1336,7 @@ export const projectsRoutes = new Elysia()
           useAbstract: boolean
           useFulltext: boolean
           useFulltextNoImages: boolean
+          useMetadata: boolean
           humanJudgmentMode: 'prompt' | 'summary' | null
           systemPromptVariant: string | null
           dateFrom: unknown
@@ -1334,6 +1355,7 @@ export const projectsRoutes = new Elysia()
         use_abstract AS useAbstract,
         use_fulltext AS useFulltext,
         use_fulltext_no_images AS useFulltextNoImages,
+        COALESCE(use_metadata, FALSE) AS useMetadata,
         human_judgment_mode AS humanJudgmentMode,
         system_prompt_variant AS systemPromptVariant,
         date_from AS dateFrom,
@@ -1550,6 +1572,7 @@ export const projectsRoutes = new Elysia()
           useAbstract: boolean
           useFulltext: boolean
           useFulltextNoImages: boolean
+          useMetadata: boolean
           systemPromptVariant: string | null
           dateFrom: unknown
           dateTo: unknown
@@ -1566,6 +1589,7 @@ export const projectsRoutes = new Elysia()
             use_abstract,
             use_fulltext,
             use_fulltext_no_images,
+            use_metadata,
             system_prompt_variant,
             date_from,
             date_to
@@ -1579,6 +1603,7 @@ export const projectsRoutes = new Elysia()
             ${(body.useAbstract ?? true) ? 'TRUE' : 'FALSE'},
             ${(body.useFulltext ?? false) ? 'TRUE' : 'FALSE'},
             ${(body.useFulltextNoImages ?? false) ? 'TRUE' : 'FALSE'},
+            ${(body.useMetadata ?? false) ? 'TRUE' : 'FALSE'},
             ${getSqlLiteral(body.systemPromptVariant ?? null)},
             ${dateFrom ? getTimestampLiteral(dateFrom) : 'NULL'},
             ${dateTo ? getTimestampLiteral(dateTo) : 'NULL'}
@@ -1592,6 +1617,7 @@ export const projectsRoutes = new Elysia()
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
+            COALESCE(use_metadata, FALSE) AS useMetadata,
             system_prompt_variant AS systemPromptVariant,
             date_from AS dateFrom,
             date_to AS dateTo,
@@ -1712,6 +1738,7 @@ export const projectsRoutes = new Elysia()
             'useAbstract',
             'useFulltext',
             'useFulltextNoImages',
+            'useMetadata',
             'systemPromptVariant',
             ...(dateFrom ? (['dateFrom'] as const) : []),
             ...(dateTo ? (['dateTo'] as const) : []),
@@ -1740,6 +1767,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: t.Optional(t.Boolean()),
         useFulltext: t.Optional(t.Boolean()),
         useFulltextNoImages: t.Optional(t.Boolean()),
+        useMetadata: t.Optional(t.Boolean()),
         systemPromptVariant: t.Optional(systemPromptVariantBodySchema),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
@@ -1820,6 +1848,7 @@ export const projectsRoutes = new Elysia()
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(use_metadata, FALSE) AS useMetadata,
           date_from AS dateFrom,
           date_to AS dateTo
         FROM app.project
@@ -1944,6 +1973,9 @@ export const projectsRoutes = new Elysia()
               : null,
             !hasExistingJob && changedReviewConfigFields.includes('useFulltextNoImages')
               ? `use_fulltext_no_images = ${body.useFulltextNoImages ? 'TRUE' : 'FALSE'}`
+              : null,
+            !hasExistingJob && changedReviewConfigFields.includes('useMetadata')
+              ? `use_metadata = ${body.useMetadata ? 'TRUE' : 'FALSE'}`
               : null,
           ].filter((part): part is string => {
             return part !== null
@@ -2211,7 +2243,7 @@ export const projectsRoutes = new Elysia()
             await markComparisonServingStaleForProjectPromptEditTx(tx, params.id)
           }
 
-          if (!hasExistingJob && hasSystemPromptVariantUpdate) {
+          if (!hasExistingJob && (hasSystemPromptVariantUpdate || changedReviewConfigFields.includes('useMetadata'))) {
             await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForSourceProjects(
               [params.id],
               {runner: tx},
@@ -2290,6 +2322,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: t.Optional(t.Boolean()),
         useFulltext: t.Optional(t.Boolean()),
         useFulltextNoImages: t.Optional(t.Boolean()),
+        useMetadata: t.Optional(t.Boolean()),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Array(
@@ -2390,6 +2423,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         dateFrom: unknown
         dateTo: unknown
       }>(
@@ -2405,6 +2439,7 @@ export const projectsRoutes = new Elysia()
         use_abstract AS useAbstract,
         use_fulltext AS useFulltext,
         use_fulltext_no_images AS useFulltextNoImages,
+        COALESCE(use_metadata, FALSE) AS useMetadata,
         date_from AS dateFrom,
         date_to AS dateTo
       FROM app.project
@@ -2447,6 +2482,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         dateFrom: unknown
         dateTo: unknown
         archived: boolean
@@ -2464,6 +2500,7 @@ export const projectsRoutes = new Elysia()
           use_abstract,
           use_fulltext,
           use_fulltext_no_images,
+          use_metadata,
           date_from,
           date_to,
           archived
@@ -2479,6 +2516,7 @@ export const projectsRoutes = new Elysia()
           ${sourceProject.useAbstract ? 'TRUE' : 'FALSE'},
           ${sourceProject.useFulltext ? 'TRUE' : 'FALSE'},
           ${sourceProject.useFulltextNoImages ? 'TRUE' : 'FALSE'},
+          ${sourceProject.useMetadata ? 'TRUE' : 'FALSE'},
           ${sourceProject.dateFrom ? getTimestampLiteral(sourceProject.dateFrom) : 'NULL'},
           ${sourceProject.dateTo ? getTimestampLiteral(sourceProject.dateTo) : 'NULL'},
           FALSE
@@ -2494,6 +2532,7 @@ export const projectsRoutes = new Elysia()
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(use_metadata, FALSE) AS useMetadata,
           date_from AS dateFrom,
           date_to AS dateTo,
           archived,
@@ -2682,6 +2721,7 @@ export const projectsRoutes = new Elysia()
           'useAbstract',
           'useFulltext',
           'useFulltextNoImages',
+          'useMetadata',
           'systemPromptVariant',
           ...(sourceProject.dateFrom ? (['dateFrom'] as const) : []),
           ...(sourceProject.dateTo ? (['dateTo'] as const) : []),

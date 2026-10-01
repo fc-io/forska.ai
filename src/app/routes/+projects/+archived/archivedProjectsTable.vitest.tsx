@@ -40,6 +40,7 @@ const getArchivedProject = (overrides: Partial<ProjectListItem> = {}): ProjectLi
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
     ...overrides,
   }

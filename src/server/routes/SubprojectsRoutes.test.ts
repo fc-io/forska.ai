@@ -29,11 +29,13 @@ const insertProjectFixture = async ({
   modelId,
   projectId,
   systemPromptVariant = null,
+  useMetadata = false,
 }: {
   connectionId: string
   modelId: string
   projectId: string
   systemPromptVariant?: string | null
+  useMetadata?: boolean
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -48,8 +50,8 @@ const insertProjectFixture = async ({
     VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
   `)
   await runDatabase(`
-    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant)
-    VALUES ('${projectId}', 'Subproject Source', '${modelId}', TRUE, TRUE, FALSE, FALSE, ${getSqlLiteral(systemPromptVariant)})
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant)
+    VALUES ('${projectId}', 'Subproject Source', '${modelId}', TRUE, TRUE, FALSE, FALSE, ${useMetadata}, ${getSqlLiteral(systemPromptVariant)})
   `)
 }
 
@@ -295,4 +297,78 @@ test('subproject prompt filters only match source judgments with the source syst
   expect(body.data.articleCount).toBe(1)
   expect(articleRows).toEqual([{articleId: screeningArticleId}])
   expect(configDelta?.configFieldSet.split(',')).toContain('systemPromptVariant')
+})
+
+test('subproject prompt filters only match source judgments with the source metadata flag and copy the flag', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'subproject-metadata-connection'
+  const modelId = 'subproject-metadata-model'
+  const sourceProjectId = 'subproject-metadata-source-project'
+  const sourcePromptId = 'subproject-metadata-source-prompt'
+  const withoutMetadataArticleId = 'subproject-metadata-without-article'
+  const withMetadataArticleId = 'subproject-metadata-with-article'
+
+  await insertProjectFixture({connectionId, modelId, projectId: sourceProjectId, useMetadata: true})
+  await insertProjectPromptFixture({
+    originalText: 'Is this about article metadata?',
+    projectId: sourceProjectId,
+    projectPromptId: 'subproject-metadata-project-prompt',
+    promptId: sourcePromptId,
+  })
+  await insertArticleFixture({articleId: withoutMetadataArticleId, projectId: sourceProjectId})
+  await insertArticleFixture({articleId: withMetadataArticleId, projectId: sourceProjectId})
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id, article_id, prompt_id, model_id, project_id,
+      use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant, answered_original
+    )
+    VALUES
+      ('subproject-metadata-without-judgment', '${withoutMetadataArticleId}', '${sourcePromptId}', '${modelId}', '${sourceProjectId}', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'Include'),
+      ('subproject-metadata-with-judgment', '${withMetadataArticleId}', '${sourcePromptId}', '${modelId}', '${sourceProjectId}', TRUE, TRUE, FALSE, FALSE, TRUE, 'legacy', 'Include')
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/subprojects', {
+      body: JSON.stringify({
+        name: 'Metadata subproject',
+        modelId,
+        promptSelections: [{promptId: sourcePromptId, types: ['Include']}],
+        sourceProjectIds: [sourceProjectId],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {articleCount: number; project: {id: string; useMetadata: boolean}}}
+  const subprojectId = body.data.project.id
+
+  expect(response.status).toBe(200)
+
+  const articleRows = await queryDatabase<{articleId: string}>(`
+    SELECT article_id AS articleId
+    FROM app.project_article
+    WHERE project_id = '${subprojectId}'
+    ORDER BY article_id
+  `)
+  const [projectRow] = await queryDatabase<{useMetadata: boolean}>(`
+    SELECT use_metadata AS useMetadata
+    FROM app.project
+    WHERE id = '${subprojectId}'
+  `)
+  const [configDelta] = await queryDatabase<{configFieldSet: string}>(`
+    SELECT config_field_set AS configFieldSet
+    FROM app.review_change_delta
+    WHERE project_id = '${subprojectId}'
+      AND change_kind = 'project.reviewConfig.updated'
+    LIMIT 1
+  `)
+
+  expect(body.data.articleCount).toBe(1)
+  expect(body.data.project.useMetadata).toBe(true)
+  expect(articleRows).toEqual([{articleId: withMetadataArticleId}])
+  expect(projectRow?.useMetadata).toBe(true)
+  expect(configDelta?.configFieldSet.split(',')).toContain('useMetadata')
 })

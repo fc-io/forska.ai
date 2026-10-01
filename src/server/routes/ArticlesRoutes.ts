@@ -37,6 +37,7 @@ type ArticleJudgmentRow = {
   judgmentUseAbstract: boolean | null
   judgmentUseFulltext: boolean | null
   judgmentUseFulltextNoImages: boolean | null
+  judgmentUseMetadata: boolean | null
   judgmentSystemPromptVariant: string | null
   judgmentChunkingStrategy: string | null
   judgmentIsAnswered: boolean | null
@@ -102,6 +103,7 @@ const getArticleJudgmentValue = (row: ArticleJudgmentRow) => {
     useAbstract: row.judgmentUseAbstract ?? true,
     useFulltext: row.judgmentUseFulltext ?? false,
     useFulltextNoImages: row.judgmentUseFulltextNoImages ?? false,
+    useMetadata: row.judgmentUseMetadata ?? false,
     systemPromptVariant: getSystemPromptVariant(row.judgmentSystemPromptVariant),
     chunkingStrategy: row.judgmentChunkingStrategy,
     isAnswered: row.judgmentIsAnswered ?? false,
@@ -594,6 +596,7 @@ export const articlesRoutes = new Elysia()
           j.use_abstract AS judgmentUseAbstract,
           j.use_fulltext AS judgmentUseFulltext,
           j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
+          j.use_metadata AS judgmentUseMetadata,
           j.system_prompt_variant AS judgmentSystemPromptVariant,
           j.chunking_strategy AS judgmentChunkingStrategy,
           j.is_answered AS judgmentIsAnswered,

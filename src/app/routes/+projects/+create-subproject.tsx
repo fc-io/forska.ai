@@ -19,6 +19,7 @@ type ProjectSource = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   prompts: PromptInfo[]
 }
 
@@ -53,6 +54,7 @@ const formatContentSettings = (project: ProjectSource): string => {
   if (project.useAbstract) parts.push('abstract')
   if (project.useFulltext) parts.push('fulltext')
   if (project.useFulltextNoImages) parts.push('fulltext (no images)')
+  if (project.useMetadata) parts.push('metadata')
   return parts.length > 0 ? parts.join(' + ') : 'none'
 }
 

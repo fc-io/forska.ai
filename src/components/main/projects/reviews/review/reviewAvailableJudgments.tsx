@@ -20,6 +20,7 @@ type Judgment = {
   useAbstract?: boolean
   useFulltext?: boolean
   useFulltextNoImages?: boolean
+  useMetadata?: boolean
   chunkingStrategy?: string | null
 }
 
@@ -147,6 +148,7 @@ export const ReviewAvailableJudgments = (props: ReviewAvailableJudgmentsProps) =
                                 useAbstract: j.useAbstract,
                                 useFulltext: j.useFulltext,
                                 useFulltextNoImages: j.useFulltextNoImages,
+                                useMetadata: j.useMetadata,
                                 chunkingStrategy: j.chunkingStrategy,
                               }}
                               setArticleViewToShow={props.setArticleViewToShow}

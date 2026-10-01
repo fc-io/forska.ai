@@ -60,12 +60,14 @@ const insertProjectFixture = async ({
   humanJudgmentMode = 'prompt',
   modelId,
   projectId,
+  useMetadata = false,
 }: {
   archived?: boolean
   connectionId: string
   humanJudgmentMode?: 'prompt' | 'summary'
   modelId: string
   projectId: string
+  useMetadata?: boolean
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -89,6 +91,7 @@ const insertProjectFixture = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      use_metadata,
       archived
     )
     VALUES (
@@ -100,6 +103,7 @@ const insertProjectFixture = async ({
       TRUE,
       FALSE,
       FALSE,
+      ${useMetadata ? 'TRUE' : 'FALSE'},
       ${archived ? 'TRUE' : 'FALSE'}
     )
   `)
@@ -187,15 +191,25 @@ const insertProjectPromptFixture = async ({
 const insertProjectArticleFixture = async ({
   articleId,
   articleSeq,
+  doi = null,
+  fullText = null,
   projectArticleId,
   projectId,
+  publicationStatus = null,
+  pubmedId = null,
+  sourceMetadata = null,
   summary = null,
   title,
 }: {
   articleId: string
   articleSeq: number
+  doi?: string | null
+  fullText?: string | null
   projectArticleId: string
   projectId: string
+  publicationStatus?: string | null
+  pubmedId?: string | null
+  sourceMetadata?: Record<string, unknown> | null
   summary?: string | null
   title: string
 }) => {
@@ -204,8 +218,17 @@ const insertProjectArticleFixture = async ({
   }
 
   await runDatabase(`
-    INSERT INTO app.article (id, article_title, article_summary)
-    VALUES ('${articleId}', ${getSqlLiteral(title)}, ${getSqlLiteral(summary)})
+    INSERT INTO app.article (id, article_title, article_summary, source_metadata, doi, pubmed_id, publication_status, full_text)
+    VALUES (
+      '${articleId}',
+      ${getSqlLiteral(title)},
+      ${getSqlLiteral(summary)},
+      ${sourceMetadata ? `${getSqlLiteral(JSON.stringify(sourceMetadata))}::JSON` : 'NULL'},
+      ${getSqlLiteral(doi)},
+      ${getSqlLiteral(pubmedId)},
+      ${getSqlLiteral(publicationStatus)},
+      ${getSqlLiteral(fullText)}
+    )
   `)
   await runDatabase(`
     INSERT INTO app.project_article (id, project_id, article_id)
@@ -284,13 +307,21 @@ type CloneRerunProjectConfig = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
 type CloneRerunScenario = {key: string; nextConfig: CloneRerunProjectConfig}
 
 const baseCloneRerunConfig = (modelId: string): CloneRerunProjectConfig => {
-  return {modelId, useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+  return {
+    modelId,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useMetadata: false,
+    useTitle: true,
+  }
 }
 
 const insertCloneRerunJudgmentFixture = async ({
@@ -326,6 +357,7 @@ const insertCloneRerunJudgmentFixture = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      use_metadata,
       is_answered,
       answered_original,
       answered_original_as_array,
@@ -343,6 +375,7 @@ const insertCloneRerunJudgmentFixture = async ({
       ${config.useAbstract ? 'TRUE' : 'FALSE'},
       ${config.useFulltext ? 'TRUE' : 'FALSE'},
       ${config.useFulltextNoImages ? 'TRUE' : 'FALSE'},
+      ${config.useMetadata ? 'TRUE' : 'FALSE'},
       TRUE,
       '${answer}',
       ['${answer}'],
@@ -483,7 +516,13 @@ afterAll(async () => {
 const insertReadyPromptPreviewFixture = async (input: {
   key: string
   promptText: string
+  secondArticle?: {doi?: string; fullText?: string; publicationStatus?: string; pubmedId?: string}
+  secondArticleCreatedAt?: string | null
+  secondArticleImportMetadata?: Record<string, unknown>
+  secondArticleSourceMetadata?: Record<string, unknown>
   systemPromptVariant?: 'legacy' | 'screening_v1'
+  useFulltext?: boolean
+  useMetadata?: boolean
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -494,15 +533,21 @@ const insertReadyPromptPreviewFixture = async (input: {
   const snapshotId = `snapshot-preview-${input.key}`
   const firstArticleId = `preview-article-first-${input.key}`
   const secondArticleId = `preview-article-second-${input.key}`
+  const selectedImportSnapshotId = input.secondArticleImportMetadata ? `selected-import-preview-${input.key}` : null
+  const secondArticleCreatedAt =
+    input.secondArticleCreatedAt === undefined ? '2026-01-01T00:00:00.000Z' : input.secondArticleCreatedAt
 
   await insertProjectFixture({
     connectionId: `preview-connection-${input.key}`,
     modelId: `preview-model-${input.key}`,
     projectId,
+    useMetadata: input.useMetadata,
   })
   await runDatabase(`
     UPDATE app.project
-    SET system_prompt_variant = ${input.systemPromptVariant ? `'${input.systemPromptVariant}'` : 'NULL'}
+    SET
+      system_prompt_variant = ${input.systemPromptVariant ? `'${input.systemPromptVariant}'` : 'NULL'},
+      use_fulltext = ${input.useFulltext ? 'TRUE' : 'FALSE'}
     WHERE id = '${projectId}'
   `)
   await insertProjectPromptFixture({
@@ -520,8 +565,10 @@ const insertReadyPromptPreviewFixture = async (input: {
     articleSeq: 2,
     projectArticleId: `project-article-preview-second-${input.key}`,
     projectId,
+    sourceMetadata: input.secondArticleSourceMetadata,
     summary: 'Second article summary',
     title: 'Second article title',
+    ...input.secondArticle,
   })
   await insertProjectArticleFixture({
     articleId: firstArticleId,
@@ -557,6 +604,51 @@ const insertReadyPromptPreviewFixture = async (input: {
         NULL
       )
   `)
+  if (input.secondArticleImportMetadata) {
+    const importRouteId = `import-route-preview-${input.key}`
+    const sourceRecordKey = `source-record-key-preview-${input.key}`
+
+    await runDatabase(`
+      INSERT INTO app.import_route (id, route, name)
+      VALUES ('${importRouteId}', 'covidence:preview-${input.key}', 'Covidence preview ${input.key}')
+    `)
+    await runDatabase(`
+      INSERT INTO app.article_import_route_source_record (
+        id,
+        article_id,
+        import_route_id,
+        external_article_id,
+        source_record_key,
+        source_record_hash,
+        import_metadata
+      ) VALUES (
+        'source-record-preview-${input.key}',
+        '${secondArticleId}',
+        '${importRouteId}',
+        'covidence-preview-${input.key}',
+        '${sourceRecordKey}',
+        'source-record-hash-preview-${input.key}',
+        ${getSqlLiteral(JSON.stringify(input.secondArticleImportMetadata))}::JSON
+      )
+    `)
+    await runDatabase(`
+      INSERT INTO mart.review_selected_article_import_current_v4 (
+        project_id,
+        project_scope_identity,
+        selected_import_snapshot_id,
+        article_id,
+        import_route_id,
+        source_record_key
+      ) VALUES (
+        '${projectId}',
+        'projectScope:preview-identity',
+        '${selectedImportSnapshotId}',
+        '${secondArticleId}',
+        '${importRouteId}',
+        '${sourceRecordKey}'
+      )
+    `)
+  }
   const reviewConfigHash = await getCurrentReviewConfigHash(projectId)
   const required = [
     'display',
@@ -582,6 +674,7 @@ const insertReadyPromptPreviewFixture = async (input: {
       required_components_json,
       optional_components_json,
       source_watermarks_json,
+      selected_import_snapshot_id,
       activated_at,
       updated_at
     ) VALUES (
@@ -594,6 +687,7 @@ const insertReadyPromptPreviewFixture = async (input: {
       '${JSON.stringify(required).replaceAll("'", "''")}'::JSON,
       '[]'::JSON,
       '{}'::JSON,
+      ${getSqlLiteral(selectedImportSnapshotId)},
       TIMESTAMPTZ '2026-02-02T00:00:00.000Z',
       TIMESTAMPTZ '2026-02-02T00:00:00.000Z'
     )
@@ -616,7 +710,7 @@ const insertReadyPromptPreviewFixture = async (input: {
       1,
       0,
       '${secondArticleId}',
-      TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
+      ${secondArticleCreatedAt ? `TIMESTAMPTZ '${secondArticleCreatedAt}'` : 'NULL'},
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z'
     );
@@ -733,6 +827,131 @@ test('project prompt preview shows the system prompt of the project system promp
   expect(screeningPreview.payload.data.userPrompt).toContain(
     'Is this study about screening variants in the screening project?',
   )
+})
+
+test('project prompt preview adds the article metadata block only when the project uses metadata', async () => {
+  const sourceMetadata = {
+    issue: '3',
+    journalTitle: 'Preview Journal of Metadata',
+    pages: '45-67',
+    publicationType: 'Journal Article',
+    publicationYear: 2021,
+    volume: '12',
+  }
+  const metadataFixture = await insertReadyPromptPreviewFixture({
+    key: 'metadata-on',
+    promptText: 'Is this study about article metadata?',
+    secondArticleSourceMetadata: sourceMetadata,
+    useMetadata: true,
+  })
+  const plainFixture = await insertReadyPromptPreviewFixture({
+    key: 'metadata-off',
+    promptText: 'Is this study about article metadata without the block?',
+    secondArticleSourceMetadata: sourceMetadata,
+  })
+  const metadataPreview = await requestPromptPreview(metadataFixture.projectId, metadataFixture.promptId)
+  const plainPreview = await requestPromptPreview(plainFixture.projectId, plainFixture.promptId)
+  const metadataUserPrompt = metadataPreview.payload.data.userPrompt ?? ''
+
+  expect(metadataPreview.status).toBe(200)
+  expect(metadataPreview.payload.data.status).toBe('ready')
+  expect(metadataUserPrompt).toContain('## article_metadata')
+  expect(metadataUserPrompt).toContain('journal: Preview Journal of Metadata')
+  expect(metadataUserPrompt).toContain('year: 2021')
+  expect(metadataUserPrompt).toContain('volume/issue/pages: 12(3):45-67')
+  expect(metadataUserPrompt).toContain('publication_type: Journal Article')
+  expect(metadataUserPrompt.indexOf('## article_title')).toBeLessThan(metadataUserPrompt.indexOf('## article_metadata'))
+  expect(metadataUserPrompt.indexOf('## article_metadata')).toBeLessThan(
+    metadataUserPrompt.indexOf('## article_summary'),
+  )
+  expect(metadataPreview.payload.data.previewText).toContain('## article_metadata')
+  expect(plainPreview.status).toBe(200)
+  expect(plainPreview.payload.data.status).toBe('ready')
+  expect(plainPreview.payload.data.userPrompt).toContain('Second article title')
+  expect(plainPreview.payload.data.userPrompt).not.toContain('## article_metadata')
+  expect(plainPreview.payload.data.userPrompt).not.toContain('Preview Journal of Metadata')
+})
+
+const getPromptPreviewMetadataSection = (userPrompt: string) => {
+  const start = userPrompt.indexOf('## article_metadata')
+  const end = userPrompt.indexOf('## article_summary')
+
+  return start >= 0 && end > start ? userPrompt.slice(start, end) : ''
+}
+
+test('project prompt preview builds the metadata block from the selected Covidence import and the article row', async () => {
+  const fixture = await insertReadyPromptPreviewFixture({
+    key: 'metadata-covidence',
+    promptText: 'Is this a Covidence record with metadata?',
+    secondArticle: {doi: '10.1016/S0140-6736(21)00234-8', publicationStatus: 'published', pubmedId: '33676628'},
+    secondArticleCreatedAt: null,
+    secondArticleImportMetadata: {
+      issue: '10278',
+      journalTitle: 'The Lancet',
+      pages: '1023-1034',
+      publicationYear: 2021,
+      volume: '397',
+    },
+    useMetadata: true,
+  })
+  const preview = await requestPromptPreview(fixture.projectId, fixture.promptId)
+  const metadataSection = getPromptPreviewMetadataSection(preview.payload.data.userPrompt ?? '')
+
+  expect(preview.status).toBe(200)
+  expect(preview.payload.data.status).toBe('ready')
+  expect(metadataSection).toContain(
+    [
+      'journal: The Lancet',
+      'year: 2021',
+      'volume/issue/pages: 397(10278):1023-1034',
+      'publication_type: published',
+      'doi: 10.1016/S0140-6736(21)00234-8',
+      'pmid: 33676628',
+    ].join('\n'),
+  )
+})
+
+test('project prompt preview writes none available when the project uses metadata but the article has none', async () => {
+  const fixture = await insertReadyPromptPreviewFixture({
+    key: 'metadata-none',
+    promptText: 'Is this a record without metadata?',
+    secondArticleCreatedAt: null,
+    useMetadata: true,
+  })
+  const preview = await requestPromptPreview(fixture.projectId, fixture.promptId)
+  const metadataSection = getPromptPreviewMetadataSection(preview.payload.data.userPrompt ?? '')
+
+  expect(preview.status).toBe(200)
+  expect(preview.payload.data.status).toBe('ready')
+  expect(metadataSection).toContain('<SOURCE_TEXT_START>\nnone available\n</SOURCE_TEXT_END>')
+  expect(metadataSection).not.toContain('journal:')
+  expect(metadataSection).not.toContain('year:')
+})
+
+test('project prompt preview orders title, metadata, summary and full text when full text and metadata are on', async () => {
+  const fixture = await insertReadyPromptPreviewFixture({
+    key: 'metadata-fulltext',
+    promptText: 'Is this full text record about metadata?',
+    secondArticle: {fullText: 'Second article full text body about metadata.'},
+    secondArticleSourceMetadata: {journalTitle: 'Full Text Journal'},
+    useFulltext: true,
+    useMetadata: true,
+  })
+  const preview = await requestPromptPreview(fixture.projectId, fixture.promptId)
+  const userPrompt = preview.payload.data.userPrompt ?? ''
+  const titleIndex = userPrompt.indexOf('## article_title')
+  const metadataIndex = userPrompt.indexOf('## article_metadata')
+  const summaryIndex = userPrompt.indexOf('## article_summary')
+  const fullTextIndex = userPrompt.indexOf('## article_fulltext')
+
+  expect(preview.status).toBe(200)
+  expect(preview.payload.data.status).toBe('ready')
+  expect(userPrompt).toContain('journal: Full Text Journal')
+  expect(userPrompt).toContain('Second article full text body about metadata.')
+  expect(titleIndex).toBeGreaterThanOrEqual(0)
+  expect(titleIndex).toBeLessThan(metadataIndex)
+  expect(metadataIndex).toBeLessThan(summaryIndex)
+  expect(summaryIndex).toBeLessThan(fullTextIndex)
 })
 
 test('project prompt preview builds article records from the prompt preview serving read', () => {
@@ -2061,6 +2280,124 @@ test('edit route rejects a system prompt variant change when a judgment job exis
   expect(projectRow).toEqual({systemPromptVariant: null})
 })
 
+test('edit route switches the metadata flag before a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-metadata-connection'
+  const modelId = 'edit-metadata-model'
+  const projectId = 'edit-metadata-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.comparison_project (id, name, model_ids, compare_with_humans, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('edit-metadata-comparison', 'Linked metadata comparison', ['${modelId}'], FALSE, TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id)
+    VALUES ('edit-metadata-comparison-link', 'edit-metadata-comparison', '${projectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.comparison_project_serving_generation (
+      comparison_project_id,
+      active_generation,
+      generation_updated_at,
+      serving_status,
+      serving_generation,
+      serving_completed_at
+    )
+    VALUES ('edit-metadata-comparison', 1, current_timestamp, 'ready', 1, current_timestamp)
+  `)
+
+  const initialResponse = await app.handle(new Request(`http://localhost/api/projects/${projectId}`))
+  const initialBody = (await initialResponse.json()) as {data: {project: {useMetadata: boolean}}}
+
+  expect(initialResponse.status).toBe(200)
+  expect(initialBody.data.project.useMetadata).toBe(false)
+
+  const editResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({useMetadata: true}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const editBody = (await editResponse.json()) as {data: {project: {useMetadata: boolean}}}
+
+  expect(editResponse.status).toBe(200)
+  expect(editBody.data.project.useMetadata).toBe(true)
+
+  const [projectRow] = await queryDatabase<{useMetadata: boolean}>(`
+    SELECT use_metadata AS useMetadata
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+  const configDeltaRows = await queryDatabase<{configFieldSet: string}>(`
+    SELECT config_field_set AS configFieldSet
+    FROM app.review_change_delta
+    WHERE project_id = '${projectId}'
+      AND change_kind = 'project.reviewConfig.updated'
+  `)
+  const [comparisonRow] = await queryDatabase<{servingStatus: string}>(`
+    SELECT serving_status AS servingStatus
+    FROM app.comparison_project_serving_generation
+    WHERE comparison_project_id = 'edit-metadata-comparison'
+  `)
+
+  expect(projectRow).toEqual({useMetadata: true})
+  expect(configDeltaRows).toEqual([{configFieldSet: 'useMetadata'}])
+  expect(comparisonRow).toEqual({servingStatus: 'stale'})
+})
+
+test('edit route rejects a metadata flag change when a judgment job exists', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-metadata-job-connection'
+  const modelId = 'edit-metadata-job-model'
+  const projectId = 'edit-metadata-job-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('edit-metadata-job', '${projectId}', 'completed')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({useMetadata: true}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(409)
+  expect(body).toContain('useMetadata')
+
+  const unchangedResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({name: 'Renamed metadata job project', useMetadata: false}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(unchangedResponse.status).toBe(200)
+
+  const [projectRow] = await queryDatabase<{name: string; useMetadata: boolean}>(`
+    SELECT name, use_metadata AS useMetadata
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(projectRow).toEqual({name: 'Renamed metadata job project', useMetadata: false})
+})
+
 test('edit route rejects protected config changes when a judgment job exists', async () => {
   if (!app || !queryDatabase || !runDatabase) {
     throw new Error('Test app not initialized')
@@ -2129,6 +2466,7 @@ test('edit route rejects all remaining protected config changes when a judgment 
         useAbstract: false,
         useFulltext: true,
         useFulltextNoImages: true,
+        useMetadata: true,
       }),
       headers: {'content-type': 'application/json'},
       method: 'PATCH',
@@ -2140,6 +2478,7 @@ test('edit route rejects all remaining protected config changes when a judgment 
   expect(body).toContain('useAbstract')
   expect(body).toContain('useFulltext')
   expect(body).toContain('useFulltextNoImages')
+  expect(body).toContain('useMetadata')
   expect(body).toContain('humanJudgmentMode')
   expect(body).toContain('dateFrom')
   expect(body).toContain('dateTo')
@@ -2152,6 +2491,7 @@ test('edit route rejects all remaining protected config changes when a judgment 
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
+    useMetadata: boolean
   }>(`
     SELECT
       CAST(date_from AS VARCHAR) AS dateFrom,
@@ -2159,7 +2499,8 @@ test('edit route rejects all remaining protected config changes when a judgment 
       human_judgment_mode AS humanJudgmentMode,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
-      use_fulltext_no_images AS useFulltextNoImages
+      use_fulltext_no_images AS useFulltextNoImages,
+      use_metadata AS useMetadata
     FROM app.project
     WHERE id = '${projectId}'
     LIMIT 1
@@ -2177,6 +2518,7 @@ test('edit route rejects all remaining protected config changes when a judgment 
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
   })
   expect(Number(importRouteCount?.count ?? 0)).toBe(0)
 })
@@ -3614,6 +3956,123 @@ test('edit route old prompt LLM cleanup matches the project system prompt varian
   expect(judgmentRows).toEqual([
     {deleteGeneration: 1, deleted: true, id: 'edit-job-variant-llm-legacy-judgment'},
     {deleteGeneration: 3, deleted: false, id: 'edit-job-variant-llm-screening-judgment'},
+  ])
+})
+
+test('edit route old prompt LLM cleanup matches the project metadata flag', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-job-metadata-llm-connection'
+  const modelId = 'edit-job-metadata-llm-model'
+  const projectId = 'edit-job-metadata-llm-project'
+  const otherProjectId = 'edit-job-metadata-llm-other-project'
+  const oldPromptId = 'edit-job-metadata-llm-old-prompt'
+  const oldPromptText = 'Metadata cleanup old prompt text'
+  const articleId = 'edit-job-metadata-llm-article'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      use_metadata,
+      archived
+    )
+    VALUES ('${otherProjectId}', 'Other metadata project', '${modelId}', 'prompt', TRUE, TRUE, FALSE, FALSE, TRUE, FALSE)
+  `)
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(oldPromptText, null, 'old', 'string'),
+    originProjectId: projectId,
+    originalText: oldPromptText,
+    projectId,
+    projectPromptId: 'edit-job-metadata-llm-project-prompt',
+    promptHeading: 'old',
+    promptId: oldPromptId,
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES ('edit-job-metadata-llm-other-project-prompt', '${otherProjectId}', '${oldPromptId}', 0, FALSE, TRUE, NULL)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Metadata cleanup LLM article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('edit-job-metadata-llm-project-article', '${projectId}', '${articleId}'),
+      ('edit-job-metadata-llm-other-project-article', '${otherProjectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      use_metadata,
+      delete_generation,
+      is_answered,
+      answered_original
+    )
+    VALUES
+      ('edit-job-metadata-llm-plain-judgment', '${articleId}', '${oldPromptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, FALSE, 0, TRUE, 'yes'),
+      ('edit-job-metadata-llm-metadata-judgment', '${articleId}', '${oldPromptId}', '${modelId}', '${otherProjectId}', TRUE, TRUE, FALSE, FALSE, TRUE, 3, TRUE, 'no')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('edit-job-metadata-llm-job', '${projectId}', 'completed', 'draining')
+  `)
+  await insertJudgmentJobSqliteHealthProjectionFixture({jobId: 'edit-job-metadata-llm-job'})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        prompts: [
+          {
+            originalId: oldPromptId,
+            originalText: 'Metadata cleanup new prompt text',
+            promptHeading: 'new',
+            type: 'string',
+            order: 0,
+          },
+        ],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {promptCleanupSummary: {keptSharedLlmJudgments: number; softDeletedLlmJudgments: number}}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.promptCleanupSummary.keptSharedLlmJudgments).toBe(0)
+  expect(body.data.promptCleanupSummary.softDeletedLlmJudgments).toBe(1)
+
+  const judgmentRows = await queryDatabase<{deleteGeneration: number; deleted: boolean; id: string}>(`
+    SELECT id, CAST(delete_generation AS INTEGER) AS deleteGeneration, deleted_at IS NOT NULL AS deleted
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+    ORDER BY id
+  `)
+
+  expect(judgmentRows).toEqual([
+    {deleteGeneration: 3, deleted: false, id: 'edit-job-metadata-llm-metadata-judgment'},
+    {deleteGeneration: 1, deleted: true, id: 'edit-job-metadata-llm-plain-judgment'},
   ])
 })
 
@@ -5501,6 +5960,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
     {key: 'use-abstract', nextConfig: {...sourceConfig, useAbstract: false}},
     {key: 'use-fulltext', nextConfig: {...sourceConfig, useFulltext: true}},
     {key: 'use-fulltext-no-images', nextConfig: {...sourceConfig, useFulltextNoImages: true}},
+    {key: 'use-metadata', nextConfig: {...sourceConfig, useMetadata: true}},
   ]
 
   await currentRunDatabase(`
@@ -5594,6 +6054,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
           useAbstract: scenario.nextConfig.useAbstract,
           useFulltext: scenario.nextConfig.useFulltext,
           useFulltextNoImages: scenario.nextConfig.useFulltextNoImages,
+          useMetadata: scenario.nextConfig.useMetadata,
         }),
         headers: {'content-type': 'application/json'},
         method: 'PATCH',
@@ -5734,6 +6195,48 @@ test('cloning a project appends V4 deltas for copied article scope and review co
   expect(Number(cloneDeltaCounts?.legacyDirtyMaterializationRows ?? 0)).toBe(0)
 })
 
+test('clone route copies the metadata flag', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = 'clone-metadata-source'
+
+  await insertProjectFixture({
+    connectionId: 'clone-metadata-connection',
+    modelId: 'clone-metadata-model',
+    projectId,
+    useMetadata: true,
+  })
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {id: string; useMetadata: boolean}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+  expect(cloneBody.data.useMetadata).toBe(true)
+
+  const [projectRow] = await queryDatabase<{useMetadata: boolean}>(`
+    SELECT use_metadata AS useMetadata
+    FROM app.project
+    WHERE id = '${clonedProjectId}'
+  `)
+  const cloneConfigDeltaRows = await queryDatabase<{configFieldSet: string}>(`
+    SELECT config_field_set AS configFieldSet
+    FROM app.review_change_delta
+    WHERE project_id = '${clonedProjectId}'
+      AND change_kind = 'project.reviewConfig.updated'
+  `)
+  const cloneConfigFields = cloneConfigDeltaRows.flatMap((row) => {
+    return row.configFieldSet.split(',')
+  })
+
+  expect(projectRow).toEqual({useMetadata: true})
+  expect(cloneConfigFields).toContain('useMetadata')
+})
+
 test('editing a cloned project model leaves the source project model unchanged', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
@@ -5863,6 +6366,95 @@ test('create route stores the requested system prompt variant and defaults to le
   `)
 
   expect(screeningConfigDelta?.configFieldSet.split(',')).toContain('systemPromptVariant')
+
+  await flushMartRefreshes()
+})
+
+test('create route stores the requested metadata flag and defaults to false', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'create-metadata-connection'
+  const modelId = 'create-metadata-model'
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
+  `)
+
+  const metadataResponse = await app.handle(
+    new Request('http://localhost/api/projects', {
+      body: JSON.stringify({name: 'Metadata project', modelId, useMetadata: true}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const metadataBody = (await metadataResponse.json()) as {data: {id: string; useMetadata: boolean}}
+  const defaultResponse = await app.handle(
+    new Request('http://localhost/api/projects', {
+      body: JSON.stringify({name: 'Default metadata project', modelId}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const defaultBody = (await defaultResponse.json()) as {data: {id: string; useMetadata: boolean}}
+
+  expect(metadataResponse.status).toBe(200)
+  expect(metadataBody.data.useMetadata).toBe(true)
+  expect(defaultResponse.status).toBe(200)
+  expect(defaultBody.data.useMetadata).toBe(false)
+
+  const projectRows = await queryDatabase<{id: string; useMetadata: boolean}>(`
+    SELECT id, use_metadata AS useMetadata
+    FROM app.project
+    WHERE id IN ('${metadataBody.data.id}', '${defaultBody.data.id}')
+    ORDER BY id ASC
+  `)
+
+  expect(projectRows).toEqual(
+    [
+      {id: metadataBody.data.id, useMetadata: true},
+      {id: defaultBody.data.id, useMetadata: false},
+    ].sort((left, right) => {
+      return left.id.localeCompare(right.id)
+    }),
+  )
+
+  const listResponse = await app.handle(new Request('http://localhost/api/projects'))
+  const listBody = (await listResponse.json()) as {data: Array<{id: string; useMetadata: boolean}>}
+  const listedMetadataProject = listBody.data.find((project) => {
+    return project.id === metadataBody.data.id
+  })
+  const [metadataConfigDelta] = await queryDatabase<{configFieldSet: string}>(`
+    SELECT config_field_set AS configFieldSet
+    FROM app.review_change_delta
+    WHERE project_id = '${metadataBody.data.id}'
+      AND change_kind = 'project.reviewConfig.updated'
+    LIMIT 1
+  `)
+
+  expect(listResponse.status).toBe(200)
+  expect(listedMetadataProject?.useMetadata).toBe(true)
+  expect(metadataConfigDelta?.configFieldSet.split(',')).toContain('useMetadata')
+
+  await runDatabase(`UPDATE app.project SET use_metadata = NULL WHERE id = '${defaultBody.data.id}'`)
+
+  const nullDetailResponse = await app.handle(new Request(`http://localhost/api/projects/${defaultBody.data.id}`))
+  const nullDetailBody = (await nullDetailResponse.json()) as {data: {project: {useMetadata: boolean | null}}}
+  const nullListResponse = await app.handle(new Request('http://localhost/api/projects'))
+  const nullListBody = (await nullListResponse.json()) as {data: Array<{id: string; useMetadata: boolean | null}>}
+  const listedNullProject = nullListBody.data.find((project) => {
+    return project.id === defaultBody.data.id
+  })
+
+  expect(nullDetailResponse.status).toBe(200)
+  expect(nullDetailBody.data.project.useMetadata).toBe(false)
+  expect(listedNullProject?.useMetadata).toBe(false)
 
   await flushMartRefreshes()
 })

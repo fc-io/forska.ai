@@ -99,6 +99,7 @@ type ProjectReviewConfig = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
 }
 
@@ -548,6 +549,7 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
         useAbstract: boolean | null
         useFulltext: boolean | null
         useFulltextNoImages: boolean | null
+        useMetadata: boolean | null
         systemPromptVariant: string | null
       }>(
         `
@@ -560,6 +562,7 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          ${getOptionalColumnSelect({alias: 'useMetadata', columnName: 'use_metadata', columnNames})},
           ${getOptionalColumnSelect({alias: 'systemPromptVariant', columnName: 'system_prompt_variant', columnNames})}
         FROM app.project
         WHERE id = '${escapeSqlString(projectId)}'
@@ -591,6 +594,7 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
           useAbstract: projectConfig.useAbstract ?? true,
           useFulltext: projectConfig.useFulltext ?? false,
           useFulltextNoImages: projectConfig.useFulltextNoImages ?? false,
+          useMetadata: projectConfig.useMetadata ?? false,
           systemPromptVariant: getSystemPromptVariant(projectConfig.systemPromptVariant),
         }
       : null

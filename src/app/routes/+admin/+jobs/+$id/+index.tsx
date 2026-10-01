@@ -217,6 +217,7 @@ type JobData = {
   updatedAt?: string
   useFulltext?: boolean
   useFulltextNoImages?: boolean
+  useMetadata?: boolean
   totalTokenUsage?: {totalTokens?: number; totalPromptTokens?: number; totalCompletionTokens?: number}
   promptStats?: Partial<JudgmentJobPromptStats>
   requestStats?: Partial<JudgmentJobRequestStats>
