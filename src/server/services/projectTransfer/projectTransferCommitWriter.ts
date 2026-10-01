@@ -1,4 +1,9 @@
-import {isSystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
+import {
+  defaultSystemPromptVariant,
+  getSystemPromptVariant,
+  isSystemPromptVariant,
+  type SystemPromptVariant,
+} from '../../../agent/judge/systemPromptVariant.ts'
 import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
 import {
   appendArticleReviewServingDeltas,
@@ -205,6 +210,7 @@ type TargetJudgmentRow = {
   articleId: string
   modelId: string
   promptId: string
+  systemPromptVariant: string
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -233,6 +239,7 @@ type JudgmentCommitRow = {
   quotes: unknown[]
   snapshotProjectModelName: string | null
   sourceJudgmentId: string
+  systemPromptVariant: SystemPromptVariant
   updatedAt: Date
   useAbstract: boolean
   useFulltext: boolean
@@ -246,6 +253,7 @@ type ProjectTransferInsertedJudgmentDeltaRow = {
   projectId: string
   promptId: string
   sourceJudgmentId: string
+  systemPromptVariant: SystemPromptVariant
   updatedAt: Date | string | null
   useAbstract: boolean
   useFulltext: boolean
@@ -1827,6 +1835,7 @@ const appendProjectTransferProjectReviewConfigDelta = async ({
       'modelExecutionIdentity',
       'modelId',
       'promptMembership',
+      'systemPromptVariant',
       'useAbstract',
       'useFulltext',
       'useFulltextNoImages',
@@ -4010,6 +4019,7 @@ const getContentSettings = (record: ProjectTransferPayloadRecord) => {
   const settings = isRecord(record.contentSettings) ? record.contentSettings : {}
 
   return {
+    systemPromptVariant: getSystemPromptVariant(record.systemPromptVariant),
     useAbstract: getBoolean(settings.useAbstract, true),
     useFulltext: getBoolean(settings.useFulltext, false),
     useFulltextNoImages: getBoolean(settings.useFulltextNoImages, false),
@@ -4053,12 +4063,13 @@ const getJudgmentPhysicalKey = (row: {
   deleteGeneration: number
   modelId: string
   promptId: string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
   useTitle: boolean
 }) => {
-  return [
+  const key = [
     row.articleId,
     row.promptId,
     row.modelId,
@@ -4068,18 +4079,21 @@ const getJudgmentPhysicalKey = (row: {
     String(row.useFulltextNoImages),
     String(row.deleteGeneration),
   ].join('\u0000')
+
+  return `${key}|${row.systemPromptVariant}`
 }
 
 const getJudgmentReviewVisibleKey = (row: {
   articleId: string
   modelId: string
   promptId: string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
   useTitle: boolean
 }) => {
-  return [
+  const key = [
     row.articleId,
     row.promptId,
     row.modelId,
@@ -4088,6 +4102,8 @@ const getJudgmentReviewVisibleKey = (row: {
     String(row.useFulltext),
     String(row.useFulltextNoImages),
   ].join('\u0000')
+
+  return `${key}|${row.systemPromptVariant}`
 }
 
 const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
@@ -4096,6 +4112,7 @@ const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
     deleteGeneration: row.deleteGeneration ?? 0,
     modelId: row.modelId,
     promptId: row.promptId,
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
     useAbstract: row.useAbstract,
     useFulltext: row.useFulltext,
     useFulltextNoImages: row.useFulltextNoImages,
@@ -4104,7 +4121,7 @@ const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
 }
 
 const getTargetJudgmentReviewVisibleKey = (row: TargetJudgmentRow) => {
-  return getJudgmentReviewVisibleKey(row)
+  return getJudgmentReviewVisibleKey({...row, systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant)})
 }
 
 const getJudgmentFieldSignature = (row: JudgmentCommitRow) => {
@@ -4283,6 +4300,7 @@ const getTargetJudgmentRows = async ({
                   use_abstract AS useAbstract,
                   use_fulltext AS useFulltext,
                   use_fulltext_no_images AS useFulltextNoImages,
+                  system_prompt_variant AS systemPromptVariant,
                   is_answered AS isAnswered,
                   answered_original AS answeredOriginal,
                   TO_JSON(answered_original_as_array) AS answeredOriginalAsArray,
@@ -4416,6 +4434,7 @@ const getSetBasedJudgmentRowsSql = ({
       ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useAbstract', true)} AS use_abstract,
       ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useFulltext', false)} AS use_fulltext,
       ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useFulltextNoImages', false)} AS use_fulltext_no_images,
+      COALESCE(${getNullableJsonStringFieldSql('payload.payload_json', 'systemPromptVariant')}, ${getSqlLiteral(defaultSystemPromptVariant)}) AS system_prompt_variant,
       ${getNullableJsonStringFieldSql('payload.payload_json', 'chunkingStrategy')} AS chunking_strategy,
       ${getJsonBooleanPathSql('payload.payload_json', '$.isAnswered', false)} AS is_answered,
       ${getNullableJsonStringFieldSql('payload.payload_json', 'answeredOriginal')} AS answered_original,
@@ -4573,6 +4592,7 @@ const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      system_prompt_variant,
       delete_generation
     HAVING COUNT(*) > 1
     ORDER BY sourceJudgmentId ASC
@@ -4588,7 +4608,8 @@ const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
       use_title,
       use_abstract,
       use_fulltext,
-      use_fulltext_no_images
+      use_fulltext_no_images,
+      system_prompt_variant
     HAVING COUNT(*) > 1
     ORDER BY sourceJudgmentId ASC
     LIMIT 1
@@ -4624,6 +4645,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
       AND target.use_abstract = rows.use_abstract
       AND target.use_fulltext = rows.use_fulltext
       AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.system_prompt_variant = rows.system_prompt_variant
       AND target.delete_generation = rows.delete_generation
     WHERE rows.action = 'insert'
     ORDER BY rows.source_judgment_id ASC
@@ -4641,6 +4663,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
       AND target.use_abstract = rows.use_abstract
       AND target.use_fulltext = rows.use_fulltext
       AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.system_prompt_variant = rows.system_prompt_variant
     WHERE rows.action = 'insert'
     ORDER BY rows.source_judgment_id ASC
     LIMIT 1
@@ -4658,6 +4681,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
       AND target.use_abstract = rows.use_abstract
       AND target.use_fulltext = rows.use_fulltext
       AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.system_prompt_variant = rows.system_prompt_variant
       AND target.delete_generation = rows.delete_generation
     WHERE rows.action = 'reuse'
       AND target.id IS NULL
@@ -4676,6 +4700,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
       AND target.use_abstract = rows.use_abstract
       AND target.use_fulltext = rows.use_fulltext
       AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.system_prompt_variant = rows.system_prompt_variant
       AND target.id <> rows.id
     WHERE rows.action = 'reuse'
     ORDER BY rows.source_judgment_id ASC
@@ -4745,7 +4770,8 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
             ${getSqlLiteral(row.useTitle)} AS use_title,
             ${getSqlLiteral(row.useAbstract)} AS use_abstract,
             ${getSqlLiteral(row.useFulltext)} AS use_fulltext,
-            ${getSqlLiteral(row.useFulltextNoImages)} AS use_fulltext_no_images
+            ${getSqlLiteral(row.useFulltextNoImages)} AS use_fulltext_no_images,
+            ${getSqlLiteral(row.systemPromptVariant)} AS system_prompt_variant
         )
         SELECT DISTINCT project.id AS projectId
         FROM inserted_judgment
@@ -4775,6 +4801,7 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
             sourceMutationKey: `projectTransfer|${visibleProject.projectId}|${row.sourceJudgmentId}|${row.id}`,
             sourceOperation: 'insert' as const,
             sourceUpdatedAt: row.updatedAt,
+            systemPromptVariant: row.systemPromptVariant,
             useAbstract: row.useAbstract,
             useFulltext: row.useFulltext,
             useFulltextNoImages: row.useFulltextNoImages,
@@ -4807,6 +4834,7 @@ const appendProjectTransferJudgmentCreatedDeltasSetBased = async ({
       'projectTransfer|' || project.id || '|' || rows.source_judgment_id || '|' || rows.id AS sourceMutationKey,
       'insert' AS sourceOperation,
       rows.updated_at AS sourceUpdatedAt,
+      rows.system_prompt_variant AS systemPromptVariant,
       rows.use_abstract AS useAbstract,
       rows.use_fulltext AS useFulltext,
       rows.use_fulltext_no_images AS useFulltextNoImages,
@@ -4935,6 +4963,7 @@ const insertJudgmentRowsSetBased = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      system_prompt_variant,
       chunking_strategy,
       is_answered,
       answered_original,
@@ -4959,6 +4988,7 @@ const insertJudgmentRowsSetBased = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      system_prompt_variant,
       chunking_strategy,
       TRUE,
       answered_original,
@@ -5023,6 +5053,7 @@ const insertJudgmentRows = async ({
           use_abstract,
           use_fulltext,
           use_fulltext_no_images,
+          system_prompt_variant,
           chunking_strategy,
           is_answered,
           answered_original,
@@ -5048,6 +5079,7 @@ const insertJudgmentRows = async ({
               ${getSqlLiteral(row.useAbstract)},
               ${getSqlLiteral(row.useFulltext)},
               ${getSqlLiteral(row.useFulltextNoImages)},
+              ${getSqlLiteral(row.systemPromptVariant)},
               ${getSqlLiteral(row.chunkingStrategy)},
               TRUE,
               ${getSqlLiteral(row.answeredOriginal)},
@@ -5073,6 +5105,7 @@ const insertJudgmentRows = async ({
               projectId,
               promptId: row.promptId,
               sourceJudgmentId: row.sourceJudgmentId,
+              systemPromptVariant: row.systemPromptVariant,
               updatedAt: row.updatedAt,
               useAbstract: row.useAbstract,
               useFulltext: row.useFulltext,

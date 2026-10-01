@@ -187,6 +187,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     judgmentIds: string[]
     judgmentKeys: string[]
     judgmentProvenanceKind: string | null
+    judgmentSystemPromptVariants: string[]
     missingProviderMessage: string | null
     packageChecksumMatches: boolean
     packageExecutionMode: string
@@ -273,6 +274,11 @@ test('project-transfer export reads archived app-table scope and serializes lock
     projectSettings: {humanJudgmentMode: string; systemPromptVariant?: string}
     summaryProjectSettings: {humanJudgmentMode: string; systemPromptVariant?: string}
     summaryProjectSettingsHasSystemPromptVariant: boolean
+    summaryJudgments: Array<{
+      judgmentInputSignatureSystemPromptVariant: string
+      sourceJudgmentId: string
+      systemPromptVariant: string
+    }>
     summaryReviewIds: string[]
     preservedUrlWarnings: Array<{action: string; code: string; jsonPointer: string; severity: string}>
     warnings: unknown[]
@@ -802,6 +808,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
         use_abstract,
         use_fulltext,
         use_fulltext_no_images,
+        system_prompt_variant,
         chunking_strategy,
         is_answered,
         answered_original,
@@ -816,10 +823,11 @@ test('project-transfer export reads archived app-table scope and serializes lock
         updated_at
       )
       VALUES
-        ('judgment-export', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-other', TRUE, TRUE, FALSE, FALSE, NULL, TRUE, 'yes', ['yes'], 92, 'export explanation', CAST('[{"quote":"export quote"}]' AS JSON), 0, 'project-other', 'Snapshot Model', TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z'),
-        ('judgment-chunked-no-proof', 'article-route-in', 'prompt-chunked', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'article_paragraph_greedy', TRUE, 'yes', ['yes'], 88, 'chunked explanation', CAST('[{"quote":"chunked"}]' AS JSON), 0, NULL, NULL, TIMESTAMPTZ '2026-04-02T00:00:00Z', TIMESTAMPTZ '2026-04-03T00:00:00Z'),
-        ('judgment-duplicate-answered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, NULL, TRUE, 'maybe', ['maybe'], 50, 'duplicate answered', CAST('[{"quote":"duplicate"}]' AS JSON), 0, NULL, NULL, TIMESTAMPTZ '2026-04-03T00:00:00Z', TIMESTAMPTZ '2026-04-04T00:00:00Z'),
-        ('judgment-duplicate-unanswered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, NULL, FALSE, NULL, NULL, 50, NULL, CAST('[]' AS JSON), 1, NULL, NULL, TIMESTAMPTZ '2026-04-05T00:00:00Z', TIMESTAMPTZ '2026-04-06T00:00:00Z')
+        ('judgment-export', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-other', TRUE, TRUE, FALSE, FALSE, 'screening_v1', NULL, TRUE, 'yes', ['yes'], 92, 'export explanation', CAST('[{"quote":"export quote"}]' AS JSON), 0, 'project-other', 'Snapshot Model', TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z'),
+        ('judgment-legacy-twin', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-summary-export', TRUE, TRUE, FALSE, FALSE, 'legacy', NULL, TRUE, 'no', ['no'], 70, 'legacy explanation', CAST('[{"quote":"legacy quote"}]' AS JSON), 0, 'project-summary-export', 'Snapshot Model', TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z'),
+        ('judgment-chunked-no-proof', 'article-route-in', 'prompt-chunked', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'screening_v1', 'article_paragraph_greedy', TRUE, 'yes', ['yes'], 88, 'chunked explanation', CAST('[{"quote":"chunked"}]' AS JSON), 0, NULL, NULL, TIMESTAMPTZ '2026-04-02T00:00:00Z', TIMESTAMPTZ '2026-04-03T00:00:00Z'),
+        ('judgment-duplicate-answered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'screening_v1', NULL, TRUE, 'maybe', ['maybe'], 50, 'duplicate answered', CAST('[{"quote":"duplicate"}]' AS JSON), 0, NULL, NULL, TIMESTAMPTZ '2026-04-03T00:00:00Z', TIMESTAMPTZ '2026-04-04T00:00:00Z'),
+        ('judgment-duplicate-unanswered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'screening_v1', NULL, FALSE, NULL, NULL, 50, NULL, CAST('[]' AS JSON), 1, NULL, NULL, TIMESTAMPTZ '2026-04-05T00:00:00Z', TIMESTAMPTZ '2026-04-06T00:00:00Z')
     \`)
     await database.run(\`
       INSERT INTO app.judgment_assessment (
@@ -1024,6 +1032,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
       judgmentInputSignature: archived.payloads.judgments[0].judgmentInputSignature,
       judgmentIds: archived.payloads.judgments.map((judgment) => judgment.sourceJudgmentId),
       judgmentKeys: Object.keys(archived.payloads.judgments[0]).sort(),
+      judgmentSystemPromptVariants: archived.payloads.judgments.map((judgment) => judgment.systemPromptVariant),
       judgmentProvenanceKind: archived.payloads.judgments[0].judgmentInputSignatureProvenance.kind,
       missingProviderMessage,
       packageChecksumMatches: packageBuild.metadata.checksumSha256 === getProjectTransferSha256Checksum(packageBytes),
@@ -1126,6 +1135,13 @@ test('project-transfer export reads archived app-table scope and serializes lock
       summaryProjectSettings: summary.payloads.project.settings,
       summaryProjectSettingsHasSystemPromptVariant: Object.hasOwn(summary.payloads.project.settings, 'systemPromptVariant'),
       summaryReviewIds: summary.payloads.reviews.map((review) => review.sourceReviewId),
+      summaryJudgments: summary.payloads.judgments.map((judgment) => {
+        return {
+          judgmentInputSignatureSystemPromptVariant: judgment.judgmentInputSignature.request.systemPromptVariant,
+          sourceJudgmentId: judgment.sourceJudgmentId,
+          systemPromptVariant: judgment.systemPromptVariant,
+        }
+      }),
       preservedUrlWarnings: archived.warnings.filter((warning) => warning.code === 'nonLocalUrlPreserved').map((warning) => {
         return {
           action: warning.action,
@@ -1167,6 +1183,14 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.projectArticleIds).toEqual(['article-curated-in', 'article-stale-duplicate-doi'])
   expect(result.importRouteActiveValues).toEqual([false])
   expect(result.judgmentIds).toEqual(['judgment-duplicate-answered', 'judgment-export'])
+  expect(result.judgmentSystemPromptVariants).toEqual(['screening_v1', 'screening_v1'])
+  expect(result.summaryJudgments).toEqual([
+    {
+      judgmentInputSignatureSystemPromptVariant: 'legacy',
+      sourceJudgmentId: 'judgment-legacy-twin',
+      systemPromptVariant: 'legacy',
+    },
+  ])
   expect(result.judgmentAssessmentIds).toEqual(['assessment-duplicate', 'assessment-export'])
   expect(result.humanJudgmentIds).toEqual(['human-disabled'])
   expect(result.humanSummaryIds).toEqual(['summary-human'])
@@ -1323,6 +1347,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.judgmentKeys).toContain('chunkingStrategy')
   expect(result.judgmentKeys).toContain('deleteGeneration')
   expect(result.judgmentKeys).toContain('snapshotProjectModelName')
+  expect(result.judgmentKeys).toContain('systemPromptVariant')
   expect(result.serializedArticleHasFullTextPdf).toBe(true)
   expect(result.serializedArticleFullTextPdf).toBe('assets/project-transfer-export-test/route.pdf')
   expect(result.serializedArticleFullTextAssets).toEqual({

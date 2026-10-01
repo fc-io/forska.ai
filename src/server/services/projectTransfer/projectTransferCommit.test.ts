@@ -3385,9 +3385,10 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       projectId: string
       snapshotProjectId: string | null
       snapshotProjectModelName: string | null
+      systemPromptVariant: string
     }
     reusedAssessmentCount: number
-    reusedJudgmentRow: {snapshotProjectModelName: string | null}
+    reusedJudgmentRow: {snapshotProjectModelName: string | null; systemPromptVariant: string}
     reviewRow: {
       articleId: string
       opened: boolean
@@ -3499,6 +3500,7 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       answeredOriginalAsArray: ['new-answer-staged'],
       explanation: 'new-answer-staged explanation',
       quotes: [{quote: 'new-answer-staged quote'}],
+      systemPromptVariant: 'screening_v1',
     }
     const newAssessmentPayload = {
       assessmentComment: 'New assessment',
@@ -3749,8 +3751,8 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       })
     })
     const targetNewArticleId = writeResult.articleIdBySourceId['source-decision-new']
-    const [newJudgmentRow] = await database.queryJson("SELECT id, article_id AS articleId, project_id AS projectId, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, is_answered AS isAnswered, answered_original AS answeredOriginal, confidence_original AS confidenceOriginal, delete_generation::INTEGER AS deleteGeneration, deleted_at AS deletedAt FROM app.judgment WHERE article_id = '" + targetNewArticleId + "'")
-    const [reusedJudgmentRow] = await database.queryJson("SELECT snapshot_project_model_name AS snapshotProjectModelName FROM app.judgment WHERE id = 'target-judgment-reuse'")
+    const [newJudgmentRow] = await database.queryJson("SELECT id, article_id AS articleId, project_id AS projectId, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, is_answered AS isAnswered, answered_original AS answeredOriginal, confidence_original AS confidenceOriginal, delete_generation::INTEGER AS deleteGeneration, deleted_at AS deletedAt, system_prompt_variant AS systemPromptVariant FROM app.judgment WHERE article_id = '" + targetNewArticleId + "'")
+    const [reusedJudgmentRow] = await database.queryJson("SELECT snapshot_project_model_name AS snapshotProjectModelName, system_prompt_variant AS systemPromptVariant FROM app.judgment WHERE id = 'target-judgment-reuse'")
     const [newAssessmentRow] = await database.queryJson("SELECT judgment_id AS judgmentId, assessment_is_correct AS assessmentIsCorrect FROM app.judgment_assessment WHERE judgment_id = '" + newJudgmentRow.id + "'")
     const [reusedAssessmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment_assessment WHERE judgment_id = 'target-judgment-reuse'")
     const [humanJudgmentRow] = await database.queryJson("SELECT project_id AS projectId, article_id AS articleId, prompt_id AS promptId, answer FROM app.judgment_human WHERE project_id = '" + writeResult.projectId + "'")
@@ -3782,6 +3784,7 @@ test('project transfer set-based commit preserves judgment ids and counts from c
     projectId: result.targetProjectId,
     snapshotProjectId: result.targetProjectId,
     snapshotProjectModelName: 'exported-new-label',
+    systemPromptVariant: 'screening_v1',
   })
   expect(result.completionJudgmentCount).toBe(2)
   expect(result.judgmentIdBySourceId).toEqual({
@@ -3789,6 +3792,7 @@ test('project transfer set-based commit preserves judgment ids and counts from c
     'source-judgment-reuse': 'target-judgment-reuse',
   })
   expect(result.reusedJudgmentRow.snapshotProjectModelName).toBe('target-existing-label')
+  expect(result.reusedJudgmentRow.systemPromptVariant).toBe('legacy')
   expect(result.newAssessmentRow).toMatchObject({assessmentIsCorrect: true, judgmentId: result.newJudgmentRow.id})
   expect(result.reusedAssessmentCount).toBe(1)
   expect(result.humanJudgmentRow).toMatchObject({
@@ -4203,6 +4207,206 @@ test('project transfer commit writer blocks active judgment review-visible confl
   expect(result.errorMessage).toContain('target judgment review-visible key already exists')
   expect(result.projectCount).toBe(0)
   expect(result.judgmentCount).toBe(1)
+})
+
+test('project transfer commit writer stores judgment system prompt variants and keeps other variants distinct', () => {
+  const result = runCommitWriterScript<{
+    deltaRows: Array<{
+      contentFlagSystemPromptVariant: string | null
+      judgmentId: string
+      projectId: string
+      systemPromptVariant: string | null
+    }>
+    judgmentRows: Array<{answeredOriginal: string; articleId: string; id: string; systemPromptVariant: string}>
+    projectId: string
+    projectSystemPromptVariant: string | null
+  }>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Variant prompt?', null, 'Variant', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-prompt-variant', 'Variant prompt?', NULL, 'Variant', 'system', '" + promptHash + "', FALSE)")
+    await database.run("INSERT INTO app.article (id, article_title) VALUES ('target-variant-article', 'Variant Article'), ('target-old-article', 'Old Package Article')")
+    await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, is_answered, answered_original, answered_original_as_array, confidence_original, explanation, quotes, delete_generation, deleted_at) VALUES ('target-legacy-judgment', 'target-variant-article', 'target-prompt-variant', 'target-model', TRUE, TRUE, FALSE, FALSE, TRUE, 'existing-legacy', ['existing-legacy'], 50, 'Existing legacy', CAST('[]' AS JSON), 0, NULL)")
+    const settings = {
+      humanJudgmentMode: 'prompt',
+      systemPromptVariant: 'screening_v1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+    const contentSettings = {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const getArticlePayload = (sourceArticleId, articleTitle) => ({
+      articleTitle,
+      identifierInputs: [],
+      provenance: {sourceArticleId},
+      signature: {identifierKeys: [], title: articleTitle},
+      sourceArticleId,
+    })
+    const getArticleMatch = (sourceArticleId, selectedTargetArticleId) => ({
+      action: 'reuse',
+      candidates: [],
+      conflicts: [],
+      identifierKeys: [],
+      packageArticleId: null,
+      selectedTargetArticleId,
+      sourceArticleId,
+    })
+    const getProjectArticlePayload = (sourceArticleId) => ({
+      provenance: {sourceArticleId, sourceProjectId: 'source-project'},
+      signature: {},
+      sourceArticleId,
+      sourceProjectArticleId: 'source-project-article-' + sourceArticleId,
+      sourceProjectId: 'source-project',
+    })
+    const getJudgmentPlanEntry = (sourceJudgmentId, targetArticleId) => ({
+      action: 'insert',
+      conflictCodes: [],
+      inputSignatureMatches: true,
+      physicalKey: sourceJudgmentId + '-physical',
+      provenanceKind: 'currentReviewRows',
+      reviewVisibleKey: sourceJudgmentId + '-visible',
+      sourceJudgmentId,
+      targetArticleId,
+      targetJudgmentId: 'new:judgment:' + sourceJudgmentId,
+      targetModelId: 'target-model',
+      targetPromptId: 'target-prompt-variant',
+    })
+    const getJudgmentPayload = (sourceJudgmentId, sourceArticleId, answer) => ({
+      answeredOriginal: answer,
+      answeredOriginalAsArray: [answer],
+      confidenceOriginal: 80,
+      contentSettings,
+      deleteGeneration: 0,
+      explanation: answer + ' explanation',
+      isAnswered: true,
+      judgmentInputSignature: {},
+      judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      provenance: {sourceArticleId, sourceModelId: 'source-model', sourcePromptId: 'source-variant-prompt'},
+      quotes: [],
+      signature: {},
+      sourceArticleId,
+      sourceJudgmentId,
+      sourceModelId: 'source-model',
+      sourcePromptId: 'source-variant-prompt',
+    })
+    const targetPlan = {
+      articleMatches: [
+        getArticleMatch('source-variant-article', 'target-variant-article'),
+        getArticleMatch('source-old-article', 'target-old-article'),
+      ],
+      judgmentPlan: [
+        getJudgmentPlanEntry('source-screening-judgment', 'target-variant-article'),
+        getJudgmentPlanEntry('source-old-package-judgment', 'target-old-article'),
+      ],
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 0,
+          sourceProjectPromptId: 'source-variant-project-prompt',
+          sourcePromptId: 'source-variant-prompt',
+          targetPromptId: 'target-prompt-variant',
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'reuse',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-variant-prompt',
+          targetPromptId: 'target-prompt-variant',
+        },
+      ],
+    }
+    const writeResult = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-judgment-variant',
+      now,
+      payloads: {
+        articles: [
+          getArticlePayload('source-variant-article', 'Variant Article'),
+          getArticlePayload('source-old-article', 'Old Package Article'),
+        ],
+        judgments: [
+          {...getJudgmentPayload('source-screening-judgment', 'source-variant-article', 'screening-answer'), systemPromptVariant: 'screening_v1'},
+          getJudgmentPayload('source-old-package-judgment', 'source-old-article', 'old-package-answer'),
+        ],
+        models: [getModelPayload()],
+        project: getProjectPayload(settings),
+        projectArticles: [getProjectArticlePayload('source-variant-article'), getProjectArticlePayload('source-old-article')],
+        projectPrompts: [
+          {
+            archived: false,
+            enabled: true,
+            order: 0,
+            provenance: {sourceProjectId: 'source-project', sourcePromptId: 'source-variant-prompt'},
+            signature: {},
+            sourceProjectId: 'source-project',
+            sourceProjectPromptId: 'source-variant-project-prompt',
+            sourcePromptId: 'source-variant-prompt',
+          },
+        ],
+        prompts: [
+          {
+            archived: false,
+            contentHash: promptHash,
+            originalText: 'Variant prompt?',
+            promptHeading: 'Variant',
+            provenance: {sourcePromptId: 'source-variant-prompt'},
+            signature: {},
+            sourcePromptId: 'source-variant-prompt',
+            transformedText: null,
+            type: 'system',
+          },
+        ],
+      },
+      plan: getBasePlan(targetPlan, dependencyResolution),
+      promotion: {
+        articleCreates: [],
+        articleFieldFills: [],
+        manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-judgment-variant', updatedAt: now.toISOString()},
+        promotionPathByPackagePath: {},
+      },
+      schemaVersion: 1,
+      sessionId: 'session-judgment-variant',
+    })
+    const [projectRow] = await database.queryJson("SELECT system_prompt_variant AS systemPromptVariant FROM app.project WHERE id = '" + writeResult.projectId + "'")
+    const judgmentRows = await database.queryJson("SELECT id, article_id AS articleId, answered_original AS answeredOriginal, system_prompt_variant AS systemPromptVariant FROM app.judgment WHERE prompt_id = 'target-prompt-variant' ORDER BY article_id ASC, system_prompt_variant ASC")
+    const deltaRows = await database.queryJson("SELECT judgment_id AS judgmentId, project_id AS projectId, system_prompt_variant AS systemPromptVariant, json_extract_string(payload_json, '$.contentFlags.systemPromptVariant') AS contentFlagSystemPromptVariant FROM app.review_change_delta WHERE change_kind = 'judgment.llm.created' ORDER BY judgment_id ASC")
+
+    console.log(JSON.stringify({
+      deltaRows,
+      judgmentRows,
+      projectId: writeResult.projectId,
+      projectSystemPromptVariant: projectRow.systemPromptVariant,
+    }))
+  `)
+  const screeningJudgment = result.judgmentRows.find((row) => {
+    return row.answeredOriginal === 'screening-answer'
+  })
+
+  expect(result.projectSystemPromptVariant).toBe('screening_v1')
+  expect(
+    result.judgmentRows.map((row) => {
+      return {
+        answeredOriginal: row.answeredOriginal,
+        articleId: row.articleId,
+        systemPromptVariant: row.systemPromptVariant,
+      }
+    }),
+  ).toEqual([
+    {answeredOriginal: 'old-package-answer', articleId: 'target-old-article', systemPromptVariant: 'legacy'},
+    {answeredOriginal: 'existing-legacy', articleId: 'target-variant-article', systemPromptVariant: 'legacy'},
+    {answeredOriginal: 'screening-answer', articleId: 'target-variant-article', systemPromptVariant: 'screening_v1'},
+  ])
+  expect(result.deltaRows).toEqual([
+    {
+      contentFlagSystemPromptVariant: 'screening_v1',
+      judgmentId: screeningJudgment?.id ?? '',
+      projectId: result.projectId,
+      systemPromptVariant: 'screening_v1',
+    },
+  ])
 })
 
 test('project transfer commit writer blocks extra target assessment state on reused judgments', () => {

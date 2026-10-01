@@ -1,3 +1,4 @@
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import type {ProviderConnectionForAdmin, ProviderModelRecord} from '../../providers/providerTypes.ts'
 import {getJsonValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {ProjectTransferAnalyzeTargetRunner, ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
@@ -103,6 +104,7 @@ type TargetJudgmentRow = {
   explanation: string | null
   isAnswered: boolean | null
   quotes: unknown
+  systemPromptVariant: string
   targetArticleId: string
   targetJudgmentId: string
   targetModelId: string
@@ -530,6 +532,14 @@ const getContentSettings = (judgment: ProjectTransferPayloadRecord): ProjectTran
   }
 }
 
+const getJudgmentSystemPromptVariant = (judgment: ProjectTransferPayloadRecord): SystemPromptVariant => {
+  return getSystemPromptVariant(judgment.systemPromptVariant)
+}
+
+const getJudgmentIdentityKey = (key: string, systemPromptVariant: SystemPromptVariant) => {
+  return `${key}|${systemPromptVariant}`
+}
+
 const getProvenanceKind = (record: ProjectTransferPayloadRecord, field: string) => {
   const provenance = getRecordField(record, field)
 
@@ -607,16 +617,19 @@ const getJudgmentPhysicalKey = ({
 
   return targetArticleId === null || targetPromptId === null || targetModelId === null
     ? null
-    : [
-        targetArticleId,
-        targetPromptId,
-        targetModelId,
-        String(settings.useTitle),
-        String(settings.useAbstract),
-        String(settings.useFulltext),
-        String(settings.useFulltextNoImages),
-        String(getNumberField(judgment, 'deleteGeneration', 0) ?? 0),
-      ].join(':')
+    : getJudgmentIdentityKey(
+        [
+          targetArticleId,
+          targetPromptId,
+          targetModelId,
+          String(settings.useTitle),
+          String(settings.useAbstract),
+          String(settings.useFulltext),
+          String(settings.useFulltextNoImages),
+          String(getNumberField(judgment, 'deleteGeneration', 0) ?? 0),
+        ].join(':'),
+        getJudgmentSystemPromptVariant(judgment),
+      )
 }
 
 const getJudgmentReviewVisibleKey = ({
@@ -634,40 +647,49 @@ const getJudgmentReviewVisibleKey = ({
 
   return targetArticleId === null || targetPromptId === null || targetModelId === null
     ? null
-    : [
-        targetArticleId,
-        targetPromptId,
-        targetModelId,
-        String(settings.useTitle),
-        String(settings.useAbstract),
-        String(settings.useFulltext),
-        String(settings.useFulltextNoImages),
-      ].join(':')
+    : getJudgmentIdentityKey(
+        [
+          targetArticleId,
+          targetPromptId,
+          targetModelId,
+          String(settings.useTitle),
+          String(settings.useAbstract),
+          String(settings.useFulltext),
+          String(settings.useFulltextNoImages),
+        ].join(':'),
+        getJudgmentSystemPromptVariant(judgment),
+      )
 }
 
 const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
-  return [
-    row.targetArticleId,
-    row.targetPromptId,
-    row.targetModelId,
-    String(row.useTitle),
-    String(row.useAbstract),
-    String(row.useFulltext),
-    String(row.useFulltextNoImages),
-    String(row.deleteGeneration ?? 0),
-  ].join(':')
+  return getJudgmentIdentityKey(
+    [
+      row.targetArticleId,
+      row.targetPromptId,
+      row.targetModelId,
+      String(row.useTitle),
+      String(row.useAbstract),
+      String(row.useFulltext),
+      String(row.useFulltextNoImages),
+      String(row.deleteGeneration ?? 0),
+    ].join(':'),
+    getSystemPromptVariant(row.systemPromptVariant),
+  )
 }
 
 const getTargetJudgmentReviewVisibleKey = (row: TargetJudgmentRow) => {
-  return [
-    row.targetArticleId,
-    row.targetPromptId,
-    row.targetModelId,
-    String(row.useTitle),
-    String(row.useAbstract),
-    String(row.useFulltext),
-    String(row.useFulltextNoImages),
-  ].join(':')
+  return getJudgmentIdentityKey(
+    [
+      row.targetArticleId,
+      row.targetPromptId,
+      row.targetModelId,
+      String(row.useTitle),
+      String(row.useAbstract),
+      String(row.useFulltext),
+      String(row.useFulltextNoImages),
+    ].join(':'),
+    getSystemPromptVariant(row.systemPromptVariant),
+  )
 }
 
 const getTargetJudgmentRows = async ({
@@ -709,6 +731,7 @@ const getTargetJudgmentRows = async ({
         use_abstract AS useAbstract,
         use_fulltext AS useFulltext,
         use_fulltext_no_images AS useFulltextNoImages,
+        system_prompt_variant AS systemPromptVariant,
         is_answered AS isAnswered,
         answered_original AS answeredOriginal,
         TO_JSON(answered_original_as_array) AS answeredOriginalAsArray,
@@ -808,6 +831,7 @@ const getJudgmentSignature = ({
         model,
         prompt,
         providerConnection,
+        systemPromptVariant: getJudgmentSystemPromptVariant(judgment),
       })
     : null
 }

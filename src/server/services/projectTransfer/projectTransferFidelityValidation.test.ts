@@ -109,7 +109,9 @@ test('judgment review-visible keys preserve distinct content settings', async ()
 
   expect(judgmentPlan?.action).toBe('insert')
   expect(judgmentPlan?.conflictCodes).not.toContain('judgment_review_visible_natural_key_conflict')
-  expect(judgmentPlan?.reviewVisibleKey).toBe('target-article-1:target-prompt-1:target-model-1:true:true:false:false')
+  expect(judgmentPlan?.reviewVisibleKey).toBe(
+    'target-article-1:target-prompt-1:target-model-1:true:true:false:false|legacy',
+  )
   expect(result.conflictCounts.judgmentConflictCount).toBe(0)
 })
 
@@ -281,7 +283,7 @@ test('imported model placeholders detect judgments that already exist under the 
   expect(judgmentPlan?.action).toBe('reuse')
   expect(judgmentPlan?.targetJudgmentId).toBe('target-judgment-1')
   expect(judgmentPlan?.targetModelId).toBe('model-1')
-  expect(judgmentPlan?.physicalKey).toBe('target-article-1:target-prompt-1:model-1:true:true:false:false:0')
+  expect(judgmentPlan?.physicalKey).toBe('target-article-1:target-prompt-1:model-1:true:true:false:false:0|legacy')
   expect(judgmentPlan?.conflictCodes).toEqual([])
   expect(result.conflictCounts.judgmentConflictCount).toBe(0)
 })
@@ -397,4 +399,150 @@ test('reused judgment field conflicts explain differing saved judgment content c
     resolutionKind: 'requires_new_package_or_target_changes',
     scope: 'judgments.judgment-1',
   })
+})
+
+const getSystemPromptVariantFidelityPlan = async (targetSystemPromptVariant: string | undefined) => {
+  const fixturePayloads = getProjectTransferPayloadFixtureMap()
+  const [fixtureJudgment] = fixturePayloads.judgments
+
+  if (!fixtureJudgment) {
+    throw new Error('Expected judgment fixture')
+  }
+
+  const importedJudgment = {...fixtureJudgment, systemPromptVariant: 'screening_v1'}
+  const result = await getProjectTransferFidelityValidation({
+    dependencyResolution: {
+      modelTargetBySourceId: {'model-1': 'target-model-1'},
+      providerTargetBySourceId: {'provider-connection-1': 'target-provider-1'},
+    },
+    payloads: {
+      ...fixturePayloads,
+      humanJudgmentSummaries: [],
+      humanJudgments: [],
+      judgmentAssessments: [],
+      judgments: [importedJudgment],
+      reviews: [],
+    },
+    runner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        const rows = statement.includes('FROM app.judgment')
+          ? [
+              {
+                answeredOriginal: 'exclude',
+                answeredOriginalAsArray: '["exclude"]',
+                confidenceOriginal: 20,
+                deleteGeneration: 0,
+                explanation: 'Target judgment saved under another variant.',
+                isAnswered: true,
+                quotes: '[]',
+                ...(targetSystemPromptVariant === undefined ? {} : {systemPromptVariant: targetSystemPromptVariant}),
+                targetArticleId: 'target-article-1',
+                targetJudgmentId: 'target-judgment-1',
+                targetModelId: 'target-model-1',
+                targetPromptId: 'target-prompt-1',
+                useAbstract: true,
+                useFulltext: false,
+                useFulltextNoImages: false,
+                useTitle: true,
+              },
+            ]
+          : []
+
+        return rows as T[]
+      },
+    },
+    targetPlan: getBaseTargetPlan(),
+  })
+
+  return {judgmentPlan: result.targetPlan.judgmentPlan[0], result}
+}
+
+test('judgment physical and review-visible keys include the system prompt variant', async () => {
+  const legacyTarget = await getSystemPromptVariantFidelityPlan('legacy')
+  const defaultTarget = await getSystemPromptVariantFidelityPlan(undefined)
+  const sameVariantTarget = await getSystemPromptVariantFidelityPlan('screening_v1')
+
+  expect(legacyTarget.judgmentPlan?.action).toBe('insert')
+  expect(legacyTarget.judgmentPlan?.conflictCodes).toEqual([])
+  expect(legacyTarget.judgmentPlan?.targetJudgmentId).toBe('new:judgment:judgment-1')
+  expect(legacyTarget.judgmentPlan?.physicalKey).toBe(
+    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|screening_v1',
+  )
+  expect(legacyTarget.judgmentPlan?.reviewVisibleKey).toBe(
+    'target-article-1:target-prompt-1:target-model-1:true:true:false:false|screening_v1',
+  )
+  expect(legacyTarget.result.conflictCounts.judgmentConflictCount).toBe(0)
+  expect(defaultTarget.judgmentPlan?.action).toBe('insert')
+  expect(defaultTarget.judgmentPlan?.conflictCodes).toEqual([])
+  expect(sameVariantTarget.judgmentPlan?.targetJudgmentId).toBe('target-judgment-1')
+  expect(sameVariantTarget.judgmentPlan?.conflictCodes).toContain('judgment_reused_benchmark_field_conflict')
+})
+
+test('judgments without a system prompt variant match legacy target judgments', async () => {
+  const payloads = {
+    ...getProjectTransferPayloadFixtureMap(),
+    humanJudgmentSummaries: [],
+    humanJudgments: [],
+    judgmentAssessments: [],
+    reviews: [],
+  }
+  const [importedJudgment] = payloads.judgments
+  const statements: string[] = []
+
+  if (!importedJudgment) {
+    throw new Error('Expected judgment fixture')
+  }
+
+  const result = await getProjectTransferFidelityValidation({
+    dependencyResolution: {
+      modelTargetBySourceId: {'model-1': 'target-model-1'},
+      providerTargetBySourceId: {'provider-connection-1': 'target-provider-1'},
+    },
+    payloads,
+    runner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+        const rows = statement.includes('FROM app.judgment')
+          ? [
+              {
+                answeredOriginal: importedJudgment.answeredOriginal,
+                answeredOriginalAsArray: JSON.stringify(importedJudgment.answeredOriginalAsArray ?? []),
+                confidenceOriginal: importedJudgment.confidenceOriginal,
+                deleteGeneration: 0,
+                explanation: importedJudgment.explanation,
+                isAnswered: importedJudgment.isAnswered,
+                quotes: JSON.stringify(importedJudgment.quotes ?? []),
+                systemPromptVariant: 'legacy',
+                targetArticleId: 'target-article-1',
+                targetJudgmentId: 'target-judgment-1',
+                targetModelId: 'target-model-1',
+                targetPromptId: 'target-prompt-1',
+                useAbstract: true,
+                useFulltext: false,
+                useFulltextNoImages: false,
+                useTitle: true,
+              },
+            ]
+          : []
+
+        return rows as T[]
+      },
+    },
+    targetPlan: getBaseTargetPlan(),
+  })
+  const [judgmentPlan] = result.targetPlan.judgmentPlan
+
+  expect(Object.hasOwn(importedJudgment, 'systemPromptVariant')).toBe(false)
+  expect(judgmentPlan?.action).toBe('reuse')
+  expect(judgmentPlan?.targetJudgmentId).toBe('target-judgment-1')
+  expect(judgmentPlan?.physicalKey).toBe(
+    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|legacy',
+  )
+  expect(
+    statements.some((statement) => {
+      return (
+        statement.includes('FROM app.judgment') && statement.includes('system_prompt_variant AS systemPromptVariant')
+      )
+    }),
+  ).toBe(true)
 })
