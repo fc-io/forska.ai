@@ -14,6 +14,7 @@ import {
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import type {
   ProjectTransferContentSettings,
+  ProjectTransferNormalizedContentSettings,
   ProjectTransferPayloadByKey,
   ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
@@ -112,6 +113,7 @@ type TargetJudgmentRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -235,6 +237,7 @@ const getComparableContentSettings = (value: unknown): ProjectTransferContentSet
     useFulltext: settings.useFulltext === true,
     useFulltextNoImages: settings.useFulltextNoImages === true,
     useTitle: settings.useTitle !== false,
+    ...(settings.useMetadata === true ? {useMetadata: true} : {}),
   }
 }
 
@@ -521,13 +524,14 @@ const getModelTargetIdBySource = ({
   ) as Record<string, string | null>
 }
 
-const getContentSettings = (judgment: ProjectTransferPayloadRecord): ProjectTransferContentSettings => {
+const getContentSettings = (judgment: ProjectTransferPayloadRecord): ProjectTransferNormalizedContentSettings => {
   const settings = isRecord(judgment.contentSettings) ? judgment.contentSettings : {}
 
   return {
     useAbstract: settings.useAbstract !== false,
     useFulltext: settings.useFulltext === true,
     useFulltextNoImages: settings.useFulltextNoImages === true,
+    useMetadata: settings.useMetadata === true,
     useTitle: settings.useTitle !== false,
   }
 }
@@ -536,8 +540,8 @@ const getJudgmentSystemPromptVariant = (judgment: ProjectTransferPayloadRecord):
   return getSystemPromptVariant(judgment.systemPromptVariant)
 }
 
-const getJudgmentIdentityKey = (key: string, systemPromptVariant: SystemPromptVariant) => {
-  return `${key}|${systemPromptVariant}`
+const getJudgmentIdentityKey = (key: string, systemPromptVariant: SystemPromptVariant, useMetadata: boolean) => {
+  return useMetadata ? `${key}|${systemPromptVariant}|useMetadata` : `${key}|${systemPromptVariant}`
 }
 
 const getProvenanceKind = (record: ProjectTransferPayloadRecord, field: string) => {
@@ -629,6 +633,7 @@ const getJudgmentPhysicalKey = ({
           String(getNumberField(judgment, 'deleteGeneration', 0) ?? 0),
         ].join(':'),
         getJudgmentSystemPromptVariant(judgment),
+        settings.useMetadata,
       )
 }
 
@@ -658,6 +663,7 @@ const getJudgmentReviewVisibleKey = ({
           String(settings.useFulltextNoImages),
         ].join(':'),
         getJudgmentSystemPromptVariant(judgment),
+        settings.useMetadata,
       )
 }
 
@@ -674,6 +680,7 @@ const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
       String(row.deleteGeneration ?? 0),
     ].join(':'),
     getSystemPromptVariant(row.systemPromptVariant),
+    row.useMetadata,
   )
 }
 
@@ -689,6 +696,7 @@ const getTargetJudgmentReviewVisibleKey = (row: TargetJudgmentRow) => {
       String(row.useFulltextNoImages),
     ].join(':'),
     getSystemPromptVariant(row.systemPromptVariant),
+    row.useMetadata,
   )
 }
 
@@ -731,6 +739,7 @@ const getTargetJudgmentRows = async ({
         use_abstract AS useAbstract,
         use_fulltext AS useFulltext,
         use_fulltext_no_images AS useFulltextNoImages,
+        COALESCE(use_metadata, FALSE) AS useMetadata,
         system_prompt_variant AS systemPromptVariant,
         is_answered AS isAnswered,
         answered_original AS answeredOriginal,

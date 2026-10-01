@@ -280,6 +280,18 @@ test('project-transfer export reads archived app-table scope and serializes lock
       systemPromptVariant: string
     }>
     summaryReviewIds: string[]
+    summaryContentSettingsHaveUseMetadata: boolean[]
+    summaryPromptInputHasMetadataDigest: boolean[]
+    metadataProjectSettings: {useMetadata?: boolean}
+    metadataSourceSettingsUseMetadata: boolean
+    summarySourceSettingsUseMetadata: boolean
+    metadataJudgments: Array<{
+      articleMetadataDigest: unknown
+      contentSettingsUseMetadata: unknown
+      inputSignatureUseMetadata: unknown
+      signatureUseMetadata: unknown
+      sourceJudgmentId: string
+    }>
     preservedUrlWarnings: Array<{action: string; code: string; jsonPointer: string; severity: string}>
     warnings: unknown[]
     warningCodes: string[]
@@ -413,6 +425,22 @@ test('project-transfer export reads archived app-table scope and serializes lock
           TIMESTAMPTZ '2026-01-02T00:00:00Z'
         ),
         (
+          'project-metadata-export',
+          'Metadata Export',
+          NULL,
+          'model-null-remote',
+          'prompt',
+          TRUE,
+          TRUE,
+          FALSE,
+          FALSE,
+          NULL,
+          NULL,
+          FALSE,
+          TIMESTAMPTZ '2026-01-01T00:00:00Z',
+          TIMESTAMPTZ '2026-01-02T00:00:00Z'
+        ),
+        (
           'project-invalid-date',
           'Invalid Date',
           NULL,
@@ -467,6 +495,11 @@ test('project-transfer export reads archived app-table scope and serializes lock
       WHERE id = 'project-archived-export'
     \`)
     await database.run(\`
+      UPDATE app.project
+      SET use_metadata = TRUE
+      WHERE id = 'project-metadata-export'
+    \`)
+    await database.run(\`
       INSERT INTO app.prompt (
         id,
         original_text,
@@ -502,6 +535,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
         ('pp-chunked', 'project-archived-export', 'prompt-chunked', 2, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-disabled', 'project-archived-export', 'prompt-disabled', 2, FALSE, FALSE, 'exclude', 'exclusion', 'Exclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-summary', 'project-summary-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
+        ('pp-metadata', 'project-metadata-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-missing-provider', 'project-missing-provider', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
     \`)
     await database.run(\`
@@ -795,6 +829,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
         ('pa-curated', 'project-archived-export', 'article-curated-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pa-stale-duplicate-doi', 'project-archived-export', 'article-stale-duplicate-doi', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pa-summary', 'project-summary-export', 'article-route-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
+        ('pa-metadata', 'project-metadata-export', 'article-route-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pa-missing-provider', 'project-missing-provider', 'article-route-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
     \`)
     await database.run(\`
@@ -828,6 +863,31 @@ test('project-transfer export reads archived app-table scope and serializes lock
         ('judgment-chunked-no-proof', 'article-route-in', 'prompt-chunked', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'screening_v1', 'article_paragraph_greedy', TRUE, 'yes', ['yes'], 88, 'chunked explanation', CAST('[{"quote":"chunked"}]' AS JSON), 0, NULL, NULL, TIMESTAMPTZ '2026-04-02T00:00:00Z', TIMESTAMPTZ '2026-04-03T00:00:00Z'),
         ('judgment-duplicate-answered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'screening_v1', NULL, TRUE, 'maybe', ['maybe'], 50, 'duplicate answered', CAST('[{"quote":"duplicate"}]' AS JSON), 0, NULL, NULL, TIMESTAMPTZ '2026-04-03T00:00:00Z', TIMESTAMPTZ '2026-04-04T00:00:00Z'),
         ('judgment-duplicate-unanswered', 'article-curated-in', 'prompt-enabled', 'model-null-remote', NULL, TRUE, TRUE, FALSE, FALSE, 'screening_v1', NULL, FALSE, NULL, NULL, 50, NULL, CAST('[]' AS JSON), 1, NULL, NULL, TIMESTAMPTZ '2026-04-05T00:00:00Z', TIMESTAMPTZ '2026-04-06T00:00:00Z')
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        use_metadata,
+        system_prompt_variant,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original,
+        explanation,
+        quotes,
+        delete_generation,
+        created_at,
+        updated_at
+      )
+      VALUES ('judgment-metadata-twin', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-metadata-export', TRUE, TRUE, FALSE, FALSE, TRUE, 'legacy', TRUE, 'yes', ['yes'], 81, 'metadata explanation', CAST('[{"quote":"metadata quote"}]' AS JSON), 0, TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z')
     \`)
     await database.run(\`
       INSERT INTO app.judgment_assessment (
@@ -900,6 +960,9 @@ test('project-transfer export reads archived app-table scope and serializes lock
       rawArticleProvenanceMode: 'omit',
     })
     const summary = await getProjectTransferExportPayloads('project-summary-export')
+    const metadata = await getProjectTransferExportPayloads('project-metadata-export')
+    const metadataSourceSettings = await getProjectTransferExportSourceProjectSettings('project-metadata-export')
+    const summarySourceSettings = await getProjectTransferExportSourceProjectSettings('project-summary-export')
     const serialized = serializeProjectTransferExportPayloads(archived.payloads)
     const [serializedArticle] = serialized.articles.trim().split('\\n').map((line) => JSON.parse(line))
     const [serializedJudgment] = serialized.judgments.trim().split('\\n').map((line) => JSON.parse(line))
@@ -1142,6 +1205,28 @@ test('project-transfer export reads archived app-table scope and serializes lock
           systemPromptVariant: judgment.systemPromptVariant,
         }
       }),
+      summaryContentSettingsHaveUseMetadata: summary.payloads.judgments.flatMap((judgment) => {
+        return [
+          Object.hasOwn(judgment.contentSettings, 'useMetadata'),
+          Object.hasOwn(judgment.signature.contentSettings, 'useMetadata'),
+          Object.hasOwn(judgment.judgmentInputSignature.contentSettings, 'useMetadata'),
+        ]
+      }),
+      summaryPromptInputHasMetadataDigest: summary.payloads.judgments.map((judgment) => {
+        return Object.hasOwn(judgment.judgmentInputSignature.article.promptInput, 'articleMetadataDigest')
+      }),
+      metadataProjectSettings: metadata.payloads.project.settings,
+      metadataSourceSettingsUseMetadata: metadataSourceSettings.useMetadata,
+      summarySourceSettingsUseMetadata: summarySourceSettings.useMetadata,
+      metadataJudgments: metadata.payloads.judgments.map((judgment) => {
+        return {
+          articleMetadataDigest: judgment.judgmentInputSignature.article.promptInput.articleMetadataDigest,
+          contentSettingsUseMetadata: judgment.contentSettings.useMetadata,
+          inputSignatureUseMetadata: judgment.judgmentInputSignature.contentSettings.useMetadata,
+          signatureUseMetadata: judgment.signature.contentSettings.useMetadata,
+          sourceJudgmentId: judgment.sourceJudgmentId,
+        }
+      }),
       preservedUrlWarnings: archived.warnings.filter((warning) => warning.code === 'nonLocalUrlPreserved').map((warning) => {
         return {
           action: warning.action,
@@ -1189,6 +1274,22 @@ test('project-transfer export reads archived app-table scope and serializes lock
       judgmentInputSignatureSystemPromptVariant: 'legacy',
       sourceJudgmentId: 'judgment-legacy-twin',
       systemPromptVariant: 'legacy',
+    },
+  ])
+  expect(result.summaryContentSettingsHaveUseMetadata).toEqual([false, false, false])
+  expect(result.summaryPromptInputHasMetadataDigest).toEqual([false])
+  expect(Object.hasOwn(result.summaryProjectSettings, 'useMetadata')).toBe(false)
+  expect(Object.hasOwn(result.projectSettings, 'useMetadata')).toBe(false)
+  expect(result.summarySourceSettingsUseMetadata).toBe(false)
+  expect(result.metadataSourceSettingsUseMetadata).toBe(true)
+  expect(result.metadataProjectSettings).toMatchObject({humanJudgmentMode: 'prompt', useMetadata: true})
+  expect(result.metadataJudgments).toEqual([
+    {
+      articleMetadataDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      contentSettingsUseMetadata: true,
+      inputSignatureUseMetadata: true,
+      signatureUseMetadata: true,
+      sourceJudgmentId: 'judgment-metadata-twin',
     },
   ])
   expect(result.judgmentAssessmentIds).toEqual(['assessment-duplicate', 'assessment-export'])
@@ -1536,6 +1637,36 @@ test('project-transfer judgment input signatures are stable across database id r
     providerConnection,
     systemPromptVariant: 'screening_v1',
   })
+  const metadataArticle = {
+    ...article,
+    sourceMetadata: {journalTitle: 'Signature Journal', publicationYear: 2025},
+  } as JudgmentSignatureInput['article']
+  const metadataOffSignature = getProjectTransferExportJudgmentInputSignature({
+    article: metadataArticle,
+    chunkingStrategy: null,
+    contentSettings: {...contentSettings, useMetadata: false},
+    model,
+    prompt,
+    providerConnection,
+  })
+  const metadataSignature = getProjectTransferExportJudgmentInputSignature({
+    article: metadataArticle,
+    chunkingStrategy: null,
+    contentSettings: {...contentSettings, useMetadata: true},
+    model,
+    prompt,
+    providerConnection,
+  })
+  const metadataJournalChangedSignature = getProjectTransferExportJudgmentInputSignature({
+    article: {...metadataArticle, sourceMetadata: {journalTitle: 'Other Journal', publicationYear: 2025}},
+    chunkingStrategy: null,
+    contentSettings: {...contentSettings, useMetadata: true},
+    model,
+    prompt,
+    providerConnection,
+  })
+  const {articleMetadataDigest: metadataPromptInputDigest, ...metadataPromptInputRest} =
+    metadataSignature.article.promptInput
   const {
     systemPromptDigest: _legacySystemPromptDigest,
     systemPromptVariant: _legacySystemPromptVariant,
@@ -1558,6 +1689,29 @@ test('project-transfer judgment input signatures are stable across database id r
   expect(screeningRequestRest).toEqual(legacyRequestRest)
   expect({...screeningSignature, request: null}).toEqual({...signature, request: null})
   expect(getProjectTransferJudgmentAnalysisInputSignatureDigest(screeningSignature)).toBe(
+    getProjectTransferJudgmentAnalysisInputSignatureDigest(signature),
+  )
+  expect(getProjectTransferJudgmentAnalysisInputSignatureDigest(signature)).toBe(
+    '72b49c813ca49f460c680e19d266ffcaa615298a969b3426ad87adbed7c827af',
+  )
+  expect(metadataOffSignature).toEqual(signature)
+  expect(Object.hasOwn(signature.contentSettings, 'useMetadata')).toBe(false)
+  expect(Object.keys(signature.article.promptInput).sort()).toEqual([
+    'articleSummaryDigest',
+    'articleTitleDigest',
+    'promptOriginalTextDigest',
+    'promptTemplateFamily',
+    'promptType',
+    'sourceTextWrapper',
+  ])
+  expect(metadataSignature.contentSettings).toEqual({...contentSettings, useMetadata: true})
+  expect(metadataPromptInputRest).toEqual(signature.article.promptInput)
+  expect(metadataPromptInputDigest).toMatch(/^[0-9a-f]{64}$/)
+  expect(metadataSignature.request).toEqual(signature.request)
+  expect(metadataJournalChangedSignature.article.promptInput.articleMetadataDigest).not.toBe(
+    metadataSignature.article.promptInput.articleMetadataDigest,
+  )
+  expect(getProjectTransferJudgmentAnalysisInputSignatureDigest(metadataSignature)).not.toBe(
     getProjectTransferJudgmentAnalysisInputSignatureDigest(signature),
   )
   expect(JSON.stringify(signature)).not.toContain('source-model-a')

@@ -214,6 +214,7 @@ type TargetJudgmentRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type TargetJudgmentAssessmentRow = {
@@ -244,6 +245,7 @@ type JudgmentCommitRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type ProjectTransferInsertedJudgmentDeltaRow = {
@@ -258,6 +260,7 @@ type ProjectTransferInsertedJudgmentDeltaRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type ProjectTransferVisibleJudgmentProjectRow = {projectId: string}
@@ -1398,6 +1401,7 @@ const getProjectSettings = (project: ProjectTransferProjectPayload) => {
     useAbstract: getBoolean(settings.useAbstract, true),
     useFulltext: getBoolean(settings.useFulltext, false),
     useFulltextNoImages: getBoolean(settings.useFulltextNoImages, false),
+    useMetadata: getBoolean(settings.useMetadata, false),
     useTitle: getBoolean(settings.useTitle, true),
   }
 }
@@ -1430,6 +1434,7 @@ const insertImportedProject = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      use_metadata,
       date_from,
       date_to,
       archived,
@@ -1446,6 +1451,7 @@ const insertImportedProject = async ({
       ${getSqlLiteral(settings.useAbstract)},
       ${getSqlLiteral(settings.useFulltext)},
       ${getSqlLiteral(settings.useFulltextNoImages)},
+      ${getSqlLiteral(settings.useMetadata)},
       ${getNullableDateLiteral(project.dateFrom)},
       ${getNullableDateLiteral(project.dateTo)},
       FALSE,
@@ -1839,6 +1845,7 @@ const appendProjectTransferProjectReviewConfigDelta = async ({
       'useAbstract',
       'useFulltext',
       'useFulltextNoImages',
+      'useMetadata',
       'useTitle',
     ],
     projectId,
@@ -4023,6 +4030,7 @@ const getContentSettings = (record: ProjectTransferPayloadRecord) => {
     useAbstract: getBoolean(settings.useAbstract, true),
     useFulltext: getBoolean(settings.useFulltext, false),
     useFulltextNoImages: getBoolean(settings.useFulltextNoImages, false),
+    useMetadata: getBoolean(settings.useMetadata, false),
     useTitle: getBoolean(settings.useTitle, true),
   }
 }
@@ -4067,6 +4075,7 @@ const getJudgmentPhysicalKey = (row: {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }) => {
   const key = [
@@ -4077,6 +4086,7 @@ const getJudgmentPhysicalKey = (row: {
     String(row.useAbstract),
     String(row.useFulltext),
     String(row.useFulltextNoImages),
+    String(row.useMetadata),
     String(row.deleteGeneration),
   ].join('\u0000')
 
@@ -4091,6 +4101,7 @@ const getJudgmentReviewVisibleKey = (row: {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }) => {
   const key = [
@@ -4101,6 +4112,7 @@ const getJudgmentReviewVisibleKey = (row: {
     String(row.useAbstract),
     String(row.useFulltext),
     String(row.useFulltextNoImages),
+    String(row.useMetadata),
   ].join('\u0000')
 
   return `${key}|${row.systemPromptVariant}`
@@ -4116,6 +4128,7 @@ const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
     useAbstract: row.useAbstract,
     useFulltext: row.useFulltext,
     useFulltextNoImages: row.useFulltextNoImages,
+    useMetadata: row.useMetadata,
     useTitle: row.useTitle,
   })
 }
@@ -4300,6 +4313,7 @@ const getTargetJudgmentRows = async ({
                   use_abstract AS useAbstract,
                   use_fulltext AS useFulltext,
                   use_fulltext_no_images AS useFulltextNoImages,
+                  COALESCE(use_metadata, FALSE) AS useMetadata,
                   system_prompt_variant AS systemPromptVariant,
                   is_answered AS isAnswered,
                   answered_original AS answeredOriginal,
@@ -4434,6 +4448,7 @@ const getSetBasedJudgmentRowsSql = ({
       ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useAbstract', true)} AS use_abstract,
       ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useFulltext', false)} AS use_fulltext,
       ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useFulltextNoImages', false)} AS use_fulltext_no_images,
+      ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useMetadata', false)} AS use_metadata,
       COALESCE(${getNullableJsonStringFieldSql('payload.payload_json', 'systemPromptVariant')}, ${getSqlLiteral(defaultSystemPromptVariant)}) AS system_prompt_variant,
       ${getNullableJsonStringFieldSql('payload.payload_json', 'chunkingStrategy')} AS chunking_strategy,
       ${getJsonBooleanPathSql('payload.payload_json', '$.isAnswered', false)} AS is_answered,
@@ -4592,6 +4607,7 @@ const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      use_metadata,
       system_prompt_variant,
       delete_generation
     HAVING COUNT(*) > 1
@@ -4609,6 +4625,7 @@ const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      use_metadata,
       system_prompt_variant
     HAVING COUNT(*) > 1
     ORDER BY sourceJudgmentId ASC
@@ -4645,6 +4662,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
       AND target.use_abstract = rows.use_abstract
       AND target.use_fulltext = rows.use_fulltext
       AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.use_metadata = rows.use_metadata
       AND target.system_prompt_variant = rows.system_prompt_variant
       AND target.delete_generation = rows.delete_generation
     WHERE rows.action = 'insert'
@@ -4663,6 +4681,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
       AND target.use_abstract = rows.use_abstract
       AND target.use_fulltext = rows.use_fulltext
       AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.use_metadata = rows.use_metadata
       AND target.system_prompt_variant = rows.system_prompt_variant
     WHERE rows.action = 'insert'
     ORDER BY rows.source_judgment_id ASC
@@ -4681,6 +4700,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
       AND target.use_abstract = rows.use_abstract
       AND target.use_fulltext = rows.use_fulltext
       AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.use_metadata = rows.use_metadata
       AND target.system_prompt_variant = rows.system_prompt_variant
       AND target.delete_generation = rows.delete_generation
     WHERE rows.action = 'reuse'
@@ -4700,6 +4720,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
       AND target.use_abstract = rows.use_abstract
       AND target.use_fulltext = rows.use_fulltext
       AND target.use_fulltext_no_images = rows.use_fulltext_no_images
+      AND target.use_metadata = rows.use_metadata
       AND target.system_prompt_variant = rows.system_prompt_variant
       AND target.id <> rows.id
     WHERE rows.action = 'reuse'
@@ -4771,6 +4792,7 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
             ${getSqlLiteral(row.useAbstract)} AS use_abstract,
             ${getSqlLiteral(row.useFulltext)} AS use_fulltext,
             ${getSqlLiteral(row.useFulltextNoImages)} AS use_fulltext_no_images,
+            ${getSqlLiteral(row.useMetadata)} AS use_metadata,
             ${getSqlLiteral(row.systemPromptVariant)} AS system_prompt_variant
         )
         SELECT DISTINCT project.id AS projectId
@@ -4805,6 +4827,7 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
             useAbstract: row.useAbstract,
             useFulltext: row.useFulltext,
             useFulltextNoImages: row.useFulltextNoImages,
+            useMetadata: row.useMetadata,
             useTitle: row.useTitle,
           }
         }),
@@ -4838,6 +4861,7 @@ const appendProjectTransferJudgmentCreatedDeltasSetBased = async ({
       rows.use_abstract AS useAbstract,
       rows.use_fulltext AS useFulltext,
       rows.use_fulltext_no_images AS useFulltextNoImages,
+      rows.use_metadata AS useMetadata,
       rows.use_title AS useTitle
     FROM (${rowsSql}) rows
     INNER JOIN app.project_article project_scope
@@ -4963,6 +4987,7 @@ const insertJudgmentRowsSetBased = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      use_metadata,
       system_prompt_variant,
       chunking_strategy,
       is_answered,
@@ -4988,6 +5013,7 @@ const insertJudgmentRowsSetBased = async ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      use_metadata,
       system_prompt_variant,
       chunking_strategy,
       TRUE,
@@ -5053,6 +5079,7 @@ const insertJudgmentRows = async ({
           use_abstract,
           use_fulltext,
           use_fulltext_no_images,
+          use_metadata,
           system_prompt_variant,
           chunking_strategy,
           is_answered,
@@ -5079,6 +5106,7 @@ const insertJudgmentRows = async ({
               ${getSqlLiteral(row.useAbstract)},
               ${getSqlLiteral(row.useFulltext)},
               ${getSqlLiteral(row.useFulltextNoImages)},
+              ${getSqlLiteral(row.useMetadata)},
               ${getSqlLiteral(row.systemPromptVariant)},
               ${getSqlLiteral(row.chunkingStrategy)},
               TRUE,
@@ -5110,6 +5138,7 @@ const insertJudgmentRows = async ({
               useAbstract: row.useAbstract,
               useFulltext: row.useFulltext,
               useFulltextNoImages: row.useFulltextNoImages,
+              useMetadata: row.useMetadata,
               useTitle: row.useTitle,
             }
           }),

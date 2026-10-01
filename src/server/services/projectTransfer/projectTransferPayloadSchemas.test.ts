@@ -1,6 +1,8 @@
 import {expect, test} from 'bun:test'
 
 import {
+  assertProjectTransferContentSettings,
+  assertProjectTransferProjectSettings,
   getProjectTransferPayloadFixture,
   getProjectTransferSchemaVNextFingerprintSortKey,
   normalizeProjectTransferModelVariant,
@@ -171,6 +173,52 @@ test('accepts known system prompt variants, keeps packages without one importabl
   expect(getValidationError(getSettingsResult(1))).toContain(
     'project.settings.systemPromptVariant must be one of legacy, screening_v1',
   )
+})
+
+test('reads a missing useMetadata content setting as false, accepts booleans, and rejects other values', () => {
+  const project = getProjectTransferPayloadFixture('project')
+  const judgment = getOnlyRecord(getProjectTransferPayloadFixture('judgments'))
+  const judgmentContentSettings = judgment.contentSettings as Record<string, unknown>
+  const getSettingsResult = (useMetadata: unknown) => {
+    return validateProjectTransferPayload('project', {...project, settings: {...project.settings, useMetadata}})
+  }
+  const getJudgmentResult = (useMetadata: unknown) => {
+    return validateProjectTransferPayload('judgments', [
+      {...judgment, contentSettings: {...judgmentContentSettings, useMetadata}},
+    ])
+  }
+  const metadataOnlySettings = {
+    useAbstract: false,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useMetadata: true,
+    useTitle: false,
+  }
+  const metadataJudgments = [{...judgment, contentSettings: {...judgmentContentSettings, useMetadata: true}}]
+  const parsedMetadataJudgments = parseProjectTransferPayload(
+    'judgments',
+    serializeProjectTransferPayload('judgments', metadataJudgments),
+  )
+
+  expect(Object.hasOwn(project.settings, 'useMetadata')).toBe(false)
+  expect(Object.hasOwn(judgmentContentSettings, 'useMetadata')).toBe(false)
+  expect(assertProjectTransferContentSettings(project.settings).useMetadata).toBe(false)
+  expect(assertProjectTransferProjectSettings(project.settings).useMetadata).toBe(false)
+  expect(assertProjectTransferContentSettings({...project.settings, useMetadata: true}).useMetadata).toBe(true)
+  expect(() => {
+    return assertProjectTransferContentSettings(metadataOnlySettings)
+  }).toThrow('must enable at least one article content field')
+  expect(getValidationError(validateProjectTransferPayload('project', project))).toBeNull()
+  expect(getValidationError(getSettingsResult(undefined))).toBeNull()
+  expect(getValidationError(getSettingsResult(false))).toBeNull()
+  expect(getValidationError(getSettingsResult(true))).toBeNull()
+  expect(getValidationError(getSettingsResult('true'))).toContain('project.settings.useMetadata must be a boolean')
+  expect(getValidationError(getSettingsResult(null))).toContain('project.settings.useMetadata must be a boolean')
+  expect(getValidationError(getSettingsResult(1))).toContain('project.settings.useMetadata must be a boolean')
+  expect(getValidationError(validateProjectTransferPayload('judgments', [judgment]))).toBeNull()
+  expect(getValidationError(getJudgmentResult(true))).toBeNull()
+  expect(getValidationError(getJudgmentResult('yes'))).toContain('contentSettings.useMetadata must be a boolean')
+  expect((parsedMetadataJudgments[0]?.contentSettings as Record<string, unknown>).useMetadata).toBe(true)
 })
 
 test('accepts known judgment system prompt variants, keeps judgments without one importable, and rejects unknown variants', () => {
