@@ -651,3 +651,134 @@ test('delta intake reads the typed system prompt variant with the content flags 
   expect(result).toMatchObject({dirtyWorkCount: 5, maxSourceHighWaterMark: 7, status: 'converted'})
   expect(deltaSelect).toContain("COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant")
 })
+
+test('delta intake reads NULL article metadata on older deltas as false with the content flags', async () => {
+  const {database, statements} = createFakeIntakeDatabase([
+    createReviewChangeDelta({
+      articleId: 'article-1',
+      judgmentId: 'judgment-1',
+      modelId: 'model-1',
+      payloadJson: {articleId: 'article-1', judgmentId: 'judgment-1', projectId: 'project-1', promptId: 'prompt-1'},
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      sourceHighWaterMark: 7,
+      systemPromptVariant: 'legacy',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: null,
+      useTitle: true,
+    }),
+  ])
+
+  const result = await intakeReviewChangeDeltasToDirtyWork(
+    {endSourceHighWaterMark: 7, limit: 10, sourcePartition: 'reviewChange:project-1', startSourceHighWaterMark: 1},
+    database,
+  )
+  const deltaSelect = statements.find((statement) => {
+    return statement.includes('FROM app.review_change_delta')
+  })
+
+  expect(result).toMatchObject({dirtyWorkCount: 5, maxSourceHighWaterMark: 7, status: 'converted'})
+  expect(deltaSelect).toContain('COALESCE(use_metadata, FALSE) AS useMetadata')
+})
+
+test('article sourceMetadata changes dirty judgment input only for projects that use article metadata', async () => {
+  const {database, statements} = createFakeIntakeDatabase(
+    [
+      createReviewChangeDelta({
+        articleId: 'article-1',
+        changeKind: 'article.display.updated',
+        deltaId: 'delta-metadata-display',
+        payloadJson: {articleId: 'article-1', changedDisplayFieldNames: ['sourceMetadata']},
+        sourceHighWaterMark: 11,
+      }),
+      createReviewChangeDelta({
+        articleId: 'article-1',
+        changeKind: 'article.judgmentInput.updated',
+        deltaId: 'delta-metadata-judgment-input',
+        payloadJson: {affectedContentFlags: ['useMetadata'], articleId: 'article-1'},
+        sourceHighWaterMark: 12,
+      }),
+      createReviewChangeDelta({
+        articleId: 'article-2',
+        changeKind: 'article.judgmentInput.updated',
+        deltaId: 'delta-fulltext-judgment-input',
+        payloadJson: {affectedContentFlags: ['useFulltext', 'useFulltextNoImages'], articleId: 'article-2'},
+        sourceHighWaterMark: 13,
+      }),
+    ],
+    {
+      articleProjectRows: [
+        {articleId: 'article-1', projectId: 'project-metadata-off', useMetadata: false},
+        {articleId: 'article-1', projectId: 'project-metadata-on', useMetadata: true},
+        {articleId: 'article-2', projectId: 'project-metadata-off', useMetadata: false},
+        {articleId: 'article-2', projectId: 'project-metadata-on', useMetadata: true},
+      ],
+    },
+  )
+
+  await intakeReviewChangeDeltasToDirtyWork(
+    {endSourceHighWaterMark: 13, limit: 10, sourcePartition: 'article:all', startSourceHighWaterMark: 1},
+    database,
+  )
+  const dirtyInserts = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_serving_dirty_work (')
+  })
+  const getComponents = (scopeId: string) => {
+    return dirtyInserts
+      .filter((statement) => {
+        return statement.includes(`'${scopeId}'`)
+      })
+      .map((statement) => {
+        return parseProjectionKey(statement).projectionComponent
+      })
+  }
+  const scopeLookup = statements.find((statement) => {
+    return statement.includes('FROM mart.project_scope_article')
+  })
+
+  expect(scopeLookup).toContain('COALESCE(project.use_metadata, FALSE) AS useMetadata')
+  expect(getComponents('project-metadata-on:article-1')).toContain('display')
+  expect(getComponents('project-metadata-on:article-1')).toContain('judgmentInputContent')
+  expect(getComponents('project-metadata-off:article-1')).toContain('display')
+  expect(getComponents('project-metadata-off:article-1')).not.toContain('judgmentInputContent')
+  expect(getComponents('project-metadata-off:article-1')).not.toContain('llmStatus')
+  expect(getComponents('project-metadata-on:article-2')).toContain('judgmentInputContent')
+  expect(getComponents('project-metadata-off:article-2')).toContain('judgmentInputContent')
+})
+
+test('article judgment-input changes that mix metadata with other content still dirty every project', async () => {
+  const {database, statements} = createFakeIntakeDatabase(
+    [
+      createReviewChangeDelta({
+        articleId: 'article-1',
+        changeKind: 'article.judgmentInput.updated',
+        deltaId: 'delta-mixed-judgment-input',
+        payloadJson: {affectedContentFlags: ['useAbstract', 'useMetadata'], articleId: 'article-1'},
+        sourceHighWaterMark: 21,
+      }),
+    ],
+    {
+      articleProjectRows: [
+        {articleId: 'article-1', projectId: 'project-metadata-off', useMetadata: false},
+        {articleId: 'article-1', projectId: 'project-metadata-on', useMetadata: true},
+      ],
+    },
+  )
+
+  const result = await intakeReviewChangeDeltasToDirtyWork(
+    {endSourceHighWaterMark: 21, limit: 10, sourcePartition: 'article:all', startSourceHighWaterMark: 1},
+    database,
+  )
+  const judgmentInputInserts = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO app.review_serving_dirty_work (')
+      && parseProjectionKey(statement).projectionComponent === 'judgmentInputContent'
+    )
+  })
+
+  expect(result).toMatchObject({maxSourceHighWaterMark: 21, status: 'converted'})
+  expect(judgmentInputInserts.join('\n')).toContain('project-metadata-off:article-1')
+  expect(judgmentInputInserts.join('\n')).toContain('project-metadata-on:article-1')
+})

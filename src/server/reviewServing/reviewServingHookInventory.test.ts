@@ -98,10 +98,10 @@ const hookInventory: HookInventoryEntry[] = [
     symbol: 'dataSourcesImportRoutesPostStructuredFile',
   },
   {
-    filePath: 'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts',
-    label: 'data-source Covidence import route',
+    filePath: 'src/server/routes/DataSourcesImportRoutes/startCovidencePackageImportInBackground.ts',
+    label: 'data-source Covidence background package import',
     markers: ['syncCovidenceProjectScopeFromConfig'],
-    symbol: 'dataSourcesImportRoutesPostCovidence',
+    symbol: 'runCovidencePackageImport',
   },
   {
     filePath: 'src/server/services/articleImportStoreService.ts',

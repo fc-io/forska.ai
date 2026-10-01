@@ -608,6 +608,7 @@ const getIncrementalPayloadRouteRows = (statement: string) => {
         useAbstract: true,
         useFulltext: false,
         useFulltextNoImages: false,
+        useMetadata: false,
         useTitle: true,
       },
     ]
@@ -2930,7 +2931,7 @@ test('low-memory worker charges request-associated selected import batch complet
   ).toBe(16)
 })
 
-test('explicit rebuild chunk only projects its targeted snapshot context', async () => {
+const runExplicitPayloadRebuildChunk = async (useMetadata: boolean) => {
   const statements: string[] = []
   const projectSettings = {
     humanJudgmentMode: 'prompt' as const,
@@ -2945,6 +2946,7 @@ test('explicit rebuild chunk only projects its targeted snapshot context', async
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata,
     useTitle: true,
   }
   const reviewConfigHash = buildReviewConfigHash({
@@ -2963,6 +2965,7 @@ test('explicit rebuild chunk only projects its targeted snapshot context', async
     useAbstract: projectSettings.useAbstract,
     useFulltext: projectSettings.useFulltext,
     useFulltextNoImages: projectSettings.useFulltextNoImages,
+    useMetadata: projectSettings.useMetadata,
     useTitle: projectSettings.useTitle,
   })
   const componentState = {
@@ -3061,11 +3064,27 @@ test('explicit rebuild chunk only projects its targeted snapshot context', async
       || statement.includes('UPDATE app.review_rebuild_chunk_manifest')
     )
   })
-  const joined = projectorStatements.join('\n')
+
+  return {joined: projectorStatements.join('\n'), result, statements}
+}
+
+test('explicit rebuild chunk only projects its targeted snapshot context', async () => {
+  const {joined, result, statements} = await runExplicitPayloadRebuildChunk(false)
 
   expect(result).toEqual({status: 'completed'})
   expect(joined).toContain('snapshot-target')
   expect(joined).not.toContain('snapshot-other')
+  expect(joined).toContain('AND judgment.use_metadata = FALSE')
+  expect(statements.join('\n')).toContain('COALESCE(project.use_metadata, FALSE) AS useMetadata')
+})
+
+test('explicit payload rebuild chunk hashes and filters article metadata from the project settings', async () => {
+  const {joined, result} = await runExplicitPayloadRebuildChunk(true)
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('snapshot-target')
+  expect(joined).toContain('AND judgment.use_metadata = TRUE')
+  expect(joined).not.toContain('AND judgment.use_metadata = FALSE')
 })
 
 test('worker writes compatible display rebuild chunks through one batch writer', async () => {
@@ -3238,6 +3257,7 @@ test('worker writes compatible payload rebuild chunks through one batch writer',
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
   }
   const reviewConfigHash = buildReviewConfigHash({
@@ -4436,6 +4456,7 @@ test('worker writes compatible judgment input content rebuild chunks through one
           useAbstract: true,
           useFulltext: false,
           useFulltextNoImages: false,
+          useMetadata: false,
           useTitle: true,
         },
       ] as T[]
@@ -9089,6 +9110,7 @@ test('payload and search rebuild chunk executors write bounded base rows and com
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
   }
   const reviewConfigHash = buildReviewConfigHash({
@@ -9357,6 +9379,7 @@ test('status queue posting summary and judgment detail rebuild chunk executors c
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
   }
   const reviewConfigHash = buildReviewConfigHash({
@@ -11590,6 +11613,7 @@ test('judgment input content rebuild chunk splits only after DuckDB OOM', async 
             useAbstract: true,
             useFulltext: false,
             useFulltextNoImages: false,
+            useMetadata: false,
             useTitle: true,
           },
         ] as T[]

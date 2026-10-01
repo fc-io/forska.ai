@@ -536,6 +536,7 @@ type ProjectReviewSettingsRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -2144,6 +2145,7 @@ const runPayloadRebuildChunk = async (
                   useAbstract: project.useAbstract,
                   useFulltext: project.useFulltext,
                   useFulltextNoImages: project.useFulltextNoImages,
+                  useMetadata: project.useMetadata,
                   useTitle: project.useTitle,
                 },
               ],
@@ -2936,6 +2938,7 @@ const runJudgmentInputContentRebuildChunk = async (
                     useAbstract: project.useAbstract,
                     useFulltext: project.useFulltext,
                     useFulltextNoImages: project.useFulltextNoImages,
+                    useMetadata: project.useMetadata,
                     useTitle: project.useTitle,
                   },
                   chunkDatabase,
@@ -3919,6 +3922,7 @@ const runPayloadRebuildChunkBatch = async (
               useAbstract: project.useAbstract,
               useFulltext: project.useFulltext,
               useFulltextNoImages: project.useFulltextNoImages,
+              useMetadata: project.useMetadata,
               useTitle: project.useTitle,
             }
           }),
@@ -4318,6 +4322,7 @@ const runJudgmentInputContentRebuildChunkBatch = async (
               useAbstract: project.useAbstract,
               useFulltext: project.useFulltext,
               useFulltextNoImages: project.useFulltextNoImages,
+              useMetadata: project.useMetadata,
               useTitle: project.useTitle,
             }
           }),
@@ -4925,7 +4930,8 @@ const getProjectReviewSettings = async (projectId: string, database: ReviewServi
       project.use_abstract AS useAbstract,
       project.use_fulltext AS useFulltext,
       project.use_fulltext_no_images AS useFulltextNoImages,
-      project.system_prompt_variant AS systemPromptVariant
+      project.system_prompt_variant AS systemPromptVariant,
+      COALESCE(project.use_metadata, FALSE) AS useMetadata
     FROM app.project project
     LEFT JOIN app.model model
       ON model.id = project.model_id
@@ -4995,6 +5001,7 @@ const getReviewConfigHash = (
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
     useFulltextNoImages: input.useFulltextNoImages,
+    useMetadata: input.useMetadata,
     useTitle: input.useTitle,
   })
 }
@@ -5488,6 +5495,7 @@ const getUngatedReviewServingProjectorRunners = (database: ReviewServingProjecto
             useAbstract: project.useAbstract,
             useFulltext: project.useFulltext,
             useFulltextNoImages: project.useFulltextNoImages,
+            useMetadata: project.useMetadata,
             useTitle: project.useTitle,
           },
           database,

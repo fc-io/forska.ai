@@ -45,6 +45,7 @@ export type ReviewServingDeltaAppendInput = ReviewServingIdempotencyKeyInput & {
   useAbstract?: boolean | null
   useFulltext?: boolean | null
   useFulltextNoImages?: boolean | null
+  useMetadata?: boolean | null
   useTitle?: boolean | null
 }
 
@@ -136,6 +137,7 @@ const reviewServingBulkTempColumns = [
   'use_fulltext',
   'use_fulltext_no_images',
   'system_prompt_variant',
+  'use_metadata',
   'judgment_id',
   'human_judgment_key',
   'config_field_set',
@@ -178,6 +180,10 @@ const getReviewServingDeltaSystemPromptVariant = (
   input: Pick<ReviewServingDeltaAppendInput, 'systemPromptVariant'>,
 ) => {
   return input.systemPromptVariant ?? defaultSystemPromptVariant
+}
+
+const getReviewServingDeltaUseMetadata = (input: Pick<ReviewServingDeltaAppendInput, 'useMetadata'>) => {
+  return input.useMetadata ?? false
 }
 
 const validateReviewServingChangeKind = (changeKind: string) => {
@@ -481,6 +487,7 @@ const getCreateBulkDeltaTempTableSql = (tableName: string) => {
       use_fulltext BOOLEAN,
       use_fulltext_no_images BOOLEAN,
       system_prompt_variant VARCHAR,
+      use_metadata BOOLEAN,
       judgment_id VARCHAR,
       human_judgment_key VARCHAR,
       config_field_set VARCHAR,
@@ -525,6 +532,7 @@ const getReviewChangeBulkRowValuesSql = (row: ResolvedBulkDelta<ReviewServingDel
     getSqlLiteral(row.input.useFulltext),
     getSqlLiteral(row.input.useFulltextNoImages),
     getSqlLiteral(getReviewServingDeltaSystemPromptVariant(row.input)),
+    getSqlLiteral(getReviewServingDeltaUseMetadata(row.input)),
     getSqlLiteral(row.input.judgmentId),
     getSqlLiteral(row.input.humanJudgmentKey),
     getSqlLiteral(row.input.configFieldSet),
@@ -542,6 +550,7 @@ const getImportRunArticleBulkRowValuesSql = (row: ResolvedBulkDelta<ReviewServin
     ...getCommonBulkDeltaRowValues(row),
     'NULL',
     getSqlLiteral(row.input.articleId),
+    'NULL',
     'NULL',
     'NULL',
     'NULL',
@@ -583,6 +592,7 @@ const getReviewChangeBulkInsertSql = (tableName: string) => {
       use_fulltext,
       use_fulltext_no_images,
       system_prompt_variant,
+      use_metadata,
       judgment_id,
       human_judgment_key,
       config_field_set,
@@ -611,6 +621,7 @@ const getReviewChangeBulkInsertSql = (tableName: string) => {
       use_fulltext,
       use_fulltext_no_images,
       system_prompt_variant,
+      use_metadata,
       judgment_id,
       human_judgment_key,
       config_field_set,
@@ -886,6 +897,7 @@ export const appendReviewServingChangeDelta = async (
       use_fulltext,
       use_fulltext_no_images,
       system_prompt_variant,
+      use_metadata,
       judgment_id,
       human_judgment_key,
       config_field_set,
@@ -913,6 +925,7 @@ export const appendReviewServingChangeDelta = async (
       ${getSqlLiteral(input.useFulltext)},
       ${getSqlLiteral(input.useFulltextNoImages)},
       ${getSqlLiteral(getReviewServingDeltaSystemPromptVariant(input))},
+      ${getSqlLiteral(getReviewServingDeltaUseMetadata(input))},
       ${getSqlLiteral(input.judgmentId)},
       ${getSqlLiteral(input.humanJudgmentKey)},
       ${getSqlLiteral(input.configFieldSet)},

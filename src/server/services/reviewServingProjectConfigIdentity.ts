@@ -30,6 +30,7 @@ export const getCurrentReviewConfigHash = async (
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
+    useMetadata: boolean
     useTitle: boolean
   }>(
     `
@@ -46,7 +47,8 @@ export const getCurrentReviewConfigHash = async (
       app.project.use_abstract AS useAbstract,
       app.project.use_fulltext AS useFulltext,
       app.project.use_fulltext_no_images AS useFulltextNoImages,
-      app.project.system_prompt_variant AS systemPromptVariant
+      app.project.system_prompt_variant AS systemPromptVariant,
+      COALESCE(app.project.use_metadata, FALSE) AS useMetadata
     FROM app.project
     LEFT JOIN app.model model
       ON model.id = app.project.model_id
@@ -110,6 +112,7 @@ export const getCurrentReviewConfigHash = async (
         useAbstract: project.useAbstract,
         useFulltext: project.useFulltext,
         useFulltextNoImages: project.useFulltextNoImages,
+        useMetadata: project.useMetadata,
         useTitle: project.useTitle,
       })
 }

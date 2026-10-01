@@ -423,6 +423,44 @@ test('buildReviewConfigHash keeps the legacy system prompt variant hash byte-ide
   expect(buildReviewConfigHash({...input, systemPromptVariant: 'screening_v1'})).not.toBe(pinnedLegacyHash)
 })
 
+test('buildReviewConfigHash keeps the hash byte-identical without article metadata and separates it when used', () => {
+  const input = {
+    humanJudgmentMode: 'prompt',
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
+    modelId: 'model-a',
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a', promptOrder: 1}],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  } as const
+  const pinnedLegacyHash = 'review:a62efbdc412d01bbaaee603e490e1538ef56100435231d4e625c57135955874a'
+  const metadataHash = buildReviewConfigHash({...input, useMetadata: true})
+
+  expect(buildReviewConfigHash({...input, useMetadata: undefined})).toBe(pinnedLegacyHash)
+  expect(buildReviewConfigHash({...input, useMetadata: false})).toBe(pinnedLegacyHash)
+  expect(buildReviewConfigHash({...input, systemPromptVariant: 'legacy', useMetadata: false})).toBe(pinnedLegacyHash)
+  expect(metadataHash).not.toBe(pinnedLegacyHash)
+  expect(buildReviewConfigHash({...input, systemPromptVariant: 'screening_v1', useMetadata: true})).not.toBe(
+    metadataHash,
+  )
+})
+
+test('buildReviewJudgmentInputContentIdentity keeps the identity without article metadata and separates it when used', () => {
+  const input = {
+    contentDependencyKeys: ['title', 'abstract'],
+    definitionVersion: 'judgment-input:v1',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
+  const withoutMetadata = buildReviewJudgmentInputContentIdentity(input)
+
+  expect(buildReviewJudgmentInputContentIdentity({...input, useMetadata: false})).toBe(withoutMetadata)
+  expect(buildReviewJudgmentInputContentIdentity({...input, useMetadata: true})).not.toBe(withoutMetadata)
+})
+
 test('buildSummaryDefinitionIdentity sorts contribution keys before hashing', () => {
   const left = buildSummaryDefinitionIdentity({
     contributionKeys: ['answer:yes', 'answer:no'],

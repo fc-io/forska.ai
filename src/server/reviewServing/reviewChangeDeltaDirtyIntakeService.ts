@@ -56,6 +56,7 @@ type ReviewChangeDeltaRow = {
   useAbstract: boolean | null
   useFulltext: boolean | null
   useFulltextNoImages: boolean | null
+  useMetadata?: boolean | null
   useTitle: boolean | null
 }
 
@@ -66,6 +67,7 @@ type ValidatedReviewChangeDelta = {
   sourceHighWaterMark: number
 }
 type InvalidReviewChangeDelta = {deltaId: string; reason: string}
+type ArticleScopeProject = {projectId: string; useMetadata?: boolean | null}
 
 const supportedPayloadVersion = 1
 
@@ -119,6 +121,7 @@ const getContentFlags = (row: ReviewChangeDeltaRow) => {
         useAbstract: row.useAbstract,
         useFulltext: row.useFulltext,
         useFulltextNoImages: row.useFulltextNoImages,
+        useMetadata: row.useMetadata ?? false,
         useTitle: row.useTitle,
       }
 }
@@ -193,6 +196,20 @@ const shouldExpandArticleDeltaToProjects = (row: ReviewChangeDeltaRow) => {
   return row.projectId === null && row.articleId !== null && row.changeKind.startsWith('article.')
 }
 
+const isMetadataOnlyJudgmentInputDelta = (row: ReviewChangeDeltaRow) => {
+  const payload = parsePayloadJson(row.payloadJson)
+  const affectedContentFlags = isRecord(payload) ? payload.affectedContentFlags : undefined
+
+  return (
+    row.changeKind === 'article.judgmentInput.updated'
+    && Array.isArray(affectedContentFlags)
+    && affectedContentFlags.length > 0
+    && affectedContentFlags.every((flag) => {
+      return flag === 'useMetadata'
+    })
+  )
+}
+
 const isInvalidReviewChangeDelta = (
   delta: InvalidReviewChangeDelta | ValidatedReviewChangeDelta,
 ): delta is InvalidReviewChangeDelta => {
@@ -202,7 +219,7 @@ const isInvalidReviewChangeDelta = (
 // One scope lookup per intake batch: a query per article delta scanned mart.project_scope_article each time
 // (13-32 ms apiece), which held a shared article partition to under a thousand deltas a minute. The batch lookup
 // costs about the same as a single one.
-const getArticleProjectIdsByArticleId = async (
+const getArticleProjectsByArticleId = async (
   rows: readonly ReviewChangeDeltaRow[],
   database: Pick<ReviewChangeDeltaDirtyIntakeDatabase, 'queryJson'>,
 ) => {
@@ -215,12 +232,17 @@ const getArticleProjectIdsByArticleId = async (
   ]
 
   if (articleIds.length === 0) {
-    return new Map<string, string[]>()
+    return new Map<string, ArticleScopeProject[]>()
   }
 
-  const projectRows = await database.queryJson<{articleId: string; projectId: string}>(`
-    SELECT DISTINCT scope.article_id AS articleId, scope.project_id AS projectId
+  const projectRows = await database.queryJson<ArticleScopeProject & {articleId: string}>(`
+    SELECT DISTINCT
+      scope.article_id AS articleId,
+      scope.project_id AS projectId,
+      COALESCE(project.use_metadata, FALSE) AS useMetadata
     FROM mart.project_scope_article scope
+    LEFT JOIN app.project project
+      ON project.id = scope.project_id
     WHERE scope.article_id IN (
         SELECT article.article_id
         FROM (${getReviewServingJsonRowsSql({
@@ -234,12 +256,27 @@ const getArticleProjectIdsByArticleId = async (
     ORDER BY articleId ASC, projectId ASC
   `)
 
-  return projectRows.reduce((projectIdsByArticleId, row) => {
-    return projectIdsByArticleId.set(row.articleId, [
-      ...(projectIdsByArticleId.get(row.articleId) ?? []),
-      row.projectId,
+  return projectRows.reduce((projectsByArticleId, row) => {
+    return projectsByArticleId.set(row.articleId, [
+      ...(projectsByArticleId.get(row.articleId) ?? []),
+      {projectId: row.projectId, useMetadata: row.useMetadata},
     ])
-  }, new Map<string, string[]>())
+  }, new Map<string, ArticleScopeProject[]>())
+}
+
+const getArticleDeltaProjectIds = (
+  row: ReviewChangeDeltaRow,
+  projectsByArticleId: Map<string, ArticleScopeProject[]>,
+) => {
+  const requiresMetadata = isMetadataOnlyJudgmentInputDelta(row)
+
+  return (projectsByArticleId.get(row.articleId as string) ?? [])
+    .filter((project) => {
+      return !requiresMetadata || project.useMetadata === true
+    })
+    .map((project) => {
+      return project.projectId
+    })
 }
 
 const getValidatedReviewChangeDelta = (
@@ -305,10 +342,11 @@ const getValidatedReviewChangeDelta = (
   }
 }
 
-const getValidatedReviewChangeDeltas = (row: ReviewChangeDeltaRow, projectIdsByArticleId: Map<string, string[]>) => {
-  const projectIds = shouldExpandArticleDeltaToProjects(row)
-    ? (projectIdsByArticleId.get(row.articleId as string) ?? [])
-    : []
+const getValidatedReviewChangeDeltas = (
+  row: ReviewChangeDeltaRow,
+  projectsByArticleId: Map<string, ArticleScopeProject[]>,
+) => {
+  const projectIds = shouldExpandArticleDeltaToProjects(row) ? getArticleDeltaProjectIds(row, projectsByArticleId) : []
 
   if (projectIds.length > 0) {
     return projectIds.map((projectId) => {
@@ -327,10 +365,10 @@ const getValidatedReviewChangeDeltaRows = async (
   rows: readonly ReviewChangeDeltaRow[],
   database: Pick<ReviewChangeDeltaDirtyIntakeDatabase, 'queryJson'>,
 ) => {
-  const projectIdsByArticleId = await getArticleProjectIdsByArticleId(rows, database)
+  const projectsByArticleId = await getArticleProjectsByArticleId(rows, database)
 
   return rows.flatMap((row) => {
-    return getValidatedReviewChangeDeltas(row, projectIdsByArticleId)
+    return getValidatedReviewChangeDeltas(row, projectsByArticleId)
   })
 }
 
@@ -358,6 +396,7 @@ const getReviewChangeDeltaRows = async (
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
           COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant,
+          COALESCE(use_metadata, FALSE) AS useMetadata,
           judgment_id AS judgmentId,
           human_judgment_key AS humanJudgmentKey,
           config_field_set AS configFieldSet,

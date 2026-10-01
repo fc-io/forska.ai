@@ -30,6 +30,7 @@ export type ProjectReviewConfigReviewServingField =
   | 'useAbstract'
   | 'useFulltext'
   | 'useFulltextNoImages'
+  | 'useMetadata'
   | 'useTitle'
 
 export type AppendPromptConfigReviewServingDeltaInput = {

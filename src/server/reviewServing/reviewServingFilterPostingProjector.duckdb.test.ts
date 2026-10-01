@@ -225,6 +225,7 @@ const projectPayloadRows = async (input: SnapshotInput) => {
       useFulltext: false,
       useFulltextNoImages: false,
       systemPromptVariant: 'legacy',
+      useMetadata: false,
       useTitle: true,
     },
     getDatabase() as never,

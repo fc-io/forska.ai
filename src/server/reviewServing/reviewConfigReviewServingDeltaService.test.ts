@@ -97,7 +97,7 @@ test('prompt config updates emit prompt scoped output-affecting fields', async (
   expect(inserts).toContain('promptConfig:project-1:prompt-1')
 })
 
-test('project review config updates emit review scoped model content prompt variant and human-mode fields', async () => {
+test('project review config updates emit review scoped model content prompt variant metadata and human-mode fields', async () => {
   const {statements, tx} = createFakeLedgerTransaction()
 
   await appendProjectReviewConfigReviewServingDelta(tx, {
@@ -106,6 +106,7 @@ test('project review config updates emit review scoped model content prompt vari
       'promptMembership',
       'humanJudgmentMode',
       'useTitle',
+      'useMetadata',
       'systemPromptVariant',
       'dateFrom',
     ],
@@ -118,7 +119,7 @@ test('project review config updates emit review scoped model content prompt vari
 
   expect(inserts).toContain('project.reviewConfig.updated')
   expect(inserts).toContain(
-    'dateFrom,humanJudgmentMode,modelExecutionIdentity,promptMembership,systemPromptVariant,useTitle',
+    'dateFrom,humanJudgmentMode,modelExecutionIdentity,promptMembership,systemPromptVariant,useMetadata,useTitle',
   )
   expect(inserts).toContain('projectReviewConfig:project-1')
 })
