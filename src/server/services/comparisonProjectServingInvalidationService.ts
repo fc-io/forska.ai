@@ -36,6 +36,7 @@ export type ComparisonProjectLlmJudgmentChange = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -104,6 +105,7 @@ const getLlmJudgmentChangeKey = (change: ComparisonProjectLlmJudgmentChange) => 
     change.useAbstract,
     change.useFulltext,
     change.useFulltextNoImages,
+    change.useMetadata,
     getSystemPromptVariant(change.systemPromptVariant),
   ].join('|')
 }
@@ -126,6 +128,7 @@ const getLlmJudgmentChangeCteSql = (changes: ComparisonProjectLlmJudgmentChange[
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      use_metadata,
       system_prompt_variant
     ) AS (
       VALUES ${changes
@@ -138,6 +141,7 @@ const getLlmJudgmentChangeCteSql = (changes: ComparisonProjectLlmJudgmentChange[
             ${getSqlLiteral(change.useAbstract)},
             ${getSqlLiteral(change.useFulltext)},
             ${getSqlLiteral(change.useFulltextNoImages)},
+            ${getSqlLiteral(change.useMetadata)},
             ${getSqlLiteral(getSystemPromptVariant(change.systemPromptVariant))}
           )`
         })

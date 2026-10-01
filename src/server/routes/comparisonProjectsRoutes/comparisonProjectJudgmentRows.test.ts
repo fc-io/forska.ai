@@ -157,6 +157,31 @@ test('batch cell assembly keeps system prompt variants in separate llm columns',
   })
 })
 
+test('batch cell assembly keeps article metadata judgments in separate llm columns', () => {
+  const cellsByArticle = getComparisonProjectBatchCellsByArticle({
+    humanRows: [],
+    llmRows: [
+      {...getLlmRow({answer: 'yes', articleId: 'article-1', promptId: 'prompt-1'}), useMetadata: false},
+      {...getLlmRow({answer: 'no', articleId: 'article-1', promptId: 'prompt-1'}), useMetadata: true},
+      {
+        ...getLlmRow({answer: 'maybe', articleId: 'article-1', promptId: 'prompt-1'}),
+        systemPromptVariant: 'screening_v1',
+        useMetadata: true,
+      },
+      {...getLlmRow({answer: 'yes', articleId: 'article-2', promptId: 'prompt-1'}), useMetadata: null},
+    ],
+  })
+
+  expect(cellsByArticle.llmCellsByArticle).toEqual({
+    'article-1': {
+      'llm:model-1:1100:prompt-1': 'yes',
+      'llm:model-1:1100m-screening_v1:prompt-1': 'maybe',
+      'llm:model-1:1100m:prompt-1': 'no',
+    },
+    'article-2': {'llm:model-1:1100:prompt-1': 'yes'},
+  })
+})
+
 test('row batch iterator yields filtered rows by scoped article batch', async () => {
   const articleBatches = new Map<number, ComparisonProjectScopedArticle[]>([
     [0, articles.slice(0, 2)],

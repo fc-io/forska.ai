@@ -256,7 +256,8 @@ const getMaterializedPromptModeComparisonProjectConfigCtesSql = ({
         use_title,
         use_abstract,
         use_fulltext,
-        use_fulltext_no_images
+        use_fulltext_no_images,
+        use_metadata
       FROM ${comparisonProjectServingGenerationConfigTables.contentVariant}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
         AND generation = ${generationLiteral}
@@ -302,6 +303,7 @@ const getMaterializedSummaryModeComparisonProjectConfigCtesSql = ({
         source_project_id,
         model_id,
         system_prompt_variant,
+        use_metadata,
         source_project_order,
         prompt_id,
         prompt_order,
@@ -323,7 +325,8 @@ const getMaterializedSummaryModeComparisonProjectConfigCtesSql = ({
         use_title,
         use_abstract,
         use_fulltext,
-        use_fulltext_no_images
+        use_fulltext_no_images,
+        use_metadata
       FROM ${comparisonProjectServingGenerationConfigTables.contentVariant}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
         AND generation = ${generationLiteral}
@@ -513,6 +516,7 @@ const getPromptModeComparisonProjectLlmCellServingInsertSql = ({
        AND content_variant.use_abstract = j.use_abstract
        AND content_variant.use_fulltext = j.use_fulltext
        AND content_variant.use_fulltext_no_images = j.use_fulltext_no_images
+       AND content_variant.use_metadata = j.use_metadata
        AND content_variant.system_prompt_variant = j.system_prompt_variant
       WHERE j.deleted_at IS NULL
     ),
@@ -679,7 +683,8 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
         j.updated_at AS source_updated_at,
         content_variant.content_order,
         content_variant.content_key,
-        content_variant.system_prompt_variant
+        content_variant.system_prompt_variant,
+        content_variant.use_metadata
       FROM app.judgment j
       ${getComparisonProjectArticleBatchJoinSql('j.article_id', useArticleBatch)}
       CROSS JOIN comparison_project
@@ -691,6 +696,7 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
        AND content_variant.use_abstract = j.use_abstract
        AND content_variant.use_fulltext = j.use_fulltext
        AND content_variant.use_fulltext_no_images = j.use_fulltext_no_images
+       AND content_variant.use_metadata = j.use_metadata
        AND content_variant.system_prompt_variant = j.system_prompt_variant
       WHERE j.deleted_at IS NULL
     ),
@@ -731,6 +737,10 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
        AND (
          summary_prompt_group.system_prompt_variant IS NULL
          OR summary_prompt_group.system_prompt_variant = normalized_cell.system_prompt_variant
+       )
+       AND (
+         summary_prompt_group.use_metadata IS NULL
+         OR summary_prompt_group.use_metadata = normalized_cell.use_metadata
        )
     ),
     latest_summary_prompt_answer AS (

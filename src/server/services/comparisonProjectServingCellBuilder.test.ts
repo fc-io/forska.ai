@@ -1017,8 +1017,28 @@ test('prompt-mode cell inserts are split by discovered article batches', async (
 
 type SystemPromptVariantServingCellsResult = {
   actualRows: Array<{articleId: string; columnId: string; comparisonProjectId: string; displayAnswer: string | null}>
+  contentOrders: Record<string, string[]>
   requiredColumnIds: Record<string, string[]>
   servedSystemPromptVariants: Record<string, string[]>
+}
+
+const getContentOrdersScript = () => {
+  return `
+    const getContentOrders = async () => {
+      const contentOrderRows = await database.queryJson(\`
+        SELECT
+          comparison_project_id AS comparisonProjectId,
+          content_key || ':' || CAST(content_order AS VARCHAR) AS contentOrder
+        FROM comparison_serving_generation_content_variant_config
+        WHERE generation = 1
+        ORDER BY comparison_project_id ASC, content_order ASC
+      \`)
+
+      return contentOrderRows.reduce((orderMap, row) => {
+        return {...orderMap, [row.comparisonProjectId]: [...(orderMap[row.comparisonProjectId] ?? []), row.contentOrder]}
+      }, {})
+    }
+  `
 }
 
 const getSystemPromptVariantServingCellsScript = () => {
@@ -1032,6 +1052,7 @@ const getSystemPromptVariantServingCellsScript = () => {
     const database = getAppDatabaseService()
     const builder = getComparisonProjectServingCellBuilder()
     const runner = {queryJson: database.queryJson, run: database.run}
+    ${getContentOrdersScript()}
 
     await database.run(\`
       INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
@@ -1192,8 +1213,9 @@ const getSystemPromptVariantServingCellsScript = () => {
         [row.comparisonProjectId]: [...(variantMap[row.comparisonProjectId] ?? []), row.systemPromptVariant],
       }
     }, {})
+    const contentOrders = await getContentOrders()
 
-    console.log(JSON.stringify({actualRows, requiredColumnIds, servedSystemPromptVariants}))
+    console.log(JSON.stringify({actualRows, contentOrders, requiredColumnIds, servedSystemPromptVariants}))
   `
 }
 
@@ -1276,5 +1298,316 @@ test('system prompt variants discovered in scope become separate comparison sour
     'comparison-variant-legacy': ['legacy'],
     'comparison-variant-route': ['legacy', 'screening_v1'],
     'comparison-variant-summary': ['legacy', 'screening_v1'],
+  })
+  expect(result.contentOrders).toEqual({
+    'comparison-variant-ab': ['1100:0', '1100-screening_v1:3'],
+    'comparison-variant-legacy': ['1100:0'],
+    'comparison-variant-route': ['1100:0', '1100-screening_v1:3'],
+    'comparison-variant-summary': ['1100:0', '1100-screening_v1:3'],
+  })
+})
+
+type ArticleMetadataServingCellsResult = {
+  actualRows: Array<{articleId: string; columnId: string; comparisonProjectId: string; displayAnswer: string | null}>
+  contentOrders: Record<string, string[]>
+  requiredColumnIds: Record<string, string[]>
+  servedContentDimensions: Record<string, string[]>
+}
+
+const getArticleMetadataServingCellsScript = () => {
+  return `
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {getComparisonProjectServingCellBuilder} = await import('./src/server/services/comparisonProjectServingCellBuilder.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const builder = getComparisonProjectServingCellBuilder()
+    const runner = {queryJson: database.queryJson, run: database.run}
+    ${getContentOrdersScript()}
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-metadata-cells', 'sglang', 'Provider Metadata Cells', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled, metadata_json)
+      VALUES ('model-a', 'provider-metadata-cells', 'Model A', 'model-a', 'Model A', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project (
+        id,
+        name,
+        description,
+        model_id,
+        human_judgment_mode,
+        system_prompt_variant,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        use_metadata
+      ) VALUES
+        ('source-plain', 'Source Plain', NULL, 'model-a', 'summary', NULL, TRUE, TRUE, FALSE, FALSE, FALSE),
+        ('source-metadata', 'Source Metadata', NULL, 'model-a', 'summary', NULL, TRUE, TRUE, FALSE, FALSE, TRUE),
+        ('source-metadata-screening', 'Source Metadata Screening', NULL, 'model-a', 'prompt', 'screening_v1', TRUE, TRUE, FALSE, FALSE, TRUE)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash, created_at)
+      VALUES
+        ('prompt-m', 'Prompt M', 'Prompt M', NULL, 'prompt-m-hash', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('prompt-s', 'Prompt S', 'Prompt S', NULL, 'prompt-s-hash', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('prompt-l', 'Prompt L', 'Prompt L', NULL, 'prompt-l-hash', TIMESTAMPTZ '2026-06-01T00:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project_prompt (
+        id,
+        project_id,
+        prompt_id,
+        prompt_order,
+        enabled,
+        criteria_disposition,
+        criteria_section_key,
+        criteria_section_label
+      ) VALUES
+        ('source-plain-prompt-m', 'source-plain', 'prompt-m', 0, TRUE, 'include', 'population', 'Population'),
+        ('source-metadata-prompt-m', 'source-metadata', 'prompt-m', 0, TRUE, 'include', 'population', 'Population')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.article (id, article_id, article_title, article_summary, article_created_at, article_updated_at)
+      VALUES ('article-m', 'external-m', 'Article M', 'Summary M', TIMESTAMPTZ '2026-06-01T00:00:00.000Z', TIMESTAMPTZ '2026-06-01T01:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES
+        ('source-plain-article-m', 'source-plain', 'article-m'),
+        ('source-metadata-article-m', 'source-metadata', 'article-m'),
+        ('source-metadata-screening-article-m', 'source-metadata-screening', 'article-m')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project (
+        id,
+        name,
+        description,
+        model_ids,
+        compare_with_humans,
+        human_judgment_mode,
+        summary_source_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        ('comparison-metadata-ab', 'Metadata AB', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('comparison-metadata-legacy', 'Metadata Legacy', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('comparison-metadata-route', 'Metadata Route', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('comparison-metadata-screening', 'Metadata Screening', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('comparison-metadata-summary', 'Metadata Summary', NULL, ['model-a'], TRUE, 'summary', NULL, TRUE, TRUE, FALSE, FALSE)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_prompt (id, comparison_project_id, prompt_id, prompt_order, criteria_disposition)
+      VALUES
+        ('comparison-metadata-ab-prompt-m', 'comparison-metadata-ab', 'prompt-m', 0, NULL),
+        ('comparison-metadata-legacy-prompt-l', 'comparison-metadata-legacy', 'prompt-l', 0, NULL),
+        ('comparison-metadata-route-prompt-m', 'comparison-metadata-route', 'prompt-m', 0, NULL),
+        ('comparison-metadata-screening-prompt-s', 'comparison-metadata-screening', 'prompt-s', 0, NULL),
+        ('comparison-metadata-summary-prompt-m', 'comparison-metadata-summary', 'prompt-m', 0, 'include')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id, created_at)
+      VALUES
+        ('comparison-metadata-ab-plain', 'comparison-metadata-ab', 'source-plain', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('comparison-metadata-ab-metadata', 'comparison-metadata-ab', 'source-metadata', TIMESTAMPTZ '2026-06-02T00:00:00.000Z'),
+        ('comparison-metadata-legacy-plain', 'comparison-metadata-legacy', 'source-plain', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('comparison-metadata-screening-source', 'comparison-metadata-screening', 'source-metadata-screening', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('comparison-metadata-summary-plain', 'comparison-metadata-summary', 'source-plain', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('comparison-metadata-summary-metadata', 'comparison-metadata-summary', 'source-metadata', TIMESTAMPTZ '2026-06-02T00:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        use_metadata,
+        system_prompt_variant,
+        created_at,
+        updated_at
+      ) VALUES
+        ('judgment-m-plain', 'article-m', 'prompt-m', 'model-a', 'source-plain', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', TIMESTAMPTZ '2026-06-03T00:00:00.000Z', TIMESTAMPTZ '2026-06-03T01:00:00.000Z'),
+        ('judgment-m-metadata', 'article-m', 'prompt-m', 'model-a', 'source-metadata', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, TRUE, 'legacy', TIMESTAMPTZ '2026-06-04T00:00:00.000Z', TIMESTAMPTZ '2026-06-04T01:00:00.000Z'),
+        ('judgment-s-metadata-screening', 'article-m', 'prompt-s', 'model-a', 'source-metadata-screening', TRUE, 'maybe', NULL, TRUE, TRUE, FALSE, FALSE, TRUE, 'screening_v1', TIMESTAMPTZ '2026-06-04T00:00:00.000Z', TIMESTAMPTZ '2026-06-04T01:00:00.000Z'),
+        ('judgment-l-plain', 'article-m', 'prompt-l', 'model-a', 'source-plain', TRUE, 'maybe', NULL, TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', TIMESTAMPTZ '2026-06-03T00:00:00.000Z', TIMESTAMPTZ '2026-06-03T01:00:00.000Z')
+    \`)
+
+    await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: 'comparison-metadata-ab', generation: 1}, runner)
+    await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: 'comparison-metadata-legacy', generation: 1}, runner)
+    await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: 'comparison-metadata-route', generation: 1}, runner)
+    await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: 'comparison-metadata-screening', generation: 1}, runner)
+    await builder.insertSummaryModeComparisonProjectLlmCells({comparisonProjectId: 'comparison-metadata-summary', generation: 1}, runner)
+
+    const actualRows = await database.queryJson(\`
+      SELECT
+        comparison_project_id AS comparisonProjectId,
+        article_id AS articleId,
+        column_id AS columnId,
+        display_answer AS displayAnswer
+      FROM mart.comparison_cell_serving
+      WHERE generation = 1
+      ORDER BY comparison_project_id ASC, column_id ASC
+    \`)
+    const requiredColumnRows = await database.queryJson(\`
+      SELECT comparison_project_id AS comparisonProjectId, column_id AS columnId
+      FROM comparison_serving_generation_required_column_config
+      WHERE generation = 1
+      ORDER BY comparison_project_id ASC, column_id ASC
+    \`)
+    const requiredColumnIds = requiredColumnRows.reduce((columnMap, row) => {
+      return {...columnMap, [row.comparisonProjectId]: [...(columnMap[row.comparisonProjectId] ?? []), row.columnId]}
+    }, {})
+    const servedDimensionRows = await database.queryJson(\`
+      SELECT
+        comparison_project_id AS comparisonProjectId,
+        system_prompt_variant || ':' || CAST(use_metadata AS VARCHAR) AS contentDimension
+      FROM mart.comparison_system_prompt_variant_serving
+      WHERE generation = 1
+      ORDER BY comparison_project_id ASC, contentDimension ASC
+    \`)
+    const servedContentDimensions = servedDimensionRows.reduce((dimensionMap, row) => {
+      return {
+        ...dimensionMap,
+        [row.comparisonProjectId]: [...(dimensionMap[row.comparisonProjectId] ?? []), row.contentDimension],
+      }
+    }, {})
+    const contentOrders = await getContentOrders()
+
+    console.log(JSON.stringify({actualRows, contentOrders, requiredColumnIds, servedContentDimensions}))
+  `
+}
+
+test('article metadata judgments discovered in scope become separate comparison sources keyed like the TypeScript content key', () => {
+  const result = runScript<ArticleMetadataServingCellsResult>(getArticleMetadataServingCellsScript())
+  const metadataContentKey = getComparisonProjectContentKey({...contentSettings, useMetadata: true})
+  const metadataScreeningContentKey = getComparisonProjectContentKey({
+    ...contentSettings,
+    systemPromptVariant: 'screening_v1',
+    useMetadata: true,
+  })
+  const plainPromptColumnId = getComparisonProjectColumnId('llm', 'prompt-m', 'model-a', contentKey)
+  const metadataPromptColumnId = getComparisonProjectColumnId('llm', 'prompt-m', 'model-a', metadataContentKey)
+  const legacyOnlyPromptColumnId = getComparisonProjectColumnId('llm', 'prompt-l', 'model-a', contentKey)
+  const metadataScreeningPromptColumnId = getComparisonProjectColumnId(
+    'llm',
+    'prompt-s',
+    'model-a',
+    metadataScreeningContentKey,
+  )
+  const plainSummaryColumnId = getComparisonProjectColumnId(
+    'llm',
+    summaryPromptId,
+    'model-a',
+    contentKey,
+    'source-plain',
+  )
+  const metadataSummaryColumnId = getComparisonProjectColumnId(
+    'llm',
+    summaryPromptId,
+    'model-a',
+    metadataContentKey,
+    'source-metadata',
+  )
+
+  expect(metadataContentKey).toBe('1100m')
+  expect(metadataScreeningContentKey).toBe('1100m-screening_v1')
+  expect(getComparisonProjectContentKey({...contentSettings, useMetadata: false})).toBe(contentKey)
+  expect(result.actualRows).toEqual([
+    {
+      articleId: 'article-m',
+      columnId: plainPromptColumnId,
+      comparisonProjectId: 'comparison-metadata-ab',
+      displayAnswer: 'yes',
+    },
+    {
+      articleId: 'article-m',
+      columnId: metadataPromptColumnId,
+      comparisonProjectId: 'comparison-metadata-ab',
+      displayAnswer: 'no',
+    },
+    {
+      articleId: 'article-m',
+      columnId: legacyOnlyPromptColumnId,
+      comparisonProjectId: 'comparison-metadata-legacy',
+      displayAnswer: 'maybe',
+    },
+    {
+      articleId: 'article-m',
+      columnId: plainPromptColumnId,
+      comparisonProjectId: 'comparison-metadata-route',
+      displayAnswer: 'yes',
+    },
+    {
+      articleId: 'article-m',
+      columnId: metadataPromptColumnId,
+      comparisonProjectId: 'comparison-metadata-route',
+      displayAnswer: 'no',
+    },
+    {
+      articleId: 'article-m',
+      columnId: metadataScreeningPromptColumnId,
+      comparisonProjectId: 'comparison-metadata-screening',
+      displayAnswer: 'maybe',
+    },
+    {
+      articleId: 'article-m',
+      columnId: metadataSummaryColumnId,
+      comparisonProjectId: 'comparison-metadata-summary',
+      displayAnswer: 'no',
+    },
+    {
+      articleId: 'article-m',
+      columnId: plainSummaryColumnId,
+      comparisonProjectId: 'comparison-metadata-summary',
+      displayAnswer: 'yes',
+    },
+  ])
+  expect(result.requiredColumnIds).toEqual({
+    'comparison-metadata-ab': [plainPromptColumnId, metadataPromptColumnId],
+    'comparison-metadata-legacy': [legacyOnlyPromptColumnId],
+    'comparison-metadata-route': [plainPromptColumnId, metadataPromptColumnId],
+    'comparison-metadata-screening': [metadataScreeningPromptColumnId],
+    'comparison-metadata-summary': ['human:summary', metadataSummaryColumnId, plainSummaryColumnId],
+  })
+  expect(result.servedContentDimensions).toEqual({
+    'comparison-metadata-ab': ['legacy:false', 'legacy:true'],
+    'comparison-metadata-legacy': ['legacy:false'],
+    'comparison-metadata-route': ['legacy:false', 'legacy:true'],
+    'comparison-metadata-screening': ['screening_v1:true'],
+    'comparison-metadata-summary': ['legacy:false', 'legacy:true'],
+  })
+  expect(result.contentOrders).toEqual({
+    'comparison-metadata-ab': ['1100:0', '1100m:9'],
+    'comparison-metadata-legacy': ['1100:0'],
+    'comparison-metadata-route': ['1100:0', '1100m:9'],
+    'comparison-metadata-screening': ['1100m-screening_v1:12'],
+    'comparison-metadata-summary': ['1100:0', '1100m:9'],
   })
 })

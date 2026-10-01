@@ -47,6 +47,7 @@ export type ComparisonProjectJudgmentLlmRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata?: boolean | null
 }
 
 export type ComparisonProjectJudgmentHumanRow = {
@@ -222,12 +223,14 @@ const comparisonProjectServingDifferenceFilterPredicates = {
 } satisfies Record<ComparisonProjectDifferenceFilter, string>
 
 const comparisonProjectContentKeySystemPromptVariantSeparator = '-'
+const comparisonProjectContentKeyMetadataSuffix = 'm'
 
 export const getComparisonProjectContentKey = (settings: {
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata?: boolean | null
   systemPromptVariant?: string | null
 }) => {
   const flagKey = [settings.useTitle, settings.useAbstract, settings.useFulltext, settings.useFulltextNoImages]
@@ -235,11 +238,12 @@ export const getComparisonProjectContentKey = (settings: {
       return (value ? 1 : 0).toString()
     })
     .join('')
+  const contentKey = settings.useMetadata ? `${flagKey}${comparisonProjectContentKeyMetadataSuffix}` : flagKey
   const systemPromptVariant = getSystemPromptVariant(settings.systemPromptVariant)
 
   return systemPromptVariant === defaultSystemPromptVariant
-    ? flagKey
-    : `${flagKey}${comparisonProjectContentKeySystemPromptVariantSeparator}${systemPromptVariant}`
+    ? contentKey
+    : `${contentKey}${comparisonProjectContentKeySystemPromptVariantSeparator}${systemPromptVariant}`
 }
 
 export const getComparisonProjectColumnId = (
