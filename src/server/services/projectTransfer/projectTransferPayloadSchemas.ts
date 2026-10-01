@@ -673,6 +673,7 @@ const assertJudgmentPayload = (record: JsonRecord, label: string) => {
   assertBoolean(record.isAnswered, `${label}.isAnswered`)
   assertNonNegativeInteger(record.confidenceOriginal, `${label}.confidenceOriginal`)
   assertProjectTransferContentSettings(record.contentSettings, `${label}.contentSettings`)
+  assertProjectTransferSystemPromptVariant(record.systemPromptVariant, label)
 
   return assertArray(record.quotes, `${label}.quotes`)
 }

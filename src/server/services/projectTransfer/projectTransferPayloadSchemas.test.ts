@@ -173,6 +173,31 @@ test('accepts known system prompt variants, keeps packages without one importabl
   )
 })
 
+test('accepts known judgment system prompt variants, keeps judgments without one importable, and rejects unknown variants', () => {
+  const judgment = getOnlyRecord(getProjectTransferPayloadFixture('judgments'))
+  const getJudgmentResult = (systemPromptVariant: unknown) => {
+    return validateProjectTransferPayload('judgments', [{...judgment, systemPromptVariant}])
+  }
+  const screeningJudgments = [{...judgment, systemPromptVariant: 'screening_v1'}]
+  const parsedScreeningJudgments = parseProjectTransferPayload(
+    'judgments',
+    serializeProjectTransferPayload('judgments', screeningJudgments),
+  )
+
+  expect(Object.hasOwn(judgment, 'systemPromptVariant')).toBe(false)
+  expect(getValidationError(validateProjectTransferPayload('judgments', [judgment]))).toBeNull()
+  expect(getValidationError(getJudgmentResult(undefined))).toBeNull()
+  expect(getValidationError(getJudgmentResult(null))).toBeNull()
+  expect(getValidationError(getJudgmentResult('legacy'))).toBeNull()
+  expect(getValidationError(getJudgmentResult('screening_v1'))).toBeNull()
+  expect(parsedScreeningJudgments[0]?.systemPromptVariant).toBe('screening_v1')
+  expect(getValidationError(getJudgmentResult('screening_v2'))).toContain(
+    'systemPromptVariant must be one of legacy, screening_v1',
+  )
+  expect(getValidationError(getJudgmentResult(''))).toContain('systemPromptVariant must be one of legacy, screening_v1')
+  expect(getValidationError(getJudgmentResult(1))).toContain('systemPromptVariant must be one of legacy, screening_v1')
+})
+
 test('rejects missing required signature fields and source ids outside provenance', () => {
   const project = getProjectTransferPayloadFixture('project')
   const article = getOnlyRecord(getProjectTransferPayloadFixture('articles'))

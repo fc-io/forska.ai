@@ -246,6 +246,7 @@ type ProjectTransferExportJudgmentRow = {
   quotes: unknown
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
+  systemPromptVariant: string | null
   updatedAt: unknown
   useAbstract: boolean | null
   useFulltext: boolean | null
@@ -811,6 +812,7 @@ const getProjectTransferExportJudgmentCandidateWhereSql = () => {
     AND j.use_abstract = project.use_abstract
     AND j.use_fulltext = project.use_fulltext
     AND j.use_fulltext_no_images = project.use_fulltext_no_images
+    AND j.system_prompt_variant = COALESCE(project.system_prompt_variant, ${getSqlLiteral(defaultSystemPromptVariant)})
     AND j.deleted_at IS NULL
   `
 }
@@ -832,7 +834,8 @@ const getProjectTransferExportAmbiguousJudgmentCteSql = () => {
         j.use_title,
         j.use_abstract,
         j.use_fulltext,
-        j.use_fulltext_no_images
+        j.use_fulltext_no_images,
+        j.system_prompt_variant
       FROM app.judgment j
       INNER JOIN project_transfer_scope_article scope ON scope.article_id = j.article_id
       INNER JOIN project_transfer_source_project project ON TRUE
@@ -845,7 +848,8 @@ const getProjectTransferExportAmbiguousJudgmentCteSql = () => {
         j.use_title,
         j.use_abstract,
         j.use_fulltext,
-        j.use_fulltext_no_images
+        j.use_fulltext_no_images,
+        j.system_prompt_variant
       HAVING COUNT(*) > 1
     )
   `
@@ -860,6 +864,7 @@ const getProjectTransferExportJudgmentAmbiguityJoinSql = () => {
     AND ambiguous.use_abstract = j.use_abstract
     AND ambiguous.use_fulltext = j.use_fulltext
     AND ambiguous.use_fulltext_no_images = j.use_fulltext_no_images
+    AND ambiguous.system_prompt_variant = j.system_prompt_variant
   `
 }
 
@@ -1370,7 +1375,8 @@ const getProjectTransferExportAmbiguousJudgmentWarnings = async (
       j.use_title,
       j.use_abstract,
       j.use_fulltext,
-      j.use_fulltext_no_images
+      j.use_fulltext_no_images,
+      j.system_prompt_variant
     HAVING COUNT(*) > 1
     ORDER BY j.article_id ASC, j.prompt_id ASC, j.model_id ASC
   `)
@@ -1437,6 +1443,7 @@ const getProjectTransferExportJudgmentRows = async (projectId: string, database:
       j.use_abstract AS useAbstract,
       j.use_fulltext AS useFulltext,
       j.use_fulltext_no_images AS useFulltextNoImages,
+      j.system_prompt_variant AS systemPromptVariant,
       j.chunking_strategy AS chunkingStrategy,
       j.is_answered AS isAnswered,
       j.answered_original AS answeredOriginal,
@@ -2625,6 +2632,7 @@ const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTra
         sourceModelId: row.modelId,
         sourceProjectId: row.projectId,
         sourcePromptId: row.promptId,
+        systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
         updatedAt: getIsoDateValue(row.updatedAt),
       }
     }),
