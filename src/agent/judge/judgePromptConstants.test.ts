@@ -8,6 +8,10 @@ import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptE
 import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptEvidenceSystemPromptStructuredImport.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT, SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptSystemPromptPatient.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV1.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 describe('judge prompt constants', () => {
@@ -394,5 +398,80 @@ Rules:
 - Do not include wrapper markers in quotes.
 - If the question includes criteria or instructions that matter for reasoning, use them only to decide relevance and return no quote rather than quoting them.
 - If nothing is relevant, return {"facts":[],"quotes":[]} only.`)
+  })
+})
+
+const getScreeningV1PromptBody = (prompt: string) => {
+  return prompt.slice(prompt.indexOf('\n\nYou will receive:'))
+}
+
+describe('screening_v1 prompt constants', () => {
+  test('frames the task as systematic review screening of one criteria section', () => {
+    expect(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1.startsWith('You are screening records for a systematic review.'),
+    ).toBe(true)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain('each request holds one section')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain('judge only the section you are given')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(
+      'Apply the exclusion lines first; if one applies, answer no.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(
+      'Answer maybe only if the output_type allows it, the record is silent on a fact the criteria need',
+    )
+  })
+
+  test('asks for a Missing: part in maybe explanations', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(
+      '(3) only when the answer is maybe: "Missing: " followed by the missing fact in one or two words',
+    )
+  })
+
+  test('requires quotes from the part of the record that concerns the section', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(
+      '- Quotes must come from the part of the record that concerns this section:',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(
+      'Do not support the answer with a sentence that merely mentions the topic.',
+    )
+  })
+
+  test("offers 'maybe' in every example and shows yes, no and maybe answers", () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1.match(/output_type: 'yes' \| 'no' \| 'maybe'/g)).toHaveLength(3)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain('"answer": "yes"')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain('"answer": "no"')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain('"answer": "maybe"')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain('Missing: country"')
+  })
+
+  test('renders the JSON escape rules like the legacy prompt', () => {
+    const escapeRules = [
+      '- Use \\" for double quotes within strings',
+      '- Use \\\\ for backslashes',
+      '- Use \\n for newlines',
+      '- Use \\t for tabs',
+    ]
+
+    escapeRules.map((rule) => {
+      expect(SINGLE_PROMPT_SYSTEM_PROMPT).toContain(rule)
+      return expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).toContain(rule)
+    })
+  })
+
+  test('uses the medical-research framing for Anthropic and keeps the rest of the prompt identical', () => {
+    expect(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC.startsWith(
+        'You are assisting with medical and biomedical research only. This is not clinical advice, diagnosis, or treatment guidance. The user is a medical/biomedical researcher and a medical doctor. You are screening records for a systematic review.',
+      ),
+    ).toBe(true)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC).toContain(
+      'This is a harmless literature-review classification task.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC).toContain(
+      'Do not provide procedural, experimental, diagnostic, treatment, or operational guidance.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).not.toContain('medical doctor')
+    expect(getScreeningV1PromptBody(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC)).toBe(
+      getScreeningV1PromptBody(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1),
+    )
   })
 })
