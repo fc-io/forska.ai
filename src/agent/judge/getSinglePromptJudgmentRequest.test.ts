@@ -51,7 +51,13 @@ const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => 
 test('getSinglePromptJudgmentRequest combines system prompt, user prompt, and record text for standard articles', () => {
   const result = getSinglePromptJudgmentRequest({
     article: buildArticle({articleTitle: 'Healthcare title', articleSummary: 'Healthcare summary'}),
-    contentSettings: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: false,
+      useTitle: true,
+    },
     prompt: {
       id: 'prompt-1',
       originalText: 'Is this about healthcare?',
@@ -76,7 +82,13 @@ test('getSinglePromptJudgmentRequest uses structured import system prompt and ra
       articleTitle: 'Registry title',
       importRoute: 'structured-file:registry-entry.json',
     }),
-    contentSettings: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: false,
+      useTitle: true,
+    },
     prompt: {
       id: 'prompt-2',
       originalText: 'Is this about healthcare?',
@@ -95,7 +107,13 @@ test('getSinglePromptJudgmentRequest uses structured import system prompt and ra
 test('getSinglePromptJudgmentRequest selects the system prompt by variant and keeps the user prompt unchanged', () => {
   const request = {
     article: buildArticle({articleTitle: 'Screening title', articleSummary: 'Screening summary'}),
-    contentSettings: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: false,
+      useTitle: true,
+    },
     prompt: {
       id: 'prompt-3',
       originalText: 'Does this study meet the Setting criteria below?',
@@ -115,4 +133,57 @@ test('getSinglePromptJudgmentRequest selects the system prompt by variant and ke
   expect(screeningResult.systemPrompt).not.toContain(`'unsure'`)
   expect(screeningResult.userPrompt).toBe(legacyResult.userPrompt)
   expect(screeningResult.recordText).toBe(legacyResult.recordText)
+})
+
+test('getSinglePromptJudgmentRequest adds the article_metadata block only when useMetadata is on and keeps recordText', () => {
+  const request = {
+    article: buildArticle({
+      articleSummary: 'Covidence summary',
+      articleTitle: 'Covidence title',
+      doi: '10.1000/covidence',
+      fullText: 'Covidence full text',
+      importRoute: 'covidence:data-source-1',
+      pubmedId: '31234567',
+      sourceMetadata: {journalTitle: 'BMJ', publicationYear: 2019, volume: '12'},
+    }),
+    prompt: {
+      id: 'prompt-4',
+      originalText: 'Should this study be included for full text review?',
+      order: 4,
+      promptHeading: 'Covidence title/abstract screening',
+      type: `'yes' | 'no' | 'maybe'`,
+    },
+    provider: 'anthropic',
+    systemPromptVariant: 'screening_v1' as const,
+  }
+  const withMetadata = getSinglePromptJudgmentRequest({
+    ...request,
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: true,
+      useTitle: true,
+    },
+  })
+  const withoutMetadata = getSinglePromptJudgmentRequest({
+    ...request,
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: false,
+      useTitle: true,
+    },
+  })
+
+  expect(withMetadata.userPrompt).toContain(
+    '## article_title\n\nCovidence title\n\n## article_metadata\n\njournal: BMJ\nyear: 2019\nvolume/issue/pages: 12\ndoi: 10.1000/covidence\npmid: 31234567\n\n## article_summary\n\nCovidence summary\n\n## Question',
+  )
+  expect(withoutMetadata.userPrompt).not.toContain('article_metadata')
+  expect(withoutMetadata.userPrompt).toContain('## article_title\n\nCovidence title\n\n## article_summary')
+  expect(withMetadata.recordText).toBe('Covidence title\n\nCovidence summary\n\nCovidence full text')
+  expect(withMetadata.recordText).toBe(withoutMetadata.recordText)
+  expect(withMetadata.recordText).not.toContain('BMJ')
+  expect(withMetadata.systemPrompt).toBe(withoutMetadata.systemPrompt)
 })

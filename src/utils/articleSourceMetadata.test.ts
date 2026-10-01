@@ -152,3 +152,56 @@ test('reads covidence source metadata values', () => {
     },
   })
 })
+
+test('keeps normalized bibliographic source metadata keys and drops unknown keys', () => {
+  expect(
+    getArticleSourceMetadataValue({
+      journalTitle: 'BMJ',
+      publicationYear: 2019,
+      publicationMonth: 'Mar',
+      volume: 12,
+      issue: ' 3 ',
+      pages: '100-110',
+      publicationType: 'JOUR',
+      accessionNumber: '31234567',
+      unknownKey: 'dropped',
+    }),
+  ).toEqual({
+    journalTitle: 'BMJ',
+    preprintSource: null,
+    preprintHostLabel: null,
+    isPreprint: false,
+    fullTextLinks: [],
+    covidence: null,
+    publicationYear: 2019,
+    publicationMonth: 'Mar',
+    volume: '12',
+    issue: '3',
+    pages: '100-110',
+    publicationType: 'JOUR',
+    accessionNumber: '31234567',
+  })
+})
+
+test('reads a numeric publication year string and omits malformed bibliographic values', () => {
+  const metadata = getArticleSourceMetadataValue({
+    publicationYear: '2020',
+    volume: '',
+    issue: null,
+    pages: {from: 1},
+    publicationType: ['JOUR'],
+  })
+
+  expect(metadata).toEqual({
+    journalTitle: null,
+    preprintSource: null,
+    preprintHostLabel: null,
+    isPreprint: false,
+    fullTextLinks: [],
+    covidence: null,
+    publicationYear: 2020,
+  })
+  expect(Object.keys(metadata ?? {})).not.toContain('volume')
+  expect(getArticleSourceMetadataValue({publicationYear: '20201'})).toBeNull()
+  expect(getArticleSourceMetadataValue({publicationYear: 2020.5})).toBeNull()
+})

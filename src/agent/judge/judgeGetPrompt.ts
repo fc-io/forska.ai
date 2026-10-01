@@ -1,5 +1,6 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {rateLimitedLogger} from '../../server/utils/rateLimitedLogger'
+import {getArticleMetadataPromptText} from './articleMetadataPrompt.ts'
 
 const SOURCE_TEXT_START = '<SOURCE_TEXT_START>'
 const SOURCE_TEXT_END = '</SOURCE_TEXT_END>'
@@ -26,6 +27,14 @@ ${text}
 ${SOURCE_TEXT_END}
 
 ${note}`
+}
+
+export const getArticleMetadataPromptSection = (article: ArticleRecord, provider?: string | null): string => {
+  return `## article_metadata
+
+${wrapSourceText(getArticleMetadataPromptText(article), provider)}
+
+`
 }
 
 export type PromptForJudging = Array<{
@@ -132,6 +141,7 @@ export type ContentSettings = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
 }
 
 const shouldIncludeFullText = (contentSettings?: ContentSettings): boolean => {
@@ -156,6 +166,7 @@ export const judgeGetSinglePrompt = (
   const useTitle = contentSettings?.useTitle ?? true
   const useAbstract = contentSettings?.useAbstract ?? true
   const includeFullText = shouldIncludeFullText(contentSettings)
+  const useMetadata = contentSettings?.useMetadata ?? false
 
   // Build title section if enabled
   const titleSection = useTitle
@@ -165,6 +176,8 @@ ${wrapSourceText(article.articleTitle, provider)}
 
 `
     : ''
+
+  const metadataSection = useMetadata ? getArticleMetadataPromptSection(article, provider) : ''
 
   // Build abstract section if enabled
   const abstractSection = useAbstract
@@ -194,7 +207,7 @@ ${wrapSourceText(article.fullText, provider)}
     )
   }
 
-  const prompt = `${titleSection}${abstractSection}${fullTextSection}## Question
+  const prompt = `${titleSection}${metadataSection}${abstractSection}${fullTextSection}## Question
 
 ${singlePrompt.originalText}
 

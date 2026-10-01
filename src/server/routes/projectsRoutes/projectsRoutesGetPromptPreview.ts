@@ -40,7 +40,7 @@ type PromptPreviewServingRow = {
   source_metadata: unknown
   url: string | null
 }
-type PromptPreviewFullTextRow = {fullText: string | null}
+type PromptPreviewArticleDetailsRow = {fullText: string | null; publicationStatus: string | null}
 
 const getPromptPreviewWorkloadContext = (params: {maxResultRows?: number; operation: string; projectId: string}) => {
   return {
@@ -102,18 +102,34 @@ const getFirstProjectArticleFromServing = async (projectId: string, reviewConfig
   })
 }
 
-const getPromptPreviewArticleFullText = async (params: {articleId: string; projectId: string}) => {
-  const rows = await getAppDatabaseService().queryJson<PromptPreviewFullTextRow>(
+const getPromptPreviewArticleDetails = async (params: {
+  articleId: string
+  includeFullText: boolean
+  projectId: string
+}) => {
+  const rows = await getAppDatabaseService().queryJson<PromptPreviewArticleDetailsRow>(
     `
-    SELECT full_text AS fullText
+    SELECT
+      ${params.includeFullText ? 'full_text' : 'CAST(NULL AS VARCHAR)'} AS fullText,
+      publication_status AS publicationStatus
     FROM app.article
     WHERE id = ${getSqlLiteral(params.articleId)}
     LIMIT 1
   `,
-    getPromptPreviewWorkloadContext({maxResultRows: 1, operation: 'articleFullText', projectId: params.projectId}),
+    getPromptPreviewWorkloadContext({maxResultRows: 1, operation: 'articleDetails', projectId: params.projectId}),
   )
 
-  return rows[0]?.fullText ?? null
+  return rows[0] ?? null
+}
+
+const publicationStatuses = ['preprint', 'submitted', 'accepted', 'published', 'retracted'] as const
+
+const getPublicationStatus = (value: string | null | undefined): ArticleRecord['publicationStatus'] => {
+  return (
+    publicationStatuses.find((status) => {
+      return status === value
+    }) ?? null
+  )
 }
 
 const getDateValue = (value: unknown) => {
@@ -122,6 +138,7 @@ const getDateValue = (value: unknown) => {
 
 const getPromptPreviewArticleRecord = (input: {
   fullText: string | null
+  publicationStatus: string | null
   row: PromptPreviewServingRow
 }): ArticleRecord => {
   return {
@@ -154,9 +171,9 @@ const getPromptPreviewArticleRecord = (input: {
     importRoute: null,
     medrxivId: input.row.medrxiv_id,
     originalData: null,
-    publicationStatus: null,
+    publicationStatus: getPublicationStatus(input.publicationStatus),
     pubmedId: input.row.pmid,
-    sourceMetadata: input.row.source_metadata,
+    sourceMetadata: getJsonValue(input.row.source_metadata),
     updatedAt: new Date(0),
     url: input.row.url,
   }
@@ -213,6 +230,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean | null
         useTitle: boolean
       }>(
         `
@@ -222,6 +240,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          use_metadata AS useMetadata,
           use_title AS useTitle
         FROM app.project
         WHERE id = '${escapeSqlString(params.id)}'
@@ -290,9 +309,16 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       getProviderModelMetadataPromptTokenLimit(getJsonValue(projectModel?.modelMetadataJson), MAX_COMPLETION_TOKENS)
       ?? defaultJudgmentPromptTokenLimit
     const needsFulltext = projectRow.useFulltext || projectRow.useFulltextNoImages
-    const previewFullText = needsFulltext
-      ? await getPromptPreviewArticleFullText({articleId: firstArticleId, projectId: params.id})
-      : null
+    const useMetadata = projectRow.useMetadata === true
+    const previewArticleDetails =
+      needsFulltext || useMetadata
+        ? await getPromptPreviewArticleDetails({
+            articleId: firstArticleId,
+            includeFullText: needsFulltext,
+            projectId: params.id,
+          })
+        : null
+    const previewFullText = previewArticleDetails?.fullText ?? null
     const fullTextResult =
       needsFulltext && previewFullText
         ? processFulltextForLLM(previewFullText, {
@@ -300,7 +326,11 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
             stripImages: projectRow.useFulltextNoImages,
           }).processedText
         : null
-    const firstArticle = getPromptPreviewArticleRecord({fullText: fullTextResult, row: previewArticle})
+    const firstArticle = getPromptPreviewArticleRecord({
+      fullText: fullTextResult,
+      publicationStatus: previewArticleDetails?.publicationStatus ?? null,
+      row: previewArticle,
+    })
 
     if (needsFulltext && !fullTextResult) {
       return getUnavailablePromptPreview({
@@ -319,6 +349,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         useAbstract: projectRow.useAbstract,
         useFulltext: projectRow.useFulltext,
         useFulltextNoImages: projectRow.useFulltextNoImages,
+        useMetadata,
         useTitle: projectRow.useTitle,
       },
       prompt: {...promptRow, order: null},

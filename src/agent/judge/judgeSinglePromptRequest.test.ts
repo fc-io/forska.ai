@@ -32,7 +32,13 @@ const createArticle = (): JudgeSinglePromptInput['article'] => {
 const createJudgeSinglePromptInput = (): JudgeSinglePromptInput => {
   return {
     article: createArticle(),
-    contentSettings: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: false,
+      useTitle: true,
+    },
     judgmentsJobId: 'job-1',
     modelConfig: {
       baseURL: 'http://runtime.test/v1',

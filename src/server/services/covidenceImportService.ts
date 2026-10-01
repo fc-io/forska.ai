@@ -7,7 +7,7 @@ import {
   getSystemPromptVariant,
   type SystemPromptVariant,
 } from '../../agent/judge/systemPromptVariant.ts'
-import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
+import {type ArticleBibliographicSourceMetadata, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
@@ -228,6 +228,7 @@ type CovidenceProjectRecord = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type CovidenceHumanJudgmentSeed = {answer: 'no' | 'yes' | null; articleExternalId: string; isAnswered: boolean}
@@ -258,11 +259,17 @@ const covidencePromptQuestionByMode = {
   title_abstract: 'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
 } as const satisfies Record<CovidenceImportMode, string>
 const covidenceProjectSettingsByMode = {
-  full_text: {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useTitle: true},
-  title_abstract: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+  full_text: {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useMetadata: true, useTitle: true},
+  title_abstract: {
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useMetadata: true,
+    useTitle: true,
+  },
 } as const satisfies Record<
   CovidenceImportMode,
-  {useAbstract: boolean; useFulltext: boolean; useFulltextNoImages: boolean; useTitle: boolean}
+  {useAbstract: boolean; useFulltext: boolean; useFulltextNoImages: boolean; useMetadata: boolean; useTitle: boolean}
 >
 const titleAbstractRoles: CovidenceFileRole[] = ['all', 'irrelevant', 'full_text']
 const fullTextRoles: CovidenceFileRole[] = ['all', 'irrelevant', 'full_text', 'excluded', 'included']
@@ -324,6 +331,14 @@ const covidenceRecordCovidenceKeys = ['covidence', 'covidence_id']
 const covidenceRecordReferenceKeys = ['reference_id', 'ref']
 const covidenceStudyReferenceKeys = ['reference_id', 'ref']
 const covidenceYearKeys = ['year', 'publication_year', 'published_year', 'publication_date', 'date']
+const covidenceMonthKeys = ['published_month', 'publication_month', 'month']
+const covidenceVolumeKeys = ['volume', 'vl']
+const covidenceIssueKeys = ['issue', 'is']
+const covidencePagesKeys = ['pages']
+const covidenceStartPageKeys = ['sp']
+const covidenceEndPageKeys = ['ep']
+const covidencePublicationTypeKeys = ['publication_type', 'reference_type']
+const covidenceAccessionNumberKeys = ['accession_number']
 const emptyCovidenceStageMembership = {
   all: false,
   excluded: false,
@@ -713,6 +728,7 @@ const getCovidenceProjectByImportRoute = async (params: {importRoute: string; tx
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
+    useMetadata: boolean
     useTitle: boolean
   }>(`
     SELECT
@@ -724,6 +740,7 @@ const getCovidenceProjectByImportRoute = async (params: {importRoute: string; tx
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
       p.use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(p.use_metadata, FALSE) AS useMetadata,
       p.use_title AS useTitle
     FROM app.project_import_route pir
     INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
@@ -1758,12 +1775,57 @@ const getCovidenceImportOriginalData = (candidate: CovidenceMergedArticleCandida
   }
 }
 
+const getCovidencePublicationYear = (citation: Record<string, string | null>) => {
+  const year = covidenceYearKeys
+    .map((key) => {
+      return citation[key]?.match(/\b\d{4}\b/)?.[0] ?? null
+    })
+    .find((value) => {
+      return value !== null
+    })
+
+  return year ? Number(year) : null
+}
+
+const getCovidenceTrimmedCitationValue = (citation: Record<string, string | null>, keys: string[]) => {
+  return getCovidenceCitationValue(citation, keys)?.trim() ?? null
+}
+
+const getCovidencePages = (citation: Record<string, string | null>) => {
+  const pages = getCovidenceTrimmedCitationValue(citation, covidencePagesKeys)
+  const startPage = getCovidenceTrimmedCitationValue(citation, covidenceStartPageKeys)
+  const endPage = getCovidenceTrimmedCitationValue(citation, covidenceEndPageKeys)
+  const pageRange =
+    startPage && endPage && endPage !== startPage && !startPage.includes('-') ? `${startPage}-${endPage}` : startPage
+
+  return pages ?? pageRange
+}
+
+export const getCovidenceBibliographicMetadata = (citation: Record<string, string | null>) => {
+  const entries: Array<[string, number | string | null]> = [
+    ['publicationYear', getCovidencePublicationYear(citation)],
+    ['publicationMonth', getCovidenceTrimmedCitationValue(citation, covidenceMonthKeys)],
+    ['volume', getCovidenceTrimmedCitationValue(citation, covidenceVolumeKeys)],
+    ['issue', getCovidenceTrimmedCitationValue(citation, covidenceIssueKeys)],
+    ['pages', getCovidencePages(citation)],
+    ['publicationType', getCovidenceTrimmedCitationValue(citation, covidencePublicationTypeKeys)],
+    ['accessionNumber', getCovidenceTrimmedCitationValue(citation, covidenceAccessionNumberKeys)],
+  ]
+
+  return Object.fromEntries(
+    entries.filter((entry) => {
+      return entry[1] !== null
+    }),
+  ) as ArticleBibliographicSourceMetadata
+}
+
 const getCovidenceImportSourceMetadata = (params: {
   candidate: CovidenceMergedArticleCandidate
   config: CovidencePackageConfig
 }) => {
   return {
     journalTitle: params.candidate.citation.journal ?? null,
+    ...getCovidenceBibliographicMetadata(params.candidate.citation),
     covidence: {
       articleKey: params.candidate.articleKey,
       articleKeySource: params.candidate.articleKeySource,
@@ -1798,7 +1860,7 @@ const getCovidenceImportSourceMetadata = (params: {
 }
 
 const getCovidenceCanonicalSourceMetadata = (candidate: CovidenceMergedArticleCandidate) => {
-  return {journalTitle: candidate.citation.journal ?? null}
+  return {journalTitle: candidate.citation.journal ?? null, ...getCovidenceBibliographicMetadata(candidate.citation)}
 }
 
 const getCovidenceDoiResolverUrl = (value: string | null) => {
@@ -2611,7 +2673,8 @@ export const getOrCreateCovidenceProject = async (params: {
       use_title,
       use_abstract,
       use_fulltext,
-      use_fulltext_no_images
+      use_fulltext_no_images,
+      use_metadata
     )
     VALUES (
       '${escapeSqlString(projectId)}',
@@ -2622,7 +2685,8 @@ export const getOrCreateCovidenceProject = async (params: {
       ${settings.useTitle ? 'TRUE' : 'FALSE'},
       ${settings.useAbstract ? 'TRUE' : 'FALSE'},
       ${settings.useFulltext ? 'TRUE' : 'FALSE'},
-      ${settings.useFulltextNoImages ? 'TRUE' : 'FALSE'}
+      ${settings.useFulltextNoImages ? 'TRUE' : 'FALSE'},
+      ${settings.useMetadata ? 'TRUE' : 'FALSE'}
     )
   `)
 
@@ -2668,6 +2732,7 @@ export const getOrCreateCovidenceProject = async (params: {
       'useAbstract',
       'useFulltext',
       'useFulltextNoImages',
+      'useMetadata',
       'systemPromptVariant',
       ...(params.promptId ? (['promptMembership'] as const) : []),
       'importRoutes',

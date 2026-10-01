@@ -389,3 +389,40 @@ test('single prompt quote validation requeues after the final invalid attempt', 
 
   expect(result).toEqual({error: 'Invalid quotes: not substrings of record text', kind: 'requeue'})
 })
+
+test('single prompt quote validation drops quotes copied from the article_metadata block instead of retrying', () => {
+  const retryBasePrompt = `## article_title
+
+Weekly pharmacist review of antibiotic orders
+
+## article_metadata
+
+journal: Journal of Antimicrobial Chemotherapy
+year: 2019
+
+## article_summary
+
+Antibiotic prescriptions per 100 admissions fell from 62 to 41.
+
+## Question
+
+Is the study set in a hospital?`
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {
+      answer: 'yes',
+      explanation: 'because',
+      quotes: ['Journal of Antimicrobial Chemotherapy', 'fell from 62 to 41'],
+    },
+    lastResponse: '{"answer":"yes"}',
+    maxRetries: 2,
+    recordText:
+      'Weekly pharmacist review of antibiotic orders\n\nAntibiotic prescriptions per 100 admissions fell from 62 to 41.\n\n',
+    retryBasePrompt,
+  })
+
+  expect(result).toEqual({
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['fell from 62 to 41']},
+    kind: 'valid',
+  })
+})

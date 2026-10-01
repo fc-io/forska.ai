@@ -37,6 +37,16 @@ export type ArticleCovidenceSourceMetadata = {
   isSeededHumanJudgmentAnswered: boolean
 }
 
+export type ArticleBibliographicSourceMetadata = {
+  publicationYear?: number
+  publicationMonth?: string
+  volume?: string
+  issue?: string
+  pages?: string
+  publicationType?: string
+  accessionNumber?: string
+}
+
 export type ArticleSourceMetadata = {
   journalTitle: string | null
   preprintSource: string | null
@@ -44,7 +54,7 @@ export type ArticleSourceMetadata = {
   isPreprint: boolean
   fullTextLinks: ArticleSourceLink[]
   covidence?: ArticleCovidenceSourceMetadata | null
-}
+} & ArticleBibliographicSourceMetadata
 
 export const emptyArticleSourceMetadata: ArticleSourceMetadata = {
   journalTitle: null,
@@ -398,6 +408,39 @@ export const getArticleSourceMetadata = (params: {
   return {journalTitle, preprintSource, preprintHostLabel, isPreprint, fullTextLinks}
 }
 
+const articleBibliographicTextKeys = [
+  'publicationMonth',
+  'volume',
+  'issue',
+  'pages',
+  'publicationType',
+  'accessionNumber',
+] as const
+
+const getBibliographicTextValue = (value: unknown) => {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : asNonEmptyString(value)
+}
+
+const getPublicationYearValue = (value: unknown) => {
+  const text = getBibliographicTextValue(value)
+
+  return text !== null && /^\d{4}$/.test(text) ? Number(text) : null
+}
+
+export const getArticleBibliographicSourceMetadataValue = (value: unknown): ArticleBibliographicSourceMetadata => {
+  const record = isRecord(value) ? value : {}
+  const publicationYear = getPublicationYearValue(record.publicationYear)
+  const textEntries = articleBibliographicTextKeys
+    .map((key) => {
+      return [key, getBibliographicTextValue(record[key])] as const
+    })
+    .filter((entry): entry is readonly [(typeof articleBibliographicTextKeys)[number], string] => {
+      return entry[1] !== null
+    })
+
+  return {...(publicationYear === null ? {} : {publicationYear}), ...Object.fromEntries(textEntries)}
+}
+
 export const getArticleSourceMetadataValue = (value: unknown) => {
   const record = isRecord(value) ? value : null
 
@@ -405,6 +448,7 @@ export const getArticleSourceMetadataValue = (value: unknown) => {
     return null
   }
 
+  const bibliographicMetadata = getArticleBibliographicSourceMetadataValue(record)
   const metadata = {
     journalTitle: asNonEmptyString(record.journalTitle),
     preprintSource: asNonEmptyString(record.preprintSource),
@@ -412,6 +456,7 @@ export const getArticleSourceMetadataValue = (value: unknown) => {
     isPreprint: Boolean(record.isPreprint),
     fullTextLinks: getSourceMetadataLinks(record.fullTextLinks),
     covidence: getCovidenceSourceMetadataValue(record.covidence),
+    ...bibliographicMetadata,
   } satisfies ArticleSourceMetadata
 
   return metadata.journalTitle
@@ -420,6 +465,7 @@ export const getArticleSourceMetadataValue = (value: unknown) => {
     || metadata.isPreprint
     || metadata.fullTextLinks.length > 0
     || metadata.covidence
+    || Object.keys(bibliographicMetadata).length > 0
     ? metadata
     : null
 }
