@@ -154,6 +154,25 @@ test('locks project settings and warning, omission, and redaction code fixtures'
   expect(getValidationError(invalidWarningResult)).toContain('unknown code secretOmitted')
 })
 
+test('accepts known system prompt variants, keeps packages without one importable, and rejects unknown variants', () => {
+  const project = getProjectTransferPayloadFixture('project')
+  const getSettingsResult = (systemPromptVariant: unknown) => {
+    return validateProjectTransferPayload('project', {...project, settings: {...project.settings, systemPromptVariant}})
+  }
+
+  expect(Object.hasOwn(project.settings, 'systemPromptVariant')).toBe(false)
+  expect(getValidationError(validateProjectTransferPayload('project', project))).toBeNull()
+  expect(getValidationError(getSettingsResult(null))).toBeNull()
+  expect(getValidationError(getSettingsResult('legacy'))).toBeNull()
+  expect(getValidationError(getSettingsResult('screening_v1'))).toBeNull()
+  expect(getValidationError(getSettingsResult('screening_v2'))).toContain(
+    'project.settings.systemPromptVariant must be one of legacy, screening_v1',
+  )
+  expect(getValidationError(getSettingsResult(1))).toContain(
+    'project.settings.systemPromptVariant must be one of legacy, screening_v1',
+  )
+})
+
 test('rejects missing required signature fields and source ids outside provenance', () => {
   const project = getProjectTransferPayloadFixture('project')
   const article = getOnlyRecord(getProjectTransferPayloadFixture('articles'))

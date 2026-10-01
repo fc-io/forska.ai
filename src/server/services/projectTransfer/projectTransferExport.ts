@@ -2190,6 +2190,7 @@ export const getProjectTransferExportJudgmentInputSignature = ({
   model,
   prompt,
   providerConnection,
+  systemPromptVariant = null,
 }: {
   article: ProjectTransferExportArticlePayloadRecord
   chunkEvidenceDigests?: string[] | null
@@ -2199,6 +2200,7 @@ export const getProjectTransferExportJudgmentInputSignature = ({
   model: ProjectTransferExportModelRow
   prompt: ProjectTransferExportProjectPromptRow
   providerConnection: ProjectTransferExportProviderConnectionRow
+  systemPromptVariant?: SystemPromptVariant | null
 }) => {
   const modelRequestSignature = getProjectTransferExportModelRequestSignature({model, providerConnection})
   const providerKind = providerConnection.providerKind
@@ -2208,7 +2210,8 @@ export const getProjectTransferExportJudgmentInputSignature = ({
     promptTokenLimit: modelRequestSignature.promptTokenLimit,
   })
   const articleRecord = getProjectTransferExportArticleRecordForSignature(article, fullTextProcessing.fullText)
-  const systemPrompt = getSinglePromptSystemPromptForArticle(articleRecord, providerKind)
+  const resolvedSystemPromptVariant = getSystemPromptVariant(systemPromptVariant)
+  const systemPrompt = getSinglePromptSystemPromptForArticle(articleRecord, providerKind, resolvedSystemPromptVariant)
   const evidenceSystemPrompt = chunkingStrategy
     ? getSinglePromptEvidenceSystemPromptForArticle(articleRecord, providerKind)
     : null
@@ -2241,7 +2244,8 @@ export const getProjectTransferExportJudgmentInputSignature = ({
       reservedCompletionTokens: MAX_COMPLETION_TOKENS,
       retryContract: 'json-schema-and-quote-validation:v1',
       systemPromptDigest: getDigestValue(systemPrompt),
-      systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v1',
+      systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v2',
+      systemPromptVariant: resolvedSystemPromptVariant,
     },
     version: projectTransferInputSignatureVersion,
   }
@@ -2589,6 +2593,7 @@ const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTra
               model,
               prompt,
               providerConnection,
+              systemPromptVariant: context.project.systemPromptVariant,
             })
           : null
 

@@ -1721,6 +1721,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
       humanJudgmentMode: string | null
       modelId: string
       name: string
+      systemPromptVariant: string | null
     }
     promptRow: {
       archived: boolean
@@ -1963,7 +1964,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
       sessionId: 'session-writer',
     })
 
-    const [projectRow] = await database.queryJson("SELECT name, model_id AS modelId, human_judgment_mode AS humanJudgmentMode, use_fulltext_no_images AS useFulltextNoImages, archived, date_from AS dateFrom, date_to AS dateTo FROM app.project WHERE id = '" + writeResult.projectId + "'")
+    const [projectRow] = await database.queryJson("SELECT name, model_id AS modelId, human_judgment_mode AS humanJudgmentMode, system_prompt_variant AS systemPromptVariant, use_fulltext_no_images AS useFulltextNoImages, archived, date_from AS dateFrom, date_to AS dateTo FROM app.project WHERE id = '" + writeResult.projectId + "'")
     const [promptRow] = await database.queryJson("SELECT pp.prompt_id AS promptId, pp.prompt_order AS promptOrder, pp.enabled, pp.archived, pp.origin_project_id AS originProjectId, pp.criteria_disposition AS criteriaDisposition, pp.criteria_section_key AS criteriaSectionKey, p.archived AS promptArchived FROM app.project_prompt pp INNER JOIN app.prompt p ON p.id = pp.prompt_id WHERE pp.project_id = '" + writeResult.projectId + "'")
     const articleRows = await database.queryJson("SELECT id, article_id AS articleId, article_title AS articleTitle, article_summary AS articleSummary, full_text_pdf AS fullTextPdf, TO_JSON(source_metadata) AS sourceMetadata FROM app.article WHERE id IN ('" + writeResult.articleIdBySourceId['source-new'] + "', 'reuse-article') ORDER BY id ASC")
     const [projectArticleCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project_article WHERE project_id = '" + writeResult.projectId + "' AND imported_from_project_id IS NULL")
@@ -2003,6 +2004,7 @@ test('project transfer commit writer creates project rows and preserves safe pac
     humanJudgmentMode: 'prompt',
     modelId: 'target-model',
     name: 'Imported Writer Project',
+    systemPromptVariant: null,
   })
   expect(result.promptRow).toMatchObject({
     archived: false,
@@ -2786,6 +2788,58 @@ test('project transfer commit writer preserves imported model variant and versio
   expect(result.modelRow.variant).toBe('reasoning')
   expect(result.modelRow.markerVariant).toBe('reasoning')
   expect(result.modelRow.markerVersion).toBe('2026-06-01')
+})
+
+test('project transfer commit writer keeps the system prompt variant from the package settings', () => {
+  const result = runCommitWriterScript<{projectRow: {systemPromptVariant: string | null}}>(`
+    const settings = {
+      humanJudgmentMode: 'summary',
+      systemPromptVariant: 'screening_v1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+    const importedDependencyResolution = {
+      modelTargetBySourceId: {'source-model': 'new:model:source-model'},
+      providerTargetBySourceId: {'source-provider': 'new:provider:source-provider'},
+    }
+    const writeResult = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-system-prompt-variant',
+      now,
+      payloads: {
+        models: [getModelPayload()],
+        project: getProjectPayload(settings),
+        providerConnections: [
+          {
+            authMode: 'apiKey',
+            baseURL: null,
+            configJson: {archived: false, disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+            enabled: false,
+            label: 'Imported Provider',
+            maxInflightRequests: 4,
+            providerKind: 'openai',
+            secretRef: null,
+            sourceProviderConnectionId: 'source-provider',
+          },
+        ],
+      },
+      plan: getBasePlan({}, importedDependencyResolution),
+      promotion: {
+        articleCreates: [],
+        articleFieldFills: [],
+        manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-system-prompt-variant', updatedAt: now.toISOString()},
+        promotionPathByPackagePath: {},
+      },
+      schemaVersion: 1,
+      sessionId: 'session-system-prompt-variant',
+    })
+    const [projectRow] = await database.queryJson("SELECT system_prompt_variant AS systemPromptVariant FROM app.project WHERE id = '" + writeResult.projectId + "'")
+
+    console.log(JSON.stringify({projectRow}))
+  `)
+
+  expect(result.projectRow).toEqual({systemPromptVariant: 'screening_v1'})
 })
 
 test('project transfer commit writer blocks commit when a reused imported model fingerprint drifts', () => {

@@ -1663,7 +1663,8 @@ const judgmentInputSignature = {
     reservedCompletionTokens: 4000,
     retryContract: 'json-schema-and-quote-validation:v1',
     systemPromptDigest: 'fixture-system-prompt-digest',
-    systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v1',
+    systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v2',
+    systemPromptVariant: 'legacy',
   },
   version: 1,
 }

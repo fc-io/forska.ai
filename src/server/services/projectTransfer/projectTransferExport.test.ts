@@ -10,6 +10,7 @@ import {
   getProjectTransferExportHumanReviewInputSignature,
   getProjectTransferExportJudgmentInputSignature,
 } from './projectTransferExport.ts'
+import {getProjectTransferJudgmentAnalysisInputSignatureDigest} from './projectTransferFidelityValidation.ts'
 import {projectTransferPayloadKeys, projectTransferSchemaVNextPayloadKeys} from './projectTransferSchemas.ts'
 
 setDefaultTimeout(120_000)
@@ -175,7 +176,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
     judgmentInputSignature: {
       model: {modelOptions: {thinking: string | null}; promptTokenLimit: number}
       provider: {transportFamily: string | null}
-      request: {invocationTemperature: number; reservedCompletionTokens: number}
+      request: {
+        invocationTemperature: number
+        reservedCompletionTokens: number
+        systemPromptFamily: string
+        systemPromptVariant: string
+      }
       version: number
     }
     judgmentIds: string[]
@@ -263,6 +269,10 @@ test('project-transfer export reads archived app-table scope and serializes lock
     serializedArticleHasFullTextPdf: boolean
     serializedJudgmentHasDeleteGeneration: boolean
     settingsArchived: boolean
+    settingsSystemPromptVariant: string
+    projectSettings: {humanJudgmentMode: string; systemPromptVariant?: string}
+    summaryProjectSettings: {humanJudgmentMode: string; systemPromptVariant?: string}
+    summaryProjectSettingsHasSystemPromptVariant: boolean
     summaryReviewIds: string[]
     preservedUrlWarnings: Array<{action: string; code: string; jsonPointer: string; severity: string}>
     warnings: unknown[]
@@ -444,6 +454,11 @@ test('project-transfer export reads archived app-table scope and serializes lock
           TIMESTAMPTZ '2026-01-01T00:00:00Z',
           TIMESTAMPTZ '2026-01-02T00:00:00Z'
         )
+    \`)
+    await database.run(\`
+      UPDATE app.project
+      SET system_prompt_variant = 'screening_v1'
+      WHERE id = 'project-archived-export'
     \`)
     await database.run(\`
       INSERT INTO app.prompt (
@@ -1106,6 +1121,10 @@ test('project-transfer export reads archived app-table scope and serializes lock
       serializedArticleHasFullTextPdf: Object.hasOwn(serializedArticle, 'fullTextPdf'),
       serializedJudgmentHasDeleteGeneration: Object.hasOwn(serializedJudgment, 'deleteGeneration'),
       settingsArchived: settings.archived,
+      settingsSystemPromptVariant: settings.systemPromptVariant,
+      projectSettings: archived.payloads.project.settings,
+      summaryProjectSettings: summary.payloads.project.settings,
+      summaryProjectSettingsHasSystemPromptVariant: Object.hasOwn(summary.payloads.project.settings, 'systemPromptVariant'),
       summaryReviewIds: summary.payloads.reviews.map((review) => review.sourceReviewId),
       preservedUrlWarnings: archived.warnings.filter((warning) => warning.code === 'nonLocalUrlPreserved').map((warning) => {
         return {
@@ -1125,6 +1144,10 @@ test('project-transfer export reads archived app-table scope and serializes lock
 
   expect(result.payloadKeys).toEqual([...projectTransferPayloadKeys].sort())
   expect(result.settingsArchived).toBe(true)
+  expect(result.settingsSystemPromptVariant).toBe('screening_v1')
+  expect(result.projectSettings).toMatchObject({humanJudgmentMode: 'prompt', systemPromptVariant: 'screening_v1'})
+  expect(result.summaryProjectSettings).toMatchObject({humanJudgmentMode: 'summary'})
+  expect(result.summaryProjectSettingsHasSystemPromptVariant).toBe(false)
   expect(result.projectArchived).toBe(true)
   expect(result.articleIds).toEqual(['article-route-in', 'article-curated-in', 'article-stale-duplicate-doi'])
   expect(result.curatedArticleDoi).toBeNull()
@@ -1160,7 +1183,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.judgmentInputSignature).toMatchObject({
     model: {modelOptions: {thinking: 'medium'}, promptTokenLimit: 28768},
     provider: {transportFamily: 'codex-app'},
-    request: {invocationTemperature: 0.2, reservedCompletionTokens: 4000},
+    request: {
+      invocationTemperature: 0.2,
+      reservedCompletionTokens: 4000,
+      systemPromptFamily: 'getSinglePromptSystemPromptForArticle:v2',
+      systemPromptVariant: 'screening_v1',
+    },
     version: 1,
   })
   expect(result.humanReviewProvenanceKinds).toEqual(['currentReviewRows', 'currentReviewRows', 'currentReviewRows'])
@@ -1465,10 +1493,48 @@ test('project-transfer judgment input signatures are stable across database id r
     prompt,
     providerConnection: {...providerConnection, providerKind: 'openai'},
   })
+  const explicitLegacySignature = getProjectTransferExportJudgmentInputSignature({
+    article,
+    chunkingStrategy: null,
+    contentSettings,
+    model,
+    prompt,
+    providerConnection,
+    systemPromptVariant: 'legacy',
+  })
+  const screeningSignature = getProjectTransferExportJudgmentInputSignature({
+    article,
+    chunkingStrategy: null,
+    contentSettings,
+    model,
+    prompt,
+    providerConnection,
+    systemPromptVariant: 'screening_v1',
+  })
+  const {
+    systemPromptDigest: _legacySystemPromptDigest,
+    systemPromptVariant: _legacySystemPromptVariant,
+    ...legacyRequestRest
+  } = signature.request
+  const {
+    systemPromptDigest: _screeningSystemPromptDigest,
+    systemPromptVariant: _screeningSystemPromptVariant,
+    ...screeningRequestRest
+  } = screeningSignature.request
 
   expect(signature).toEqual(remappedSignature)
+  expect(signature).toEqual(explicitLegacySignature)
   expect(signature).not.toEqual(thinkingChangedSignature)
   expect(signature).not.toEqual(providerChangedSignature)
+  expect(signature.request.systemPromptFamily).toBe('getSinglePromptSystemPromptForArticle:v2')
+  expect(signature.request.systemPromptVariant).toBe('legacy')
+  expect(screeningSignature.request.systemPromptVariant).toBe('screening_v1')
+  expect(screeningSignature.request.systemPromptDigest).not.toBe(signature.request.systemPromptDigest)
+  expect(screeningRequestRest).toEqual(legacyRequestRest)
+  expect({...screeningSignature, request: null}).toEqual({...signature, request: null})
+  expect(getProjectTransferJudgmentAnalysisInputSignatureDigest(screeningSignature)).toBe(
+    getProjectTransferJudgmentAnalysisInputSignatureDigest(signature),
+  )
   expect(JSON.stringify(signature)).not.toContain('source-model-a')
   expect(JSON.stringify(signature)).not.toContain('source-prompt-a')
   expect(signature.fullTextProcessing.processedTextDigest).not.toBeNull()
