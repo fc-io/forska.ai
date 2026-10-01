@@ -379,6 +379,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
               useAbstract: true,
               useFulltext: true,
               useFulltextNoImages: false,
+              useMetadata: false,
               useTitle: true,
             }],
             getOwnerBackedJudgmentJobInfo: async () => ({
@@ -407,6 +408,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
               useAbstract: true,
               useFulltext: true,
               useFulltextNoImages: false,
+              useMetadata: true,
               useTitle: true,
             }),
             recordAcceptedJudgeWorkerClaims: async (prompts) => {
@@ -471,6 +473,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
       modelProvider: string
       modelWorkerUrls: string[]
       providerConnectionId: string | null
+      useMetadata: boolean
     }>
     runtime: {modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]}
     runtimeMatchCalls: number
@@ -489,6 +492,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
     modelProvider: 'sglang',
     modelWorkerUrls: ['http://owner-sglang-worker:30001'],
     providerConnectionId: 'connection-sglang',
+    useMetadata: true,
   })
   expect(result.acceptedClaimCount).toBe(1)
   expect(result.listProviderConnectionCalls).toBe(0)

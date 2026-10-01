@@ -89,6 +89,7 @@ type JobInfoRow = {
   useAbstract: boolean | null
   useFulltext: boolean | null
   useFulltextNoImages: boolean | null
+  useMetadata: boolean | null
   useTitle: boolean | null
 }
 
@@ -119,6 +120,7 @@ export type JudgmentJobSqliteInfo = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -146,6 +148,7 @@ type QueuePromptClaim = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -228,6 +231,7 @@ type QueuePromptOutboxInsert = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata?: boolean | null
   useTitle: boolean
 }
 
@@ -259,6 +263,7 @@ type OutboxRow = {
   useAbstract: number
   useFulltext: number
   useFulltextNoImages: number
+  useMetadata: number
   useTitle: number
 }
 
@@ -291,6 +296,7 @@ export type JudgmentJobSqliteOutboxEntry = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -404,6 +410,7 @@ type OrphanedJudgedQueueRepairJobInfo = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type OrphanedJudgedQueueRow = {articleId: string; promptId: string; queuePromptId: string}
@@ -427,6 +434,7 @@ type PromptClaimIdentity = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -824,6 +832,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       use_abstract INTEGER NOT NULL,
       use_fulltext INTEGER NOT NULL,
       use_fulltext_no_images INTEGER NOT NULL,
+      use_metadata INTEGER NOT NULL DEFAULT 0,
       system_prompt_variant TEXT,
       created_at TEXT NOT NULL
     );
@@ -887,6 +896,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       use_abstract INTEGER NOT NULL,
       use_fulltext INTEGER NOT NULL,
       use_fulltext_no_images INTEGER NOT NULL,
+      use_metadata INTEGER NOT NULL DEFAULT 0,
       system_prompt_variant TEXT,
       chunking_strategy TEXT,
       is_answered INTEGER NOT NULL,
@@ -989,6 +999,7 @@ const judgmentJobSqliteRequiredSchema = {
     'use_abstract',
     'use_fulltext',
     'use_fulltext_no_images',
+    'use_metadata',
     'created_at',
   ],
   job_scan_state: [
@@ -1032,6 +1043,7 @@ const judgmentJobSqliteRequiredSchema = {
     'article_id',
     'prompt_id',
     'model_id',
+    'use_metadata',
     'system_prompt_variant',
     'created_at',
     'updated_at',
@@ -1052,7 +1064,10 @@ const judgmentJobSqliteRequiredSchema = {
   ],
 } as const
 
-const jobInfoColumns = [{name: 'system_prompt_variant', sql: 'TEXT'}] as const
+const jobInfoColumns = [
+  {name: 'system_prompt_variant', sql: 'TEXT'},
+  {name: 'use_metadata', sql: 'INTEGER NOT NULL DEFAULT 0'},
+] as const
 
 const jobScanStateColumns = [
   {name: 'cursor_last_prompt_id', sql: 'TEXT'},
@@ -1083,6 +1098,7 @@ const judgmentOutboxColumns = [
   {name: 'execution_snapshot_hash', sql: 'TEXT'},
   {name: 'request_attempts_json', sql: 'TEXT'},
   {name: 'system_prompt_variant', sql: 'TEXT'},
+  {name: 'use_metadata', sql: 'INTEGER NOT NULL DEFAULT 0'},
 ] as const
 
 const completionAckColumns = [
@@ -2465,6 +2481,7 @@ const getOrphanedJudgedQueueRepairJobInfo = (
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          use_metadata AS useMetadata,
           use_title AS useTitle
         FROM job_info
         WHERE job_id = ?
@@ -2478,6 +2495,7 @@ const getOrphanedJudgedQueueRepairJobInfo = (
     useAbstract: number
     useFulltext: number
     useFulltextNoImages: number
+    useMetadata: number
     useTitle: number
   } | null
 
@@ -2489,6 +2507,7 @@ const getOrphanedJudgedQueueRepairJobInfo = (
         useAbstract: toBoolean(row.useAbstract),
         useFulltext: toBoolean(row.useFulltext),
         useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+        useMetadata: toBoolean(row.useMetadata),
         useTitle: toBoolean(row.useTitle),
       }
     : null
@@ -2534,6 +2553,7 @@ const getExistingJudgmentPairsForOrphanedQueueRows = async ({
               AND use_abstract = ${getSqlLiteral(jobInfo.useAbstract)}
               AND use_fulltext = ${getSqlLiteral(jobInfo.useFulltext)}
               AND use_fulltext_no_images = ${getSqlLiteral(jobInfo.useFulltextNoImages)}
+              AND use_metadata = ${getSqlLiteral(jobInfo.useMetadata)}
               AND system_prompt_variant = ${getSqlLiteral(jobInfo.systemPromptVariant)}
               AND delete_generation = 0
               AND deleted_at IS NULL
@@ -2579,6 +2599,7 @@ const getOutboxEntry = (row: OutboxRow) => {
     useAbstract: toBoolean(row.useAbstract),
     useFulltext: toBoolean(row.useFulltext),
     useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+    useMetadata: toBoolean(row.useMetadata),
     useTitle: toBoolean(row.useTitle),
   } satisfies JudgmentJobSqliteOutboxEntry
 }
@@ -2859,7 +2880,8 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
-      p.use_fulltext_no_images AS useFulltextNoImages
+      p.use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(p.use_metadata, FALSE) AS useMetadata
     FROM app.judgment_job jj
     INNER JOIN app.project p ON p.id = jj.project_id
     INNER JOIN app.model m ON m.id = p.model_id
@@ -2901,6 +2923,7 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
     useAbstract: row.useAbstract ?? true,
     useFulltext: row.useFulltext ?? false,
     useFulltextNoImages: row.useFulltextNoImages ?? false,
+    useMetadata: row.useMetadata ?? false,
     useTitle: row.useTitle ?? true,
   }
 }
@@ -3122,6 +3145,7 @@ const getClaimableOutboxRows = (database: Database, limit: number, exactRequestA
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          use_metadata AS useMetadata,
           COALESCE(
             system_prompt_variant,
             (SELECT ji.system_prompt_variant FROM job_info ji WHERE ji.job_id = judgment_outbox.job_id)
@@ -3174,6 +3198,7 @@ const getClaimedOutboxRows = (database: Database, claimId: string) => {
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          use_metadata AS useMetadata,
           COALESCE(
             system_prompt_variant,
             (SELECT ji.system_prompt_variant FROM job_info ji WHERE ji.job_id = judgment_outbox.job_id)
@@ -3619,6 +3644,25 @@ const getOutboxSystemPromptVariantFromDatabase = (
   return getSystemPromptVariant(row ? row.systemPromptVariant : fallback)
 }
 
+const getOutboxUseMetadataFromDatabase = (
+  database: Database,
+  jobId: string,
+  fallback: boolean | null | undefined,
+): boolean => {
+  const row = database
+    .query(
+      `
+        SELECT use_metadata AS useMetadata
+        FROM job_info
+        WHERE job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId) as {useMetadata: number | null} | null
+
+  return row ? toBoolean(row.useMetadata) : fallback === true
+}
+
 const hasStoredCanonicalQueuePromptDuplicate = ({
   database,
   jobId,
@@ -3915,6 +3959,7 @@ const claimPreparedQueuePromptRows = ({
               useAbstract: jobInfo.useAbstract,
               useFulltext: jobInfo.useFulltext,
               useFulltextNoImages: jobInfo.useFulltextNoImages,
+              useMetadata: jobInfo.useMetadata,
               useTitle: jobInfo.useTitle,
             },
           ]
@@ -3933,6 +3978,7 @@ const isSnapshotIdentityForJobInfo = (
     && identity.useAbstract === jobInfo.useAbstract
     && identity.useFulltext === jobInfo.useFulltext
     && identity.useFulltextNoImages === jobInfo.useFulltextNoImages
+    && identity.useMetadata === jobInfo.useMetadata
     && identity.useTitle === jobInfo.useTitle
   )
 }
@@ -4138,6 +4184,7 @@ const getPromptClaimIdentityFromDatabase = (
         useAbstract: jobInfo.useAbstract,
         useFulltext: jobInfo.useFulltext,
         useFulltextNoImages: jobInfo.useFulltextNoImages,
+        useMetadata: jobInfo.useMetadata,
         useTitle: jobInfo.useTitle,
       }
     : null
@@ -4159,6 +4206,7 @@ const getReadyPromptIdentity = (
     useAbstract: jobInfo.useAbstract,
     useFulltext: jobInfo.useFulltext,
     useFulltextNoImages: jobInfo.useFulltextNoImages,
+    useMetadata: jobInfo.useMetadata,
     useTitle: jobInfo.useTitle,
   }
 }
@@ -4184,6 +4232,7 @@ const getPromptClaimIdentityMismatch = (
         'useAbstract',
         'useFulltext',
         'useFulltextNoImages',
+        'useMetadata',
         'useTitle',
       ] as const
     ).find((key) => {
@@ -4207,6 +4256,7 @@ const getPromptClaimIdentityMismatch = (
       'useAbstract',
       'useFulltext',
       'useFulltextNoImages',
+      'useMetadata',
       'useTitle',
     ] as const
   ).find((key) => {
@@ -4256,6 +4306,7 @@ const assertPromptClaimIdentityMatchFromDatabase = (
           useAbstract: jobInfo.useAbstract,
           useFulltext: jobInfo.useFulltext,
           useFulltextNoImages: jobInfo.useFulltextNoImages,
+          useMetadata: jobInfo.useMetadata,
           useTitle: jobInfo.useTitle,
         }
       : null
@@ -4288,6 +4339,7 @@ const assertPromptClaimIdentityFromDatabase = (
 const getPromptClaimIdentityFromOutboxInsert = (
   jobId: string,
   input: QueuePromptOutboxInsert,
+  jobUseMetadata: boolean,
 ): PromptClaimIdentity | null => {
   return input.claimId && input.executionSnapshotId && input.executionSnapshotHash && input.projectId
     ? {
@@ -4303,6 +4355,7 @@ const getPromptClaimIdentityFromOutboxInsert = (
         useAbstract: input.useAbstract,
         useFulltext: input.useFulltext,
         useFulltextNoImages: input.useFulltextNoImages,
+        useMetadata: input.useMetadata ?? jobUseMetadata,
         useTitle: input.useTitle,
       }
     : null
@@ -5192,6 +5245,7 @@ const sqliteService = {
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
+            use_metadata AS useMetadata,
             system_prompt_variant AS systemPromptVariant,
             created_at AS createdAt
           FROM job_info
@@ -5215,6 +5269,7 @@ const sqliteService = {
           useAbstract: number
           useFulltext: number
           useFulltextNoImages: number
+          useMetadata: number
           useTitle: number
         } | null
         const createdAt = getDateValue(row?.createdAt)
@@ -5237,6 +5292,7 @@ const sqliteService = {
               useAbstract: toBoolean(row.useAbstract),
               useFulltext: toBoolean(row.useFulltext),
               useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+              useMetadata: toBoolean(row.useMetadata),
               useTitle: toBoolean(row.useTitle),
             }
           : null
@@ -5680,9 +5736,10 @@ const sqliteService = {
             use_abstract,
             use_fulltext,
             use_fulltext_no_images,
+            use_metadata,
             system_prompt_variant,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
           )
           .run(
@@ -5700,6 +5757,7 @@ const sqliteService = {
             Number(jobInfo.useAbstract),
             Number(jobInfo.useFulltext),
             Number(jobInfo.useFulltextNoImages),
+            Number(jobInfo.useMetadata),
             jobInfo.systemPromptVariant,
             createdAt,
           )
@@ -6323,7 +6381,8 @@ const sqliteService = {
   ) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const insertedRows = database.transaction((input: QueuePromptOutboxInsert) => {
-        const expectedIdentity = getPromptClaimIdentityFromOutboxInsert(jobId, input)
+        const useMetadata = getOutboxUseMetadataFromDatabase(database, jobId, input.useMetadata)
+        const expectedIdentity = getPromptClaimIdentityFromOutboxInsert(jobId, input, useMetadata)
 
         if (expectedIdentity) {
           assertPromptClaimIdentityFromDatabase(database, expectedIdentity, options)
@@ -6349,6 +6408,7 @@ const sqliteService = {
             use_abstract,
             use_fulltext,
             use_fulltext_no_images,
+            use_metadata,
             system_prompt_variant,
             chunking_strategy,
             is_answered,
@@ -6361,7 +6421,7 @@ const sqliteService = {
             request_attempts_json,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
           )
           .run(
@@ -6381,6 +6441,7 @@ const sqliteService = {
             Number(input.useAbstract),
             Number(input.useFulltext),
             Number(input.useFulltextNoImages),
+            Number(useMetadata),
             getOutboxSystemPromptVariantFromDatabase(database, jobId, input.systemPromptVariant),
             input.chunkingStrategy,
             Number(input.isAnswered),

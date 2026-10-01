@@ -133,9 +133,7 @@ const runScenario = async ({upgrade}: {upgrade: boolean}) => {
           retry: input.includes('Your previous answer'),
         }
       })
-      throw new Error(
-        `Topology provider rendered an unexpected request: ${JSON.stringify(invalidRequests)}`,
-      )
+      throw new Error(`Topology provider rendered an unexpected request: ${JSON.stringify(invalidRequests)}`)
     }
     if (
       lifecycle.result.judgments.some((row) => {
@@ -145,6 +143,7 @@ const runScenario = async ({upgrade}: {upgrade: boolean}) => {
           || !row.useAbstract
           || row.useFulltext
           || row.useFulltextNoImages
+          || row.useMetadata === true
         )
       })
     ) {

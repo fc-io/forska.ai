@@ -17,6 +17,7 @@ type ExportedOutboxRow = {
   useAbstract: number
   useFulltext: number
   useFulltextNoImages: number
+  useMetadata?: number | null
   useTitle: number
 }
 
@@ -62,6 +63,7 @@ const checkBatch = async ({jobId, limit, offset}: {jobId: string; limit: number;
             AND use_abstract = ${getSqlLiteral(row.useAbstract === 1)}
             AND use_fulltext = ${getSqlLiteral(row.useFulltext === 1)}
             AND use_fulltext_no_images = ${getSqlLiteral(row.useFulltextNoImages === 1)}
+            AND use_metadata = ${getSqlLiteral(row.useMetadata === 1)}
             AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(row.systemPromptVariant))}
             AND delete_generation = 0
             AND deleted_at IS NULL

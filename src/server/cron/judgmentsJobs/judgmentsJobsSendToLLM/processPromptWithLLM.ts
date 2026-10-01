@@ -56,6 +56,7 @@ const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): 
       AND use_abstract = ${promptToProcess.useAbstract ? 'TRUE' : 'FALSE'}
       AND use_fulltext = ${promptToProcess.useFulltext ? 'TRUE' : 'FALSE'}
       AND use_fulltext_no_images = ${promptToProcess.useFulltextNoImages ? 'TRUE' : 'FALSE'}
+      AND use_metadata = ${promptToProcess.useMetadata ? 'TRUE' : 'FALSE'}
       AND system_prompt_variant = '${escapeSqlString(getSystemPromptVariant(promptToProcess.systemPromptVariant))}'
       AND deleted_at IS NULL
     LIMIT 1
@@ -251,7 +252,7 @@ const getOwnerBackedPromptInput = async (
         biorxivId: null,
         medrxivId: null,
         doi: getStringValue(articlePayload.doi),
-        pubmedId: null,
+        pubmedId: getStringValue(articlePayload.pubmedId),
         url: getStringValue(articlePayload.url),
         fullTextFetchedAt: getDateOrNull(articlePayload.fullTextFetchedAt),
         fullText: getStringValue(articlePayload.fullText),
@@ -460,6 +461,7 @@ const processSinglePrompt = async (
         useAbstract: promptToProcess.useAbstract,
         useFulltext: promptToProcess.useFulltext,
         useFulltextNoImages: promptToProcess.useFulltextNoImages,
+        useMetadata: promptToProcess.useMetadata,
       },
       systemPromptVariant: promptToProcess.systemPromptVariant,
     })
@@ -742,6 +744,7 @@ const enqueueJudgeWorkerTerminalCompletion = async (
     useAbstract: promptToProcess.useAbstract,
     useFulltext: promptToProcess.useFulltext,
     useFulltextNoImages: promptToProcess.useFulltextNoImages,
+    useMetadata: promptToProcess.useMetadata,
     useTitle: promptToProcess.useTitle,
   })
 }

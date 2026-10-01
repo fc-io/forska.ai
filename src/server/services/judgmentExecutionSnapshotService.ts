@@ -65,6 +65,7 @@ type JudgmentExecutionSnapshotRow = {
   providerMaxInflightRequests: number | null
   providerSecretRef: string | null
   publicationStatus: string | null
+  pubmedId: string | null
   queueRecordId: string
   requestedArticleId: string
   requestedPromptId: string
@@ -81,6 +82,7 @@ type JudgmentExecutionSnapshotRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -100,6 +102,7 @@ type StoredSnapshotRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type StoredSnapshotIdentityRow = Omit<StoredSnapshotRow, 'payloadJson'>
@@ -117,6 +120,7 @@ type SnapshotIdentityInput = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -138,6 +142,7 @@ export type JudgmentExecutionSnapshotRecord = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -150,6 +155,7 @@ export type JudgmentExecutionSnapshotClaim = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -432,6 +438,7 @@ const getSnapshotRows = async (
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
       p.use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(p.use_metadata, FALSE) AS useMetadata,
       p.date_from AS dateFrom,
       p.date_to AS dateTo,
       pr.id AS promptId,
@@ -452,6 +459,7 @@ const getSnapshotRows = async (
       a.article_created_at AS articleCreatedAt,
       a.article_updated_at AS articleUpdatedAt,
       a.doi AS doi,
+      a.pubmed_id AS pubmedId,
       a.url AS url,
       ${getSnapshotFullTextColumnSelect({includeFulltext, stripImages})} AS fullText,
       NULL AS fullTextHtml,
@@ -565,6 +573,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       id: articleId,
       originalData: compatibilityValues.originalData,
       publicationStatus: row.publicationStatus,
+      pubmedId: row.pubmedId,
       scopedImportMetadata,
       scopedRawPayload,
       selectedExternalArticleId: row.selectedExternalArticleId,
@@ -580,6 +589,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       useAbstract: row.useAbstract,
       useFulltext: row.useFulltext,
       useFulltextNoImages: row.useFulltextNoImages,
+      useMetadata: row.useMetadata,
       useTitle: row.useTitle,
     },
     identity: {
@@ -629,7 +639,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       maxInflightRequests: row.providerMaxInflightRequests,
       secretRef: row.providerSecretRef,
     },
-    snapshotVersion: 2,
+    snapshotVersion: 3,
   }
 }
 
@@ -650,6 +660,7 @@ const toSnapshotRecord = (row: StoredSnapshotRow): JudgmentExecutionSnapshotReco
     useAbstract: row.useAbstract,
     useFulltext: row.useFulltext,
     useFulltextNoImages: row.useFulltextNoImages,
+    useMetadata: row.useMetadata,
     useTitle: row.useTitle,
   }
 }
@@ -663,6 +674,7 @@ const toSnapshotIdentity = (row: SnapshotIdentityInput): JudgmentExecutionSnapsh
     useAbstract: row.useAbstract,
     useFulltext: row.useFulltext,
     useFulltextNoImages: row.useFulltextNoImages,
+    useMetadata: row.useMetadata,
     useTitle: row.useTitle,
   }
 }
@@ -682,6 +694,7 @@ const getSnapshotSelectSql = () => {
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(use_metadata, FALSE) AS useMetadata,
       payload_hash AS executionSnapshotHash,
       TO_JSON(payload_json) AS payloadJson,
       created_by AS createdBy,
@@ -705,6 +718,7 @@ const getSnapshotIdentitySelectSql = () => {
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(use_metadata, FALSE) AS useMetadata,
       payload_hash AS executionSnapshotHash,
       created_by AS createdBy,
       created_at AS createdAt
@@ -741,6 +755,7 @@ const getSnapshotInsertValueSql = ({
     ${getSqlLiteral(row.useAbstract)},
     ${getSqlLiteral(row.useFulltext)},
     ${getSqlLiteral(row.useFulltextNoImages)},
+    ${getSqlLiteral(row.useMetadata)},
     ${getSqlLiteral(executionSnapshotHash)},
     ${getSqlLiteral(JSON.stringify(payload))}::JSON,
     ${getSqlLiteral(claimedBy)}
@@ -787,6 +802,7 @@ const getSnapshotIdentityForTransientRow = (row: JudgmentExecutionSnapshotRow): 
     useAbstract: row.useAbstract,
     useFulltext: row.useFulltext,
     useFulltextNoImages: row.useFulltextNoImages,
+    useMetadata: row.useMetadata,
     useTitle: row.useTitle,
   }
 }
@@ -884,6 +900,7 @@ const createJudgmentExecutionSnapshotsForClaimGroup = async (
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      use_metadata,
       payload_hash,
       payload_json,
       created_by
@@ -902,6 +919,7 @@ const createJudgmentExecutionSnapshotsForClaimGroup = async (
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(use_metadata, FALSE) AS useMetadata,
       payload_hash AS executionSnapshotHash,
       created_by AS createdBy,
       created_at AS createdAt
@@ -1033,6 +1051,7 @@ export const isJudgmentExecutionSnapshotIdentityValid = async (input: SnapshotId
       AND use_abstract = ${getSqlLiteral(input.useAbstract)}
       AND use_fulltext = ${getSqlLiteral(input.useFulltext)}
       AND use_fulltext_no_images = ${getSqlLiteral(input.useFulltextNoImages)}
+      AND COALESCE(use_metadata, FALSE) = ${getSqlLiteral(input.useMetadata)}
     LIMIT 1
   `)
 

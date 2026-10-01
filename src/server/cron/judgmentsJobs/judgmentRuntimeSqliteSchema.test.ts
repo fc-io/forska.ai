@@ -109,6 +109,7 @@ test('SQLite judgment runtime schema includes request-attempt manifest and evide
   const database = new Database(getJudgmentJobSqlitePath(jobId), {readonly: true})
   const queuePromptColumns = getColumnNames(database, 'queue_prompt')
   const judgmentOutboxColumns = getColumnNames(database, 'judgment_outbox')
+  const jobInfoColumns = getColumnNames(database, 'job_info')
   const completionAckColumns = getColumnNames(database, 'completion_ack')
 
   database.close(false)
@@ -118,5 +119,7 @@ test('SQLite judgment runtime schema includes request-attempt manifest and evide
   expect(queuePromptColumns).toContain('request_attempt_manifest_repair_json')
   expect(judgmentOutboxColumns).toContain('request_attempts_json')
   expect(judgmentOutboxColumns).toContain('system_prompt_variant')
+  expect(judgmentOutboxColumns).toContain('use_metadata')
+  expect(jobInfoColumns).toContain('use_metadata')
   expect(completionAckColumns).toContain('request_attempts_json')
 })

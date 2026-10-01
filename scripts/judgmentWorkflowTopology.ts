@@ -704,6 +704,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
       useAbstract: boolean
       useFulltext: boolean
       useFulltextNoImages: boolean
+      useMetadata?: boolean
       useTitle: boolean
     }>
     migrationBoundary: {
@@ -745,6 +746,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
           useAbstract: boolean
           useFulltext: boolean
           useFulltextNoImages: boolean
+          useMetadata?: boolean
           useTitle: boolean
         }>
         migrationBoundary: {

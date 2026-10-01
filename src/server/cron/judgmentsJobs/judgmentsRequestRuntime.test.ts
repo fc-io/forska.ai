@@ -362,6 +362,7 @@ const createPromptToProcess = (): PromptToProcess => {
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
   }
 }
@@ -1767,6 +1768,45 @@ test('already-judged check only matches judgments of the prompt system prompt va
   expect(judgmentLookups[1]).toContain("AND system_prompt_variant = 'legacy'")
 })
 
+test('already-judged check only matches judgments of the prompt use_metadata flag', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  const judgmentLookups: string[] = []
+
+  queryJson.mockImplementation(async (sql: string) => {
+    if (sql.includes('FROM app.prompt p')) {
+      return createPromptRows()
+    }
+
+    if (sql.includes('FROM app.judgment')) {
+      judgmentLookups.push(sql)
+    }
+
+    return []
+  })
+
+  await processPromptWithLLM({...createPromptToProcess(), useMetadata: true})
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(judgmentLookups).toHaveLength(2)
+  expect(judgmentLookups[0]).toContain('AND use_metadata = TRUE')
+  expect(judgmentLookups[1]).toContain('AND use_metadata = FALSE')
+})
+
+test('judge-worker terminal completions carry the prompt use_metadata flag', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  hasJudgeWorkerCompletionIntent.mockImplementation((claimId: string) => {
+    return claimId === 'claim-a'
+  })
+
+  await processPromptWithLLM({...createPromptToProcess(), useMetadata: true})
+
+  expect(enqueueJudgeWorkerCompletion).toHaveBeenCalledWith(
+    expect.objectContaining({claimId: 'claim-a', status: 'retry', useMetadata: true}),
+  )
+})
+
 test('judge-worker terminal completions carry the prompt system prompt variant', async () => {
   useJudgeWorkerOwnerHandoffMocks = true
   const {processPromptWithLLM} = await loadProcessPromptModule()
@@ -1965,6 +2005,195 @@ test('judge-worker prompt execution hydrates scoped snapshot payload compatibili
   })
   expect(firstJudgeCall?.prompt.originalText).toBe('Scoped snapshot prompt text')
   expect(getOwnerBackedJudgmentExecutionSnapshot).not.toHaveBeenCalled()
+})
+
+test('judge-worker prompt execution for a use_metadata project sends title, metadata and summary to the judge', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  const {createTransientJudgmentExecutionSnapshotsForClaims} =
+    await import('../../services/judgmentExecutionSnapshotService.ts')
+  const {getSinglePromptJudgmentRequest} = await import('../../../agent/judge/getSinglePromptJudgmentRequest.ts')
+  const snapshotSourceRow = {
+    articleCreatedAt: null,
+    articleId: 'covidence-article-a',
+    articleImportRoute: 'covidence:review-a',
+    articleImportId: null,
+    articleSummary: 'Covidence snapshot summary',
+    articleTitle: 'Covidence snapshot title',
+    articleUpdatedAt: '2026-09-30T10:05:00.000Z',
+    articleVersion: 1,
+    claimId: 'claim-metadata-a',
+    contentHash: 'content-hash-metadata-a',
+    dateFrom: null,
+    dateTo: null,
+    doi: '10.1000/metadata-a',
+    externalArticleId: 'covidence:123',
+    fullText: null,
+    fullTextAssets: null,
+    fullTextCharCount: null,
+    fullTextConversionAttempts: null,
+    fullTextConversionError: null,
+    fullTextConversionMetadata: null,
+    fullTextConversionModelId: null,
+    fullTextConversionStatus: null,
+    fullTextFetchedAt: null,
+    fullTextHtml: null,
+    fullTextOriginalFormat: null,
+    fullTextPdf: null,
+    fullTextSource: null,
+    jobId: 'job-a',
+    modelDisplayName: 'Model A',
+    modelId: 'model-a',
+    modelMetadataJson: null,
+    modelName: 'model-a',
+    modelRemoteModelId: 'model-a',
+    modelSecretRef: null,
+    modelSource: 'manual',
+    modelUpdatedAt: null,
+    modelVariant: null,
+    originalData: null,
+    projectId: 'project-a',
+    projectName: 'Covidence project',
+    promptArchived: false,
+    promptContentHash: 'prompt-hash-a',
+    promptHeading: 'Population',
+    promptId: 'prompt-a',
+    promptOrder: 1,
+    promptOriginalText: 'Is the population adult?',
+    promptTransformedText: null,
+    promptType: 'single',
+    promptUpdatedAt: null,
+    providerAuthMode: 'none',
+    providerBaseUrl: 'http://runtime.test/v1',
+    providerConfigJson: null,
+    providerConnectionId: 'connection-a',
+    providerEnabled: true,
+    providerKind: 'openai',
+    providerLabel: 'Provider A',
+    providerMaxInflightRequests: 1,
+    providerSecretRef: null,
+    publicationStatus: null,
+    pubmedId: '33333333',
+    queueRecordId: 'record-a',
+    requestedArticleId: 'covidence:123',
+    requestedPromptId: 'prompt-a',
+    scopedImportMetadata: JSON.stringify({
+      covidence: {covidenceNumber: '#123', stage: 'title_abstract'},
+      issue: '10278',
+      journalTitle: 'The Lancet',
+      pages: '1023-1034',
+      publicationYear: 2021,
+      volume: '397',
+    }),
+    scopedRawPayload: null,
+    selectedExternalArticleId: 'covidence:123',
+    selectedImportRecordId: 'import-record-a',
+    selectedImportRoute: 'covidence:review-a',
+    selectedImportRouteId: 'route-a',
+    selectedSourceKind: 'covidence',
+    selectedSourceRecordKey: 'covidence:123',
+    sourceMetadata: JSON.stringify({journalTitle: 'The Lancet'}),
+    url: null,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useMetadata: true,
+    useTitle: true,
+  }
+  const [snapshot] = await createTransientJudgmentExecutionSnapshotsForClaims(
+    [
+      {
+        articleId: 'covidence:123',
+        claimId: 'claim-metadata-a',
+        claimedBy: 'judge-worker-a',
+        jobId: 'job-a',
+        promptId: 'prompt-a',
+        queueRecordId: 'record-a',
+        useFulltext: false,
+        useFulltextNoImages: false,
+      },
+    ],
+    {
+      queryJson: async <T>() => {
+        return [snapshotSourceRow] as T[]
+      },
+    },
+  )
+
+  if (!snapshot) {
+    throw new Error('Expected a transient execution snapshot')
+  }
+
+  hasUnackedJudgeWorkerCompletion.mockImplementation(async () => {
+    return true
+  })
+
+  await processPromptWithLLM({
+    ...createPromptToProcess(),
+    articleId: 'covidence-article-a',
+    claimId: 'claim-metadata-a',
+    executionSnapshotHash: snapshot.executionSnapshotHash,
+    executionSnapshotId: snapshot.executionSnapshotId,
+    executionSnapshotPayload: snapshot.executionSnapshotPayload,
+    projectId: snapshot.projectId,
+    useAbstract: snapshot.useAbstract,
+    useFulltext: snapshot.useFulltext,
+    useFulltextNoImages: snapshot.useFulltextNoImages,
+    useMetadata: snapshot.useMetadata,
+    useTitle: snapshot.useTitle,
+  })
+
+  const firstJudgeCall = judgeSinglePrompt.mock.calls[0]?.[0] as
+    | (Parameters<typeof getSinglePromptJudgmentRequest>[0] & {modelConfig: {provider: string}})
+    | undefined
+
+  if (!firstJudgeCall) {
+    throw new Error('Expected the judge to be called')
+  }
+
+  expect(snapshot.useMetadata).toBe(true)
+  expect(firstJudgeCall.contentSettings).toEqual({
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useMetadata: true,
+    useTitle: true,
+  })
+  expect(firstJudgeCall.article).toMatchObject({
+    doi: '10.1000/metadata-a',
+    pubmedId: '33333333',
+    sourceMetadata: {
+      issue: '10278',
+      journalTitle: 'The Lancet',
+      pages: '1023-1034',
+      publicationYear: 2021,
+      volume: '397',
+    },
+  })
+
+  const {recordText, userPrompt} = getSinglePromptJudgmentRequest({
+    article: firstJudgeCall.article,
+    contentSettings: firstJudgeCall.contentSettings,
+    prompt: firstJudgeCall.prompt,
+    provider: firstJudgeCall.modelConfig.provider,
+    systemPromptVariant: firstJudgeCall.systemPromptVariant,
+  })
+  const titleIndex = userPrompt.indexOf('## article_title')
+  const metadataIndex = userPrompt.indexOf('## article_metadata')
+  const summaryIndex = userPrompt.indexOf('## article_summary')
+  const metadataSection = userPrompt.slice(metadataIndex, summaryIndex)
+
+  expect(titleIndex).toBeGreaterThanOrEqual(0)
+  expect(metadataIndex).toBeGreaterThan(titleIndex)
+  expect(summaryIndex).toBeGreaterThan(metadataIndex)
+  expect(userPrompt.slice(titleIndex, metadataIndex)).toContain('Covidence snapshot title')
+  expect(metadataSection).toContain('journal: The Lancet')
+  expect(metadataSection).toContain('year: 2021')
+  expect(metadataSection).toContain('volume/issue/pages: 397(10278):1023-1034')
+  expect(metadataSection).toContain('doi: 10.1000/metadata-a')
+  expect(metadataSection).toContain('pmid: 33333333')
+  expect(userPrompt.slice(summaryIndex)).toContain('Covidence snapshot summary')
+  expect(recordText).not.toContain('The Lancet')
 })
 
 test('judge-worker prompt execution requeues when snapshot fulltext is not yet frozen', async () => {

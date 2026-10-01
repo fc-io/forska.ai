@@ -296,3 +296,114 @@ test('snapshot article resolution prefers project-scoped imports over legacy ids
     selectedExternalArticleId: 'snapshot-collision',
   })
 })
+
+test('snapshots carry use_metadata and the PubMed id, and the identity check compares use_metadata', () => {
+  const result = runScript<{
+    article: {pubmedId: string | null; sourceMetadata: {journalTitle?: string} | null}
+    contentSettings: Record<string, boolean>
+    identityValidWithMetadata: boolean
+    identityValidWithoutMetadata: boolean
+    snapshotUseMetadata: boolean
+    snapshotVersion: number
+    storedUseMetadata: boolean
+  }>(`
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {
+      createJudgmentExecutionSnapshotsForClaims,
+      getJudgmentExecutionSnapshot,
+      isJudgmentExecutionSnapshotIdentityValid,
+    } = await import('./src/server/services/judgmentExecutionSnapshotService.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-snapshot-metadata', 'sglang', 'Provider Snapshot Metadata', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+    await database.run(\`
+      INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled, metadata_json)
+      VALUES ('model-snapshot-metadata', 'provider-snapshot-metadata', 'Model Snapshot Metadata', 'model-snapshot-metadata', 'Model Snapshot Metadata', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+    await database.run(\`
+      INSERT INTO app.project (id, name, description, model_id, human_judgment_mode, use_metadata)
+      VALUES ('project-snapshot-metadata', 'Project Snapshot Metadata', NULL, 'model-snapshot-metadata', 'prompt', TRUE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash)
+      VALUES ('prompt-snapshot-metadata', 'Prompt text', 'Prompt text', 'Prompt', 'boolean', 'snapshot-metadata-prompt')
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order)
+      VALUES ('project-prompt-snapshot-metadata', 'project-snapshot-metadata', 'prompt-snapshot-metadata', 1)
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment_job (id, project_id, status)
+      VALUES ('job-snapshot-metadata', 'project-snapshot-metadata', 'ready')
+    \`)
+    await database.run(\`
+      INSERT INTO app.article (id, article_id, article_title, article_summary, pubmed_id, source_metadata)
+      VALUES ('article-snapshot-metadata', 'article-snapshot-metadata', 'Metadata Article', 'Metadata summary', '12345678', '{"journalTitle":"The Lancet"}'::JSON)
+    \`)
+
+    const [snapshot] = await createJudgmentExecutionSnapshotsForClaims([{
+      articleId: 'article-snapshot-metadata',
+      claimId: 'claim-snapshot-metadata',
+      claimedBy: 'server-1',
+      jobId: 'job-snapshot-metadata',
+      promptId: 'prompt-snapshot-metadata',
+      queueRecordId: 'queue-snapshot-metadata',
+      useFulltext: false,
+      useFulltextNoImages: false,
+    }])
+    const record = await getJudgmentExecutionSnapshot({
+      executionSnapshotHash: snapshot.executionSnapshotHash,
+      executionSnapshotId: snapshot.executionSnapshotId,
+    })
+    const identityInput = {
+      articleId: 'article-snapshot-metadata',
+      claimId: 'claim-snapshot-metadata',
+      executionSnapshotHash: snapshot.executionSnapshotHash,
+      executionSnapshotId: snapshot.executionSnapshotId,
+      jobId: 'job-snapshot-metadata',
+      modelId: 'model-snapshot-metadata',
+      projectId: 'project-snapshot-metadata',
+      promptId: 'prompt-snapshot-metadata',
+      queueRecordId: 'queue-snapshot-metadata',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+
+    console.log(JSON.stringify({
+      article: {pubmedId: record.payload.article.pubmedId, sourceMetadata: record.payload.article.sourceMetadata},
+      contentSettings: record.payload.contentSettings,
+      identityValidWithMetadata: await isJudgmentExecutionSnapshotIdentityValid({...identityInput, useMetadata: true}),
+      identityValidWithoutMetadata: await isJudgmentExecutionSnapshotIdentityValid({...identityInput, useMetadata: false}),
+      snapshotUseMetadata: snapshot.useMetadata,
+      snapshotVersion: record.payload.snapshotVersion,
+      storedUseMetadata: record.useMetadata,
+    }))
+
+    await database.close()
+  `)
+
+  expect(result).toEqual({
+    article: {pubmedId: '12345678', sourceMetadata: {journalTitle: 'The Lancet'}},
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: true,
+      useTitle: true,
+    },
+    identityValidWithMetadata: true,
+    identityValidWithoutMetadata: false,
+    snapshotUseMetadata: true,
+    snapshotVersion: 3,
+    storedUseMetadata: true,
+  })
+})

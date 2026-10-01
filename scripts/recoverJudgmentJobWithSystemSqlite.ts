@@ -39,6 +39,7 @@ type ExportedOutboxRow = {
   useAbstract: number
   useFulltext: number
   useFulltextNoImages: number
+  useMetadata: number | null
   useTitle: number
 }
 type JobInfoRow = {
@@ -47,6 +48,7 @@ type JobInfoRow = {
   useAbstract: number
   useFulltext: number
   useFulltextNoImages: number
+  useMetadata: number
   useTitle: number
 }
 type OrphanQueuePromptRow = {articleId: string; promptId: string; queuePromptId: string}
@@ -94,6 +96,7 @@ type JudgmentJobOutboxEntry = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -187,7 +190,17 @@ const getOutboxSystemPromptVariantSql = (sqlitePath: string) => {
     : jobInfoVariantSql
 }
 
-const getOutboxExportSql = (jobId: string, systemPromptVariantSql: string) => {
+const getOutboxUseMetadataSql = (sqlitePath: string) => {
+  const jobInfoUseMetadataSql = getSqliteColumnNames(sqlitePath, 'job_info').has('use_metadata')
+    ? '(SELECT ji.use_metadata FROM job_info ji WHERE ji.job_id = judgment_outbox.job_id)'
+    : '0'
+
+  return getSqliteColumnNames(sqlitePath, 'judgment_outbox').has('use_metadata')
+    ? `COALESCE(use_metadata, ${jobInfoUseMetadataSql})`
+    : jobInfoUseMetadataSql
+}
+
+const getOutboxExportSql = (jobId: string, systemPromptVariantSql: string, useMetadataSql: string) => {
   return `
     SELECT
       answered_original AS answeredOriginal,
@@ -214,6 +227,7 @@ const getOutboxExportSql = (jobId: string, systemPromptVariantSql: string) => {
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      ${useMetadataSql} AS useMetadata,
       use_title AS useTitle
     FROM judgment_outbox
     WHERE job_id = ${getSqlLiteral(jobId)}
@@ -230,6 +244,7 @@ const getJobInfoSql = (jobId: string, jobInfoColumnNames: Set<string>) => {
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      ${jobInfoColumnNames.has('use_metadata') ? 'use_metadata' : '0'} AS useMetadata,
       use_title AS useTitle
     FROM job_info
     WHERE job_id = ${getSqlLiteral(jobId)}
@@ -280,6 +295,7 @@ const mapExportedOutboxRow = (row: ExportedOutboxRow): JudgmentJobOutboxEntry =>
     useAbstract: toBoolean(row.useAbstract),
     useFulltext: toBoolean(row.useFulltext),
     useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+    useMetadata: toBoolean(row.useMetadata),
     useTitle: toBoolean(row.useTitle),
   }
 }
@@ -327,6 +343,7 @@ const getExistingJudgmentPairs = async ({jobInfo, rows}: {jobInfo: JobInfoRow; r
         AND use_abstract = ${getSqlLiteral(toBoolean(jobInfo.useAbstract))}
         AND use_fulltext = ${getSqlLiteral(toBoolean(jobInfo.useFulltext))}
         AND use_fulltext_no_images = ${getSqlLiteral(toBoolean(jobInfo.useFulltextNoImages))}
+        AND use_metadata = ${getSqlLiteral(toBoolean(jobInfo.useMetadata))}
         AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(jobInfo.systemPromptVariant))}
         AND delete_generation = 0
         AND deleted_at IS NULL
@@ -516,7 +533,7 @@ const recoverJudgmentJob = async (jobId: string): Promise<RecoverySummary> => {
   const sqlUpdatePath = `${sqlitePath}.recovery-update.sql`
   const exportedRows = runSqliteJsonQuery<ExportedOutboxRow>(
     sqlitePath,
-    getOutboxExportSql(jobId, getOutboxSystemPromptVariantSql(sqlitePath)),
+    getOutboxExportSql(jobId, getOutboxSystemPromptVariantSql(sqlitePath), getOutboxUseMetadataSql(sqlitePath)),
   )
   const jobInfo = runSqliteJsonQuery<JobInfoRow>(
     sqlitePath,

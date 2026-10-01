@@ -217,6 +217,7 @@ type JudgmentJobWorkIdentity = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type JudgmentJobImportConsumerAvailability = {
@@ -337,9 +338,10 @@ type JudgmentCompletionIdentity = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
-type JudgmentCompletionBody = JudgmentCompletionIdentity & {
+type JudgmentCompletionBody = Omit<JudgmentCompletionIdentity, 'useMetadata'> & {
   answeredOriginal?: unknown
   answeredOriginalAsArray?: unknown
   chunkingStrategy?: string | null
@@ -356,6 +358,7 @@ type JudgmentCompletionBody = JudgmentCompletionIdentity & {
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
   systemPromptVariant?: SystemPromptVariant | null
   tokenUse?: JudgmentCompletionTokenUseSummary | null
+  useMetadata?: boolean
 }
 type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number; protectedRecordIds?: string[]}
 type JudgmentWorkerHeartbeatBody = {claimedBy?: string; jobIds?: string[]}
@@ -393,6 +396,7 @@ const judgmentCompletionBodySchema = t.Object({
   useAbstract: t.Boolean(),
   useFulltext: t.Boolean(),
   useFulltextNoImages: t.Boolean(),
+  useMetadata: t.Optional(t.Boolean()),
   useTitle: t.Boolean(),
   answeredOriginal: t.Optional(t.Any()),
   answeredOriginalAsArray: t.Optional(t.Any()),
@@ -731,6 +735,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     useAbstract: boolean | null
     useFulltext: boolean | null
     useFulltextNoImages: boolean | null
+    useMetadata: boolean | null
     useTitle: boolean | null
   }>(`
     SELECT
@@ -751,7 +756,8 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
-      p.use_fulltext_no_images AS useFulltextNoImages
+      p.use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(p.use_metadata, FALSE) AS useMetadata
     FROM app.judgment_job jj
     INNER JOIN app.project p ON p.id = jj.project_id
     INNER JOIN app.model m ON m.id = p.model_id
@@ -801,6 +807,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     useAbstract: row.useAbstract ?? true,
     useFulltext: row.useFulltext ?? false,
     useFulltextNoImages: row.useFulltextNoImages ?? false,
+    useMetadata: jobInfo?.useMetadata ?? row.useMetadata ?? false,
     useTitle: row.useTitle ?? true,
   }
 }
@@ -926,6 +933,10 @@ const getCompletionRequestAttemptsJson = (
   )
 }
 
+const getCompletionIdentity = (jobId: string, body: JudgmentCompletionBody): JudgmentCompletionIdentity => {
+  return {...body, jobId, useMetadata: body.useMetadata === true}
+}
+
 const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCompletionBody) => {
   const existingAck = await getJudgmentJobSqliteService().getPromptCompletionAck(jobId, body.claimId)
 
@@ -933,7 +944,7 @@ const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCom
     return null
   }
 
-  const snapshotValid = await isJudgmentExecutionSnapshotIdentityValid({...body, jobId})
+  const snapshotValid = await isJudgmentExecutionSnapshotIdentityValid(getCompletionIdentity(jobId, body))
 
   if (!snapshotValid || existingAck.queuePromptId !== body.queueRecordId) {
     throw new HttpError(409, 'snapshot identity mismatch for replayed judgment completion')
@@ -958,7 +969,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
     return existingAckResponse
   }
 
-  const identity = {...body, jobId}
+  const identity = getCompletionIdentity(jobId, body)
   const allowUnclaimedReadyPrompt = !['failed', 'retry', 'skipped'].includes(body.status ?? '')
 
   const claimIdentitySource = await assertCompletionClaimIdentity(identity, {allowUnclaimedReadyPrompt})
@@ -1048,6 +1059,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
         useAbstract: body.useAbstract,
         useFulltext: body.useFulltext,
         useFulltextNoImages: body.useFulltextNoImages,
+        useMetadata: body.useMetadata ?? null,
         useTitle: body.useTitle,
       },
       {allowUnclaimedReadyPrompt},
@@ -1127,6 +1139,7 @@ const getUnassessedCountCacheKey = (
   useAbstract: boolean,
   useFulltext: boolean,
   useFulltextNoImages: boolean,
+  useMetadata: boolean,
   systemPromptVariant: SystemPromptVariant,
   dirtyToken: number | null,
   lastCompletedDirtyToken: number | null,
@@ -1134,7 +1147,7 @@ const getUnassessedCountCacheKey = (
   const from = projectDateFrom ? projectDateFrom.toISOString() : ''
   const to = projectDateTo ? projectDateTo.toISOString() : ''
   const routes = importRouteIds.slice().sort().join(',')
-  const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}|${systemPromptVariant}`
+  const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}|${useMetadata}|${systemPromptVariant}`
   return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}|${dirtyToken ?? 'null'}|${lastCompletedDirtyToken ?? 'null'}`
 }
 
@@ -1302,6 +1315,7 @@ const getJobContext = async ({
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
+    useMetadata: boolean
   }
   projectModelId: string
   projectDateFrom: Date | null
@@ -1335,6 +1349,7 @@ const getJobContext = async ({
       projectUseAbstract: boolean | null
       projectUseFulltext: boolean | null
       projectUseFulltextNoImages: boolean | null
+      projectUseMetadata: boolean | null
     }>(`
       SELECT
         jj.id AS id,
@@ -1361,7 +1376,8 @@ const getJobContext = async ({
         p.use_title AS projectUseTitle,
         p.use_abstract AS projectUseAbstract,
         p.use_fulltext AS projectUseFulltext,
-        p.use_fulltext_no_images AS projectUseFulltextNoImages
+        p.use_fulltext_no_images AS projectUseFulltextNoImages,
+        COALESCE(p.use_metadata, FALSE) AS projectUseMetadata
       FROM app.judgment_job jj
       LEFT JOIN app.project p ON jj.project_id = p.id
       WHERE jj.id = '${escapeSqlString(jobId)}'
@@ -1390,6 +1406,7 @@ const getJobContext = async ({
     projectUseAbstract,
     projectUseFulltext,
     projectUseFulltextNoImages,
+    projectUseMetadata,
     ...rest
   } = jobWithProject
 
@@ -1413,6 +1430,7 @@ const getJobContext = async ({
     useAbstract: projectUseAbstract ?? true,
     useFulltext: projectUseFulltext ?? false,
     useFulltextNoImages: projectUseFulltextNoImages ?? false,
+    useMetadata: projectUseMetadata ?? false,
   }
 
   if (!projectModelId) {
@@ -1823,6 +1841,7 @@ const getJudgmentJobWorkIdentity = ({
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
+    useMetadata: boolean
     useTitle: boolean
   }
   modelId: string
@@ -1834,6 +1853,7 @@ const getJudgmentJobWorkIdentity = ({
     useAbstract: job.useAbstract,
     useFulltext: job.useFulltext,
     useFulltextNoImages: job.useFulltextNoImages,
+    useMetadata: job.useMetadata,
     useTitle: job.useTitle,
   }
 }
@@ -3050,6 +3070,7 @@ export const judgmentsJobsRoutes = new Elysia()
         job.useAbstract,
         job.useFulltext,
         job.useFulltextNoImages,
+        job.useMetadata,
         job.systemPromptVariant,
         freshness.dirtyToken,
         freshness.lastCompletedDirtyToken,
@@ -3213,6 +3234,7 @@ export const judgmentsJobsRoutes = new Elysia()
           useAbstract: boolean | null
           useFulltext: boolean | null
           useFulltextNoImages: boolean | null
+          useMetadata: boolean | null
           storageState: string
           quarantinedAt: unknown
           quarantineReason: string | null
@@ -3234,6 +3256,7 @@ export const judgmentsJobsRoutes = new Elysia()
           p.use_abstract AS useAbstract,
           p.use_fulltext AS useFulltext,
           p.use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(p.use_metadata, FALSE) AS useMetadata,
           jj.storage_state AS storageState,
           jj.quarantined_at AS quarantinedAt,
           jj.quarantine_reason AS quarantineReason,
@@ -3270,6 +3293,7 @@ export const judgmentsJobsRoutes = new Elysia()
               useAbstract: job.useAbstract ?? true,
               useFulltext: job.useFulltext ?? false,
               useFulltextNoImages: job.useFulltextNoImages ?? false,
+              useMetadata: job.useMetadata ?? false,
               useTitle: job.useTitle ?? true,
             }
             const sqliteHealth = sqliteHealthByJobId.get(job.id)

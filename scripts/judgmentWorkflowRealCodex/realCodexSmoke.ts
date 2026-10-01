@@ -33,7 +33,13 @@ export type RealArticleFixture = {
   title: string
 }
 
-export type RealCodexContentFlags = {useAbstract: true; useFulltext: false; useFulltextNoImages: false; useTitle: true}
+export type RealCodexContentFlags = {
+  useAbstract: true
+  useFulltext: false
+  useFulltextNoImages: false
+  useMetadata: false
+  useTitle: true
+}
 
 export type RealCodexSeedArticle = RealArticleFixture & {fulltextSentinel: string; imageSentinelUrl: string}
 
@@ -116,6 +122,7 @@ const contentFlags: RealCodexContentFlags = {
   useAbstract: true,
   useFulltext: false,
   useFulltextNoImages: false,
+  useMetadata: false,
   useTitle: true,
 }
 

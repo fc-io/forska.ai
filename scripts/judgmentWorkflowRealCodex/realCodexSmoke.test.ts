@@ -69,7 +69,13 @@ const getEvidence = async (): Promise<RealCodexEvidence> => {
   const fixtures = await loadAndValidateRealArticleFixtures()
 
   return {
-    contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+    contentFlags: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: false,
+      useTitle: true,
+    },
     requestInputs: fixtures.map((fixture) => {
       return {
         articleFixtureId: fixture.fixtureId,
@@ -86,7 +92,13 @@ const getEvidence = async (): Promise<RealCodexEvidence> => {
     judgments: fixtures.map((fixture) => {
       return {
         articleFixtureId: fixture.fixtureId,
-        contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+        contentFlags: {
+          useAbstract: true,
+          useFulltext: false,
+          useFulltextNoImages: false,
+          useMetadata: false,
+          useTitle: true,
+        },
         modelId: 'model-real-codex',
         providerKind: 'codex',
         schemaValid: true,
@@ -163,7 +175,13 @@ test('in-repo topology adapter refuses provisioning before the production stack 
   const error = await getError(
     adapter.provisionThroughHttp({
       articles,
-      contentFlags: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+      contentFlags: {
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useMetadata: false,
+        useTitle: true,
+      },
       model: {
         displayName: 'GPT-5.6 Luna',
         remoteModelId: realCodexPinnedModel,

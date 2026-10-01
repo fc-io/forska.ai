@@ -98,6 +98,7 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
     articleId: string
     id: string
     systemPromptVariant?: JudgmentInsertRow['systemPromptVariant']
+    useMetadata?: boolean
   }): JudgmentInsertRow => {
     return {
       answeredOriginal: 'yes',
@@ -120,6 +121,7 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
+      useMetadata: params.useMetadata ?? false,
       useTitle: true,
     }
   }
@@ -153,6 +155,12 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
       systemPromptVariant: 'screening_v1',
     }),
   ])
+  const metadataResult = await appendJudgments([
+    buildRow({articleId: articleIds[0] ?? '', id: `judgment-a-metadata-${Date.now()}`, useMetadata: true}),
+  ])
+  const metadataDuplicateResult = await appendJudgments([
+    buildRow({articleId: articleIds[0] ?? '', id: `judgment-a-metadata-duplicate-${Date.now()}`, useMetadata: true}),
+  ])
   const appendMetrics = getAppendMetrics()
   const [countRow] = await queryDatabase<{total: number}>(
     `SELECT COUNT(*) AS total FROM app.judgment WHERE model_id = '${modelId}'`,
@@ -164,24 +172,37 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
     GROUP BY system_prompt_variant
     ORDER BY system_prompt_variant
   `)
+  const metadataRows = await queryDatabase<{total: number; useMetadata: boolean}>(`
+    SELECT use_metadata AS useMetadata, COUNT(*)::INTEGER AS total
+    FROM app.judgment
+    WHERE model_id = '${modelId}'
+    GROUP BY use_metadata
+    ORDER BY use_metadata
+  `)
 
   expect(parallelTotals).toEqual({attempted: 4, inserted: 4, skipped: 0})
   expect(duplicateResult).toEqual({attempted: 1, inserted: 0, skipped: 1})
   expect(otherVariantResult).toEqual({attempted: 1, inserted: 1, skipped: 0})
+  expect(metadataResult).toEqual({attempted: 1, inserted: 1, skipped: 0})
+  expect(metadataDuplicateResult).toEqual({attempted: 1, inserted: 0, skipped: 1})
   expect(variantRows).toEqual([
-    {systemPromptVariant: 'legacy', total: 4},
+    {systemPromptVariant: 'legacy', total: 5},
     {systemPromptVariant: 'screening_v1', total: 1},
+  ])
+  expect(metadataRows).toEqual([
+    {total: 5, useMetadata: false},
+    {total: 1, useMetadata: true},
   ])
   expect(appendMetrics.laneCount).toBe(2)
   expect(appendMetrics.maxQueueDepth).toBeGreaterThanOrEqual(1)
-  expect(appendMetrics.rowsAttempted).toBe(6)
-  expect(appendMetrics.rowsInserted).toBe(5)
-  expect(appendMetrics.rowsSkipped).toBe(1)
+  expect(appendMetrics.rowsAttempted).toBe(8)
+  expect(appendMetrics.rowsInserted).toBe(6)
+  expect(appendMetrics.rowsSkipped).toBe(2)
   if (appendMetrics.averageRowsPerSecondAttempted !== null) {
     expect(appendMetrics.averageRowsPerSecondAttempted).toBeGreaterThan(0)
   }
   expect(appendMetrics.queueDepth).toBe(0)
-  expect(Number(countRow?.total ?? 0)).toBe(5)
+  expect(Number(countRow?.total ?? 0)).toBe(6)
 })
 
 test('appendJudgments safely inserts quote-heavy judgment text', async () => {
@@ -240,6 +261,7 @@ test('appendJudgments safely inserts quote-heavy judgment text', async () => {
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
+      useMetadata: false,
       useTitle: true,
     },
   ])

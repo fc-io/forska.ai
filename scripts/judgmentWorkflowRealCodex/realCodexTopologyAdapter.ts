@@ -402,6 +402,7 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
         useAbstract: project.useAbstract === true,
         useFulltext: project.useFulltext === true,
         useFulltextNoImages: project.useFulltextNoImages === true,
+        useMetadata: project.useMetadata === true,
         useTitle: project.useTitle === true,
       } as RealCodexContentFlags
       const providerKind = getString(connection.providerKind, 'stored provider kind')
@@ -424,6 +425,7 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
             useAbstract: judgment.useAbstract === true,
             useFulltext: judgment.useFulltext === true,
             useFulltextNoImages: judgment.useFulltextNoImages === true,
+            useMetadata: judgment.useMetadata === true,
             useTitle: judgment.useTitle === true,
           } as RealCodexContentFlags
           return {

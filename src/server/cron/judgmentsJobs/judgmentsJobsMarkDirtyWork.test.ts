@@ -139,6 +139,7 @@ const getEntry = (
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
     ...overrides,
   }
@@ -300,6 +301,83 @@ test('dirty work stores each system prompt variant as its own judgment and fans 
   expect(deltas).toEqual([
     {judgmentId: ids.judgmentId, projectId: ids.projectId},
     {judgmentId: screeningJudgmentId, projectId: screeningProjectId},
+  ])
+})
+
+test('dirty work stores use_metadata as its own judgment identity and fans out by the flag', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const ids = await seedImportFixture(`metadata-identity-${Date.now()}`)
+  const metadataProjectId = `${ids.projectId}-metadata`
+  const metadataJudgmentId = `${ids.judgmentId}-metadata`
+  const duplicateMetadataJudgmentId = `${ids.judgmentId}-metadata-duplicate`
+
+  await runDatabase(`
+    INSERT INTO app.project (
+      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata
+    )
+    VALUES ('${metadataProjectId}', 'Metadata Project', '${ids.modelId}', TRUE, TRUE, FALSE, FALSE, TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${metadataProjectId}-article', '${metadataProjectId}', '${ids.articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${metadataProjectId}-prompt', '${metadataProjectId}', '${ids.promptId}', 1, TRUE)
+  `)
+
+  const result = await commitJudgmentSqliteOutboxImportDirtyWork({
+    discardedEntries: [],
+    importableEntries: [
+      getEntry(ids, 1),
+      getEntry(ids, 2, {
+        judgmentId: metadataJudgmentId,
+        queuePromptId: `${ids.queuePromptId}-metadata`,
+        useMetadata: true,
+      }),
+    ],
+    requestedBy: 'test-importer',
+  })
+  const duplicateResult = await commitJudgmentSqliteOutboxImportDirtyWork({
+    discardedEntries: [],
+    importableEntries: [
+      getEntry(ids, 3, {
+        judgmentId: duplicateMetadataJudgmentId,
+        queuePromptId: `${ids.queuePromptId}-metadata-duplicate`,
+        useMetadata: true,
+      }),
+    ],
+    requestedBy: 'test-importer',
+  })
+  const judgments = await queryDatabase<{id: string; useMetadata: boolean}>(`
+    SELECT id, use_metadata AS useMetadata
+    FROM app.judgment
+    WHERE article_id = '${ids.articleId}'
+    ORDER BY use_metadata ASC
+  `)
+  const deltas = await queryDatabase<{judgmentId: string; projectId: string; useMetadata: boolean | null}>(`
+    SELECT DISTINCT judgment_id AS judgmentId, project_id AS projectId, use_metadata AS useMetadata
+    FROM app.review_change_delta
+    WHERE judgment_id IN ('${ids.judgmentId}', '${metadataJudgmentId}', '${duplicateMetadataJudgmentId}')
+    ORDER BY project_id ASC
+  `)
+
+  expect(result.importedRows).toEqual([
+    {jobId: ids.jobId, outboxSeq: 1},
+    {jobId: ids.jobId, outboxSeq: 2},
+  ])
+  expect(duplicateResult.importedRows).toEqual([])
+  expect(duplicateResult.duplicateRows).toEqual([{jobId: ids.jobId, outboxSeq: 3}])
+  expect(judgments).toEqual([
+    {id: ids.judgmentId, useMetadata: false},
+    {id: metadataJudgmentId, useMetadata: true},
+  ])
+  expect(deltas).toEqual([
+    {judgmentId: ids.judgmentId, projectId: ids.projectId, useMetadata: false},
+    {judgmentId: metadataJudgmentId, projectId: metadataProjectId, useMetadata: true},
   ])
 })
 

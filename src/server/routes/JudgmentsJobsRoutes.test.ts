@@ -911,6 +911,7 @@ test('owner-backed claim snapshots resolve legacy scoped article ids through imp
           selectedImportRouteId: string
           sourceMetadata: {stage: string; studyId: string}
         }
+        contentSettings: {useMetadata: boolean}
         identity: {articleId: string; queueRecordId: string}
         snapshotVersion: number
       }
@@ -934,7 +935,8 @@ test('owner-backed claim snapshots resolve legacy scoped article ids through imp
     selectedImportRouteId: importRouteId,
     sourceMetadata: {stage: 'title_abstract', studyId: `study-${suffix}`},
   })
-  expect(snapshotBody.data.payload.snapshotVersion).toBe(2)
+  expect(snapshotBody.data.payload.contentSettings.useMetadata).toBe(false)
+  expect(snapshotBody.data.payload.snapshotVersion).toBe(3)
 
   await sqliteService.closeAll()
 })
@@ -1200,7 +1202,7 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
   `)
   await runDatabase(`
     UPDATE app.project
-    SET system_prompt_variant = 'screening_v1'
+    SET system_prompt_variant = 'screening_v1', use_metadata = TRUE
     WHERE id = '${projectId}'
   `)
 
@@ -1228,6 +1230,7 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }>
     }
@@ -1237,6 +1240,8 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
   if (!claim) {
     throw new Error('Expected owner-backed claim')
   }
+
+  expect(claim.useMetadata).toBe(true)
 
   const startedAt = '2026-05-03T12:00:00.000Z'
   const finishedAt = '2026-05-03T12:00:01.000Z'
@@ -1263,7 +1268,7 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
     },
   ]
 
-  const getCompletionRequest = (systemPromptVariant: string) => {
+  const getCompletionRequest = (systemPromptVariant: string, useMetadata: unknown = claim.useMetadata) => {
     return new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
       body: JSON.stringify({
         articleId: claim.articleId,
@@ -1301,6 +1306,7 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
         useAbstract: claim.useAbstract,
         useFulltext: claim.useFulltext,
         useFulltextNoImages: claim.useFulltextNoImages,
+        useMetadata,
         useTitle: claim.useTitle,
       }),
       headers: {'content-type': 'application/json'},
@@ -1308,10 +1314,12 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
     })
   }
   const invalidVariantResponse = await app.handle(getCompletionRequest('screening_v0'))
+  const invalidUseMetadataResponse = await app.handle(getCompletionRequest('screening_v1', 'yes'))
+  const mismatchedUseMetadataResponse = await app.handle(getCompletionRequest('screening_v1', false))
   const completionResponse = await app.handle(getCompletionRequest('screening_v1'))
   const getJudgmentVariants = async () => {
     const rows = await getAppDatabaseService().queryJson<{systemPromptVariant: string}>(`
-      SELECT system_prompt_variant AS systemPromptVariant
+      SELECT system_prompt_variant || CASE WHEN use_metadata THEN '+metadata' ELSE '' END AS systemPromptVariant
       FROM app.judgment
       WHERE project_id = '${projectId}'
         AND article_id = '${articleId}'
@@ -1325,13 +1333,16 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
   }
 
   expect(invalidVariantResponse.status).toBe(422)
+  expect(invalidUseMetadataResponse.status).toBe(422)
+  expect(mismatchedUseMetadataResponse.status).toBe(409)
+  expect(await mismatchedUseMetadataResponse.text()).toContain('snapshot claim identity mismatch for useMetadata')
   expect(completionResponse.status).toBe(200)
   expect(await getJudgmentVariants()).toEqual([])
   expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(1)
 
   await flushJudgmentJobSqliteOutbox({jobId})
 
-  expect(await getJudgmentVariants()).toEqual(['screening_v1'])
+  expect(await getJudgmentVariants()).toEqual(['screening_v1+metadata'])
   expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(0)
 
   await sqliteService.closeAll()
@@ -1707,6 +1718,50 @@ test('owner-backed runtime route reports the system prompt variant the job was i
 
   expect(await getRuntimeVariant(jobId)).toBe('legacy')
   expect(await getRuntimeVariant(uninitializedJobId)).toBe('screening_v1')
+})
+
+test('owner-backed runtime route reports the use_metadata flag the job was initialized with', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `runtime-metadata-project-${Date.now()}`
+  const modelId = `runtime-metadata-model-${Date.now()}`
+  const connectionId = `runtime-metadata-connection-${Date.now()}`
+  const jobId = `runtime-metadata-job-${Date.now()}`
+  const uninitializedJobId = `runtime-metadata-uninitialized-job-${Date.now()}`
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const getRuntimeUseMetadata = async (id: string) => {
+    if (!app) {
+      throw new Error('Test app not initialized')
+    }
+
+    const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${id}/runtime`))
+    const body = (await response.json()) as {data: {job: {useMetadata: boolean} | null}}
+
+    expect(response.status).toBe(200)
+
+    return body.data.job?.useMetadata ?? null
+  }
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await getJudgmentJobSqliteService().initializeJob(jobId)
+  await runDatabase(`
+    UPDATE app.project
+    SET use_metadata = TRUE
+    WHERE id = '${projectId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${uninitializedJobId}', '${projectId}', 'running')
+  `)
+
+  expect(await getRuntimeUseMetadata(jobId)).toBe(false)
+  expect(await getRuntimeUseMetadata(uninitializedJobId)).toBe(true)
 })
 
 test('owner-backed running jobs route returns provider bucket snapshots', async () => {
@@ -3851,7 +3906,7 @@ test('judgment job health routes distinguish active and blocked import ownership
   await runDatabase(`
     UPDATE app.project
     SET use_title = FALSE, use_abstract = TRUE, use_fulltext = TRUE, use_fulltext_no_images = FALSE,
-        system_prompt_variant = 'screening_v1'
+        use_metadata = TRUE, system_prompt_variant = 'screening_v1'
     WHERE id = '${blockedProjectId}'
   `)
   await runDatabase(`
@@ -3941,6 +3996,7 @@ test('judgment job health routes distinguish active and blocked import ownership
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }
     }
@@ -3956,6 +4012,7 @@ test('judgment job health routes distinguish active and blocked import ownership
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }
     }
@@ -3975,6 +4032,7 @@ test('judgment job health routes distinguish active and blocked import ownership
             useAbstract: boolean
             useFulltext: boolean
             useFulltextNoImages: boolean
+            useMetadata: boolean
             useTitle: boolean
           }
         }>
@@ -4006,6 +4064,7 @@ test('judgment job health routes distinguish active and blocked import ownership
       useAbstract: false,
       useFulltext: false,
       useFulltextNoImages: true,
+      useMetadata: false,
       useTitle: true,
     })
     expect(blockedBody.progressState).toBe('blocked_import')
@@ -4022,6 +4081,7 @@ test('judgment job health routes distinguish active and blocked import ownership
       useAbstract: true,
       useFulltext: true,
       useFulltextNoImages: false,
+      useMetadata: true,
       useTitle: false,
     })
     expect(summaryBody.data.importConsumer.requiredConsumerRole).toBe('judge-worker')

@@ -54,6 +54,7 @@ export type PromptToProcess = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   systemPromptVariant?: SystemPromptVariant | null
 }
 
@@ -358,6 +359,7 @@ const getOwnerBackedReadyRows = async (
         useAbstract: jobInfo.useAbstract,
         useFulltext: jobInfo.useFulltext,
         useFulltextNoImages: jobInfo.useFulltextNoImages,
+        useMetadata: jobInfo.useMetadata === true,
         useTitle: jobInfo.useTitle,
         systemPromptVariant: jobInfo.systemPromptVariant,
       }

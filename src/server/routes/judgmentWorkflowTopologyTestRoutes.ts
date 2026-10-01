@@ -99,10 +99,10 @@ const seedTopologyFixture = async ({
         ${sql(ids.modelId)}, ${sql(ids.connectionId)}, 'topology-deterministic', 'topology-deterministic',
         'Topology deterministic', 'manual', TRUE
       );
-      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata)
       VALUES
-        (${sql(projectA)}, 'Topology project A', ${sql(ids.modelId)}, TRUE, TRUE, FALSE, FALSE),
-        (${sql(projectB)}, 'Topology project B', ${sql(ids.modelId)}, TRUE, TRUE, FALSE, FALSE);
+        (${sql(projectA)}, 'Topology project A', ${sql(ids.modelId)}, TRUE, TRUE, FALSE, FALSE, FALSE),
+        (${sql(projectB)}, 'Topology project B', ${sql(ids.modelId)}, TRUE, TRUE, FALSE, FALSE, FALSE);
       INSERT INTO app.article (id, article_id, article_title, article_summary, article_created_at, article_updated_at)
       VALUES
         (${sql(articleA)}, ${sql(`external-${articleA}`)}, 'Topology article A', 'Deterministic abstract A', current_timestamp, current_timestamp),
@@ -161,6 +161,7 @@ const seedTopologyFixture = async ({
             'useAbstract',
             'useFulltext',
             'useFulltextNoImages',
+            'useMetadata',
             'useTitle',
           ] as const,
           projectId,
@@ -360,6 +361,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }>(`
         SELECT project_id AS projectId,
@@ -369,7 +371,8 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
                BOOL_AND(use_title) AS useTitle,
                BOOL_AND(use_abstract) AS useAbstract,
                BOOL_OR(use_fulltext) AS useFulltext,
-               BOOL_OR(use_fulltext_no_images) AS useFulltextNoImages
+               BOOL_OR(use_fulltext_no_images) AS useFulltextNoImages,
+               BOOL_OR(use_metadata) AS useMetadata
         FROM app.judgment
         WHERE project_id IN (${projectList})
         GROUP BY project_id, model_id, system_prompt_variant
@@ -543,6 +546,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         useTitle: boolean
       }>(`
         SELECT article_id AS articleId,
@@ -558,6 +562,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
                use_abstract AS useAbstract,
                use_fulltext AS useFulltext,
                use_fulltext_no_images AS useFulltextNoImages,
+               use_metadata AS useMetadata,
                system_prompt_variant AS systemPromptVariant
         FROM app.judgment
         WHERE project_id = ${getSqlLiteral(body.projectId)}
