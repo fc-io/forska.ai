@@ -213,6 +213,7 @@ type ServingArticleDetailRow = {
 }
 
 type ArticleFullTextRow = {
+  articleAuthors: unknown
   articleSummary: string | null
   fullText: string | null
   fullTextCharCount: number | null
@@ -920,6 +921,16 @@ const getAppArticleDetailRow = async (input: {articleId: string; projectId: stri
   return rows[0] ?? null
 }
 
+const getArticleAuthorsValue = (value: unknown) => {
+  const parsed = getJsonValue(value)
+
+  return Array.isArray(parsed)
+    ? parsed.filter((author): author is string => {
+        return typeof author === 'string'
+      })
+    : null
+}
+
 const getArticleRecordFromServing = (input: {
   articleId: string
   detail: ServingArticleDetailRow
@@ -928,7 +939,7 @@ const getArticleRecordFromServing = (input: {
   const sourceMetadata = getJsonValue(input.detail.source_metadata)
 
   return {
-    articleAuthors: null,
+    articleAuthors: getArticleAuthorsValue(input.fullText?.articleAuthors),
     articleCreatedAt: getDateValue(input.detail.article_created_at),
     articleId: input.detail.article_external_id ?? null,
     articleSummary: input.fullText?.articleSummary ?? null,
@@ -1011,7 +1022,8 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         getAppDatabaseService().queryJson<ArticleFullTextRow>(
           `
           SELECT
-            LEFT(article_summary, 2000) AS articleSummary,
+            TO_JSON(article_authors) AS articleAuthors,
+            article_summary AS articleSummary,
             full_text AS fullText,
             full_text_char_count AS fullTextCharCount,
             full_text_html AS fullTextHtml,
