@@ -101,6 +101,7 @@ const defaultRecoverPrompts = async (prompts: PromptToProcess[], _reason: string
           useAbstract: prompt.useAbstract,
           useFulltext: prompt.useFulltext,
           useFulltextNoImages: prompt.useFulltextNoImages,
+          useMetadata: prompt.useMetadata,
           useTitle: prompt.useTitle,
         })
         await flushJudgeWorkerCompletionOutboxForClaim(prompt.claimId)

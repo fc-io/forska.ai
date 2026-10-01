@@ -141,6 +141,7 @@ type MockJobConfigRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
   systemPromptVariant: 'legacy' | 'screening_v1'
 }
@@ -153,6 +154,7 @@ const getJobConfigRow = (): MockJobConfigRow => {
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
   }
 }
@@ -2021,6 +2023,7 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
   const changedModelArticleId = `${suffix}-article-changed-model`
   const changedFulltextArticleId = `${suffix}-article-changed-fulltext`
   const changedVariantArticleId = `${suffix}-article-changed-variant`
+  const changedMetadataArticleId = `${suffix}-article-changed-metadata`
   const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async (_jobId, entries) => {
@@ -2084,7 +2087,8 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
       ('${unchangedArticleId}', '${unchangedArticleId}-external', 'Unchanged article'),
       ('${changedModelArticleId}', '${changedModelArticleId}-external', 'Changed model article'),
       ('${changedFulltextArticleId}', '${changedFulltextArticleId}-external', 'Changed fulltext article'),
-      ('${changedVariantArticleId}', '${changedVariantArticleId}-external', 'Changed variant article')
+      ('${changedVariantArticleId}', '${changedVariantArticleId}-external', 'Changed variant article'),
+      ('${changedMetadataArticleId}', '${changedMetadataArticleId}-external', 'Changed metadata article')
   `)
   await dbRun(`
     INSERT INTO app.project_article (id, project_id, article_id)
@@ -2092,15 +2096,17 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
       ('${suffix}-project-article-unchanged', '${projectId}', '${unchangedArticleId}'),
       ('${suffix}-project-article-changed-model', '${projectId}', '${changedModelArticleId}'),
       ('${suffix}-project-article-changed-fulltext', '${projectId}', '${changedFulltextArticleId}'),
-      ('${suffix}-project-article-changed-variant', '${projectId}', '${changedVariantArticleId}')
+      ('${suffix}-project-article-changed-variant', '${projectId}', '${changedVariantArticleId}'),
+      ('${suffix}-project-article-changed-metadata', '${projectId}', '${changedMetadataArticleId}')
   `)
   await dbRun(`
-    INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant)
+    INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant)
     VALUES
-      ('${suffix}-judgment-unchanged', '${unchangedArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, 'legacy'),
-      ('${suffix}-judgment-changed-model', '${changedModelArticleId}', '${promptId}', '${changedModelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, 'legacy'),
-      ('${suffix}-judgment-changed-fulltext', '${changedFulltextArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, TRUE, FALSE, 'legacy'),
-      ('${suffix}-judgment-changed-variant', '${changedVariantArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, 'screening_v1')
+      ('${suffix}-judgment-unchanged', '${unchangedArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy'),
+      ('${suffix}-judgment-changed-model', '${changedModelArticleId}', '${promptId}', '${changedModelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy'),
+      ('${suffix}-judgment-changed-fulltext', '${changedFulltextArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, TRUE, FALSE, FALSE, 'legacy'),
+      ('${suffix}-judgment-changed-variant', '${changedVariantArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, FALSE, 'screening_v1'),
+      ('${suffix}-judgment-changed-metadata', '${changedMetadataArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE, TRUE, 'legacy')
   `)
   await dbRun(`
     INSERT INTO app.judgment_job (id, project_id, status)
@@ -2132,6 +2138,7 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
             {articleId: changedModelArticleId, promptId},
             {articleId: changedFulltextArticleId, promptId},
             {articleId: changedVariantArticleId, promptId},
+            {articleId: changedMetadataArticleId, promptId},
           ],
         }
       },
@@ -2152,6 +2159,7 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
       {articleId: changedModelArticleId, promptId},
       {articleId: changedFulltextArticleId, promptId},
       {articleId: changedVariantArticleId, promptId},
+      {articleId: changedMetadataArticleId, promptId},
     ],
   ])
 })

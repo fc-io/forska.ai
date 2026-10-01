@@ -108,6 +108,7 @@ export type JudgeWorkerCompletionPayload = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata?: boolean | null
   useTitle: boolean
 }
 
@@ -129,6 +130,7 @@ export type OwnerBackedJudgmentJobInfo = ProviderBucketSnapshot & {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -197,6 +199,7 @@ type CompletionClaimIdentityKey =
   | 'useAbstract'
   | 'useFulltext'
   | 'useFulltextNoImages'
+  | 'useMetadata'
   | 'useTitle'
 export type JudgeWorkerRolloutCleanupResult = {
   acceptedClaimsDeleted: number
@@ -1415,6 +1418,7 @@ const getRolloutCompletionPayload = (row: AcceptedClaimRolloutRow): JudgeWorkerC
     useAbstract: prompt.useAbstract,
     useFulltext: prompt.useFulltext,
     useFulltextNoImages: prompt.useFulltextNoImages,
+    useMetadata: prompt.useMetadata === true,
     useTitle: prompt.useTitle,
   }
 }
@@ -2085,6 +2089,7 @@ const applyJudgedCompletionLocally = async (
     useAbstract: payload.useAbstract,
     useFulltext: payload.useFulltext,
     useFulltextNoImages: payload.useFulltextNoImages,
+    useMetadata: payload.useMetadata ?? null,
     useTitle: payload.useTitle,
   })
 }
@@ -2202,6 +2207,7 @@ const completionClaimIdentityKeys: CompletionClaimIdentityKey[] = [
   'useAbstract',
   'useFulltext',
   'useFulltextNoImages',
+  'useMetadata',
   'useTitle',
 ]
 
@@ -2236,6 +2242,7 @@ const getCompletionClaimIdentity = (payload: JudgeWorkerCompletionPayload): Comp
     useAbstract: payload.useAbstract,
     useFulltext: payload.useFulltext,
     useFulltextNoImages: payload.useFulltextNoImages,
+    useMetadata: payload.useMetadata === true,
     useTitle: payload.useTitle,
   }
 }
@@ -2254,6 +2261,7 @@ const getPromptClaimIdentity = (prompt: PromptToProcess): CompletionClaimIdentit
     useAbstract: prompt.useAbstract,
     useFulltext: prompt.useFulltext,
     useFulltextNoImages: prompt.useFulltextNoImages,
+    useMetadata: prompt.useMetadata === true,
     useTitle: prompt.useTitle,
   }
 }

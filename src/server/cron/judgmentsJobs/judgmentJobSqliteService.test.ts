@@ -42,7 +42,11 @@ const getQueueCountMap = (rows: QueueCountRow[]) => {
   )
 }
 
-const createSqliteJobFixture = async (prefix: string, systemPromptVariant: string | null = null) => {
+const createSqliteJobFixture = async (
+  prefix: string,
+  systemPromptVariant: string | null = null,
+  useMetadata = false,
+) => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
   }
@@ -64,10 +68,11 @@ const createSqliteJobFixture = async (prefix: string, systemPromptVariant: strin
   `)
   await runDatabase(`
     INSERT INTO app.project (
-      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant
+      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata,
+      system_prompt_variant
     )
     VALUES (
-      '${projectId}', '${prefix} fixture', '${modelId}', TRUE, TRUE, FALSE, FALSE,
+      '${projectId}', '${prefix} fixture', '${modelId}', TRUE, TRUE, FALSE, FALSE, ${useMetadata ? 'TRUE' : 'FALSE'},
       ${systemPromptVariant === null ? 'NULL' : `'${systemPromptVariant}'`}
     )
   `)
@@ -88,6 +93,7 @@ const getVariantOutboxInsert = (input: {
   promptId: string
   queuePromptId: string
   systemPromptVariant?: 'legacy' | 'screening_v1'
+  useMetadata?: boolean
 }) => {
   return {
     answeredOriginal: 'yes',
@@ -112,7 +118,20 @@ const getVariantOutboxInsert = (input: {
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    ...(input.useMetadata === undefined ? {} : {useMetadata: input.useMetadata}),
     useTitle: true,
+  }
+}
+
+const getOutboxUseMetadataValues = (jobId: string) => {
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId), {readonly: true})
+
+  try {
+    return sqliteDatabase
+      .query(`SELECT judgment_id AS judgmentId, use_metadata AS useMetadata FROM judgment_outbox ORDER BY outbox_seq`)
+      .all() as Array<{judgmentId: string; useMetadata: number}>
+  } finally {
+    sqliteDatabase.close(false)
   }
 }
 
@@ -2864,6 +2883,140 @@ test('judgment outbox rows fall back to the completion payload variant only with
   expect(getOutboxSystemPromptVariants(jobId)).toEqual([
     {judgmentId: `${jobId}-judgment`, systemPromptVariant: 'screening_v1'},
   ])
+})
+
+test('job info, claims and claim identities carry the project use_metadata flag', async () => {
+  const metadataFixture = await createSqliteJobFixture('job-info-metadata', null, true)
+  const plainFixture = await createSqliteJobFixture('job-info-no-metadata')
+
+  expect((await metadataFixture.service.getJobInfo(metadataFixture.jobId))?.useMetadata).toBe(true)
+  expect((await plainFixture.service.getJobInfo(plainFixture.jobId))?.useMetadata).toBe(false)
+
+  await metadataFixture.service.addReadyPrompts(
+    metadataFixture.jobId,
+    [{articleId: 'job-info-metadata-article', promptId: 'job-info-metadata-prompt'}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await metadataFixture.service.claimReadyPrompts(metadataFixture.jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  expect(claimedPrompt.useMetadata).toBe(true)
+  expect(
+    (await metadataFixture.service.getPromptClaimIdentity(metadataFixture.jobId, claimedPrompt.recordId))?.useMetadata,
+  ).toBe(true)
+})
+
+test('judgment outbox rows take use_metadata from job_info and a contradicting completion fails the claim identity', async () => {
+  const {jobId, modelId, projectId, service} = await createSqliteJobFixture('outbox-metadata', null, true)
+  const prompts = [1, 2, 3].map((index) => {
+    return {articleId: `outbox-metadata-article-${index}`, promptId: `outbox-metadata-prompt-${index}`}
+  })
+
+  await service.addReadyPrompts(jobId, prompts, 'server-a')
+
+  const [firstPrompt, secondPrompt, thirdPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 3)
+
+  if (!firstPrompt || !secondPrompt || !thirdPrompt) {
+    throw new Error('Failed to claim SQLite queue prompts')
+  }
+
+  const getClaimedOutboxInsert = (
+    prompt: NonNullable<typeof firstPrompt>,
+    index: number,
+    useMetadata: boolean | undefined,
+  ) => {
+    return {
+      ...getVariantOutboxInsert({
+        articleId: prompt.articleId,
+        judgmentId: `${jobId}-judgment-${index}`,
+        modelId,
+        projectId,
+        promptId: prompt.promptId,
+        queuePromptId: prompt.recordId,
+        useMetadata,
+      }),
+      claimId: prompt.claimId,
+      executionSnapshotHash: prompt.executionSnapshotHash,
+      executionSnapshotId: prompt.executionSnapshotId,
+    }
+  }
+
+  await service.recordJudgmentSuccess(jobId, getClaimedOutboxInsert(firstPrompt, 1, undefined))
+  await service.recordJudgmentSuccess(jobId, getClaimedOutboxInsert(secondPrompt, 2, true))
+  const mismatchError = await service.recordJudgmentSuccess(jobId, getClaimedOutboxInsert(thirdPrompt, 3, false)).then(
+    () => {
+      return null
+    },
+    (error: unknown) => {
+      return error instanceof Error ? error.message : String(error)
+    },
+  )
+
+  expect(mismatchError).toContain('snapshot claim identity mismatch for useMetadata')
+
+  expect(getOutboxUseMetadataValues(jobId)).toEqual([
+    {judgmentId: `${jobId}-judgment-1`, useMetadata: 1},
+    {judgmentId: `${jobId}-judgment-2`, useMetadata: 1},
+  ])
+
+  const batch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  expect(
+    batch?.rows.map((row) => {
+      return {judgmentId: row.judgmentId, useMetadata: row.useMetadata}
+    }),
+  ).toEqual([
+    {judgmentId: `${jobId}-judgment-1`, useMetadata: true},
+    {judgmentId: `${jobId}-judgment-2`, useMetadata: true},
+  ])
+})
+
+test('judgment outbox rows fall back to the completion payload use_metadata only without a job_info row', async () => {
+  const {jobId, modelId, projectId, service} = await createSqliteJobFixture('outbox-metadata-fallback')
+
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'outbox-metadata-fallback-article', promptId: 'outbox-metadata-fallback-prompt'}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase.query(`DELETE FROM job_info WHERE job_id = ?`).run(jobId)
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  await service.recordJudgmentSuccess(
+    jobId,
+    getVariantOutboxInsert({
+      articleId: claimedPrompt.articleId,
+      judgmentId: `${jobId}-judgment`,
+      modelId,
+      projectId,
+      promptId: claimedPrompt.promptId,
+      queuePromptId: claimedPrompt.recordId,
+      useMetadata: true,
+    }),
+  )
+
+  expect(getOutboxUseMetadataValues(jobId)).toEqual([{judgmentId: `${jobId}-judgment`, useMetadata: 1}])
 })
 
 test('claims, reaps, releases, and completes outbox batches', async () => {

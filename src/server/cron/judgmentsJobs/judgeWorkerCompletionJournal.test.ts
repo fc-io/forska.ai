@@ -108,6 +108,7 @@ const createAcceptedClaimPrompt = (payload: JudgeWorkerCompletionPayload): Promp
     useAbstract: payload.useAbstract,
     useFulltext: payload.useFulltext,
     useFulltextNoImages: payload.useFulltextNoImages,
+    useMetadata: payload.useMetadata === true,
     useTitle: payload.useTitle,
   }
 }
@@ -594,6 +595,60 @@ test('judged completion replay sends the claim system prompt variant to the owne
 
   expect(await replayJudgeWorkerCompletionOutbox()).toEqual({ackedCount: 1, discardedCount: 0, failedCount: 0})
   expect(receivedVariants).toEqual(['screening_v1'])
+})
+
+test('judged completion replay sends the claim use_metadata flag to the owner', async () => {
+  const receivedUseMetadata: Array<boolean | null | undefined> = []
+  setupJournalTest(async (request) => {
+    const body = (await request.json()) as JudgeWorkerCompletionPayload
+    receivedUseMetadata.push(body.useMetadata)
+
+    return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}})
+  })
+  const payload = createCompletionPayload({
+    answeredOriginal: 'yes',
+    claimId: 'claim-metadata',
+    judgmentId: 'judgment-metadata',
+    queueRecordId: 'queue-metadata',
+    useMetadata: true,
+  })
+
+  await enqueueJudgeWorkerCompletion(payload)
+  await attachTokenUseToPendingJudgeWorkerCompletion({
+    articleId: payload.articleId,
+    jobId: payload.jobId,
+    promptIds: [payload.promptId],
+    tokenUse: createTokenUse(),
+  })
+
+  expect(await replayJudgeWorkerCompletionOutbox()).toEqual({ackedCount: 1, discardedCount: 0, failedCount: 0})
+  expect(receivedUseMetadata).toEqual([true])
+})
+
+test('completion replay discards local claims whose use_metadata contradicts the job without calling the owner', async () => {
+  let ownerCalls = 0
+  const {journalPath, testDirectory} = setupJournalTest(async () => {
+    ownerCalls += 1
+    return Response.json({data: {claimId: 'unexpected', queueRecordId: 'unexpected', status: 'retry'}})
+  })
+  const payload = createCompletionPayload({
+    claimId: 'claim-local-metadata',
+    jobId: 'job-local-metadata',
+    queueRecordId: 'queue-local-metadata',
+    status: 'retry',
+    useMetadata: true,
+  })
+
+  createLocalJobPrompt({claimId: payload.claimId, payload, testDirectory})
+  await enqueueJudgeWorkerCompletion(payload)
+
+  const result = await replayJudgeWorkerCompletionOutbox()
+  const row = getCompletionOutboxRow(journalPath, payload.claimId)
+
+  expect(result).toEqual({ackedCount: 0, discardedCount: 1, failedCount: 0})
+  expect(ownerCalls).toBe(0)
+  expect(row?.status).toBe('discarded_stale')
+  expect(row?.lastError).toContain('snapshot claim identity mismatch for useMetadata')
 })
 
 test('completion replay discards stale missing SQLite job database responses', async () => {

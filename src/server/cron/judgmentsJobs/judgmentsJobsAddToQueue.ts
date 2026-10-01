@@ -29,6 +29,7 @@ type JobConfig = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
 }
 
@@ -820,6 +821,7 @@ const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
       p.use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(p.use_metadata, FALSE) AS useMetadata,
       COALESCE(p.system_prompt_variant, 'legacy') AS systemPromptVariant
     FROM app.judgment_job jj
     INNER JOIN app.project p ON p.id = jj.project_id

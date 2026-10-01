@@ -69,11 +69,13 @@ const insertProjectFixture = async ({
   modelId,
   projectId,
   systemPromptVariant = null,
+  useMetadata = false,
 }: {
   connectionId: string
   modelId: string
   projectId: string
   systemPromptVariant?: string | null
+  useMetadata?: boolean
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -89,10 +91,11 @@ const insertProjectFixture = async ({
   `)
   await runDatabase(`
     INSERT INTO app.project (
-      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant
+      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata,
+      system_prompt_variant
     )
     VALUES (
-      '${projectId}', 'Judgment job repair test', '${modelId}', TRUE, TRUE, FALSE, FALSE,
+      '${projectId}', 'Judgment job repair test', '${modelId}', TRUE, TRUE, FALSE, FALSE, ${useMetadata ? 'TRUE' : 'FALSE'},
       ${systemPromptVariant === null ? 'NULL' : `'${systemPromptVariant}'`}
     )
   `)
@@ -274,6 +277,66 @@ test('orphan repair only counts a stored judgment of the job system prompt varia
     requeuedRows: 1,
   })
   expect(await service.repairOrphanedJudgedQueueRows({jobId: sameVariantJobId, maxRows: 10})).toMatchObject({
+    deletedRows: 1,
+    requeuedRows: 0,
+  })
+})
+
+test('orphan repair only counts a stored judgment with the job use_metadata flag as already judged', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const now = Date.now()
+  const connectionId = `metadata-repair-connection-${now}`
+  const modelId = `metadata-repair-model-${now}`
+  const projectId = `metadata-repair-project-${now}`
+  const otherFlagJobId = `metadata-repair-other-job-${now}`
+  const sameFlagJobId = `metadata-repair-same-job-${now}`
+  const insertStoredJudgment = (input: {articleId: string; promptId: string; useMetadata: boolean}) => {
+    return runDatabase?.(`
+      INSERT INTO app.judgment (
+        id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+        use_metadata, is_answered, answered_original
+      )
+      VALUES (
+        '${input.articleId}-judgment', '${input.articleId}', '${input.promptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE,
+        ${input.useMetadata ? 'TRUE' : 'FALSE'}, TRUE, 'yes'
+      )
+    `)
+  }
+
+  await insertProjectFixture({connectionId, modelId, projectId, useMetadata: true})
+  await insertJobFixture({jobId: otherFlagJobId, projectId, status: 'running', storageState: 'active'})
+  await insertJobFixture({jobId: sameFlagJobId, projectId, status: 'running', storageState: 'active'})
+  await insertOrphanedJudgedQueueFixture({
+    articleId: `metadata-repair-other-article-${now}`,
+    jobId: otherFlagJobId,
+    promptId: `metadata-repair-other-prompt-${now}`,
+  })
+  await insertOrphanedJudgedQueueFixture({
+    articleId: `metadata-repair-same-article-${now}`,
+    jobId: sameFlagJobId,
+    promptId: `metadata-repair-same-prompt-${now}`,
+  })
+  await insertStoredJudgment({
+    articleId: `metadata-repair-other-article-${now}`,
+    promptId: `metadata-repair-other-prompt-${now}`,
+    useMetadata: false,
+  })
+  await insertStoredJudgment({
+    articleId: `metadata-repair-same-article-${now}`,
+    promptId: `metadata-repair-same-prompt-${now}`,
+    useMetadata: true,
+  })
+
+  const service = sqliteService()
+
+  expect(await service.repairOrphanedJudgedQueueRows({jobId: otherFlagJobId, maxRows: 10})).toMatchObject({
+    deletedRows: 0,
+    requeuedRows: 1,
+  })
+  expect(await service.repairOrphanedJudgedQueueRows({jobId: sameFlagJobId, maxRows: 10})).toMatchObject({
     deletedRows: 1,
     requeuedRows: 0,
   })

@@ -14,6 +14,7 @@ type JobInfoRow = {
   useAbstract: number
   useFulltext: number
   useFulltextNoImages: number
+  useMetadata: number
   useTitle: number
 }
 type OrphanQueuePromptRow = {articleId: string; promptId: string; queuePromptId: string}
@@ -91,6 +92,7 @@ const getJobInfoSql = (jobId: string, jobInfoColumnNames: Set<string>) => {
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      ${jobInfoColumnNames.has('use_metadata') ? 'use_metadata' : '0'} AS useMetadata,
       use_title AS useTitle
     FROM job_info
     WHERE job_id = ${getSqlLiteral(jobId)}
@@ -151,6 +153,7 @@ const getExistingJudgmentPairs = async ({jobInfo, rows}: {jobInfo: JobInfoRow; r
         AND use_abstract = ${getSqlLiteral(Boolean(jobInfo.useAbstract))}
         AND use_fulltext = ${getSqlLiteral(Boolean(jobInfo.useFulltext))}
         AND use_fulltext_no_images = ${getSqlLiteral(Boolean(jobInfo.useFulltextNoImages))}
+        AND use_metadata = ${getSqlLiteral(Boolean(jobInfo.useMetadata))}
         AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(jobInfo.systemPromptVariant))}
         AND delete_generation = 0
         AND deleted_at IS NULL

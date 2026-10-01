@@ -108,6 +108,7 @@ const acceptedClaim: PromptToProcess = {
   useAbstract: true,
   useFulltext: false,
   useFulltextNoImages: false,
+  useMetadata: false,
   useTitle: true,
 }
 
