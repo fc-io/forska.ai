@@ -214,6 +214,7 @@ beforeEach(() => {
     return _statement.includes('FROM app.article')
       ? [
           {
+            articleAuthors: '["Alice Example","Bob Example"]',
             articleSummary: 'Abstract',
             fullText: null,
             fullTextCharCount: null,
@@ -357,6 +358,55 @@ test('project review details hydrates article, judgments, and assessments from V
       return request.contractKey
     }),
   ).toEqual(['review.detail.row', 'review.detail.judgments', 'review.detail.humanJudgments'])
+})
+
+test('project review details returns the whole abstract and the authors like the article page', async () => {
+  const abstract = `${'Perioperative antimicrobial prophylaxis was assessed with the ATC/DDD methodology. '.repeat(26)}Published by Elsevier Ltd. All rights reserved.`
+  const defaultQueryJson = queryJsonRef.current
+
+  expect(abstract.length).toBeGreaterThan(2000)
+
+  queryJsonRef.current = async (statement) => {
+    if (!statement.includes('article_summary') || statement.includes('AS article_external_id')) {
+      return defaultQueryJson(statement)
+    }
+
+    appRowsRef.statements.push(statement)
+
+    return [
+      {
+        articleAuthors: '["Alice Example","Bob Example","Carol Example"]',
+        articleSummary: abstract,
+        fullText: null,
+        fullTextCharCount: null,
+        fullTextHtml: null,
+        fullTextOriginalFormat: null,
+        fullTextSource: null,
+        importRoute: 'covidence:datasource-1',
+      },
+    ]
+  }
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.row'
+      ? {rows: [getServingArticleRow()], status: 'accepted'}
+      : {rows: [], status: 'accepted'}
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    article: {articleAuthors: string[] | null; articleSummary: string; importRoute: string | null}
+  }
+  const abstractStatement = appRowsRef.statements.find((statement) => {
+    return statement.includes('article_summary') && !statement.includes('AS article_external_id')
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.article.articleSummary).toBe(abstract)
+  expect(body.article.articleSummary.length).toBe(abstract.length)
+  expect(body.article.articleAuthors).toEqual(['Alice Example', 'Bob Example', 'Carol Example'])
+  expect(body.article.importRoute).toBe('covidence:datasource-1')
+  expect(abstractStatement).toBeDefined()
+  expect(abstractStatement).not.toContain('LEFT(')
 })
 
 test('project review details returns a typed conflict for archived projects', async () => {
