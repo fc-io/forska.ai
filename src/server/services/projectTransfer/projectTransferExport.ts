@@ -5,6 +5,7 @@ import {mkdir} from 'node:fs/promises'
 import {dirname, join} from 'node:path'
 
 import {MAX_COMPLETION_TOKENS} from '../../../agent/judge.ts'
+import {getArticleMetadataPromptText} from '../../../agent/judge/articleMetadataPrompt.ts'
 import {
   getSinglePromptEvidenceSystemPromptForArticle,
   getSinglePromptSystemPromptForArticle,
@@ -104,7 +105,16 @@ export type ProjectTransferExportSourceProjectSettings = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
+}
+
+type ProjectTransferExportContentSettingsSource = {
+  useAbstract: boolean | null
+  useFulltext: boolean | null
+  useFulltextNoImages: boolean | null
+  useMetadata?: boolean | null
+  useTitle: boolean | null
 }
 
 type ProjectTransferExportProjectPromptRow = {
@@ -251,6 +261,7 @@ type ProjectTransferExportJudgmentRow = {
   useAbstract: boolean | null
   useFulltext: boolean | null
   useFulltextNoImages: boolean | null
+  useMetadata: boolean | null
   useTitle: boolean | null
 }
 
@@ -812,6 +823,7 @@ const getProjectTransferExportJudgmentCandidateWhereSql = () => {
     AND j.use_abstract = project.use_abstract
     AND j.use_fulltext = project.use_fulltext
     AND j.use_fulltext_no_images = project.use_fulltext_no_images
+    AND j.use_metadata = COALESCE(project.use_metadata, FALSE)
     AND j.system_prompt_variant = COALESCE(project.system_prompt_variant, ${getSqlLiteral(defaultSystemPromptVariant)})
     AND j.deleted_at IS NULL
   `
@@ -835,6 +847,7 @@ const getProjectTransferExportAmbiguousJudgmentCteSql = () => {
         j.use_abstract,
         j.use_fulltext,
         j.use_fulltext_no_images,
+        j.use_metadata,
         j.system_prompt_variant
       FROM app.judgment j
       INNER JOIN project_transfer_scope_article scope ON scope.article_id = j.article_id
@@ -849,6 +862,7 @@ const getProjectTransferExportAmbiguousJudgmentCteSql = () => {
         j.use_abstract,
         j.use_fulltext,
         j.use_fulltext_no_images,
+        j.use_metadata,
         j.system_prompt_variant
       HAVING COUNT(*) > 1
     )
@@ -864,6 +878,7 @@ const getProjectTransferExportJudgmentAmbiguityJoinSql = () => {
     AND ambiguous.use_abstract = j.use_abstract
     AND ambiguous.use_fulltext = j.use_fulltext
     AND ambiguous.use_fulltext_no_images = j.use_fulltext_no_images
+    AND ambiguous.use_metadata = j.use_metadata
     AND ambiguous.system_prompt_variant = j.system_prompt_variant
   `
 }
@@ -876,6 +891,7 @@ const getProjectTransferExportSettingsValue = (
     useAbstract: boolean | null
     useFulltext: boolean | null
     useFulltextNoImages: boolean | null
+    useMetadata: boolean | null
     useTitle: boolean | null
   },
   label: string,
@@ -902,6 +918,7 @@ const getProjectTransferExportSettingsValue = (
     useAbstract: row.useAbstract ?? true,
     useFulltext,
     useFulltextNoImages,
+    useMetadata: row.useMetadata ?? false,
     useTitle: row.useTitle ?? true,
   }
 }
@@ -925,6 +942,7 @@ export const getProjectTransferExportSourceProjectSettings = async (
     useAbstract: boolean | null
     useFulltext: boolean | null
     useFulltextNoImages: boolean | null
+    useMetadata: boolean | null
     useTitle: boolean | null
   }>(`
     SELECT
@@ -938,6 +956,7 @@ export const getProjectTransferExportSourceProjectSettings = async (
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(use_metadata, FALSE) AS useMetadata,
       date_from AS dateFrom,
       date_to AS dateTo,
       archived,
@@ -1376,6 +1395,7 @@ const getProjectTransferExportAmbiguousJudgmentWarnings = async (
       j.use_abstract,
       j.use_fulltext,
       j.use_fulltext_no_images,
+      j.use_metadata,
       j.system_prompt_variant
     HAVING COUNT(*) > 1
     ORDER BY j.article_id ASC, j.prompt_id ASC, j.model_id ASC
@@ -1443,6 +1463,7 @@ const getProjectTransferExportJudgmentRows = async (projectId: string, database:
       j.use_abstract AS useAbstract,
       j.use_fulltext AS useFulltext,
       j.use_fulltext_no_images AS useFulltextNoImages,
+      j.use_metadata AS useMetadata,
       j.system_prompt_variant AS systemPromptVariant,
       j.chunking_strategy AS chunkingStrategy,
       j.is_answered AS isAnswered,
@@ -2000,17 +2021,13 @@ const getProjectTransferExportEmptyModelSignature = () => {
   }
 }
 
-const getProjectTransferExportContentSettings = (
-  row: Pick<
-    ProjectTransferExportSourceProjectSettings | ProjectTransferExportJudgmentRow,
-    'useAbstract' | 'useFulltext' | 'useFulltextNoImages' | 'useTitle'
-  >,
-) => {
+const getProjectTransferExportContentSettings = (row: ProjectTransferExportContentSettingsSource) => {
   return {
     useAbstract: row.useAbstract ?? true,
     useFulltext: row.useFulltext ?? false,
     useFulltextNoImages: row.useFulltextNoImages ?? false,
     useTitle: row.useTitle ?? true,
+    ...(row.useMetadata === true ? {useMetadata: true} : {}),
   }
 }
 
@@ -2167,18 +2184,30 @@ const isAnthropicProviderKind = (providerKind: string | null | undefined) => {
   return providerKind?.toLowerCase() === 'anthropic'
 }
 
+const getProjectTransferExportArticleMetadataSignature = (
+  articleRecord: ArticleRecord,
+  contentSettings: ProjectTransferContentSettings,
+) => {
+  return contentSettings.useMetadata === true
+    ? {articleMetadataDigest: getDigestValue(getArticleMetadataPromptText(articleRecord))}
+    : {}
+}
+
 const getProjectTransferExportJudgmentPromptTemplateSignature = ({
   article,
+  articleRecord,
   contentSettings,
   prompt,
   providerKind,
 }: {
   article: ProjectTransferExportArticlePayloadRecord
+  articleRecord: ArticleRecord
   contentSettings: ProjectTransferContentSettings
   prompt: ProjectTransferExportProjectPromptRow
   providerKind: string | null
 }) => {
   return {
+    ...getProjectTransferExportArticleMetadataSignature(articleRecord, contentSettings),
     articleSummaryDigest: contentSettings.useAbstract ? getSignatureTextDigest(article.articleSummary) : null,
     articleTitleDigest: contentSettings.useTitle ? getDigestValue(article.articleTitle) : null,
     promptOriginalTextDigest: getDigestValue(prompt.originalText),
@@ -2228,13 +2257,14 @@ export const getProjectTransferExportJudgmentInputSignature = ({
       ...getProjectTransferExportArticleDisplaySignature(article),
       promptInput: getProjectTransferExportJudgmentPromptTemplateSignature({
         article,
+        articleRecord,
         contentSettings,
         prompt,
         providerKind,
       }),
     },
     chunking: {chunkEvidenceDigests, finalPromptDigest: chunkFinalPromptDigest, strategy: chunkingStrategy},
-    contentSettings,
+    contentSettings: getProjectTransferExportContentSettings(contentSettings),
     fullTextProcessing: fullTextProcessing.signature,
     kind: 'judgmentInputSignature',
     model: modelRequestSignature,

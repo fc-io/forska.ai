@@ -546,3 +546,142 @@ test('judgments without a system prompt variant match legacy target judgments', 
     }),
   ).toBe(true)
 })
+
+const getUseMetadataFidelityPlan = async ({
+  importedUseMetadata,
+  targetUseMetadata,
+}: {
+  importedUseMetadata: boolean | undefined
+  targetUseMetadata: boolean
+}) => {
+  const fixturePayloads = getProjectTransferPayloadFixtureMap()
+  const [fixtureJudgment] = fixturePayloads.judgments
+  const statements: string[] = []
+
+  if (!fixtureJudgment) {
+    throw new Error('Expected judgment fixture')
+  }
+
+  const fixtureContentSettings = fixtureJudgment.contentSettings as Record<string, unknown>
+  const importedJudgment =
+    importedUseMetadata === undefined
+      ? fixtureJudgment
+      : {...fixtureJudgment, contentSettings: {...fixtureContentSettings, useMetadata: importedUseMetadata}}
+  const result = await getProjectTransferFidelityValidation({
+    dependencyResolution: {
+      modelTargetBySourceId: {'model-1': 'target-model-1'},
+      providerTargetBySourceId: {'provider-connection-1': 'target-provider-1'},
+    },
+    payloads: {
+      ...fixturePayloads,
+      humanJudgmentSummaries: [],
+      humanJudgments: [],
+      judgmentAssessments: [],
+      judgments: [importedJudgment],
+      reviews: [],
+    },
+    runner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        statements.push(statement)
+        const rows = statement.includes('FROM app.judgment')
+          ? [
+              {
+                answeredOriginal: fixtureJudgment.answeredOriginal,
+                answeredOriginalAsArray: JSON.stringify(fixtureJudgment.answeredOriginalAsArray ?? []),
+                confidenceOriginal: fixtureJudgment.confidenceOriginal,
+                deleteGeneration: 0,
+                explanation: fixtureJudgment.explanation,
+                isAnswered: fixtureJudgment.isAnswered,
+                quotes: JSON.stringify(fixtureJudgment.quotes ?? []),
+                systemPromptVariant: 'legacy',
+                targetArticleId: 'target-article-1',
+                targetJudgmentId: 'target-judgment-1',
+                targetModelId: 'target-model-1',
+                targetPromptId: 'target-prompt-1',
+                useAbstract: true,
+                useFulltext: false,
+                useFulltextNoImages: false,
+                useMetadata: targetUseMetadata,
+                useTitle: true,
+              },
+            ]
+          : []
+
+        return rows as T[]
+      },
+    },
+    targetPlan: getBaseTargetPlan(),
+  })
+
+  return {fixtureContentSettings, judgmentPlan: result.targetPlan.judgmentPlan[0], statements}
+}
+
+test('judgment keys include useMetadata only when it is true and old judgments read it as false', async () => {
+  const metadataOverPlainTarget = await getUseMetadataFidelityPlan({
+    importedUseMetadata: true,
+    targetUseMetadata: false,
+  })
+  const metadataOverMetadataTarget = await getUseMetadataFidelityPlan({
+    importedUseMetadata: true,
+    targetUseMetadata: true,
+  })
+  const oldOverMetadataTarget = await getUseMetadataFidelityPlan({
+    importedUseMetadata: undefined,
+    targetUseMetadata: true,
+  })
+  const oldOverPlainTarget = await getUseMetadataFidelityPlan({
+    importedUseMetadata: undefined,
+    targetUseMetadata: false,
+  })
+  const explicitFalseOverPlainTarget = await getUseMetadataFidelityPlan({
+    importedUseMetadata: false,
+    targetUseMetadata: false,
+  })
+
+  expect(Object.hasOwn(oldOverPlainTarget.fixtureContentSettings, 'useMetadata')).toBe(false)
+  expect(metadataOverPlainTarget.judgmentPlan?.targetJudgmentId).toBeNull()
+  expect(metadataOverPlainTarget.judgmentPlan?.conflictCodes).toEqual(['judgment_input_signature_mismatch'])
+  expect(metadataOverPlainTarget.judgmentPlan?.physicalKey).toBe(
+    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|legacy|useMetadata',
+  )
+  expect(metadataOverPlainTarget.judgmentPlan?.reviewVisibleKey).toBe(
+    'target-article-1:target-prompt-1:target-model-1:true:true:false:false|legacy|useMetadata',
+  )
+  expect(metadataOverMetadataTarget.judgmentPlan?.physicalKey).toBe(
+    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|legacy|useMetadata',
+  )
+  expect(oldOverMetadataTarget.judgmentPlan?.action).toBe('insert')
+  expect(oldOverMetadataTarget.judgmentPlan?.conflictCodes).toEqual([])
+  expect(oldOverMetadataTarget.judgmentPlan?.physicalKey).toBe(
+    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|legacy',
+  )
+  expect(oldOverPlainTarget.judgmentPlan?.action).toBe('reuse')
+  expect(oldOverPlainTarget.judgmentPlan?.targetJudgmentId).toBe('target-judgment-1')
+  expect(oldOverPlainTarget.judgmentPlan?.inputSignatureMatches).toBe(true)
+  expect(oldOverPlainTarget.judgmentPlan?.conflictCodes).toEqual([])
+  expect(explicitFalseOverPlainTarget.judgmentPlan).toEqual(oldOverPlainTarget.judgmentPlan)
+  expect(
+    oldOverPlainTarget.statements.some((statement) => {
+      return (
+        statement.includes('FROM app.judgment') && statement.includes('COALESCE(use_metadata, FALSE) AS useMetadata')
+      )
+    }),
+  ).toBe(true)
+})
+
+test('judgment input signatures detect a useMetadata mismatch with the stored signature', async () => {
+  const metadataOverMetadataTarget = await getUseMetadataFidelityPlan({
+    importedUseMetadata: true,
+    targetUseMetadata: true,
+  })
+  const explicitFalseOverPlainTarget = await getUseMetadataFidelityPlan({
+    importedUseMetadata: false,
+    targetUseMetadata: false,
+  })
+
+  expect(explicitFalseOverPlainTarget.judgmentPlan?.inputSignatureMatches).toBe(true)
+  expect(metadataOverMetadataTarget.judgmentPlan?.inputSignatureMatches).toBe(false)
+  expect(metadataOverMetadataTarget.judgmentPlan?.action).toBe('blocked')
+  expect(metadataOverMetadataTarget.judgmentPlan?.targetJudgmentId).toBe('target-judgment-1')
+  expect(metadataOverMetadataTarget.judgmentPlan?.conflictCodes).toEqual(['judgment_physical_key_not_equivalent'])
+})

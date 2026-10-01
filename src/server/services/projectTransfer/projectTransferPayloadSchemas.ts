@@ -96,8 +96,11 @@ export type ProjectTransferContentSettings = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata?: boolean
   useTitle: boolean
 }
+
+export type ProjectTransferNormalizedContentSettings = Required<ProjectTransferContentSettings>
 
 export type ProjectTransferProjectSettings = ProjectTransferContentSettings & {
   humanJudgmentMode: 'prompt' | 'summary'
@@ -234,8 +237,6 @@ const omissionCodeSet = new Set<string>(projectTransferPayloadOmissionCodes)
 const redactionCodeSet = new Set<string>(projectTransferPayloadRedactionCodes)
 const warningCodeSet = new Set<string>(projectTransferPayloadWarningCodes)
 
-const projectTransferContentSettingKeys = ['useTitle', 'useAbstract', 'useFulltext', 'useFulltextNoImages'] as const
-
 const failProjectTransferPayload = (message: string): never => {
   throw new Error(`Project transfer payload contract: ${message}`)
 }
@@ -280,6 +281,10 @@ const assertNullableNonEmptyString = (value: unknown, label: string): string | n
 
 const assertBoolean = (value: unknown, label: string): boolean => {
   return typeof value === 'boolean' ? value : failProjectTransferPayload(`${label} must be a boolean`)
+}
+
+const assertOptionalBoolean = (value: unknown, label: string): boolean => {
+  return value === undefined ? false : assertBoolean(value, label)
 }
 
 const assertNonNegativeInteger = (value: unknown, label: string): number => {
@@ -429,17 +434,20 @@ const assertPayloadCodeEntries = (value: unknown, codeSet: Set<string>, label: s
 export const assertProjectTransferContentSettings = (
   value: unknown,
   label = 'contentSettings',
-): ProjectTransferContentSettings => {
+): ProjectTransferNormalizedContentSettings => {
   const settings = assertRecord(value, label)
   const contentSettings = {
     useAbstract: assertBoolean(settings.useAbstract, `${label}.useAbstract`),
     useFulltext: assertBoolean(settings.useFulltext, `${label}.useFulltext`),
     useFulltextNoImages: assertBoolean(settings.useFulltextNoImages, `${label}.useFulltextNoImages`),
+    useMetadata: assertOptionalBoolean(settings.useMetadata, `${label}.useMetadata`),
     useTitle: assertBoolean(settings.useTitle, `${label}.useTitle`),
   }
-  const hasSelectedContent = projectTransferContentSettingKeys.some((field) => {
-    return contentSettings[field]
-  })
+  const hasSelectedContent = (['useTitle', 'useAbstract', 'useFulltext', 'useFulltextNoImages'] as const).some(
+    (field) => {
+      return contentSettings[field]
+    },
+  )
 
   return hasSelectedContent
     ? contentSettings.useFulltext && contentSettings.useFulltextNoImages
@@ -451,7 +459,7 @@ export const assertProjectTransferContentSettings = (
 export const assertProjectTransferProjectSettings = (
   value: unknown,
   label = 'settings',
-): ProjectTransferProjectSettings => {
+): ProjectTransferProjectSettings & ProjectTransferNormalizedContentSettings => {
   const settings = assertRecord(value, label)
   const contentSettings = assertProjectTransferContentSettings(settings, label)
   const humanJudgmentMode = settings.humanJudgmentMode
