@@ -1,4 +1,9 @@
 import {
+  defaultSystemPromptVariant,
+  getSystemPromptVariant,
+  type SystemPromptVariant,
+} from '../../../agent/judge/systemPromptVariant.ts'
+import {
   type ComparisonProjectArticleCategoryFilter,
   defaultComparisonProjectArticleCategoryFilter,
 } from '../../../utils/comparisonProjectArticleCategoryFilter.ts'
@@ -37,6 +42,7 @@ export type ComparisonProjectJudgmentLlmRow = {
   answeredOriginalAsArray: string[] | null
   explanation?: string | null
   quotes?: unknown
+  systemPromptVariant?: SystemPromptVariant | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -215,17 +221,25 @@ const comparisonProjectServingDifferenceFilterPredicates = {
   'resolution-vs-llm-true-conflict': getComparisonProjectServingConflictResolutionTrueConflictSql('llm'),
 } satisfies Record<ComparisonProjectDifferenceFilter, string>
 
+const comparisonProjectContentKeySystemPromptVariantSeparator = '-'
+
 export const getComparisonProjectContentKey = (settings: {
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant?: string | null
 }) => {
-  return [settings.useTitle, settings.useAbstract, settings.useFulltext, settings.useFulltextNoImages]
+  const flagKey = [settings.useTitle, settings.useAbstract, settings.useFulltext, settings.useFulltextNoImages]
     .map((value) => {
       return (value ? 1 : 0).toString()
     })
     .join('')
+  const systemPromptVariant = getSystemPromptVariant(settings.systemPromptVariant)
+
+  return systemPromptVariant === defaultSystemPromptVariant
+    ? flagKey
+    : `${flagKey}${comparisonProjectContentKeySystemPromptVariantSeparator}${systemPromptVariant}`
 }
 
 export const getComparisonProjectColumnId = (

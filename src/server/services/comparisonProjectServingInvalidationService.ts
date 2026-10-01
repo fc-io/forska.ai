@@ -1,5 +1,11 @@
+import {
+  defaultSystemPromptVariant,
+  getSystemPromptVariant,
+  type SystemPromptVariant,
+} from '../../agent/judge/systemPromptVariant.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
+import {getComparisonProjectSystemPromptVariantSql} from './comparisonProjectServingGenerationConfig.ts'
 import {getComparisonProjectServingRebuildService} from './comparisonProjectServingRebuildService.ts'
 import {getComparisonProjectServingWorkloadContext} from './comparisonProjectServingWorkloadContext.ts'
 
@@ -31,6 +37,7 @@ export type ComparisonProjectLlmJudgmentChange = {
   articleId: string
   modelId: string
   promptId: string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -102,6 +109,7 @@ const getLlmJudgmentChangeKey = (change: ComparisonProjectLlmJudgmentChange) => 
     change.useAbstract,
     change.useFulltext,
     change.useFulltextNoImages,
+    getSystemPromptVariant(change.systemPromptVariant),
   ].join('|')
 }
 
@@ -122,7 +130,8 @@ const getLlmJudgmentChangeCteSql = (changes: ComparisonProjectLlmJudgmentChange[
       use_title,
       use_abstract,
       use_fulltext,
-      use_fulltext_no_images
+      use_fulltext_no_images,
+      system_prompt_variant
     ) AS (
       VALUES ${changes
         .map((change) => {
@@ -133,7 +142,8 @@ const getLlmJudgmentChangeCteSql = (changes: ComparisonProjectLlmJudgmentChange[
             ${getSqlLiteral(change.useTitle)},
             ${getSqlLiteral(change.useAbstract)},
             ${getSqlLiteral(change.useFulltext)},
-            ${getSqlLiteral(change.useFulltextNoImages)}
+            ${getSqlLiteral(change.useFulltextNoImages)},
+            ${getSqlLiteral(getSystemPromptVariant(change.systemPromptVariant))}
           )`
         })
         .join(', ')}
@@ -194,6 +204,27 @@ const getComparisonProjectContentOverlapSql = (comparisonProjectAlias: string, c
       AND ${changeAlias}.use_abstract = FALSE
       AND ${changeAlias}.use_fulltext = FALSE
       AND ${changeAlias}.use_fulltext_no_images = TRUE
+    )
+  )`
+}
+
+const getComparisonProjectSystemPromptVariantOverlapSql = (comparisonProjectAlias: string, changeAlias: string) => {
+  return `(
+    EXISTS (
+      SELECT 1
+      FROM app.comparison_project_source_project cpsp
+      INNER JOIN app.project source_project ON source_project.id = cpsp.source_project_id
+      WHERE cpsp.comparison_project_id = ${comparisonProjectAlias}.id
+        AND ${getComparisonProjectSystemPromptVariantSql('source_project.system_prompt_variant')} = ${changeAlias}.system_prompt_variant
+    )
+    OR (
+      ${changeAlias}.system_prompt_variant = ${getSqlLiteral(defaultSystemPromptVariant)}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.comparison_project_source_project cpsp
+        INNER JOIN app.project source_project ON source_project.id = cpsp.source_project_id
+        WHERE cpsp.comparison_project_id = ${comparisonProjectAlias}.id
+      )
     )
   )`
 }
@@ -282,6 +313,7 @@ const getComparisonProjectAnySummarySourcePromptSql = (comparisonProjectAlias: s
 const getLlmJudgmentAffectedComparisonProjectIdsSql = (changes: ComparisonProjectLlmJudgmentChange[]) => {
   const modelOverlapSql = getComparisonProjectModelOverlapSql('cp', 'cj')
   const contentOverlapSql = getComparisonProjectContentOverlapSql('cp', 'cj')
+  const systemPromptVariantOverlapSql = getComparisonProjectSystemPromptVariantOverlapSql('cp', 'cj')
   const articleScopeOverlapSql = getComparisonProjectArticleScopeOverlapSql('cp', 'cj')
   const promptOverlapSql = getComparisonProjectPromptOverlapSql('cp', 'cj')
   const summarySourcePromptOverlapSql = getComparisonProjectSummarySourcePromptOverlapSql('cp', 'cj')
@@ -300,6 +332,7 @@ const getLlmJudgmentAffectedComparisonProjectIdsSql = (changes: ComparisonProjec
         )
         AND ${modelOverlapSql}
         AND ${contentOverlapSql}
+        AND ${systemPromptVariantOverlapSql}
         AND ${articleScopeOverlapSql}
         AND ${promptOverlapSql}
     ),
@@ -312,6 +345,7 @@ const getLlmJudgmentAffectedComparisonProjectIdsSql = (changes: ComparisonProjec
         AND COALESCE(cp.human_judgment_mode, 'prompt') = 'summary'
         AND ${modelOverlapSql}
         AND ${contentOverlapSql}
+        AND ${systemPromptVariantOverlapSql}
         AND ${articleScopeOverlapSql}
         AND ${summarySourcePromptOverlapSql}
     ),
@@ -325,6 +359,7 @@ const getLlmJudgmentAffectedComparisonProjectIdsSql = (changes: ComparisonProjec
         AND NOT ${anySummarySourcePromptSql}
         AND ${modelOverlapSql}
         AND ${contentOverlapSql}
+        AND ${systemPromptVariantOverlapSql}
         AND ${articleScopeOverlapSql}
         AND ${promptOverlapSql}
     )

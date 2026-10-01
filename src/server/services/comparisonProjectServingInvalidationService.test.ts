@@ -74,6 +74,22 @@ const getScript = (body: string) => {
     \`)
 
     await database.run(\`
+      INSERT INTO app.project (
+        id,
+        name,
+        description,
+        model_id,
+        human_judgment_mode,
+        system_prompt_variant,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        ('source-project-screening', 'Source Project Screening', NULL, 'model-a', 'prompt', 'screening_v1', TRUE, TRUE, FALSE, FALSE)
+    \`)
+
+    await database.run(\`
       INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash, created_at)
       VALUES
         ('prompt-a', 'Prompt A', 'Prompt A', NULL, 'prompt-a-hash', TIMESTAMPTZ '2026-04-01T00:00:00.000Z'),
@@ -106,7 +122,8 @@ const getScript = (body: string) => {
       INSERT INTO app.project_article (id, project_id, article_id)
       VALUES
         ('source-project-a-article-in', 'source-project-a', 'article-in'),
-        ('source-project-out-article-out', 'source-project-out', 'article-out')
+        ('source-project-out-article-out', 'source-project-out', 'article-out'),
+        ('source-project-screening-article-in', 'source-project-screening', 'article-in')
     \`)
 
     await database.run(\`
@@ -134,7 +151,9 @@ const getScript = (body: string) => {
         ('cp-human-prompt-wrong-scope', 'Human Prompt Wrong Scope', NULL, ['model-a'], TRUE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
         ('cp-human-summary-match', 'Human Summary Match', NULL, ['model-a'], TRUE, 'summary', 'summary-human-project', TRUE, TRUE, FALSE, FALSE),
         ('cp-human-summary-wrong-source', 'Human Summary Wrong Source', NULL, ['model-a'], TRUE, 'summary', 'summary-human-other', TRUE, TRUE, FALSE, FALSE),
-        ('cp-human-summary-wrong-scope', 'Human Summary Wrong Scope', NULL, ['model-a'], TRUE, 'summary', 'summary-human-project', TRUE, TRUE, FALSE, FALSE)
+        ('cp-human-summary-wrong-scope', 'Human Summary Wrong Scope', NULL, ['model-a'], TRUE, 'summary', 'summary-human-project', TRUE, TRUE, FALSE, FALSE),
+        ('cp-llm-variant-ab', 'LLM Variant AB', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('cp-llm-variant-screening', 'LLM Variant Screening', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE)
     \`)
 
     await database.run(\`
@@ -147,7 +166,9 @@ const getScript = (body: string) => {
         ('cp-llm-wrong-scope-prompt-a', 'cp-llm-wrong-scope', 'prompt-a', 0),
         ('cp-human-prompt-match-prompt-a', 'cp-human-prompt-match', 'prompt-a', 0),
         ('cp-human-prompt-wrong-prompt-prompt-b', 'cp-human-prompt-wrong-prompt', 'prompt-b', 0),
-        ('cp-human-prompt-wrong-scope-prompt-a', 'cp-human-prompt-wrong-scope', 'prompt-a', 0)
+        ('cp-human-prompt-wrong-scope-prompt-a', 'cp-human-prompt-wrong-scope', 'prompt-a', 0),
+        ('cp-llm-variant-ab-prompt-a', 'cp-llm-variant-ab', 'prompt-a', 0),
+        ('cp-llm-variant-screening-prompt-a', 'cp-llm-variant-screening', 'prompt-a', 0)
     \`)
 
     await database.run(\`
@@ -164,7 +185,10 @@ const getScript = (body: string) => {
         ('cp-human-prompt-wrong-scope-source', 'cp-human-prompt-wrong-scope', 'source-project-out'),
         ('cp-human-summary-match-source', 'cp-human-summary-match', 'source-project-a'),
         ('cp-human-summary-wrong-source-source', 'cp-human-summary-wrong-source', 'source-project-a'),
-        ('cp-human-summary-wrong-scope-source', 'cp-human-summary-wrong-scope', 'source-project-out')
+        ('cp-human-summary-wrong-scope-source', 'cp-human-summary-wrong-scope', 'source-project-out'),
+        ('cp-llm-variant-ab-source-legacy', 'cp-llm-variant-ab', 'source-project-a'),
+        ('cp-llm-variant-ab-source-screening', 'cp-llm-variant-ab', 'source-project-screening'),
+        ('cp-llm-variant-screening-source', 'cp-llm-variant-screening', 'source-project-screening')
     \`)
 
     await database.run(\`
@@ -231,6 +255,7 @@ test('LLM judgment changes stale comparison projects only when dependencies over
         articleId: 'article-in',
         promptId: 'prompt-a',
         modelId: 'model-a',
+        systemPromptVariant: 'legacy',
         useTitle: true,
         useAbstract: true,
         useFulltext: false,
@@ -245,6 +270,7 @@ test('LLM judgment changes stale comparison projects only when dependencies over
     'cp-human-summary-match',
     'cp-human-summary-wrong-source',
     'cp-llm-match',
+    'cp-llm-variant-ab',
     'cp-summary-llm-match',
   ])
   expect(result.staleIds).toEqual([
@@ -252,6 +278,57 @@ test('LLM judgment changes stale comparison projects only when dependencies over
     'cp-human-summary-match',
     'cp-human-summary-wrong-source',
     'cp-llm-match',
+    'cp-llm-variant-ab',
+    'cp-summary-llm-match',
+  ])
+})
+
+test('LLM judgment changes stale comparison projects only when a linked source project uses the judgment variant', () => {
+  const result = runScript<InvalidationResult>(`
+    const markedIds = await service.markComparisonProjectsServingStaleForLlmJudgments([
+      {
+        articleId: 'article-in',
+        promptId: 'prompt-a',
+        modelId: 'model-a',
+        systemPromptVariant: 'screening_v1',
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      },
+    ])
+    console.log(JSON.stringify({markedIds, staleIds: await getStaleIds()}))
+  `)
+
+  expect(result.markedIds).toEqual(['cp-llm-variant-ab', 'cp-llm-variant-screening'])
+  expect(result.staleIds).toEqual(['cp-llm-variant-ab', 'cp-llm-variant-screening'])
+})
+
+test('LLM judgment changes that differ only by system prompt variant are not deduplicated', () => {
+  const result = runScript<InvalidationResult>(`
+    const change = {
+      articleId: 'article-in',
+      promptId: 'prompt-a',
+      modelId: 'model-a',
+      useTitle: true,
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+    }
+    const markedIds = await service.markComparisonProjectsServingStaleForLlmJudgments([
+      {...change, systemPromptVariant: 'legacy'},
+      {...change, systemPromptVariant: 'screening_v1'},
+    ])
+    console.log(JSON.stringify({markedIds, staleIds: await getStaleIds()}))
+  `)
+
+  expect(result.markedIds).toEqual([
+    'cp-human-prompt-match',
+    'cp-human-summary-match',
+    'cp-human-summary-wrong-source',
+    'cp-llm-match',
+    'cp-llm-variant-ab',
+    'cp-llm-variant-screening',
     'cp-summary-llm-match',
   ])
 })

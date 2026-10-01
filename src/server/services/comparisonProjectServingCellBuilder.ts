@@ -252,6 +252,7 @@ const getMaterializedPromptModeComparisonProjectConfigCtesSql = ({
       SELECT
         content_order,
         content_key,
+        system_prompt_variant,
         use_title,
         use_abstract,
         use_fulltext,
@@ -300,6 +301,7 @@ const getMaterializedSummaryModeComparisonProjectConfigCtesSql = ({
         summary_group_key,
         source_project_id,
         model_id,
+        system_prompt_variant,
         source_project_order,
         prompt_id,
         prompt_order,
@@ -317,6 +319,7 @@ const getMaterializedSummaryModeComparisonProjectConfigCtesSql = ({
       SELECT
         content_order,
         content_key,
+        system_prompt_variant,
         use_title,
         use_abstract,
         use_fulltext,
@@ -510,6 +513,7 @@ const getPromptModeComparisonProjectLlmCellServingInsertSql = ({
        AND content_variant.use_abstract = j.use_abstract
        AND content_variant.use_fulltext = j.use_fulltext
        AND content_variant.use_fulltext_no_images = j.use_fulltext_no_images
+       AND content_variant.system_prompt_variant = j.system_prompt_variant
       WHERE j.deleted_at IS NULL
     ),
     ${getDisplayAnswerCtesSql('llm_source')},
@@ -674,7 +678,8 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
         j.created_at AS source_created_at,
         j.updated_at AS source_updated_at,
         content_variant.content_order,
-        content_variant.content_key
+        content_variant.content_key,
+        content_variant.system_prompt_variant
       FROM app.judgment j
       ${getComparisonProjectArticleBatchJoinSql('j.article_id', useArticleBatch)}
       CROSS JOIN comparison_project
@@ -686,6 +691,7 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
        AND content_variant.use_abstract = j.use_abstract
        AND content_variant.use_fulltext = j.use_fulltext
        AND content_variant.use_fulltext_no_images = j.use_fulltext_no_images
+       AND content_variant.system_prompt_variant = j.system_prompt_variant
       WHERE j.deleted_at IS NULL
     ),
     ${getDisplayAnswerCtesSql('llm_source')},
@@ -721,6 +727,10 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
        AND (
          summary_prompt_group.model_id IS NULL
          OR summary_prompt_group.model_id = normalized_cell.model_id
+       )
+       AND (
+         summary_prompt_group.system_prompt_variant IS NULL
+         OR summary_prompt_group.system_prompt_variant = normalized_cell.system_prompt_variant
        )
     ),
     latest_summary_prompt_answer AS (
