@@ -754,6 +754,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
 
   const providerKind = normalizeOwnerBackedProvider(row.modelProvider)
   const providerConfigJson = getJsonValue(row.providerConfigJson)
+  const jobInfo = await getJudgmentJobSqliteService().getJobInfo(jobId)
   const providerSnapshot: OwnerBackedProviderSnapshot = getProviderBucketSnapshot({
     maxInflightRequests: row.maxInflightRequests ?? null,
     modelId: row.modelId,
@@ -782,7 +783,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     ...providerSnapshot,
     providerConfigJson,
     ...runtimeMatch,
-    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
+    systemPromptVariant: jobInfo?.systemPromptVariant ?? getSystemPromptVariant(row.systemPromptVariant),
     useAbstract: row.useAbstract ?? true,
     useFulltext: row.useFulltext ?? false,
     useFulltextNoImages: row.useFulltextNoImages ?? false,

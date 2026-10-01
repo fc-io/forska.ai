@@ -1654,6 +1654,50 @@ test('owner-backed runtime route returns resolved non-Codex runtime diagnostics'
   expect(state.resolveProviderConnectionRuntimeMatch).toHaveBeenCalledTimes(1)
 })
 
+test('owner-backed runtime route reports the system prompt variant the job was initialized with', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `runtime-variant-project-${Date.now()}`
+  const modelId = `runtime-variant-model-${Date.now()}`
+  const connectionId = `runtime-variant-connection-${Date.now()}`
+  const jobId = `runtime-variant-job-${Date.now()}`
+  const uninitializedJobId = `runtime-variant-uninitialized-job-${Date.now()}`
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const getRuntimeVariant = async (id: string) => {
+    if (!app) {
+      throw new Error('Test app not initialized')
+    }
+
+    const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${id}/runtime`))
+    const body = (await response.json()) as {data: {job: {systemPromptVariant: string} | null}}
+
+    expect(response.status).toBe(200)
+
+    return body.data.job?.systemPromptVariant ?? null
+  }
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await getJudgmentJobSqliteService().initializeJob(jobId)
+  await runDatabase(`
+    UPDATE app.project
+    SET system_prompt_variant = 'screening_v1'
+    WHERE id = '${projectId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${uninitializedJobId}', '${projectId}', 'running')
+  `)
+
+  expect(await getRuntimeVariant(jobId)).toBe('legacy')
+  expect(await getRuntimeVariant(uninitializedJobId)).toBe('screening_v1')
+})
+
 test('owner-backed running jobs route returns provider bucket snapshots', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
