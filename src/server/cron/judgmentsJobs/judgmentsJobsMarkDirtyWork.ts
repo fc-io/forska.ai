@@ -1,3 +1,4 @@
+import type {SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import {appendLlmJudgmentReviewServingDeltas} from '../../reviewServing/llmJudgmentReviewServingDeltaService.ts'
 import {intakeReviewChangeDeltaRangeToDirtyWork} from '../../reviewServing/reviewChangeDeltaDirtyIntakeService.ts'
 import type {JudgmentInsertRow} from '../../services/appDatabaseService.ts'
@@ -21,6 +22,7 @@ type StoredJudgmentIdentityRow = {
   id: string
   modelId: string
   promptId: string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -35,6 +37,7 @@ type VisibleJudgmentDeltaRow = {
   sourceMutationKey: string
   sourcePartition: string
   sourceUpdatedAt: Date | string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -141,6 +144,7 @@ const getJudgmentInsertRows = (entries: JudgmentJobSqliteOutboxEntry[]): Judgmen
       quotes: entry.quotes,
       snapshotProjectId: entry.snapshotProjectId,
       snapshotProjectModelName: entry.snapshotProjectModelName,
+      systemPromptVariant: entry.systemPromptVariant,
       updatedAt: entry.updatedAt,
       useAbstract: entry.useAbstract,
       useFulltext: entry.useFulltext,
@@ -167,6 +171,7 @@ const getJudgmentInsertValueSql = (row: JudgmentInsertRow) => {
     ${getSqlLiteral(row.useAbstract)},
     ${getSqlLiteral(row.useFulltext)},
     ${getSqlLiteral(row.useFulltextNoImages)},
+    ${getSqlLiteral(row.systemPromptVariant)},
     ${getSqlLiteral(row.chunkingStrategy)},
     ${getSqlLiteral(row.snapshotProjectId)},
     ${getSqlLiteral(row.snapshotProjectModelName)},
@@ -178,7 +183,14 @@ const getJudgmentInsertValueSql = (row: JudgmentInsertRow) => {
 const getJudgmentIdentityKey = (
   row: Pick<
     StoredJudgmentIdentityRow,
-    'articleId' | 'modelId' | 'promptId' | 'useAbstract' | 'useFulltext' | 'useFulltextNoImages' | 'useTitle'
+    | 'articleId'
+    | 'modelId'
+    | 'promptId'
+    | 'systemPromptVariant'
+    | 'useAbstract'
+    | 'useFulltext'
+    | 'useFulltextNoImages'
+    | 'useTitle'
   >,
 ) => {
   return [
@@ -189,6 +201,7 @@ const getJudgmentIdentityKey = (
     row.useAbstract,
     row.useFulltext,
     row.useFulltextNoImages,
+    row.systemPromptVariant,
   ].join('|')
 }
 
@@ -202,7 +215,8 @@ const getStoredJudgmentIdsByIdentity = async (runner: DirtyWorkRunner, entries: 
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
-      use_fulltext_no_images AS useFulltextNoImages
+      use_fulltext_no_images AS useFulltextNoImages,
+      system_prompt_variant AS systemPromptVariant
     FROM app.judgment
     WHERE ${entries
       .map((entry) => {
@@ -214,6 +228,7 @@ const getStoredJudgmentIdsByIdentity = async (runner: DirtyWorkRunner, entries: 
           AND use_abstract = ${getSqlLiteral(entry.useAbstract)}
           AND use_fulltext = ${getSqlLiteral(entry.useFulltext)}
           AND use_fulltext_no_images = ${getSqlLiteral(entry.useFulltextNoImages)}
+          AND system_prompt_variant = ${getSqlLiteral(entry.systemPromptVariant)}
           AND delete_generation = 0
         )`
       })
@@ -244,6 +259,7 @@ const getVisibleJudgmentDeltaRows = async (
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      system_prompt_variant,
       judgment_id,
       source_updated_at,
       source_mutation_key,
@@ -259,6 +275,7 @@ const getVisibleJudgmentDeltaRows = async (
             ${getSqlLiteral(entry.useAbstract)},
             ${getSqlLiteral(entry.useFulltext)},
             ${getSqlLiteral(entry.useFulltextNoImages)},
+            ${getSqlLiteral(entry.systemPromptVariant)},
             ${getSqlLiteral(judgmentId)},
             ${getTimestampLiteral(entry.updatedAt)},
             ${getSqlLiteral(`sqliteOutboxImport|${entry.jobId}|${entry.outboxSeq}|${entry.judgmentId}`)},
@@ -275,6 +292,7 @@ const getVisibleJudgmentDeltaRows = async (
       imported_judgment.use_abstract AS useAbstract,
       imported_judgment.use_fulltext AS useFulltext,
       imported_judgment.use_fulltext_no_images AS useFulltextNoImages,
+      imported_judgment.system_prompt_variant AS systemPromptVariant,
       imported_judgment.judgment_id AS judgmentId,
       imported_judgment.source_updated_at AS sourceUpdatedAt,
       imported_judgment.source_mutation_key AS sourceMutationKey,
@@ -326,13 +344,14 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
+      system_prompt_variant,
       chunking_strategy,
       snapshot_project_id,
       snapshot_project_model_name,
       created_at,
       updated_at
     ) VALUES ${getJudgmentInsertRows(entries).map(getJudgmentInsertValueSql).join(', ')}
-    ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, delete_generation) DO NOTHING
+    ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant, delete_generation) DO NOTHING
     RETURNING id
   `)
   const insertedJudgmentIds = new Set(
@@ -370,6 +389,7 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
       sourceOperation: 'insert' as const,
       sourcePartition: row.sourcePartition,
       sourceUpdatedAt: row.sourceUpdatedAt,
+      systemPromptVariant: row.systemPromptVariant,
       useAbstract: row.useAbstract,
       useFulltext: row.useFulltext,
       useFulltextNoImages: row.useFulltextNoImages,
@@ -421,6 +441,7 @@ const markComparisonServingStaleForInsertedEntries = async ({
         articleId: entry.articleId,
         modelId: entry.modelId,
         promptId: entry.promptId,
+        systemPromptVariant: entry.systemPromptVariant,
         useAbstract: entry.useAbstract,
         useFulltext: entry.useFulltext,
         useFulltextNoImages: entry.useFulltextNoImages,

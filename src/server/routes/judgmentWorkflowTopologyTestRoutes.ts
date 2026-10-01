@@ -157,6 +157,7 @@ const seedTopologyFixture = async ({
           changedReviewConfigFields: [
             'modelId',
             'promptMembership',
+            'systemPromptVariant',
             'useAbstract',
             'useFulltext',
             'useFulltextNoImages',
@@ -355,6 +356,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         count: number
         modelId: string
         projectId: string
+        systemPromptVariant: string
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -362,6 +364,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
       }>(`
         SELECT project_id AS projectId,
                model_id AS modelId,
+               system_prompt_variant AS systemPromptVariant,
                COUNT(*) AS count,
                BOOL_AND(use_title) AS useTitle,
                BOOL_AND(use_abstract) AS useAbstract,
@@ -369,8 +372,8 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
                BOOL_OR(use_fulltext_no_images) AS useFulltextNoImages
         FROM app.judgment
         WHERE project_id IN (${projectList})
-        GROUP BY project_id, model_id
-        ORDER BY project_id
+        GROUP BY project_id, model_id, system_prompt_variant
+        ORDER BY project_id, system_prompt_variant
       `)
       const [queue] = await getAppDatabaseService().queryJson<{count: number}>(`
         WITH required_dispatch_component(component) AS (
@@ -536,6 +539,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         projectId: string
         promptId: string
         quotes: unknown
+        systemPromptVariant: string
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -553,7 +557,8 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
                use_title AS useTitle,
                use_abstract AS useAbstract,
                use_fulltext AS useFulltext,
-               use_fulltext_no_images AS useFulltextNoImages
+               use_fulltext_no_images AS useFulltextNoImages,
+               system_prompt_variant AS systemPromptVariant
         FROM app.judgment
         WHERE project_id = ${getSqlLiteral(body.projectId)}
           AND model_id = ${getSqlLiteral(body.modelId)}

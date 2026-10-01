@@ -2,6 +2,7 @@ import {Effect} from 'effect'
 
 import {judgeSinglePrompt, MAX_COMPLETION_TOKENS, RecoverableJudgeError} from '../../../../agent/judge.ts'
 import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromptJudgment.ts'
+import {getSystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
 import type {StoredProviderInvocationContext} from '../../../providers/providerInvocationService.ts'
 import {getProviderModelMetadataPromptTokenLimit} from '../../../providers/providerModelMetadata.ts'
@@ -55,6 +56,7 @@ const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): 
       AND use_abstract = ${promptToProcess.useAbstract ? 'TRUE' : 'FALSE'}
       AND use_fulltext = ${promptToProcess.useFulltext ? 'TRUE' : 'FALSE'}
       AND use_fulltext_no_images = ${promptToProcess.useFulltextNoImages ? 'TRUE' : 'FALSE'}
+      AND system_prompt_variant = '${escapeSqlString(getSystemPromptVariant(promptToProcess.systemPromptVariant))}'
       AND deleted_at IS NULL
     LIMIT 1
   `)
@@ -736,6 +738,7 @@ const enqueueJudgeWorkerTerminalCompletion = async (
     retryAfterMs: terminalState.kind === 'ready' ? terminalState.retryAfterMs : undefined,
     skipReason: terminalState.kind === 'skipped' ? terminalState.skipReason : undefined,
     status: terminalState.kind === 'ready' ? 'retry' : terminalState.kind === 'skipped' ? 'skipped' : 'failed',
+    systemPromptVariant: promptToProcess.systemPromptVariant ?? null,
     useAbstract: promptToProcess.useAbstract,
     useFulltext: promptToProcess.useFulltext,
     useFulltextNoImages: promptToProcess.useFulltextNoImages,

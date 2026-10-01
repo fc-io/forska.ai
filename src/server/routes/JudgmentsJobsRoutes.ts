@@ -1,6 +1,10 @@
 import {Elysia, t} from 'elysia'
 
-import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {
+  getSystemPromptVariant,
+  type SystemPromptVariant,
+  systemPromptVariants,
+} from '../../agent/judge/systemPromptVariant.ts'
 import {
   type CronRuntimeClassState,
   cronRuntimeTickNames,
@@ -209,6 +213,7 @@ type JudgmentJobProgressState =
 type JudgmentJobWorkIdentity = {
   modelId: string
   projectId: string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -349,6 +354,7 @@ type JudgmentCompletionBody = JudgmentCompletionIdentity & {
   retryAfterMs?: number | null
   skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
+  systemPromptVariant?: SystemPromptVariant | null
   tokenUse?: JudgmentCompletionTokenUseSummary | null
 }
 type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number; protectedRecordIds?: string[]}
@@ -411,6 +417,14 @@ const judgmentCompletionBodySchema = t.Object({
       t.Literal('retry'),
       t.Literal('skipped'),
       t.Literal('succeeded'),
+    ]),
+  ),
+  systemPromptVariant: t.Optional(
+    t.Union([
+      ...systemPromptVariants.map((systemPromptVariant) => {
+        return t.Literal(systemPromptVariant)
+      }),
+      t.Null(),
     ]),
   ),
   tokenUse: t.Optional(
@@ -1029,6 +1043,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
         requestAttemptsJson: getCompletionRequestAttemptsJson(body, 'judgment_outbox', judgmentId),
         snapshotProjectId: body.projectId,
         snapshotProjectModelName: null,
+        systemPromptVariant: body.systemPromptVariant ?? null,
         updatedAt: getDateValue(judgment.updatedAt) ?? now,
         useAbstract: body.useAbstract,
         useFulltext: body.useFulltext,
@@ -1112,13 +1127,14 @@ const getUnassessedCountCacheKey = (
   useAbstract: boolean,
   useFulltext: boolean,
   useFulltextNoImages: boolean,
+  systemPromptVariant: SystemPromptVariant,
   dirtyToken: number | null,
   lastCompletedDirtyToken: number | null,
 ) => {
   const from = projectDateFrom ? projectDateFrom.toISOString() : ''
   const to = projectDateTo ? projectDateTo.toISOString() : ''
   const routes = importRouteIds.slice().sort().join(',')
-  const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}`
+  const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}|${systemPromptVariant}`
   return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}|${dirtyToken ?? 'null'}|${lastCompletedDirtyToken ?? 'null'}`
 }
 
@@ -1281,6 +1297,7 @@ const getJobContext = async ({
     importFailureCount: number
     pauseRequestedAt: Date | null
     projectName: string | null
+    systemPromptVariant: SystemPromptVariant
     useTitle: boolean
     useAbstract: boolean
     useFulltext: boolean
@@ -1313,6 +1330,7 @@ const getJobContext = async ({
       projectModelId: string | null
       projectDateFrom: unknown
       projectDateTo: unknown
+      projectSystemPromptVariant: string | null
       projectUseTitle: boolean | null
       projectUseAbstract: boolean | null
       projectUseFulltext: boolean | null
@@ -1339,6 +1357,7 @@ const getJobContext = async ({
         p.model_id AS projectModelId,
         p.date_from AS projectDateFrom,
         p.date_to AS projectDateTo,
+        p.system_prompt_variant AS projectSystemPromptVariant,
         p.use_title AS projectUseTitle,
         p.use_abstract AS projectUseAbstract,
         p.use_fulltext AS projectUseFulltext,
@@ -1366,6 +1385,7 @@ const getJobContext = async ({
     projectDateFrom,
     projectDateTo,
     projectModelId,
+    projectSystemPromptVariant,
     projectUseTitle,
     projectUseAbstract,
     projectUseFulltext,
@@ -1388,6 +1408,7 @@ const getJobContext = async ({
     lastImportExitCode: rest.lastImportExitCode,
     importFailureCount: Number(rest.importFailureCount ?? 0),
     pauseRequestedAt: getDateValue(rest.pauseRequestedAt),
+    systemPromptVariant: getSystemPromptVariant(projectSystemPromptVariant),
     useTitle: projectUseTitle ?? true,
     useAbstract: projectUseAbstract ?? true,
     useFulltext: projectUseFulltext ?? false,
@@ -1796,12 +1817,20 @@ const getJudgmentJobWorkIdentity = ({
   job,
   modelId,
 }: {
-  job: {projectId: string; useAbstract: boolean; useFulltext: boolean; useFulltextNoImages: boolean; useTitle: boolean}
+  job: {
+    projectId: string
+    systemPromptVariant: SystemPromptVariant
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    useTitle: boolean
+  }
   modelId: string
 }): JudgmentJobWorkIdentity => {
   return {
     modelId,
     projectId: job.projectId,
+    systemPromptVariant: job.systemPromptVariant,
     useAbstract: job.useAbstract,
     useFulltext: job.useFulltext,
     useFulltextNoImages: job.useFulltextNoImages,
@@ -3021,6 +3050,7 @@ export const judgmentsJobsRoutes = new Elysia()
         job.useAbstract,
         job.useFulltext,
         job.useFulltextNoImages,
+        job.systemPromptVariant,
         freshness.dirtyToken,
         freshness.lastCompletedDirtyToken,
       )
@@ -3178,6 +3208,7 @@ export const judgmentsJobsRoutes = new Elysia()
           status: string
           projectId: string
           projectModelId: string
+          systemPromptVariant: string | null
           useTitle: boolean | null
           useAbstract: boolean | null
           useFulltext: boolean | null
@@ -3198,6 +3229,7 @@ export const judgmentsJobsRoutes = new Elysia()
           jj.status AS status,
           jj.project_id AS projectId,
           COALESCE(p.model_id, '') AS projectModelId,
+          p.system_prompt_variant AS systemPromptVariant,
           p.use_title AS useTitle,
           p.use_abstract AS useAbstract,
           p.use_fulltext AS useFulltext,
@@ -3234,6 +3266,7 @@ export const judgmentsJobsRoutes = new Elysia()
               lastImportStartedAt: getDateValue(job.lastImportStartedAt),
               pauseRequestedAt: getDateValue(job.pauseRequestedAt),
               quarantinedAt: getDateValue(job.quarantinedAt),
+              systemPromptVariant: getSystemPromptVariant(job.systemPromptVariant),
               useAbstract: job.useAbstract ?? true,
               useFulltext: job.useFulltext ?? false,
               useFulltextNoImages: job.useFulltextNoImages ?? false,

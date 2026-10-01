@@ -104,6 +104,7 @@ export type JudgeWorkerCompletionPayload = {
   retryAfterMs?: number | null
   skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
+  systemPromptVariant?: SystemPromptVariant | null
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -2079,6 +2080,7 @@ const applyJudgedCompletionLocally = async (
     requestAttemptsJson: row.requestAttemptsJson,
     snapshotProjectId: payload.projectId,
     snapshotProjectModelName: null,
+    systemPromptVariant: payload.systemPromptVariant ?? null,
     updatedAt: now,
     useAbstract: payload.useAbstract,
     useFulltext: payload.useFulltext,

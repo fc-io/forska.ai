@@ -1198,6 +1198,11 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
     INSERT INTO app.prompt (id, original_text, content_hash)
     VALUES ('${promptId}', 'Completion flush prompt', '${promptId}-hash')
   `)
+  await runDatabase(`
+    UPDATE app.project
+    SET system_prompt_variant = 'screening_v1'
+    WHERE id = '${projectId}'
+  `)
 
   await sqliteService.initializeJob(jobId)
   await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
@@ -1258,8 +1263,8 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
     },
   ]
 
-  const completionResponse = await app.handle(
-    new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
+  const getCompletionRequest = (systemPromptVariant: string) => {
+    return new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
       body: JSON.stringify({
         articleId: claim.articleId,
         claimId: claim.claimId,
@@ -1272,6 +1277,7 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
         promptId: claim.promptId,
         queueRecordId: claim.recordId,
         requestAttempts,
+        systemPromptVariant,
         tokenUse: {
           failedRequests: 0,
           failedRequestsDetails: [],
@@ -1299,11 +1305,13 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
       }),
       headers: {'content-type': 'application/json'},
       method: 'POST',
-    }),
-  )
-  const getJudgmentCount = async () => {
-    const [judgmentRow] = await getAppDatabaseService().queryJson<{count: number}>(`
-      SELECT COUNT(*) AS count
+    })
+  }
+  const invalidVariantResponse = await app.handle(getCompletionRequest('screening_v0'))
+  const completionResponse = await app.handle(getCompletionRequest('screening_v1'))
+  const getJudgmentVariants = async () => {
+    const rows = await getAppDatabaseService().queryJson<{systemPromptVariant: string}>(`
+      SELECT system_prompt_variant AS systemPromptVariant
       FROM app.judgment
       WHERE project_id = '${projectId}'
         AND article_id = '${articleId}'
@@ -1311,16 +1319,19 @@ test('owner-backed completion leaves the accepted judgment outbox for the backgr
         AND model_id = '${modelId}'
     `)
 
-    return Number(judgmentRow?.count ?? 0)
+    return rows.map((row) => {
+      return row.systemPromptVariant
+    })
   }
 
+  expect(invalidVariantResponse.status).toBe(422)
   expect(completionResponse.status).toBe(200)
-  expect(await getJudgmentCount()).toBe(0)
+  expect(await getJudgmentVariants()).toEqual([])
   expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(1)
 
   await flushJudgmentJobSqliteOutbox({jobId})
 
-  expect(await getJudgmentCount()).toBe(1)
+  expect(await getJudgmentVariants()).toEqual(['screening_v1'])
   expect(await sqliteService.getUnexportedOutboxCount(jobId)).toBe(0)
 
   await sqliteService.closeAll()
@@ -3839,7 +3850,8 @@ test('judgment job health routes distinguish active and blocked import ownership
   `)
   await runDatabase(`
     UPDATE app.project
-    SET use_title = FALSE, use_abstract = TRUE, use_fulltext = TRUE, use_fulltext_no_images = FALSE
+    SET use_title = FALSE, use_abstract = TRUE, use_fulltext = TRUE, use_fulltext_no_images = FALSE,
+        system_prompt_variant = 'screening_v1'
     WHERE id = '${blockedProjectId}'
   `)
   await runDatabase(`
@@ -3925,6 +3937,7 @@ test('judgment job health routes distinguish active and blocked import ownership
       workIdentity: {
         modelId: string
         projectId: string
+        systemPromptVariant: string
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -3939,6 +3952,7 @@ test('judgment job health routes distinguish active and blocked import ownership
       workIdentity: {
         modelId: string
         projectId: string
+        systemPromptVariant: string
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
@@ -3957,6 +3971,7 @@ test('judgment job health routes distinguish active and blocked import ownership
           workIdentity: {
             modelId: string
             projectId: string
+            systemPromptVariant: string
             useAbstract: boolean
             useFulltext: boolean
             useFulltextNoImages: boolean
@@ -3987,6 +4002,7 @@ test('judgment job health routes distinguish active and blocked import ownership
     expect(activeBody.workIdentity).toEqual({
       modelId: activeModelId,
       projectId: activeProjectId,
+      systemPromptVariant: 'legacy',
       useAbstract: false,
       useFulltext: false,
       useFulltextNoImages: true,
@@ -4002,6 +4018,7 @@ test('judgment job health routes distinguish active and blocked import ownership
     expect(blockedBody.workIdentity).toEqual({
       modelId: blockedModelId,
       projectId: blockedProjectId,
+      systemPromptVariant: 'screening_v1',
       useAbstract: true,
       useFulltext: true,
       useFulltextNoImages: false,

@@ -182,6 +182,7 @@ const runBenchmarkWorker = async (
         quotes: ['quote'],
         snapshotProjectId: null,
         snapshotProjectModelName: null,
+        systemPromptVariant: 'legacy' as const,
         updatedAt,
         useAbstract: true,
         useFulltext: false,

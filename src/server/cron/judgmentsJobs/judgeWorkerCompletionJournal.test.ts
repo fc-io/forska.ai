@@ -228,6 +228,7 @@ const createLocalJobPrompt = ({
       Number(payload.useFulltextNoImages),
       new Date().toISOString(),
     )
+
   database
     .query(
       `
@@ -565,6 +566,34 @@ test('local completion apply releases retry rows without owner calls', async () 
   expect(queuePrompt).toEqual({claimId: null, status: 'ready'})
   expect(outbox?.ackedAt).toBeNull()
   expect(outbox?.localAppliedAt).toBeTruthy()
+})
+
+test('judged completion replay sends the claim system prompt variant to the owner', async () => {
+  const receivedVariants: Array<string | null | undefined> = []
+  setupJournalTest(async (request) => {
+    const body = (await request.json()) as JudgeWorkerCompletionPayload
+    receivedVariants.push(body.systemPromptVariant)
+
+    return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}})
+  })
+  const payload = createCompletionPayload({
+    answeredOriginal: 'yes',
+    claimId: 'claim-variant',
+    judgmentId: 'judgment-variant',
+    queueRecordId: 'queue-variant',
+    systemPromptVariant: 'screening_v1',
+  })
+
+  await enqueueJudgeWorkerCompletion(payload)
+  await attachTokenUseToPendingJudgeWorkerCompletion({
+    articleId: payload.articleId,
+    jobId: payload.jobId,
+    promptIds: [payload.promptId],
+    tokenUse: createTokenUse(),
+  })
+
+  expect(await replayJudgeWorkerCompletionOutbox()).toEqual({ackedCount: 1, discardedCount: 0, failedCount: 0})
+  expect(receivedVariants).toEqual(['screening_v1'])
 })
 
 test('completion replay discards stale missing SQLite job database responses', async () => {

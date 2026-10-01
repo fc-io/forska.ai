@@ -223,6 +223,7 @@ type QueuePromptOutboxInsert = {
   requestAttemptsJson?: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
+  systemPromptVariant?: SystemPromptVariant | null
   updatedAt: Date
   useAbstract: boolean
   useFulltext: boolean
@@ -253,6 +254,7 @@ type OutboxRow = {
   requestAttemptsJson: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
+  systemPromptVariant: string | null
   updatedAt: string
   useAbstract: number
   useFulltext: number
@@ -284,6 +286,7 @@ export type JudgmentJobSqliteOutboxEntry = {
   requestAttemptsJson: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
+  systemPromptVariant: SystemPromptVariant
   updatedAt: Date
   useAbstract: boolean
   useFulltext: boolean
@@ -397,6 +400,7 @@ type OrphanedJudgedQueueRepairCounts = {deletedRows: number; requeuedRows: numbe
 type OrphanedJudgedQueueRepairJobInfo = {
   modelId: string
   projectId: string
+  systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -883,6 +887,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       use_abstract INTEGER NOT NULL,
       use_fulltext INTEGER NOT NULL,
       use_fulltext_no_images INTEGER NOT NULL,
+      system_prompt_variant TEXT,
       chunking_strategy TEXT,
       is_answered INTEGER NOT NULL,
       answered_original TEXT,
@@ -1027,6 +1032,7 @@ const judgmentJobSqliteRequiredSchema = {
     'article_id',
     'prompt_id',
     'model_id',
+    'system_prompt_variant',
     'created_at',
     'updated_at',
     'exported_at',
@@ -1076,6 +1082,7 @@ const judgmentOutboxColumns = [
   {name: 'execution_snapshot_id', sql: 'TEXT'},
   {name: 'execution_snapshot_hash', sql: 'TEXT'},
   {name: 'request_attempts_json', sql: 'TEXT'},
+  {name: 'system_prompt_variant', sql: 'TEXT'},
 ] as const
 
 const completionAckColumns = [
@@ -2454,6 +2461,7 @@ const getOrphanedJudgedQueueRepairJobInfo = (
         SELECT
           model_id AS modelId,
           project_id AS projectId,
+          system_prompt_variant AS systemPromptVariant,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
@@ -2466,6 +2474,7 @@ const getOrphanedJudgedQueueRepairJobInfo = (
     .get(jobId) as {
     modelId: string
     projectId: string
+    systemPromptVariant: string | null
     useAbstract: number
     useFulltext: number
     useFulltextNoImages: number
@@ -2476,6 +2485,7 @@ const getOrphanedJudgedQueueRepairJobInfo = (
     ? {
         modelId: row.modelId,
         projectId: row.projectId,
+        systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
         useAbstract: toBoolean(row.useAbstract),
         useFulltext: toBoolean(row.useFulltext),
         useFulltextNoImages: toBoolean(row.useFulltextNoImages),
@@ -2524,6 +2534,7 @@ const getExistingJudgmentPairsForOrphanedQueueRows = async ({
               AND use_abstract = ${getSqlLiteral(jobInfo.useAbstract)}
               AND use_fulltext = ${getSqlLiteral(jobInfo.useFulltext)}
               AND use_fulltext_no_images = ${getSqlLiteral(jobInfo.useFulltextNoImages)}
+              AND system_prompt_variant = ${getSqlLiteral(jobInfo.systemPromptVariant)}
               AND delete_generation = 0
               AND deleted_at IS NULL
               AND (${rows
@@ -2563,6 +2574,7 @@ const getOutboxEntry = (row: OutboxRow) => {
     requestAttemptsJson: row.requestAttemptsJson,
     snapshotProjectId: row.snapshotProjectId,
     snapshotProjectModelName: row.snapshotProjectModelName,
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
     updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
     useAbstract: toBoolean(row.useAbstract),
     useFulltext: toBoolean(row.useFulltext),
@@ -3110,6 +3122,10 @@ const getClaimableOutboxRows = (database: Database, limit: number, exactRequestA
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(
+            system_prompt_variant,
+            (SELECT ji.system_prompt_variant FROM job_info ji WHERE ji.job_id = judgment_outbox.job_id)
+          ) AS systemPromptVariant,
           chunking_strategy AS chunkingStrategy,
           answered_original AS answeredOriginal,
           answered_original_as_array AS answeredOriginalAsArray,
@@ -3158,6 +3174,10 @@ const getClaimedOutboxRows = (database: Database, claimId: string) => {
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(
+            system_prompt_variant,
+            (SELECT ji.system_prompt_variant FROM job_info ji WHERE ji.job_id = judgment_outbox.job_id)
+          ) AS systemPromptVariant,
           chunking_strategy AS chunkingStrategy,
           answered_original AS answeredOriginal,
           answered_original_as_array AS answeredOriginalAsArray,
@@ -3578,6 +3598,25 @@ const getQueuePromptSnapshotSettings = (database: Database, jobId: string): Queu
     .get(jobId) as {useFulltext: number; useFulltextNoImages: number} | null
 
   return row ? {useFulltext: toBoolean(row.useFulltext), useFulltextNoImages: toBoolean(row.useFulltextNoImages)} : null
+}
+
+const getOutboxSystemPromptVariantFromDatabase = (
+  database: Database,
+  jobId: string,
+  fallback: SystemPromptVariant | null | undefined,
+): SystemPromptVariant => {
+  const row = database
+    .query(
+      `
+        SELECT system_prompt_variant AS systemPromptVariant
+        FROM job_info
+        WHERE job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId) as {systemPromptVariant: string | null} | null
+
+  return getSystemPromptVariant(row ? row.systemPromptVariant : fallback)
 }
 
 const hasStoredCanonicalQueuePromptDuplicate = ({
@@ -6310,6 +6349,7 @@ const sqliteService = {
             use_abstract,
             use_fulltext,
             use_fulltext_no_images,
+            system_prompt_variant,
             chunking_strategy,
             is_answered,
             answered_original,
@@ -6321,7 +6361,7 @@ const sqliteService = {
             request_attempts_json,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
           )
           .run(
@@ -6341,6 +6381,7 @@ const sqliteService = {
             Number(input.useAbstract),
             Number(input.useFulltext),
             Number(input.useFulltextNoImages),
+            getOutboxSystemPromptVariantFromDatabase(database, jobId, input.systemPromptVariant),
             input.chunkingStrategy,
             Number(input.isAnswered),
             input.answeredOriginal,

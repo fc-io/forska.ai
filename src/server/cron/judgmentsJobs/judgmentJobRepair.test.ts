@@ -68,10 +68,12 @@ const insertProjectFixture = async ({
   connectionId,
   modelId,
   projectId,
+  systemPromptVariant = null,
 }: {
   connectionId: string
   modelId: string
   projectId: string
+  systemPromptVariant?: string | null
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -86,8 +88,13 @@ const insertProjectFixture = async ({
     VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
   `)
   await runDatabase(`
-    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-    VALUES ('${projectId}', 'Judgment job repair test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+    INSERT INTO app.project (
+      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant
+    )
+    VALUES (
+      '${projectId}', 'Judgment job repair test', '${modelId}', TRUE, TRUE, FALSE, FALSE,
+      ${systemPromptVariant === null ? 'NULL' : `'${systemPromptVariant}'`}
+    )
   `)
 }
 
@@ -209,6 +216,66 @@ test('startup automatic repair requeues orphaned rows for running active SQLite 
   expect(await service.getHealthSnapshot(pausedJobId)).toMatchObject({
     orphanedJudgedRowCount: 1,
     promptCounts: {claimed: 0, judged: 1, ready: 0, running: 0, skipped: 0},
+  })
+})
+
+test('orphan repair only counts a stored judgment of the job system prompt variant as already judged', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const now = Date.now()
+  const connectionId = `variant-repair-connection-${now}`
+  const modelId = `variant-repair-model-${now}`
+  const projectId = `variant-repair-project-${now}`
+  const otherVariantJobId = `variant-repair-other-job-${now}`
+  const sameVariantJobId = `variant-repair-same-job-${now}`
+  const insertStoredJudgment = (input: {articleId: string; promptId: string; systemPromptVariant: string}) => {
+    return runDatabase?.(`
+      INSERT INTO app.judgment (
+        id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+        system_prompt_variant, is_answered, answered_original
+      )
+      VALUES (
+        '${input.articleId}-judgment', '${input.articleId}', '${input.promptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE,
+        '${input.systemPromptVariant}', TRUE, 'yes'
+      )
+    `)
+  }
+
+  await insertProjectFixture({connectionId, modelId, projectId, systemPromptVariant: 'screening_v1'})
+  await insertJobFixture({jobId: otherVariantJobId, projectId, status: 'running', storageState: 'active'})
+  await insertJobFixture({jobId: sameVariantJobId, projectId, status: 'running', storageState: 'active'})
+  await insertOrphanedJudgedQueueFixture({
+    articleId: `variant-repair-other-article-${now}`,
+    jobId: otherVariantJobId,
+    promptId: `variant-repair-other-prompt-${now}`,
+  })
+  await insertOrphanedJudgedQueueFixture({
+    articleId: `variant-repair-same-article-${now}`,
+    jobId: sameVariantJobId,
+    promptId: `variant-repair-same-prompt-${now}`,
+  })
+  await insertStoredJudgment({
+    articleId: `variant-repair-other-article-${now}`,
+    promptId: `variant-repair-other-prompt-${now}`,
+    systemPromptVariant: 'legacy',
+  })
+  await insertStoredJudgment({
+    articleId: `variant-repair-same-article-${now}`,
+    promptId: `variant-repair-same-prompt-${now}`,
+    systemPromptVariant: 'screening_v1',
+  })
+
+  const service = sqliteService()
+
+  expect(await service.repairOrphanedJudgedQueueRows({jobId: otherVariantJobId, maxRows: 10})).toMatchObject({
+    deletedRows: 0,
+    requeuedRows: 1,
+  })
+  expect(await service.repairOrphanedJudgedQueueRows({jobId: sameVariantJobId, maxRows: 10})).toMatchObject({
+    deletedRows: 1,
+    requeuedRows: 0,
   })
 })
 

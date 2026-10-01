@@ -94,7 +94,11 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
     }),
   )
 
-  const buildRow = (params: {articleId: string; id: string}): JudgmentInsertRow => {
+  const buildRow = (params: {
+    articleId: string
+    id: string
+    systemPromptVariant?: JudgmentInsertRow['systemPromptVariant']
+  }): JudgmentInsertRow => {
     return {
       answeredOriginal: 'yes',
       answeredOriginalAsArray: ['yes'],
@@ -111,6 +115,7 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
       quotes: ['quote'],
       snapshotProjectId: null,
       snapshotProjectModelName: null,
+      systemPromptVariant: params.systemPromptVariant ?? 'legacy',
       updatedAt,
       useAbstract: true,
       useFulltext: false,
@@ -141,23 +146,42 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
   const duplicateResult = await appendJudgments([
     buildRow({articleId: articleIds[0] ?? '', id: `judgment-a-duplicate-${Date.now()}`}),
   ])
+  const otherVariantResult = await appendJudgments([
+    buildRow({
+      articleId: articleIds[0] ?? '',
+      id: `judgment-a-screening-${Date.now()}`,
+      systemPromptVariant: 'screening_v1',
+    }),
+  ])
   const appendMetrics = getAppendMetrics()
   const [countRow] = await queryDatabase<{total: number}>(
     `SELECT COUNT(*) AS total FROM app.judgment WHERE model_id = '${modelId}'`,
   )
+  const variantRows = await queryDatabase<{systemPromptVariant: string; total: number}>(`
+    SELECT system_prompt_variant AS systemPromptVariant, COUNT(*)::INTEGER AS total
+    FROM app.judgment
+    WHERE model_id = '${modelId}'
+    GROUP BY system_prompt_variant
+    ORDER BY system_prompt_variant
+  `)
 
   expect(parallelTotals).toEqual({attempted: 4, inserted: 4, skipped: 0})
   expect(duplicateResult).toEqual({attempted: 1, inserted: 0, skipped: 1})
+  expect(otherVariantResult).toEqual({attempted: 1, inserted: 1, skipped: 0})
+  expect(variantRows).toEqual([
+    {systemPromptVariant: 'legacy', total: 4},
+    {systemPromptVariant: 'screening_v1', total: 1},
+  ])
   expect(appendMetrics.laneCount).toBe(2)
   expect(appendMetrics.maxQueueDepth).toBeGreaterThanOrEqual(1)
-  expect(appendMetrics.rowsAttempted).toBe(5)
-  expect(appendMetrics.rowsInserted).toBe(4)
+  expect(appendMetrics.rowsAttempted).toBe(6)
+  expect(appendMetrics.rowsInserted).toBe(5)
   expect(appendMetrics.rowsSkipped).toBe(1)
   if (appendMetrics.averageRowsPerSecondAttempted !== null) {
     expect(appendMetrics.averageRowsPerSecondAttempted).toBeGreaterThan(0)
   }
   expect(appendMetrics.queueDepth).toBe(0)
-  expect(Number(countRow?.total ?? 0)).toBe(4)
+  expect(Number(countRow?.total ?? 0)).toBe(5)
 })
 
 test('appendJudgments safely inserts quote-heavy judgment text', async () => {
@@ -211,6 +235,7 @@ test('appendJudgments safely inserts quote-heavy judgment text', async () => {
       quotes: [answeredOriginal, explanation],
       snapshotProjectId: null,
       snapshotProjectModelName: null,
+      systemPromptVariant: 'legacy',
       updatedAt,
       useAbstract: true,
       useFulltext: false,

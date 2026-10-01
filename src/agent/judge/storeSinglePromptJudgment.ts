@@ -22,6 +22,7 @@ import type {DuckdbWorkloadContext} from '../../server/utils/duckdbService.ts'
 import type {ContentSettings} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 import type {SinglePromptJudgmentResult} from './parseSinglePromptJudgment.ts'
+import {getSystemPromptVariant, type SystemPromptVariant} from './systemPromptVariant.ts'
 
 export class JudgmentPersistenceError extends Error {
   constructor(message: string, options?: {cause?: unknown}) {
@@ -62,6 +63,7 @@ const enqueueOwnerBackedCompletion = async ({
   judgment,
   chunkingStrategy,
   requestAttempts = [],
+  systemPromptVariant,
 }: {
   article: ArticleRecord
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
@@ -75,6 +77,7 @@ const enqueueOwnerBackedCompletion = async ({
   judgment: SinglePromptJudgmentResult
   chunkingStrategy: JudgmentChunkingStrategy | null
   requestAttempts?: JudgmentRequestAttemptJsonEntry[]
+  systemPromptVariant: SystemPromptVariant
 }): Promise<void> => {
   if (!claimIdentity) {
     throw new JudgmentPersistenceError(`Missing owner-backed claim identity for ${judgmentsJobId}:${queueRecordId}`)
@@ -115,6 +118,7 @@ const enqueueOwnerBackedCompletion = async ({
       rawResponseJson: judgment,
       requestAttempts: completionRequestAttempts,
       status: 'judged',
+      systemPromptVariant,
       useAbstract: contentSettings.useAbstract,
       useFulltext: contentSettings.useFulltext,
       useFulltextNoImages: contentSettings.useFulltextNoImages,
@@ -140,6 +144,7 @@ export const storeSinglePromptJudgment = async ({
   judgment,
   chunkingStrategy,
   requestAttempts = [],
+  systemPromptVariant: inputSystemPromptVariant,
 }: {
   article: ArticleRecord
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
@@ -153,7 +158,10 @@ export const storeSinglePromptJudgment = async ({
   judgment: SinglePromptJudgmentResult
   chunkingStrategy: JudgmentChunkingStrategy | null
   requestAttempts?: JudgmentRequestAttemptJsonEntry[]
+  systemPromptVariant?: SystemPromptVariant | null
 }): Promise<void> => {
+  const systemPromptVariant = getSystemPromptVariant(inputSystemPromptVariant)
+
   try {
     if (shouldUseJudgeWorkerOwnerHandoff()) {
       await enqueueOwnerBackedCompletion({
@@ -169,6 +177,7 @@ export const storeSinglePromptJudgment = async ({
         judgment,
         chunkingStrategy,
         requestAttempts,
+        systemPromptVariant,
       })
       return
     }
@@ -197,6 +206,7 @@ export const storeSinglePromptJudgment = async ({
         AND use_abstract = ${useAbstract ? 'TRUE' : 'FALSE'}
         AND use_fulltext = ${useFulltext ? 'TRUE' : 'FALSE'}
         AND use_fulltext_no_images = ${useFulltextNoImages ? 'TRUE' : 'FALSE'}
+        AND system_prompt_variant = '${escapeSqlString(systemPromptVariant)}'
         AND deleted_at IS NULL
       LIMIT 1
     `,
@@ -212,6 +222,7 @@ export const storeSinglePromptJudgment = async ({
       console.error(
         `${article.id} | Judgment already exists: promptId=${promptId}, modelId=${modelId}, `
           + `content=[T:${useTitle},A:${useAbstract},F:${useFulltext},FNI:${useFulltextNoImages}], `
+          + `systemPromptVariant=${systemPromptVariant}, `
           + `projectId=${projectId}, existingId=${existingId}, createdAt=${existingCreatedAt ?? 'unknown'}`,
       )
       return
@@ -255,6 +266,7 @@ export const storeSinglePromptJudgment = async ({
           requestAttemptsJson: stringifyRequestAttempts(localRequestAttempts),
           snapshotProjectId: snapshotValues.snapshotProjectId,
           snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
+          systemPromptVariant,
           updatedAt: new Date(),
           useAbstract,
           useFulltext,
