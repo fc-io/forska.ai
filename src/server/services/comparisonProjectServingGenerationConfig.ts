@@ -1,3 +1,4 @@
+import {defaultSystemPromptVariant, systemPromptVariants} from '../../agent/judge/systemPromptVariant.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
 
 type ComparisonProjectServingGenerationConfigRunner = {
@@ -18,6 +19,38 @@ type ComparisonProjectServingGenerationConfigTableKey =
   | 'summaryPromptGroup'
 
 const summaryPromptId = 'summary'
+const contentFlagVariantCount = 3
+const contentKeySystemPromptVariantSeparator = '-'
+const defaultSystemPromptVariantSql = getSqlLiteral(defaultSystemPromptVariant)
+
+const getComparisonProjectSystemPromptVariantSql = (expression: string) => {
+  return `CASE
+      WHEN ${expression} IN (${systemPromptVariants
+        .map((systemPromptVariant) => {
+          return getSqlLiteral(systemPromptVariant)
+        })
+        .join(', ')}) THEN ${expression}
+      ELSE ${defaultSystemPromptVariantSql}
+    END`
+}
+
+const getSystemPromptVariantOrderSql = (expression: string) => {
+  return `CASE ${expression}
+      ${systemPromptVariants
+        .map((systemPromptVariant, index) => {
+          return `WHEN ${getSqlLiteral(systemPromptVariant)} THEN ${index}`
+        })
+        .join('\n      ')}
+      ELSE ${systemPromptVariants.length}
+    END`
+}
+
+const getContentKeySql = (flagKeyExpression: string, systemPromptVariantExpression: string) => {
+  return `${flagKeyExpression} || CASE
+      WHEN ${systemPromptVariantExpression} = ${defaultSystemPromptVariantSql} THEN ''
+      ELSE ${getSqlLiteral(contentKeySystemPromptVariantSeparator)} || ${systemPromptVariantExpression}
+    END`
+}
 
 const comparisonProjectServingGenerationConfigTables: Record<ComparisonProjectServingGenerationConfigTableKey, string> =
   {
@@ -137,6 +170,7 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
         generation BIGINT NOT NULL,
         content_order INTEGER NOT NULL,
         content_key VARCHAR NOT NULL,
+        system_prompt_variant VARCHAR NOT NULL,
         use_title BOOLEAN NOT NULL,
         use_abstract BOOLEAN NOT NULL,
         use_fulltext BOOLEAN NOT NULL,
@@ -158,6 +192,7 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
         generation BIGINT NOT NULL,
         source_project_id VARCHAR NOT NULL,
         model_id VARCHAR NOT NULL,
+        system_prompt_variant VARCHAR NOT NULL,
         source_project_order INTEGER NOT NULL
       )
     `,
@@ -168,6 +203,7 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
         summary_group_key VARCHAR NOT NULL,
         source_project_id VARCHAR,
         model_id VARCHAR,
+        system_prompt_variant VARCHAR,
         source_project_order INTEGER NOT NULL,
         prompt_id VARCHAR NOT NULL,
         prompt_order INTEGER NOT NULL,
@@ -180,6 +216,7 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
         generation BIGINT NOT NULL,
         source_project_id VARCHAR NOT NULL,
         model_id VARCHAR NOT NULL,
+        system_prompt_variant VARCHAR NOT NULL,
         source_project_order INTEGER NOT NULL
       )
     `,
@@ -268,6 +305,7 @@ const getContentVariantInsertSql = ({
       generation,
       content_order,
       content_key,
+      system_prompt_variant,
       use_title,
       use_abstract,
       use_fulltext,
@@ -277,48 +315,75 @@ const getContentVariantInsertSql = ({
       SELECT *
       FROM app.comparison_project cp
       WHERE cp.id = ${comparisonProjectLiteral}
+    ),
+    content_flag_variant AS (
+      SELECT
+        0 AS flag_order,
+        CASE WHEN cp.use_title THEN '1' ELSE '0' END
+          || CASE WHEN cp.use_abstract THEN '1' ELSE '0' END
+          || '00' AS flag_key,
+        cp.use_title AS use_title,
+        cp.use_abstract AS use_abstract,
+        FALSE AS use_fulltext,
+        FALSE AS use_fulltext_no_images
+      FROM comparison_project cp
+      WHERE cp.use_title = TRUE OR cp.use_abstract = TRUE
+
+      UNION ALL
+
+      SELECT
+        1 AS flag_order,
+        '0010' AS flag_key,
+        FALSE AS use_title,
+        FALSE AS use_abstract,
+        TRUE AS use_fulltext,
+        FALSE AS use_fulltext_no_images
+      FROM comparison_project cp
+      WHERE cp.use_fulltext = TRUE
+
+      UNION ALL
+
+      SELECT
+        2 AS flag_order,
+        '0001' AS flag_key,
+        FALSE AS use_title,
+        FALSE AS use_abstract,
+        FALSE AS use_fulltext,
+        TRUE AS use_fulltext_no_images
+      FROM comparison_project cp
+      WHERE cp.use_fulltext_no_images = TRUE
+    ),
+    source_project_system_prompt_variant AS (
+      SELECT DISTINCT ${getComparisonProjectSystemPromptVariantSql('p.system_prompt_variant')} AS system_prompt_variant
+      FROM app.comparison_project_source_project cpsp
+      INNER JOIN comparison_project cp ON cp.id = cpsp.comparison_project_id
+      INNER JOIN app.project p ON p.id = cpsp.source_project_id
+    ),
+    system_prompt_variant_config AS (
+      SELECT system_prompt_variant
+      FROM source_project_system_prompt_variant
+
+      UNION ALL
+
+      SELECT ${defaultSystemPromptVariantSql} AS system_prompt_variant
+      WHERE NOT EXISTS (SELECT 1 FROM source_project_system_prompt_variant)
     )
     SELECT
       ${comparisonProjectLiteral} AS comparison_project_id,
       ${generationLiteral} AS generation,
-      0 AS content_order,
-      CASE WHEN cp.use_title THEN '1' ELSE '0' END
-        || CASE WHEN cp.use_abstract THEN '1' ELSE '0' END
-        || '00' AS content_key,
-      cp.use_title AS use_title,
-      cp.use_abstract AS use_abstract,
-      FALSE AS use_fulltext,
-      FALSE AS use_fulltext_no_images
-    FROM comparison_project cp
-    WHERE cp.use_title = TRUE OR cp.use_abstract = TRUE
-
-    UNION ALL
-
-    SELECT
-      ${comparisonProjectLiteral} AS comparison_project_id,
-      ${generationLiteral} AS generation,
-      1 AS content_order,
-      '0010' AS content_key,
-      FALSE AS use_title,
-      FALSE AS use_abstract,
-      TRUE AS use_fulltext,
-      FALSE AS use_fulltext_no_images
-    FROM comparison_project cp
-    WHERE cp.use_fulltext = TRUE
-
-    UNION ALL
-
-    SELECT
-      ${comparisonProjectLiteral} AS comparison_project_id,
-      ${generationLiteral} AS generation,
-      2 AS content_order,
-      '0001' AS content_key,
-      FALSE AS use_title,
-      FALSE AS use_abstract,
-      FALSE AS use_fulltext,
-      TRUE AS use_fulltext_no_images
-    FROM comparison_project cp
-    WHERE cp.use_fulltext_no_images = TRUE
+      CAST(
+        content_flag_variant.flag_order
+          + ${contentFlagVariantCount} * ${getSystemPromptVariantOrderSql('system_prompt_variant_config.system_prompt_variant')}
+        AS INTEGER
+      ) AS content_order,
+      ${getContentKeySql('content_flag_variant.flag_key', 'system_prompt_variant_config.system_prompt_variant')} AS content_key,
+      system_prompt_variant_config.system_prompt_variant,
+      content_flag_variant.use_title,
+      content_flag_variant.use_abstract,
+      content_flag_variant.use_fulltext,
+      content_flag_variant.use_fulltext_no_images
+    FROM content_flag_variant
+    CROSS JOIN system_prompt_variant_config
   `
 }
 
@@ -335,6 +400,7 @@ const getSourceProjectConfigInsertSql = ({
       generation,
       source_project_id,
       model_id,
+      system_prompt_variant,
       source_project_order
     )
     WITH comparison_project AS (
@@ -348,6 +414,7 @@ const getSourceProjectConfigInsertSql = ({
       ${generationLiteral} AS generation,
       p.id AS source_project_id,
       p.model_id,
+      ${getComparisonProjectSystemPromptVariantSql('p.system_prompt_variant')} AS system_prompt_variant,
       CAST(
         ROW_NUMBER() OVER (
           ORDER BY cpsp.created_at ASC NULLS LAST, cpsp.id ASC
@@ -373,6 +440,7 @@ const getSummaryPromptGroupInsertSql = ({
       summary_group_key,
       source_project_id,
       model_id,
+      system_prompt_variant,
       source_project_order,
       prompt_id,
       prompt_order,
@@ -388,6 +456,7 @@ const getSummaryPromptGroupInsertSql = ({
       SELECT
         source_project_id,
         model_id,
+        system_prompt_variant,
         source_project_order
       FROM ${comparisonProjectServingGenerationConfigTables.sourceProjectConfig}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
@@ -397,6 +466,7 @@ const getSummaryPromptGroupInsertSql = ({
       SELECT
         source_project_config.source_project_id,
         source_project_config.model_id,
+        source_project_config.system_prompt_variant,
         source_project_config.source_project_order,
         pp.prompt_id,
         CAST(
@@ -421,6 +491,7 @@ const getSummaryPromptGroupInsertSql = ({
       SELECT
         NULL AS source_project_id,
         NULL AS model_id,
+        NULL AS system_prompt_variant,
         0 AS source_project_order,
         cpp.prompt_id,
         CAST(
@@ -440,6 +511,7 @@ const getSummaryPromptGroupInsertSql = ({
         COALESCE(source_project_id, '__fallback__') AS summary_group_key,
         source_project_id,
         model_id,
+        system_prompt_variant,
         source_project_order,
         prompt_id,
         prompt_order,
@@ -452,6 +524,7 @@ const getSummaryPromptGroupInsertSql = ({
         COALESCE(source_project_id, '__fallback__') AS summary_group_key,
         source_project_id,
         model_id,
+        system_prompt_variant,
         source_project_order,
         prompt_id,
         prompt_order,
@@ -464,6 +537,7 @@ const getSummaryPromptGroupInsertSql = ({
       summary_group_key,
       source_project_id,
       model_id,
+      system_prompt_variant,
       source_project_order,
       prompt_id,
       prompt_order,
@@ -508,6 +582,7 @@ const getModelConfigInsertSql = ({
       SELECT
         content_order,
         content_key,
+        system_prompt_variant,
         use_title,
         use_abstract,
         use_fulltext,
@@ -544,6 +619,7 @@ const getModelConfigInsertSql = ({
        AND content_variant.use_abstract = j.use_abstract
        AND content_variant.use_fulltext = j.use_fulltext
        AND content_variant.use_fulltext_no_images = j.use_fulltext_no_images
+       AND content_variant.system_prompt_variant = j.system_prompt_variant
       INNER JOIN app.model m ON m.id = j.model_id
       WHERE j.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM selected_model_config)
@@ -622,6 +698,7 @@ const getSourceProjectColumnConfigInsertSql = ({
       generation,
       source_project_id,
       model_id,
+      system_prompt_variant,
       source_project_order
     )
     WITH source_project_summary_prompt_count AS (
@@ -636,6 +713,7 @@ const getSourceProjectColumnConfigInsertSql = ({
       ${generationLiteral} AS generation,
       source_project_config.source_project_id,
       source_project_config.model_id,
+      source_project_config.system_prompt_variant,
       source_project_config.source_project_order
     FROM ${comparisonProjectServingGenerationConfigTables.sourceProjectConfig} source_project_config
     INNER JOIN ${comparisonProjectServingGenerationConfigTables.modelConfig} summary_model_config
@@ -677,7 +755,7 @@ const getRequiredColumnInsertSql = ({
         AND generation = ${generationLiteral}
     ),
     content_variant AS (
-      SELECT content_key
+      SELECT content_key, system_prompt_variant
       FROM ${comparisonProjectServingGenerationConfigTables.contentVariant}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
         AND generation = ${generationLiteral}
@@ -699,7 +777,8 @@ const getRequiredColumnInsertSql = ({
     source_project_column_config AS (
       SELECT
         source_project_id,
-        model_id
+        model_id,
+        system_prompt_variant
       FROM ${comparisonProjectServingGenerationConfigTables.sourceProjectColumnConfig}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
         AND generation = ${generationLiteral}
@@ -735,7 +814,8 @@ const getRequiredColumnInsertSql = ({
         '${summaryPromptId}' AS prompt_id
       FROM comparison_project cp
       CROSS JOIN source_project_column_config
-      CROSS JOIN content_variant
+      INNER JOIN content_variant
+        ON content_variant.system_prompt_variant = source_project_column_config.system_prompt_variant
       WHERE cp.compare_with_humans = TRUE
         AND COALESCE(cp.human_judgment_mode, 'prompt') = 'summary'
     ),
@@ -867,6 +947,7 @@ export {
   comparisonProjectServingGenerationConfigTables,
   ensureComparisonProjectServingGenerationConfig,
   getComparisonProjectServingGenerationSql,
+  getComparisonProjectSystemPromptVariantSql,
 }
 
 export type {ComparisonProjectServingGenerationConfigParams, ComparisonProjectServingGenerationConfigRunner}

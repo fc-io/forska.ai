@@ -1014,3 +1014,228 @@ test('prompt-mode cell inserts are split by discovered article batches', async (
     }),
   ).toEqual([true, true, true, true])
 })
+
+type SystemPromptVariantServingCellsResult = {
+  actualRows: Array<{articleId: string; columnId: string; comparisonProjectId: string; displayAnswer: string | null}>
+  requiredColumnIds: Record<string, string[]>
+}
+
+const getSystemPromptVariantServingCellsScript = () => {
+  return `
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {getComparisonProjectServingCellBuilder} = await import('./src/server/services/comparisonProjectServingCellBuilder.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+    const builder = getComparisonProjectServingCellBuilder()
+    const runner = {queryJson: database.queryJson, run: database.run}
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-variant-cells', 'sglang', 'Provider Variant Cells', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled, metadata_json)
+      VALUES ('model-a', 'provider-variant-cells', 'Model A', 'model-a', 'Model A', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project (
+        id,
+        name,
+        description,
+        model_id,
+        human_judgment_mode,
+        system_prompt_variant,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        ('source-legacy', 'Source Legacy', NULL, 'model-a', 'summary', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('source-screening', 'Source Screening', NULL, 'model-a', 'summary', 'screening_v1', TRUE, TRUE, FALSE, FALSE)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash, created_at)
+      VALUES ('prompt-v', 'Prompt V', 'Prompt V', NULL, 'prompt-v-hash', TIMESTAMPTZ '2026-06-01T00:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project_prompt (
+        id,
+        project_id,
+        prompt_id,
+        prompt_order,
+        enabled,
+        criteria_disposition,
+        criteria_section_key,
+        criteria_section_label
+      ) VALUES
+        ('source-legacy-prompt-v', 'source-legacy', 'prompt-v', 0, TRUE, 'include', 'population', 'Population'),
+        ('source-screening-prompt-v', 'source-screening', 'prompt-v', 0, TRUE, 'include', 'population', 'Population')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.article (id, article_id, article_title, article_summary, article_created_at, article_updated_at)
+      VALUES ('article-v', 'external-v', 'Article V', 'Summary V', TIMESTAMPTZ '2026-06-01T00:00:00.000Z', TIMESTAMPTZ '2026-06-01T01:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES
+        ('source-legacy-article-v', 'source-legacy', 'article-v'),
+        ('source-screening-article-v', 'source-screening', 'article-v')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project (
+        id,
+        name,
+        description,
+        model_ids,
+        compare_with_humans,
+        human_judgment_mode,
+        summary_source_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      ) VALUES
+        ('comparison-variant-ab', 'Variant AB', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('comparison-variant-legacy', 'Variant Legacy', NULL, ['model-a'], FALSE, 'prompt', NULL, TRUE, TRUE, FALSE, FALSE),
+        ('comparison-variant-summary', 'Variant Summary', NULL, ['model-a'], TRUE, 'summary', NULL, TRUE, TRUE, FALSE, FALSE)
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_prompt (id, comparison_project_id, prompt_id, prompt_order, criteria_disposition)
+      VALUES
+        ('comparison-variant-ab-prompt-v', 'comparison-variant-ab', 'prompt-v', 0, NULL),
+        ('comparison-variant-legacy-prompt-v', 'comparison-variant-legacy', 'prompt-v', 0, NULL),
+        ('comparison-variant-summary-prompt-v', 'comparison-variant-summary', 'prompt-v', 0, 'include')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id, created_at)
+      VALUES
+        ('comparison-variant-ab-legacy', 'comparison-variant-ab', 'source-legacy', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('comparison-variant-ab-screening', 'comparison-variant-ab', 'source-screening', TIMESTAMPTZ '2026-06-02T00:00:00.000Z'),
+        ('comparison-variant-legacy-legacy', 'comparison-variant-legacy', 'source-legacy', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('comparison-variant-summary-legacy', 'comparison-variant-summary', 'source-legacy', TIMESTAMPTZ '2026-06-01T00:00:00.000Z'),
+        ('comparison-variant-summary-screening', 'comparison-variant-summary', 'source-screening', TIMESTAMPTZ '2026-06-02T00:00:00.000Z')
+    \`)
+
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        system_prompt_variant,
+        created_at,
+        updated_at
+      ) VALUES
+        ('judgment-v-legacy', 'article-v', 'prompt-v', 'model-a', 'source-legacy', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, 'legacy', TIMESTAMPTZ '2026-06-03T00:00:00.000Z', TIMESTAMPTZ '2026-06-03T01:00:00.000Z'),
+        ('judgment-v-screening', 'article-v', 'prompt-v', 'model-a', 'source-screening', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, 'screening_v1', TIMESTAMPTZ '2026-06-04T00:00:00.000Z', TIMESTAMPTZ '2026-06-04T01:00:00.000Z')
+    \`)
+
+    await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: 'comparison-variant-ab', generation: 1}, runner)
+    await builder.insertPromptModeComparisonProjectCells({comparisonProjectId: 'comparison-variant-legacy', generation: 1}, runner)
+    await builder.insertSummaryModeComparisonProjectLlmCells({comparisonProjectId: 'comparison-variant-summary', generation: 1}, runner)
+
+    const actualRows = await database.queryJson(\`
+      SELECT
+        comparison_project_id AS comparisonProjectId,
+        article_id AS articleId,
+        column_id AS columnId,
+        display_answer AS displayAnswer
+      FROM mart.comparison_cell_serving
+      WHERE generation = 1
+      ORDER BY comparison_project_id ASC, column_id ASC
+    \`)
+    const requiredColumnRows = await database.queryJson(\`
+      SELECT comparison_project_id AS comparisonProjectId, column_id AS columnId
+      FROM comparison_serving_generation_required_column_config
+      WHERE generation = 1
+      ORDER BY comparison_project_id ASC, column_id ASC
+    \`)
+    const requiredColumnIds = requiredColumnRows.reduce((columnMap, row) => {
+      return {...columnMap, [row.comparisonProjectId]: [...(columnMap[row.comparisonProjectId] ?? []), row.columnId]}
+    }, {})
+
+    console.log(JSON.stringify({actualRows, requiredColumnIds}))
+  `
+}
+
+test('system prompt variants become separate comparison sources keyed like the TypeScript content key', () => {
+  const result = runScript<SystemPromptVariantServingCellsResult>(getSystemPromptVariantServingCellsScript())
+  const screeningContentKey = getComparisonProjectContentKey({...contentSettings, systemPromptVariant: 'screening_v1'})
+  const legacyPromptColumnId = getComparisonProjectColumnId('llm', 'prompt-v', 'model-a', contentKey)
+  const screeningPromptColumnId = getComparisonProjectColumnId('llm', 'prompt-v', 'model-a', screeningContentKey)
+  const legacySummaryColumnId = getComparisonProjectColumnId(
+    'llm',
+    summaryPromptId,
+    'model-a',
+    contentKey,
+    'source-legacy',
+  )
+  const screeningSummaryColumnId = getComparisonProjectColumnId(
+    'llm',
+    summaryPromptId,
+    'model-a',
+    screeningContentKey,
+    'source-screening',
+  )
+
+  expect(contentKey).toBe('1100')
+  expect(screeningContentKey).toBe('1100-screening_v1')
+  expect(getComparisonProjectContentKey({...contentSettings, systemPromptVariant: 'legacy'})).toBe(contentKey)
+  expect(result.actualRows).toEqual([
+    {
+      articleId: 'article-v',
+      columnId: screeningPromptColumnId,
+      comparisonProjectId: 'comparison-variant-ab',
+      displayAnswer: 'no',
+    },
+    {
+      articleId: 'article-v',
+      columnId: legacyPromptColumnId,
+      comparisonProjectId: 'comparison-variant-ab',
+      displayAnswer: 'yes',
+    },
+    {
+      articleId: 'article-v',
+      columnId: legacyPromptColumnId,
+      comparisonProjectId: 'comparison-variant-legacy',
+      displayAnswer: 'yes',
+    },
+    {
+      articleId: 'article-v',
+      columnId: legacySummaryColumnId,
+      comparisonProjectId: 'comparison-variant-summary',
+      displayAnswer: 'yes',
+    },
+    {
+      articleId: 'article-v',
+      columnId: screeningSummaryColumnId,
+      comparisonProjectId: 'comparison-variant-summary',
+      displayAnswer: 'no',
+    },
+  ])
+  expect(result.requiredColumnIds).toEqual({
+    'comparison-variant-ab': [screeningPromptColumnId, legacyPromptColumnId],
+    'comparison-variant-legacy': [legacyPromptColumnId],
+    'comparison-variant-summary': ['human:summary', legacySummaryColumnId, screeningSummaryColumnId],
+  })
+})

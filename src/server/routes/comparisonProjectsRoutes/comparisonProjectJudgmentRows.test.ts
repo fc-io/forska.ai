@@ -142,6 +142,21 @@ test('batch cell assembly uses latest human answer and normalized llm array valu
   expect(cellsByArticle.llmCellsByArticle['article-1']?.['llm:model-1:1100:prompt-1']).toBe('beta\nalpha')
 })
 
+test('batch cell assembly keeps system prompt variants in separate llm columns', () => {
+  const cellsByArticle = getComparisonProjectBatchCellsByArticle({
+    humanRows: [],
+    llmRows: [
+      {...getLlmRow({answer: 'yes', articleId: 'article-1', promptId: 'prompt-1'}), systemPromptVariant: 'legacy'},
+      {...getLlmRow({answer: 'no', articleId: 'article-1', promptId: 'prompt-1'}), systemPromptVariant: 'screening_v1'},
+    ],
+  })
+
+  expect(cellsByArticle.llmCellsByArticle['article-1']).toEqual({
+    'llm:model-1:1100-screening_v1:prompt-1': 'no',
+    'llm:model-1:1100:prompt-1': 'yes',
+  })
+})
+
 test('row batch iterator yields filtered rows by scoped article batch', async () => {
   const articleBatches = new Map<number, ComparisonProjectScopedArticle[]>([
     [0, articles.slice(0, 2)],

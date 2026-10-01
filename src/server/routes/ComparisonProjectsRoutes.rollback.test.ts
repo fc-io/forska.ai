@@ -181,6 +181,7 @@ type MockDatabaseState = {
   servingRebuildGate?: Promise<void>
   servingStatus: MockServingStatus
   sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
+  sourceProjectSystemPromptVariants?: Record<string, string>
   staleServingIds: string[]
   rootRunStatements: string[]
   rootQueryStatementsDuringTransaction: string[]
@@ -1946,7 +1947,8 @@ const queryJson = async (
       })
       .map((sourceProject) => {
         const {modelMetadataJson: _modelMetadataJson, ...sourceProjectRow} = sourceProject
-        return sourceProjectRow
+        const systemPromptVariant = getMockDatabaseState().sourceProjectSystemPromptVariants?.[sourceProject.id]
+        return systemPromptVariant ? {...sourceProjectRow, systemPromptVariant} : sourceProjectRow
       })
   }
 
@@ -8469,4 +8471,97 @@ test('summary comparison judgments scope to explicit source project links when a
       )
     }),
   ).toBe(true)
+})
+
+type MockComparisonProjectMetadataBody = {
+  data: {
+    columns: Array<{contentLabel: string | null; id: string; sourceProjectId: string | null}>
+    contentVariants: Array<{key: string; systemPromptVariant: string}>
+  }
+}
+
+const getMockComparisonProjectMetadata = async () => {
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(new Request('http://localhost/api/comparison-projects/comparison-project-1'))
+
+  return {body: (await response.json()) as MockComparisonProjectMetadataBody, status: response.status}
+}
+
+test('comparison metadata splits LLM columns by the linked source projects system prompt variants', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-legacy', sourceProjectId: 'prompt-project-1'},
+      {id: 'comparison-project-source-screening', sourceProjectId: 'source-project-2'},
+    ],
+    sourceProjectSystemPromptVariants: {'source-project-2': 'screening_v1'},
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.contentVariants.map((contentVariant) => {
+      return [contentVariant.key, contentVariant.systemPromptVariant]
+    }),
+  ).toEqual([
+    ['1100', 'legacy'],
+    ['1100-screening_v1', 'screening_v1'],
+  ])
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.contentLabel]
+    }),
+  ).toEqual([
+    ['llm:model-1:1100:prompt-1', 'Article Title and Abstract · System prompt variant: legacy'],
+    ['llm:model-1:1100-screening_v1:prompt-1', 'Article Title and Abstract · System prompt variant: screening_v1'],
+  ])
+})
+
+test('comparison metadata keeps legacy-only content keys and labels unchanged', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    sourceProjectLinks: [{id: 'comparison-project-source-legacy', sourceProjectId: 'prompt-project-1'}],
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.contentLabel]
+    }),
+  ).toEqual([['llm:model-1:1100:prompt-1', 'Article Title and Abstract']])
+})
+
+test('summary comparison source project columns use only that source project system prompt variant', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'},
+      {id: 'comparison-project-source-2', sourceProjectId: 'source-project-2'},
+    ],
+    sourceProjectSystemPromptVariants: {'source-project-2': 'screening_v1'},
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.sourceProjectId]
+    }),
+  ).toEqual([
+    ['llm:source-project-1:model-1:1100:summary', 'source-project-1'],
+    ['llm:source-project-2:model-2:1100-screening_v1:summary', 'source-project-2'],
+    ['human:summary', 'source-project-1'],
+  ])
 })
