@@ -267,6 +267,7 @@ export type ProjectRecord = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   systemPromptVariant: string | null
   dateFrom: Date | null
   dateTo: Date | null
@@ -469,6 +470,7 @@ export type JudgmentRecord = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
   chunkingStrategy: JudgmentChunkingStrategy | null
   isAnswered: boolean

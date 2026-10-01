@@ -8,16 +8,16 @@ import {createTempRuntimeRoot} from '../server/test/createTempRuntimeRoot.ts'
 
 setDefaultTimeout(120_000)
 
-const tempRuntimeRoot = createTempRuntimeRoot('migrate-judgment-system-prompt-variant')
+const tempRuntimeRoot = createTempRuntimeRoot('migrate-judgment-use-metadata')
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
 
-const migrationFileName = '0251_judgmentSystemPromptVariant.sql'
-const previousMigrationFileName = '0250_projectSystemPromptVariant.sql'
+const migrationFileName = '0255_judgmentUseMetadata.sql'
+const previousMigrationFileName = '0254_projectUseMetadata.sql'
 const migrationSql = readFileSync(resolve(import.meta.dir, 'duckdbMigrations', migrationFileName), 'utf8')
 const identityColumns =
-  'article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant, delete_generation'
+  'article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant, delete_generation'
 
 let database: ReturnType<typeof getAppDatabaseService> | null = null
 let migrateDuckdb: typeof import('./migrateDuckdb.ts').migrateDuckdb | null = null
@@ -38,14 +38,15 @@ const getMigrateDuckdb = () => {
   return migrateDuckdb
 }
 
-const insertJudgment = (input: {id: string; modelId: string; systemPromptVariant: string; useFulltext: boolean}) => {
+const insertJudgment = (input: {id: string; modelId: string; systemPromptVariant: string; useMetadata: boolean}) => {
   return getDatabase().run(`
     INSERT INTO app.judgment (
       id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images,
-      system_prompt_variant, is_answered, answered_original, created_at, updated_at
+      use_metadata, system_prompt_variant, is_answered, answered_original, created_at, updated_at
     ) VALUES (
-      '${input.id}', 'article-1', 'prompt-1', '${input.modelId}', TRUE, TRUE, ${input.useFulltext ? 'TRUE' : 'FALSE'}, FALSE,
-      '${input.systemPromptVariant}', TRUE, 'yes', TIMESTAMPTZ '2026-09-01T08:00:00Z', TIMESTAMPTZ '2026-09-01T08:00:00Z'
+      '${input.id}', 'article-1', 'prompt-1', '${input.modelId}', TRUE, TRUE, FALSE, FALSE,
+      ${input.useMetadata ? 'TRUE' : 'FALSE'}, '${input.systemPromptVariant}', TRUE, 'yes',
+      TIMESTAMPTZ '2026-09-01T08:00:00Z', TIMESTAMPTZ '2026-09-01T08:00:00Z'
     )
   `)
 }
@@ -83,14 +84,14 @@ afterAll(async () => {
   tempRuntimeRoot.cleanup()
 })
 
-test('the migration has no comments and recreates the judgment tables with the variant in the identity', () => {
+test('the migration has no comments and recreates the judgment tables with use_metadata in the identity', () => {
   expect(migrationSql).not.toContain('--')
   expect(migrationSql).toContain(`UNIQUE(${identityColumns})`)
   expect(migrationSql).toContain(`ON app.judgment(${identityColumns})`)
-  expect(migrationSql).toContain("system_prompt_variant VARCHAR NOT NULL DEFAULT 'legacy'")
+  expect(migrationSql).toContain('use_metadata BOOLEAN NOT NULL DEFAULT FALSE')
 })
 
-test('the migration stamps every existing judgment legacy and keeps the assessments', async () => {
+test('the migration stamps every existing judgment use_metadata FALSE and keeps the assessments', async () => {
   await getDatabase().run(`
     INSERT INTO app.article (id, article_title) VALUES ('article-1', 'Article 1')
   `)
@@ -100,11 +101,11 @@ test('the migration stamps every existing judgment legacy and keeps the assessme
   await getDatabase().run(`
     INSERT INTO app.judgment (
       id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images,
-      is_answered, answered_original, created_at, updated_at
+      system_prompt_variant, is_answered, answered_original, created_at, updated_at
     ) VALUES
-      ('judgment-a', 'article-1', 'prompt-1', 'model-a', TRUE, TRUE, FALSE, FALSE, TRUE, 'yes',
+      ('judgment-a', 'article-1', 'prompt-1', 'model-a', TRUE, TRUE, FALSE, FALSE, 'legacy', TRUE, 'yes',
         TIMESTAMPTZ '2026-09-01T08:00:00Z', TIMESTAMPTZ '2026-09-01T08:00:00Z'),
-      ('judgment-b', 'article-1', 'prompt-1', 'model-b', TRUE, TRUE, TRUE, FALSE, TRUE, 'no',
+      ('judgment-b', 'article-1', 'prompt-1', 'model-b', TRUE, TRUE, FALSE, FALSE, 'screening_v1', TRUE, 'no',
         TIMESTAMPTZ '2026-09-01T08:00:00Z', TIMESTAMPTZ '2026-09-01T08:00:00Z')
   `)
   await getDatabase().run(`
@@ -120,18 +121,27 @@ test('the migration stamps every existing judgment legacy and keeps the assessme
       FROM duckdb_columns()
       WHERE schema_name = 'app'
         AND table_name = 'judgment'
-        AND column_name = 'system_prompt_variant'
+        AND column_name = 'use_metadata'
     `),
-  ).toEqual([{columnDefault: "'legacy'", dataType: 'VARCHAR', isNullable: false}])
+  ).toEqual([{columnDefault: 'false', dataType: 'BOOLEAN', isNullable: false}])
   expect(
-    await getDatabase().queryJson<{answeredOriginal: string; id: string; systemPromptVariant: string}>(`
-      SELECT id, answered_original AS answeredOriginal, system_prompt_variant AS systemPromptVariant
+    await getDatabase().queryJson<{
+      answeredOriginal: string
+      id: string
+      systemPromptVariant: string
+      useMetadata: boolean
+    }>(`
+      SELECT
+        id,
+        answered_original AS answeredOriginal,
+        system_prompt_variant AS systemPromptVariant,
+        use_metadata AS useMetadata
       FROM app.judgment
       ORDER BY id
     `),
   ).toEqual([
-    {answeredOriginal: 'yes', id: 'judgment-a', systemPromptVariant: 'legacy'},
-    {answeredOriginal: 'no', id: 'judgment-b', systemPromptVariant: 'legacy'},
+    {answeredOriginal: 'yes', id: 'judgment-a', systemPromptVariant: 'legacy', useMetadata: false},
+    {answeredOriginal: 'no', id: 'judgment-b', systemPromptVariant: 'screening_v1', useMetadata: false},
   ])
   expect(
     await getDatabase().queryJson<{assessmentComment: string; id: string; judgmentId: string}>(`
@@ -148,7 +158,7 @@ test('the migration stamps every existing judgment legacy and keeps the assessme
   ).toEqual([{name: migrationFileName}])
 })
 
-test('the unique constraint and the lookup index include the variant', async () => {
+test('the unique constraint and the lookup index include use_metadata', async () => {
   const uniqueConstraints = await getDatabase().queryJson<{constraintColumnNames: string[]}>(`
     SELECT constraint_column_names AS constraintColumnNames
     FROM duckdb_constraints()
@@ -167,40 +177,55 @@ test('the unique constraint and the lookup index include the variant', async () 
   expect(lookupIndex?.sql).toContain(`(${identityColumns})`)
 })
 
-test('a judgment with the same flags but another variant is a new identity', async () => {
+test('a judgment with the same flags but use_metadata TRUE is a new identity', async () => {
   expect(
     await getInsertError({
-      id: 'judgment-a-screening',
+      id: 'judgment-a-metadata',
       modelId: 'model-a',
-      systemPromptVariant: 'screening_v1',
-      useFulltext: false,
+      systemPromptVariant: 'legacy',
+      useMetadata: true,
     }),
   ).toBeNull()
   expect(
     await getInsertError({
-      id: 'judgment-a-duplicate',
+      id: 'judgment-a-metadata-duplicate',
       modelId: 'model-a',
-      systemPromptVariant: 'screening_v1',
-      useFulltext: false,
+      systemPromptVariant: 'legacy',
+      useMetadata: true,
     }),
   ).toContain('Duplicate key')
   expect(
     await getInsertError({
       id: 'judgment-b-duplicate',
       modelId: 'model-b',
-      systemPromptVariant: 'legacy',
-      useFulltext: true,
+      systemPromptVariant: 'screening_v1',
+      useMetadata: false,
     }),
   ).toContain('Duplicate key')
   expect(
-    await getDatabase().queryJson<{id: string; systemPromptVariant: string}>(`
-      SELECT id, system_prompt_variant AS systemPromptVariant
+    await getDatabase().queryJson<{id: string; useMetadata: boolean}>(`
+      SELECT id, use_metadata AS useMetadata
       FROM app.judgment
       WHERE model_id = 'model-a'
       ORDER BY id
     `),
   ).toEqual([
-    {id: 'judgment-a', systemPromptVariant: 'legacy'},
-    {id: 'judgment-a-screening', systemPromptVariant: 'screening_v1'},
+    {id: 'judgment-a', useMetadata: false},
+    {id: 'judgment-a-metadata', useMetadata: true},
   ])
+})
+
+test('a judgment inserted without use_metadata defaults to FALSE', async () => {
+  await getDatabase().run(`
+    INSERT INTO app.judgment (id, article_id, prompt_id, model_id, is_answered, answered_original)
+    VALUES ('judgment-c', 'article-1', 'prompt-1', 'model-c', TRUE, 'maybe')
+  `)
+
+  expect(
+    await getDatabase().queryJson<{useMetadata: boolean}>(`
+      SELECT use_metadata AS useMetadata
+      FROM app.judgment
+      WHERE id = 'judgment-c'
+    `),
+  ).toEqual([{useMetadata: false}])
 })

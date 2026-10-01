@@ -1,0 +1,2 @@
+ALTER TABLE app.project ADD COLUMN IF NOT EXISTS use_metadata BOOLEAN DEFAULT FALSE;
+ALTER TABLE app.judgment_execution_snapshot ADD COLUMN IF NOT EXISTS use_metadata BOOLEAN DEFAULT FALSE;
