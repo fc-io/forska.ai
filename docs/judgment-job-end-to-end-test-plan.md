@@ -132,7 +132,7 @@ Acceptance criteria:
 - [x] Read and assert the canonical `app.judgment` row immediately after the
       DuckDB commit using the complete identity key:
       `(articleId, promptId, modelId, useTitle, useAbstract, useFulltext,
-useFulltextNoImages)`.
+useFulltextNoImages, systemPromptVariant)`.
 - [x] Assert the project review-serving read remains stale before its target
       dirty token is completed and exposes the judgment only after projector
       completion. Assert the SQLite visibility acknowledgement token separately
