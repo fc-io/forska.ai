@@ -1,3 +1,5 @@
+import type {SystemPromptVariant} from '../agent/judge/systemPromptVariant.ts'
+
 export type PublicationStatus = 'preprint' | 'submitted' | 'accepted' | 'published' | 'retracted'
 export type ArticleIdentifierKind = 'doi' | 'pmid' | 'arxiv'
 
@@ -467,6 +469,7 @@ export type JudgmentRecord = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  systemPromptVariant: SystemPromptVariant
   chunkingStrategy: JudgmentChunkingStrategy | null
   isAnswered: boolean
   answeredOriginal: string | null
