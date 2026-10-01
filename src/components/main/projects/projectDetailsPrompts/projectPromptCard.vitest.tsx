@@ -72,6 +72,14 @@ const renderProjectPromptCard = async (prompt: ProjectDetailsPrompt = getPrompt(
   return {container, dispose, queryClient}
 }
 
+const clickPreviewButton = (container: HTMLElement) => {
+  const previewButton = Array.from(container.querySelectorAll('button')).find((button) => {
+    return button.textContent?.trim() === 'Preview Prompt'
+  })
+
+  previewButton?.click()
+}
+
 afterEach(() => {
   document.body.innerHTML = ''
   mockedProjectServices.fetchProjectPromptPreview.mockReset()
@@ -86,6 +94,7 @@ test('ProjectPromptCard toggles from original text to preview mode', async () =>
     reason: null,
     status: 'ready',
     systemPrompt: 'system',
+    systemPromptVariant: 'screening_v1',
     userPrompt: 'user',
   })
 
@@ -94,17 +103,47 @@ test('ProjectPromptCard toggles from original text to preview mode', async () =>
   try {
     expect(container.textContent).toContain('Original prompt text')
 
-    const previewButton = Array.from(container.querySelectorAll('button')).find((button) => {
-      return button.textContent?.trim() === 'Preview Prompt'
-    })
-
-    previewButton?.click()
+    clickPreviewButton(container)
 
     await waitForCondition(() => {
       expect(mockedProjectServices.fetchProjectPromptPreview).toHaveBeenCalledWith('project-1', 'prompt-1')
       expect(container.textContent).toContain('Preview article: First article')
+      expect(container.textContent).toContain('System prompt variant: screening_v1')
       expect(container.textContent).toContain('## System Prompt')
       expect(container.textContent).toContain('Show Original Text')
+    })
+  } finally {
+    dispose()
+    queryClient.clear()
+    container.remove()
+  }
+})
+
+test('ProjectPromptCard preview shows the system prompt when the user prompt preview is unavailable', async () => {
+  mockedProjectServices.fetchProjectPromptPreview.mockResolvedValue({
+    articleId: null,
+    articleTitle: null,
+    previewText: null,
+    reason: 'stale',
+    status: 'unavailable',
+    systemPrompt: 'You are a helpful deep research assistant.',
+    systemPromptVariant: 'legacy',
+    userPrompt: null,
+  })
+
+  const {container, dispose, queryClient} = await renderProjectPromptCard()
+
+  try {
+    clickPreviewButton(container)
+
+    await waitForCondition(() => {
+      expect(container.textContent).toContain(
+        "Preview of the user prompt is unavailable: the project's review serving snapshot is out of date",
+      )
+      expect(container.textContent).toContain('System prompt variant: legacy')
+      expect(container.textContent).toContain('## System Prompt')
+      expect(container.textContent).toContain('You are a helpful deep research assistant.')
+      expect(container.textContent).not.toContain('full-text preparation is still in progress')
     })
   } finally {
     dispose()

@@ -5,9 +5,11 @@ import {
   getSinglePromptJudgmentPreviewText,
   getSinglePromptJudgmentRequest,
 } from '../../../agent/judge/getSinglePromptJudgmentRequest.ts'
-import {getSystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
+import {getSinglePromptSystemPromptForArticle} from '../../../agent/judge/judgePromptSelection.ts'
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import {getProviderModelMetadataPromptTokenLimit} from '../../providers/providerModelMetadata.ts'
+import type {ReviewServingFreshnessState} from '../../reviewServing/reviewServingContracts.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
@@ -54,7 +56,9 @@ const getUnavailablePromptPreview = (input: {
   articleId: string | null
   articleTitle?: string | null
   diagnostics?: ReviewServingReaderResult<PromptPreviewServingRow>['diagnostics'] | null
-  reason: string
+  reason: 'no_articles' | 'no_fulltext' | ReviewServingFreshnessState
+  systemPrompt: string
+  systemPromptVariant: SystemPromptVariant
 }) => {
   return {
     data: {
@@ -64,10 +68,28 @@ const getUnavailablePromptPreview = (input: {
       previewText: null,
       reason: input.reason,
       status: 'unavailable' as const,
-      systemPrompt: null,
+      systemPrompt: input.systemPrompt,
+      systemPromptVariant: input.systemPromptVariant,
       userPrompt: null,
     },
   }
+}
+
+const getPromptPreviewProjectModel = async (params: {modelId: string; projectId: string}) => {
+  const rows = await getAppDatabaseService().queryJson<{modelMetadataJson: unknown; provider: string | null}>(
+    `
+      SELECT
+        TO_JSON(m.metadata_json) AS modelMetadataJson,
+        pc.provider_kind AS provider
+      FROM app.model m
+      LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+      WHERE m.id = '${escapeSqlString(params.modelId)}'
+      LIMIT 1
+    `,
+    getPromptPreviewWorkloadContext({maxResultRows: 1, operation: 'modelMetadata', projectId: params.projectId}),
+  )
+
+  return rows[0] ?? null
 }
 
 const getFirstProjectArticleFromServing = async (projectId: string, reviewConfigHash: string | null) => {
@@ -140,6 +162,45 @@ const getPromptPreviewArticleRecord = (input: {
   }
 }
 
+const getScientificArticlePlaceholderRecord = (): ArticleRecord => {
+  return {
+    articleAuthors: null,
+    articleCreatedAt: null,
+    articleId: null,
+    articleSummary: null,
+    articleTitle: '',
+    articleUpdatedAt: null,
+    articleVersion: null,
+    arxivId: null,
+    biorxivId: null,
+    contentHash: null,
+    createdAt: new Date(0),
+    doi: null,
+    fullText: null,
+    fullTextAssets: null,
+    fullTextCharCount: null,
+    fullTextConversionAttempts: null,
+    fullTextConversionError: null,
+    fullTextConversionMetadata: null,
+    fullTextConversionModelId: null,
+    fullTextConversionStatus: null,
+    fullTextFetchedAt: null,
+    fullTextHtml: null,
+    fullTextOriginalFormat: null,
+    fullTextPDF: null,
+    fullTextSource: null,
+    id: '',
+    importRoute: null,
+    medrxivId: null,
+    originalData: null,
+    publicationStatus: null,
+    pubmedId: null,
+    sourceMetadata: null,
+    updatedAt: new Date(0),
+    url: null,
+  }
+}
+
 export const projectsRoutesGetPromptPreview = new Elysia().get(
   '/api/projects/:id/prompts/:promptId/preview',
   async ({params}) => {
@@ -202,6 +263,9 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       throw new Error('Prompt not found or not enabled for this project')
     }
 
+    const systemPromptVariant = getSystemPromptVariant(projectRow.systemPromptVariant)
+    const projectModel = await getPromptPreviewProjectModel({modelId: projectRow.modelId, projectId: params.id})
+    const provider = projectModel?.provider ?? null
     const reviewConfigHash = await getCurrentReviewConfigHash(params.id)
     const previewArticleRead = await getFirstProjectArticleFromServing(params.id, reviewConfigHash)
     const previewArticle = previewArticleRead.status === 'accepted' ? (previewArticleRead.rows[0] ?? null) : null
@@ -212,25 +276,16 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         reason:
           previewArticleRead.status === 'accepted' ? 'no_articles' : previewArticleRead.diagnostics.manifest.freshness,
+        systemPrompt: getSinglePromptSystemPromptForArticle(
+          getScientificArticlePlaceholderRecord(),
+          provider,
+          systemPromptVariant,
+        ),
+        systemPromptVariant,
       })
     }
 
     const firstArticleId = previewArticle.article_id
-
-    const modelRow = await getAppDatabaseService().queryJson<{modelMetadataJson: unknown; provider: string | null}>(
-      `
-        SELECT
-          TO_JSON(m.metadata_json) AS modelMetadataJson,
-          pc.provider_kind AS provider
-        FROM app.model m
-        LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-        WHERE m.id = '${escapeSqlString(projectRow.modelId)}'
-        LIMIT 1
-      `,
-      getPromptPreviewWorkloadContext({maxResultRows: 1, operation: 'modelMetadata', projectId: params.id}),
-    )
-
-    const [projectModel] = modelRow
     const modelContext =
       getProviderModelMetadataPromptTokenLimit(getJsonValue(projectModel?.modelMetadataJson), MAX_COMPLETION_TOKENS)
       ?? defaultJudgmentPromptTokenLimit
@@ -253,6 +308,8 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         articleTitle: firstArticle.articleTitle,
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         reason: 'no_fulltext',
+        systemPrompt: getSinglePromptSystemPromptForArticle(firstArticle, provider, systemPromptVariant),
+        systemPromptVariant,
       })
     }
 
@@ -265,8 +322,8 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         useTitle: projectRow.useTitle,
       },
       prompt: {...promptRow, order: null},
-      provider: projectModel?.provider ?? null,
-      systemPromptVariant: getSystemPromptVariant(projectRow.systemPromptVariant),
+      provider,
+      systemPromptVariant,
     })
 
     return {
@@ -278,6 +335,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         reason: null,
         status: 'ready' as const,
         systemPrompt,
+        systemPromptVariant,
         userPrompt,
       },
     }

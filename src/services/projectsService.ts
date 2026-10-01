@@ -34,9 +34,19 @@ export type ProjectPromptPreview = {
   articleId: string | null
   articleTitle: string | null
   previewText: string | null
-  reason: 'conversion_failed' | 'no_articles' | 'no_fulltext' | 'transient_failure' | null
+  reason:
+    | 'conversion_failed'
+    | 'indexing'
+    | 'no_articles'
+    | 'no_fulltext'
+    | 'ready'
+    | 'stale'
+    | 'transient_failure'
+    | 'unavailable'
+    | null
   status: 'ready' | 'unavailable'
   systemPrompt: string | null
+  systemPromptVariant: 'legacy' | 'screening_v1'
   userPrompt: string | null
 }
 
@@ -223,7 +233,7 @@ export const fetchProjectPromptPreview = async (projectId: string, promptId: str
   try {
     const response = await apiClient.api.projects({id: projectId}).prompts({promptId}).preview.get()
 
-    return getResponseData(response, 'Failed to fetch project prompt preview')
+    return getResponseData<ProjectPromptPreview>(response, 'Failed to fetch project prompt preview')
   } catch (err) {
     console.error('Error fetching project prompt preview:', err)
     throw err

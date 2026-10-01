@@ -480,42 +480,44 @@ afterAll(async () => {
   mock.restore()
 })
 
-test('project prompt preview uses the first project article and shared prompt builders', async () => {
-  if (!app || !runDatabase) {
-    throw new Error('Test app not initialized')
+const insertReadyPromptPreviewFixture = async (input: {key: string; promptText: string}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
   }
 
-  const projectId = 'project-preview-route'
-  const promptId = 'prompt-preview-route'
+  const projectId = `project-preview-${input.key}`
+  const promptId = `prompt-preview-${input.key}`
+  const snapshotId = `snapshot-preview-${input.key}`
+  const firstArticleId = `preview-article-first-${input.key}`
+  const secondArticleId = `preview-article-second-${input.key}`
 
-  await insertProjectFixture({connectionId: 'preview-connection-route', modelId: 'preview-model-route', projectId})
+  await insertProjectFixture({
+    connectionId: `preview-connection-${input.key}`,
+    modelId: `preview-model-${input.key}`,
+    projectId,
+  })
   await insertProjectPromptFixture({
-    contentHash: computePromptContentHash(
-      'Is this study about healthcare?',
-      null,
-      'Healthcare',
-      `'yes' | 'no' | 'unsure'`,
-    ),
-    originalText: 'Is this study about healthcare?',
+    contentHash: computePromptContentHash(input.promptText, null, 'Healthcare', `'yes' | 'no' | 'unsure'`),
+    originalText: input.promptText,
     originProjectId: projectId,
     projectId,
-    projectPromptId: 'project-prompt-preview-route',
+    projectPromptId: `project-prompt-preview-${input.key}`,
     promptHeading: 'Healthcare',
     promptId,
     type: `'yes' | 'no' | 'unsure'`,
   })
   await insertProjectArticleFixture({
-    articleId: 'preview-article-second',
+    articleId: secondArticleId,
     articleSeq: 2,
-    projectArticleId: 'project-article-preview-second',
+    projectArticleId: `project-article-preview-second-${input.key}`,
     projectId,
     summary: 'Second article summary',
     title: 'Second article title',
   })
   await insertProjectArticleFixture({
-    articleId: 'preview-article-first',
+    articleId: firstArticleId,
     articleSeq: 1,
-    projectArticleId: 'project-article-preview-first',
+    projectArticleId: `project-article-preview-first-${input.key}`,
     projectId,
     summary: 'First article summary',
     title: 'First article title',
@@ -531,7 +533,7 @@ test('project prompt preview uses the first project article and shared prompt bu
     ) VALUES
       (
         '${projectId}',
-        'preview-article-second',
+        '${secondArticleId}',
         TRUE,
         TRUE,
         TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
@@ -539,7 +541,7 @@ test('project prompt preview uses the first project article and shared prompt bu
       ),
       (
         '${projectId}',
-        'preview-article-first',
+        '${firstArticleId}',
         TRUE,
         TRUE,
         TIMESTAMPTZ '2026-02-01T00:00:00.000Z',
@@ -575,7 +577,7 @@ test('project prompt preview uses the first project article and shared prompt bu
       updated_at
     ) VALUES (
       '${projectId}',
-      'snapshot-preview-route',
+      '${snapshotId}',
       'active',
       ${getSqlLiteral(reviewConfigHash)},
       '{}'::JSON,
@@ -601,10 +603,10 @@ test('project prompt preview uses the first project article and shared prompt bu
     ) VALUES (
       '${projectId}',
       ${getSqlLiteral(reviewConfigHash)},
-      'snapshot-preview-route',
+      '${snapshotId}',
       1,
       0,
-      'preview-article-second',
+      '${secondArticleId}',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z',
       TIMESTAMPTZ '2026-01-01T00:00:00.000Z'
@@ -629,8 +631,8 @@ test('project prompt preview uses the first project article and shared prompt bu
     ) VALUES (
       '${projectId}',
       ${getSqlLiteral(reviewConfigHash)},
-      'snapshot-preview-route',
-      'preview-article-second',
+      '${snapshotId}',
+      '${secondArticleId}',
       TRUE,
       TRUE,
       0,
@@ -644,6 +646,15 @@ test('project prompt preview uses the first project article and shared prompt bu
       FALSE
     )
   `)
+
+  return {projectId, promptId}
+}
+
+const requestPromptPreview = async (projectId: string, promptId: string) => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
   const response = await app.handle(
     new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
   )
@@ -651,15 +662,28 @@ test('project prompt preview uses the first project article and shared prompt bu
     data: {
       articleId: string | null
       previewText: string | null
+      reason: string | null
       status: 'ready' | 'unavailable'
       systemPrompt: string | null
+      systemPromptVariant: string
       userPrompt: string | null
     }
   }
 
-  expect(response.status).toBe(200)
+  return {payload, status: response.status}
+}
+
+test('project prompt preview uses the first project article and shared prompt builders', async () => {
+  const {projectId, promptId} = await insertReadyPromptPreviewFixture({
+    key: 'route',
+    promptText: 'Is this study about healthcare?',
+  })
+  const {payload, status} = await requestPromptPreview(projectId, promptId)
+
+  expect(status).toBe(200)
   expect(payload.data.status).toBe('ready')
-  expect(payload.data.articleId).toBe('preview-article-second')
+  expect(payload.data.articleId).toBe('preview-article-second-route')
+  expect(payload.data.systemPromptVariant).toBe('legacy')
   expect(payload.data.systemPrompt).toContain('You are a helpful deep research assistant.')
   expect(payload.data.userPrompt).toContain('Second article title')
   expect(payload.data.userPrompt).toContain('Second article summary')
@@ -667,6 +691,33 @@ test('project prompt preview uses the first project article and shared prompt bu
   expect(payload.data.userPrompt).not.toContain('First article title')
   expect(payload.data.previewText).toContain('## System Prompt')
   expect(payload.data.previewText).toContain('## User Prompt')
+})
+
+test('project prompt preview shows the system prompt of the project system prompt variant', async () => {
+  if (!runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {projectId, promptId} = await insertReadyPromptPreviewFixture({
+    key: 'variant',
+    promptText: 'Is this study about screening variants?',
+  })
+  const legacyPreview = await requestPromptPreview(projectId, promptId)
+  await runDatabase(`UPDATE app.project SET system_prompt_variant = 'screening_v1' WHERE id = '${projectId}'`)
+  const screeningPreview = await requestPromptPreview(projectId, promptId)
+
+  expect(legacyPreview.status).toBe(200)
+  expect(legacyPreview.payload.data.status).toBe('ready')
+  expect(legacyPreview.payload.data.systemPromptVariant).toBe('legacy')
+  expect(legacyPreview.payload.data.systemPrompt).toContain('You are a helpful deep research assistant.')
+  expect(legacyPreview.payload.data.previewText).toContain('You are a helpful deep research assistant.')
+  expect(screeningPreview.status).toBe(200)
+  expect(screeningPreview.payload.data.status).toBe('ready')
+  expect(screeningPreview.payload.data.systemPromptVariant).toBe('screening_v1')
+  expect(screeningPreview.payload.data.systemPrompt).toContain('You are screening records for a systematic review')
+  expect(screeningPreview.payload.data.systemPrompt).not.toContain('You are a helpful deep research assistant.')
+  expect(screeningPreview.payload.data.previewText).toContain('You are screening records for a systematic review')
+  expect(screeningPreview.payload.data.userPrompt).toContain('Is this study about screening variants?')
 })
 
 test('project prompt preview builds article records from the prompt preview serving read', () => {
@@ -716,17 +767,16 @@ test('project prompt preview fails closed while serving scope rebuilds', async (
     title: 'First fallback title',
   })
 
-  const response = await app.handle(
-    new Request(`http://localhost/api/projects/${projectId}/prompts/${promptId}/preview`),
-  )
-  const payload = (await response.json()) as {
-    data: {articleId: string | null; reason: string | null; status: 'ready' | 'unavailable'}
-  }
+  const {payload, status} = await requestPromptPreview(projectId, promptId)
 
-  expect(response.status).toBe(200)
+  expect(status).toBe(200)
   expect(payload.data.status).toBe('unavailable')
   expect(payload.data.articleId).toBeNull()
   expect(payload.data.reason).toBe('unavailable')
+  expect(payload.data.systemPromptVariant).toBe('legacy')
+  expect(payload.data.systemPrompt).toContain('You are a helpful deep research assistant.')
+  expect(payload.data.previewText).toBeNull()
+  expect(payload.data.userPrompt).toBeNull()
 })
 
 test('archive route clears refresh state for archived projects without depending on the legacy queue', async () => {
