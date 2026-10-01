@@ -33,6 +33,7 @@ const providerModelRepositoryModulePath = new URL('../providers/providerModelRep
 const userConfigQueryServiceModulePath = new URL('../services/userConfigQueryService.ts', import.meta.url).href
 
 type MockServingStatus = {
+  activeContentDimensions?: Array<{systemPromptVariant: string; useMetadata: boolean}>
   activeGeneration: number | null
   activeSystemPromptVariants?: string[]
   generationUpdatedAt: Date | null
@@ -183,6 +184,7 @@ type MockDatabaseState = {
   servingStatus: MockServingStatus
   sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
   sourceProjectSystemPromptVariants?: Record<string, string>
+  sourceProjectUseMetadata?: Record<string, boolean>
   staleServingIds: string[]
   rootRunStatements: string[]
   rootQueryStatementsDuringTransaction: string[]
@@ -1908,6 +1910,17 @@ const queryJson = async (
       })
   }
 
+  if (statement.includes('FROM mart.comparison_system_prompt_variant_serving')) {
+    const servingStatus = getMockDatabaseState().servingStatus
+
+    return (
+      servingStatus.activeContentDimensions
+      ?? (servingStatus.activeSystemPromptVariants ?? []).map((systemPromptVariant) => {
+        return {systemPromptVariant, useMetadata: false}
+      })
+    )
+  }
+
   if (statement.includes('FROM app.comparison_project_serving_generation')) {
     const generation = getMockDatabaseState().servingStatus.activeGeneration
 
@@ -1949,7 +1962,10 @@ const queryJson = async (
       .map((sourceProject) => {
         const {modelMetadataJson: _modelMetadataJson, ...sourceProjectRow} = sourceProject
         const systemPromptVariant = getMockDatabaseState().sourceProjectSystemPromptVariants?.[sourceProject.id]
-        return systemPromptVariant ? {...sourceProjectRow, systemPromptVariant} : sourceProjectRow
+        const useMetadata = getMockDatabaseState().sourceProjectUseMetadata?.[sourceProject.id] ?? false
+        return systemPromptVariant
+          ? {...sourceProjectRow, systemPromptVariant, useMetadata}
+          : {...sourceProjectRow, useMetadata}
       })
   }
 
@@ -8618,4 +8634,164 @@ test('comparison metadata keeps legacy-only columns for a generation served with
       return [column.id, column.contentLabel]
     }),
   ).toEqual([['llm:model-1:1100:prompt-1', 'Article Title and Abstract']])
+})
+
+test('comparison metadata splits LLM columns by the linked source projects article metadata setting', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-legacy', sourceProjectId: 'prompt-project-1'},
+      {id: 'comparison-project-source-metadata', sourceProjectId: 'source-project-2'},
+    ],
+    sourceProjectUseMetadata: {'source-project-2': true},
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.contentVariants.map((contentVariant) => {
+      return [contentVariant.key, contentVariant.systemPromptVariant]
+    }),
+  ).toEqual([
+    ['1100', 'legacy'],
+    ['1100m', 'legacy'],
+  ])
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.contentLabel]
+    }),
+  ).toEqual([
+    ['llm:model-1:1100:prompt-1', 'Article Title and Abstract'],
+    ['llm:model-1:1100m:prompt-1', 'Article Title and Abstract · Metadata'],
+  ])
+})
+
+test('comparison metadata appends the variant after the article metadata marker', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    sourceProjectLinks: [{id: 'comparison-project-source-screening', sourceProjectId: 'source-project-2'}],
+    sourceProjectSystemPromptVariants: {'source-project-2': 'screening_v1'},
+    sourceProjectUseMetadata: {'source-project-2': true},
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.contentLabel]
+    }),
+  ).toEqual([
+    [
+      'llm:model-1:1100m-screening_v1:prompt-1',
+      'Article Title and Abstract · Metadata · System prompt variant: screening_v1',
+    ],
+  ])
+})
+
+test('summary comparison source project columns use only that source project article metadata setting', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'},
+      {id: 'comparison-project-source-2', sourceProjectId: 'source-project-2'},
+    ],
+    sourceProjectUseMetadata: {'source-project-2': true},
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.sourceProjectId]
+    }),
+  ).toEqual([
+    ['llm:source-project-1:model-1:1100:summary', 'source-project-1'],
+    ['llm:source-project-2:model-2:1100m:summary', 'source-project-2'],
+    ['human:summary', 'source-project-1'],
+  ])
+})
+
+test('comparison metadata uses the article metadata dimensions served by the active generation for route-scoped comparisons', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    servingStatus: getMockServingStatus({
+      activeContentDimensions: [
+        {systemPromptVariant: 'legacy', useMetadata: true},
+        {systemPromptVariant: 'legacy', useMetadata: false},
+      ],
+      activeGeneration: 1,
+      activeSystemPromptVariants: ['legacy'],
+      generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingCompletedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingStatus: 'ready',
+    }),
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+  const state = getMockDatabaseState()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.contentLabel]
+    }),
+  ).toEqual([
+    ['llm:model-1:1100:prompt-1', 'Article Title and Abstract'],
+    ['llm:model-1:1100m:prompt-1', 'Article Title and Abstract · Metadata'],
+  ])
+  expect(
+    state.queryStatements.some((statement) => {
+      return statement.includes('FROM app.judgment j')
+    }),
+  ).toBe(false)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM mart.comparison_system_prompt_variant_serving') && statement.includes('generation = 1')
+      )
+    }),
+  ).toBe(true)
+})
+
+test('comparison metadata orders article metadata columns after every column without it', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    servingStatus: getMockServingStatus({
+      activeContentDimensions: [
+        {systemPromptVariant: 'screening_v1', useMetadata: true},
+        {systemPromptVariant: 'legacy', useMetadata: true},
+        {systemPromptVariant: 'screening_v1', useMetadata: false},
+        {systemPromptVariant: 'legacy', useMetadata: false},
+      ],
+      activeGeneration: 1,
+      activeSystemPromptVariants: ['legacy', 'screening_v1'],
+      generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingCompletedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingStatus: 'ready',
+    }),
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.columns.map((column) => {
+      return column.id
+    }),
+  ).toEqual([
+    'llm:model-1:1100:prompt-1',
+    'llm:model-1:1100-screening_v1:prompt-1',
+    'llm:model-1:1100m:prompt-1',
+    'llm:model-1:1100m-screening_v1:prompt-1',
+  ])
 })

@@ -258,7 +258,7 @@ const overlappingComparisonProjectIds = [
   'cp-summary-llm-match',
 ]
 
-const getLlmJudgmentChangeScript = (systemPromptVariant: string) => {
+const getLlmJudgmentChangeScript = (systemPromptVariant: string, useMetadata = false) => {
   return `
     const markedIds = await service.markComparisonProjectsServingStaleForLlmJudgments([
       {
@@ -270,6 +270,7 @@ const getLlmJudgmentChangeScript = (systemPromptVariant: string) => {
         useAbstract: true,
         useFulltext: false,
         useFulltextNoImages: false,
+        useMetadata: ${useMetadata},
       },
     ])
     console.log(JSON.stringify({markedIds, staleIds: await getStaleIds()}))
@@ -288,6 +289,41 @@ test('LLM judgment changes of a variant missing from a comparison still stale it
 
   expect(result.markedIds).toEqual(overlappingComparisonProjectIds)
   expect(result.staleIds).toEqual(overlappingComparisonProjectIds)
+})
+
+test('LLM judgment changes with article metadata still stale overlapping comparisons so the metadata column can appear', () => {
+  const result = runScript<InvalidationResult>(getLlmJudgmentChangeScript('legacy', true))
+
+  expect(result.markedIds).toEqual(overlappingComparisonProjectIds)
+  expect(result.staleIds).toEqual(overlappingComparisonProjectIds)
+})
+
+test('LLM judgment changes keep the article metadata flag in the change identity', () => {
+  const result = runScript<{changedJudgmentValues: string[]}>(`
+    const change = {
+      articleId: 'article-in',
+      promptId: 'prompt-a',
+      modelId: 'model-a',
+      systemPromptVariant: 'legacy',
+      useTitle: true,
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+    }
+    const sql = service.getLlmJudgmentAffectedComparisonProjectIdsSql([
+      {...change, useMetadata: false},
+      {...change, useMetadata: true},
+    ])
+    const changedJudgmentValues = await database.queryJson(\`
+      WITH \${sql.slice(sql.indexOf('changed_judgment('), sql.indexOf('affected_prompt_mode_project') - 1).trim().replace(/,$/, '')}
+      SELECT CAST(use_metadata AS VARCHAR) AS useMetadata
+      FROM changed_judgment
+      ORDER BY useMetadata ASC
+    \`)
+    console.log(JSON.stringify({changedJudgmentValues: changedJudgmentValues.map((row) => row.useMetadata)}))
+  `)
+
+  expect(result.changedJudgmentValues).toEqual(['false', 'true'])
 })
 
 test('source project changes stale only active comparison projects linking those projects', () => {

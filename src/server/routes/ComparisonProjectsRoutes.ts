@@ -43,6 +43,7 @@ import {getProviderModelMetadataOptions} from '../providers/providerModelMetadat
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
+import {comparisonSystemPromptVariantServingTable} from '../services/comparisonProjectServingGenerationConfig.ts'
 import {getComparisonProjectServingGenerationService} from '../services/comparisonProjectServingGenerationService.ts'
 import {
   type ComparisonProjectServingProgress,
@@ -154,11 +155,9 @@ type ComparisonProjectContentFlags = {
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
-type ComparisonProjectContentVariant = ComparisonProjectContentFlags & {
-  key: string
-  label: string
-  systemPromptVariant: SystemPromptVariant
-}
+type ComparisonProjectContentDimension = {systemPromptVariant: SystemPromptVariant; useMetadata: boolean}
+type ComparisonProjectContentVariant = ComparisonProjectContentFlags
+  & ComparisonProjectContentDimension & {key: string; label: string}
 type ComparisonProjectPromptConfig = {
   id: string
   originalText: string
@@ -192,6 +191,7 @@ type ComparisonProjectSummaryPromptGroup = {
   prompts: ComparisonProjectPromptConfig[]
   sourceProjectId: string | null
   systemPromptVariant: SystemPromptVariant | null
+  useMetadata: boolean | null
 }
 type ComparisonProjectScope = {
   id: string
@@ -287,6 +287,7 @@ type ComparisonProjectSource = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   prompts: ComparisonProjectSourcePrompt[]
   importRoutes: ComparisonProjectSourceImportRoute[]
 }
@@ -327,6 +328,7 @@ type ComparisonProjectSummarySourceProject = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
 }
 type ComparisonProjectLinkedSourceProject = {
   id: string
@@ -336,6 +338,7 @@ type ComparisonProjectLinkedSourceProject = {
   modelName: string
   humanJudgmentMode: HumanJudgmentMode
   systemPromptVariant: SystemPromptVariant
+  useMetadata: boolean
 }
 type ComparisonProjectEditPrompt = {
   id: string
@@ -696,6 +699,7 @@ const getContentVariantClause = (tableAlias: string, contentVariant: ComparisonP
     AND ${tableAlias}.use_abstract = ${getBooleanLiteral(contentVariant.useAbstract)}
     AND ${tableAlias}.use_fulltext = ${getBooleanLiteral(contentVariant.useFulltext)}
     AND ${tableAlias}.use_fulltext_no_images = ${getBooleanLiteral(contentVariant.useFulltextNoImages)}
+    AND ${tableAlias}.use_metadata = ${getBooleanLiteral(contentVariant.useMetadata)}
     AND ${tableAlias}.system_prompt_variant = ${getSqlLiteral(contentVariant.systemPromptVariant)}
   )`
 }
@@ -915,12 +919,9 @@ const getPromptLabel = (promptHeading: string | null, order: number) => {
   return trimmedHeading || `Prompt ${order + 1}`
 }
 
-const getComparisonProjectContentLabel = (settings: {
-  useTitle: boolean
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-}) => {
+const comparisonProjectContentMetadataLabel = 'Metadata'
+
+const getComparisonProjectContentLabel = (settings: ComparisonProjectContentFlags & {useMetadata?: boolean}) => {
   const textLabel =
     settings.useTitle || settings.useAbstract
       ? settings.useTitle && settings.useAbstract
@@ -935,8 +936,9 @@ const getComparisonProjectContentLabel = (settings: {
       ? 'Use Full Text (with images)'
       : null
   const parts = [textLabel, fulltextLabel].filter(Boolean) as string[]
+  const contentLabel = parts.length > 0 ? parts.join(' + ') : 'No content selected'
 
-  return parts.length > 0 ? parts.join(' + ') : 'No content selected'
+  return settings.useMetadata ? `${contentLabel} · ${comparisonProjectContentMetadataLabel}` : contentLabel
 }
 
 const getComparisonProjectContentFlagVariants = (
@@ -953,58 +955,102 @@ const getComparisonProjectContentFlagVariants = (
   ].filter(isDefined)
 }
 
-const getComparisonProjectSystemPromptVariants = (
-  sourceProjects: ReadonlyArray<{systemPromptVariant: SystemPromptVariant}>,
-): SystemPromptVariant[] => {
-  const sourceProjectSystemPromptVariants = new Set(
-    sourceProjects.map((sourceProject) => {
-      return sourceProject.systemPromptVariant
-    }),
-  )
-  const comparisonSystemPromptVariants = systemPromptVariants.filter((systemPromptVariant) => {
-    return sourceProjectSystemPromptVariants.has(systemPromptVariant)
-  })
-
-  return comparisonSystemPromptVariants.length > 0 ? comparisonSystemPromptVariants : [defaultSystemPromptVariant]
+const defaultComparisonProjectContentDimension: ComparisonProjectContentDimension = {
+  systemPromptVariant: defaultSystemPromptVariant,
+  useMetadata: false,
 }
 
-const getServedComparisonProjectSystemPromptVariants = (
-  servingStatus: Pick<ComparisonProjectServingStatusRow, 'activeSystemPromptVariants'> | null,
-  sourceProjects: ReadonlyArray<{systemPromptVariant: SystemPromptVariant}>,
-) => {
-  const servedSystemPromptVariants = servingStatus?.activeSystemPromptVariants ?? []
+const getComparisonProjectContentDimensionKey = (contentDimension: ComparisonProjectContentDimension) => {
+  return `${contentDimension.systemPromptVariant}:${contentDimension.useMetadata}`
+}
 
-  return servedSystemPromptVariants.length > 0
-    ? servedSystemPromptVariants
-    : getComparisonProjectSystemPromptVariants(sourceProjects)
+const getComparisonProjectContentDimensionOrder = (contentDimension: ComparisonProjectContentDimension) => {
+  return (
+    systemPromptVariants.indexOf(contentDimension.systemPromptVariant)
+    + (contentDimension.useMetadata ? systemPromptVariants.length + 1 : 0)
+  )
+}
+
+const getComparisonProjectContentDimensions = (
+  contentDimensions: ReadonlyArray<{systemPromptVariant?: string | null; useMetadata?: boolean | null}>,
+): ComparisonProjectContentDimension[] => {
+  const uniqueContentDimensions = Array.from(
+    contentDimensions
+      .reduce<Map<string, ComparisonProjectContentDimension>>((dimensionMap, contentDimension) => {
+        const normalizedContentDimension = {
+          systemPromptVariant: getSystemPromptVariant(contentDimension.systemPromptVariant),
+          useMetadata: contentDimension.useMetadata === true,
+        }
+
+        return dimensionMap.set(
+          getComparisonProjectContentDimensionKey(normalizedContentDimension),
+          normalizedContentDimension,
+        )
+      }, new Map<string, ComparisonProjectContentDimension>())
+      .values(),
+  ).sort((left, right) => {
+    return getComparisonProjectContentDimensionOrder(left) - getComparisonProjectContentDimensionOrder(right)
+  })
+
+  return uniqueContentDimensions.length > 0 ? uniqueContentDimensions : [defaultComparisonProjectContentDimension]
+}
+
+const getServedComparisonProjectContentDimensionRows = async (
+  comparisonProjectId: string,
+  servingStatus: Pick<ComparisonProjectServingStatusRow, 'activeGeneration'> | null,
+  queryRunner: AppQueryRunner,
+) => {
+  const activeGeneration = servingStatus?.activeGeneration ?? null
+
+  return activeGeneration !== null && Number.isSafeInteger(activeGeneration) && activeGeneration > 0
+    ? queryRunner.queryJson<{systemPromptVariant: string | null; useMetadata: boolean | null}>(`
+        SELECT DISTINCT
+          system_prompt_variant AS systemPromptVariant,
+          COALESCE(use_metadata, FALSE) AS useMetadata
+        FROM ${comparisonSystemPromptVariantServingTable}
+        WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+          AND generation = ${getSqlLiteral(activeGeneration)}
+      `)
+    : []
+}
+
+const getServedComparisonProjectContentDimensions = (
+  servedContentDimensionRows: ReadonlyArray<{systemPromptVariant: string | null; useMetadata: boolean | null}>,
+  sourceProjects: ReadonlyArray<ComparisonProjectContentDimension>,
+) => {
+  return getComparisonProjectContentDimensions(
+    servedContentDimensionRows.length > 0 ? servedContentDimensionRows : sourceProjects,
+  )
 }
 
 const getComparisonProjectContentVariantLabel = (
   contentFlags: ComparisonProjectContentFlags,
-  systemPromptVariant: SystemPromptVariant,
+  contentDimension: ComparisonProjectContentDimension,
   showSystemPromptVariant: boolean,
 ) => {
-  const contentLabel = getComparisonProjectContentLabel(contentFlags)
+  const contentLabel = getComparisonProjectContentLabel({...contentFlags, useMetadata: contentDimension.useMetadata})
 
-  return showSystemPromptVariant ? `${contentLabel} · System prompt variant: ${systemPromptVariant}` : contentLabel
+  return showSystemPromptVariant
+    ? `${contentLabel} · System prompt variant: ${contentDimension.systemPromptVariant}`
+    : contentLabel
 }
 
 const getComparisonProjectContentVariants = (
   settings: ComparisonProjectContentFlags,
-  contentSystemPromptVariants: readonly SystemPromptVariant[] = [defaultSystemPromptVariant],
+  contentDimensions: readonly ComparisonProjectContentDimension[] = [defaultComparisonProjectContentDimension],
 ): ComparisonProjectContentVariant[] => {
   const contentFlagVariants = getComparisonProjectContentFlagVariants(settings)
-  const showSystemPromptVariant = contentSystemPromptVariants.some((systemPromptVariant) => {
-    return systemPromptVariant !== defaultSystemPromptVariant
+  const showSystemPromptVariant = contentDimensions.some((contentDimension) => {
+    return contentDimension.systemPromptVariant !== defaultSystemPromptVariant
   })
 
-  return contentSystemPromptVariants.flatMap((systemPromptVariant) => {
+  return contentDimensions.flatMap((contentDimension) => {
     return contentFlagVariants.map<ComparisonProjectContentVariant>((contentFlags) => {
       return {
         ...contentFlags,
-        key: getComparisonProjectContentKey({...contentFlags, systemPromptVariant}),
-        label: getComparisonProjectContentVariantLabel(contentFlags, systemPromptVariant, showSystemPromptVariant),
-        systemPromptVariant,
+        ...contentDimension,
+        key: getComparisonProjectContentKey({...contentFlags, ...contentDimension}),
+        label: getComparisonProjectContentVariantLabel(contentFlags, contentDimension, showSystemPromptVariant),
       }
     })
   })
@@ -1122,7 +1168,8 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
-      p.use_fulltext_no_images AS useFulltextNoImages
+      p.use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(p.use_metadata, FALSE) AS useMetadata
     FROM ${projectTable} p
     LEFT JOIN ${modelTable} m ON m.id = p.model_id
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
@@ -1216,6 +1263,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
         isSummaryCapable: humanJudgmentMode === 'summary',
         summarySourceProjectId: humanJudgmentMode === 'summary' ? projectRow.id : null,
         systemPromptVariant: getSystemPromptVariant(projectRow.systemPromptVariant),
+        useMetadata: projectRow.useMetadata === true,
         prompts: sourcePromptRows.map<ComparisonProjectSourcePrompt>((promptRow, index) => {
           return {
             id: promptRow.promptId,
@@ -1245,9 +1293,10 @@ const getComparisonProjectSourceProjects = async (
   }
 
   const sourceProjectRows = await queryRunner.queryJson<
-    Omit<ComparisonProjectLinkedSourceProject, 'humanJudgmentMode' | 'systemPromptVariant'> & {
+    Omit<ComparisonProjectLinkedSourceProject, 'humanJudgmentMode' | 'systemPromptVariant' | 'useMetadata'> & {
       humanJudgmentMode: HumanJudgmentMode | null
       systemPromptVariant?: string | null
+      useMetadata?: boolean | null
     }
   >(`
     SELECT
@@ -1257,7 +1306,8 @@ const getComparisonProjectSourceProjects = async (
       p.model_id AS modelId,
       COALESCE(m.display_name, m.name, m.remote_model_id, p.model_id) AS modelName,
       p.human_judgment_mode AS humanJudgmentMode,
-      p.system_prompt_variant AS systemPromptVariant
+      p.system_prompt_variant AS systemPromptVariant,
+      COALESCE(p.use_metadata, FALSE) AS useMetadata
     FROM ${projectTable} p
     LEFT JOIN ${modelTable} m ON m.id = p.model_id
     WHERE p.id IN (${getInClause(sourceProjectIds)})
@@ -1276,6 +1326,7 @@ const getComparisonProjectSourceProjects = async (
         ...sourceProjectRow,
         humanJudgmentMode: sourceProjectRow.humanJudgmentMode ?? 'prompt',
         systemPromptVariant: getSystemPromptVariant(sourceProjectRow.systemPromptVariant),
+        useMetadata: sourceProjectRow.useMetadata === true,
       }
     })
     .sort((left, right) => {
@@ -1301,7 +1352,10 @@ const getSummarySourceProject = async (
   }
 
   const [sourceProjectRow] = await queryRunner.queryJson<
-    Omit<ComparisonProjectSummarySourceProject, 'humanJudgmentMode'> & {humanJudgmentMode: HumanJudgmentMode | null}
+    Omit<ComparisonProjectSummarySourceProject, 'humanJudgmentMode' | 'useMetadata'> & {
+      humanJudgmentMode: HumanJudgmentMode | null
+      useMetadata?: boolean | null
+    }
   >(`
     SELECT
       p.id AS id,
@@ -1313,7 +1367,8 @@ const getSummarySourceProject = async (
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
-      p.use_fulltext_no_images AS useFulltextNoImages
+      p.use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(p.use_metadata, FALSE) AS useMetadata
     FROM ${projectTable} p
     LEFT JOIN ${modelTable} m ON m.id = p.model_id
     WHERE p.id = ${getSqlLiteral(summarySourceProjectId)}
@@ -1321,7 +1376,11 @@ const getSummarySourceProject = async (
   `)
 
   return sourceProjectRow
-    ? {...sourceProjectRow, humanJudgmentMode: sourceProjectRow.humanJudgmentMode ?? 'prompt'}
+    ? {
+        ...sourceProjectRow,
+        humanJudgmentMode: sourceProjectRow.humanJudgmentMode ?? 'prompt',
+        useMetadata: sourceProjectRow.useMetadata === true,
+      }
     : null
 }
 
@@ -1533,6 +1592,7 @@ const getComparisonProjectSourceProjectFromSource = (
     modelName: sourceProject.modelName,
     humanJudgmentMode: sourceProject.humanJudgmentMode,
     systemPromptVariant: sourceProject.systemPromptVariant,
+    useMetadata: sourceProject.useMetadata,
   }
 }
 
@@ -1551,6 +1611,7 @@ const getComparisonProjectSummarySourceProjectFromSource = (
         useAbstract: sourceProject.useAbstract,
         useFulltext: sourceProject.useFulltext,
         useFulltextNoImages: sourceProject.useFulltextNoImages,
+        useMetadata: sourceProject.useMetadata,
       }
     : null
 }
@@ -1622,7 +1683,7 @@ const getCreateFromProjectImportScope = async (params: {
   )
   const contentVariants = getComparisonProjectContentVariants(
     params.createdComparisonProject,
-    getComparisonProjectSystemPromptVariants(sourceProjects),
+    getComparisonProjectContentDimensions(sourceProjects),
   )
   const sourceProjectSummaryPrompts = getComparisonProjectSourceSummaryPromptConfigsFromSources(
     params.selectedSourceProjects,
@@ -3022,10 +3083,13 @@ const getComparisonProjectModels = async (
 
 const getSourceProjectContentVariants = (
   contentVariants: ComparisonProjectContentVariant[],
-  sourceProject: Pick<ComparisonProjectLinkedSourceProject, 'systemPromptVariant'>,
+  sourceProject: Pick<ComparisonProjectLinkedSourceProject, 'systemPromptVariant' | 'useMetadata'>,
 ) => {
   return contentVariants.filter((contentVariant) => {
-    return contentVariant.systemPromptVariant === sourceProject.systemPromptVariant
+    return (
+      contentVariant.systemPromptVariant === sourceProject.systemPromptVariant
+      && contentVariant.useMetadata === sourceProject.useMetadata
+    )
   })
 }
 
@@ -3285,9 +3349,17 @@ const getComparisonProjectScope = async (
     queryRunner,
   )
   const sourceProjects = await getComparisonProjectSourceProjects(sourceProjectIds, queryRunner)
+  const servedContentDimensionRows = await getServedComparisonProjectContentDimensionRows(
+    comparisonProjectId,
+    servingStatus,
+    queryRunner,
+  )
   const contentVariants = getComparisonProjectContentVariants(
     normalizedComparisonProjectRow,
-    getServedComparisonProjectSystemPromptVariants(servingStatus, useImportRoutesForScope ? [] : sourceProjects),
+    getServedComparisonProjectContentDimensions(
+      servedContentDimensionRows,
+      useImportRoutesForScope ? [] : sourceProjects,
+    ),
   )
   const modelRows = await getComparisonProjectModels(
     {...normalizedComparisonProjectRow, sourceProjectIds, useImportRoutesForScope, contentVariants},
@@ -3570,6 +3642,7 @@ const getComparisonProjectLlmRows = async (
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
+    useMetadata?: boolean | null
   }>(`
     SELECT
       created_at AS createdAt,
@@ -3584,7 +3657,8 @@ const getComparisonProjectLlmRows = async (
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
-      use_fulltext_no_images AS useFulltextNoImages
+      use_fulltext_no_images AS useFulltextNoImages,
+      use_metadata AS useMetadata
     FROM ${judgmentTable} j
     ${getWhereClause([
       `j.article_id IN (${getInClause(articleIds)})`,
@@ -3603,6 +3677,7 @@ const getComparisonProjectLlmRows = async (
         sourceProjectId: null,
         answeredOriginalAsArray: getStringArrayRowValue(row, 'answeredOriginalAsArray'),
         systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
+        useMetadata: row.useMetadata === true,
       }
     })
     .filter((row) => {
@@ -3620,7 +3695,9 @@ const getComparisonProjectSummaryPromptGroups = (
   scope: ComparisonProjectScope,
 ): ComparisonProjectSummaryPromptGroup[] => {
   if (!getIsSummaryMode(scope) || scope.useImportRoutesForScope) {
-    return [{sourceProjectId: null, modelId: null, prompts: scope.prompts, systemPromptVariant: null}]
+    return [
+      {sourceProjectId: null, modelId: null, prompts: scope.prompts, systemPromptVariant: null, useMetadata: null},
+    ]
   }
 
   const promptRowsBySourceProjectId = scope.sourceProjectSummaryPrompts.reduce<
@@ -3642,6 +3719,7 @@ const getComparisonProjectSummaryPromptGroups = (
               modelId: sourceProject.modelId,
               prompts,
               systemPromptVariant: sourceProject.systemPromptVariant,
+              useMetadata: sourceProject.useMetadata,
             },
           ]
         : groups
@@ -3651,7 +3729,7 @@ const getComparisonProjectSummaryPromptGroups = (
 
   return sourceProjectGroups.length > 0
     ? sourceProjectGroups
-    : [{sourceProjectId: null, modelId: null, prompts: scope.prompts, systemPromptVariant: null}]
+    : [{sourceProjectId: null, modelId: null, prompts: scope.prompts, systemPromptVariant: null, useMetadata: null}]
 }
 
 const getComparisonProjectLlmRowsForSummaryGroup = (
@@ -3670,6 +3748,7 @@ const getComparisonProjectLlmRowsForSummaryGroup = (
       && (summaryPromptGroup.modelId === null || row.modelId === summaryPromptGroup.modelId)
       && (summaryPromptGroup.systemPromptVariant === null
         || getSystemPromptVariant(row.systemPromptVariant) === summaryPromptGroup.systemPromptVariant)
+      && (summaryPromptGroup.useMetadata === null || (row.useMetadata === true) === summaryPromptGroup.useMetadata)
     )
   })
 }
