@@ -8,13 +8,13 @@ import {createTempRuntimeRoot} from '../server/test/createTempRuntimeRoot.ts'
 
 setDefaultTimeout(120_000)
 
-const tempRuntimeRoot = createTempRuntimeRoot('migrate-review-change-delta-system-prompt-variant')
+const tempRuntimeRoot = createTempRuntimeRoot('migrate-review-change-delta-use-metadata')
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
 
-const migrationFileName = '0252_reviewChangeDeltaSystemPromptVariant.sql'
-const previousMigrationFileName = '0251_judgmentSystemPromptVariant.sql'
+const migrationFileName = '0256_reviewChangeDeltaUseMetadata.sql'
+const previousMigrationFileName = '0255_judgmentUseMetadata.sql'
 const migrationSql = readFileSync(resolve(import.meta.dir, 'duckdbMigrations', migrationFileName), 'utf8')
 
 let database: ReturnType<typeof getAppDatabaseService> | null = null
@@ -49,20 +49,23 @@ const insertDelta = async (input: {changeKind: string; deltaId: string; useTitle
 }
 
 const getDeltaColumn = async () => {
-  const [column] = await getDatabase().queryJson<{columnDefault: string | null; dataType: string}>(`
-    SELECT data_type AS dataType, column_default AS columnDefault
+  const [column] = await getDatabase().queryJson<{dataType: string; isNullable: boolean}>(`
+    SELECT data_type AS dataType, is_nullable AS isNullable
     FROM duckdb_columns()
     WHERE schema_name = 'app'
       AND table_name = 'review_change_delta'
-      AND column_name = 'system_prompt_variant'
+      AND column_name = 'use_metadata'
   `)
 
   return column ?? null
 }
 
-const getDeltaVariants = async () => {
-  return getDatabase().queryJson<{deltaId: string; systemPromptVariant: string | null}>(`
-    SELECT delta_id AS deltaId, system_prompt_variant AS systemPromptVariant
+const getDeltaUseMetadata = async () => {
+  return getDatabase().queryJson<{coalescedUseMetadata: boolean; deltaId: string; useMetadata: boolean | null}>(`
+    SELECT
+      delta_id AS deltaId,
+      use_metadata AS useMetadata,
+      COALESCE(use_metadata, FALSE) AS coalescedUseMetadata
     FROM app.review_change_delta
     WHERE delta_id LIKE 'delta-%'
     ORDER BY delta_id
@@ -97,7 +100,7 @@ test('the migration only adds the column', () => {
   expect(migrationSql).not.toMatch(/--/)
 })
 
-test('existing review change deltas read legacy after the migration and new deltas default to legacy', async () => {
+test('existing review change deltas read false after the migration and new deltas default to false', async () => {
   expect(await getDeltaColumn()).toBeNull()
 
   await insertDelta({changeKind: 'judgment.llm.created', deltaId: 'delta-llm', useTitle: 'TRUE'})
@@ -105,18 +108,23 @@ test('existing review change deltas read legacy after the migration and new delt
 
   await getMigrateDuckdb()()
 
-  expect(await getDeltaColumn()).toEqual({columnDefault: "'legacy'", dataType: 'VARCHAR'})
-  expect(await getDeltaVariants()).toEqual([
-    {deltaId: 'delta-human', systemPromptVariant: 'legacy'},
-    {deltaId: 'delta-llm', systemPromptVariant: 'legacy'},
+  expect(await getDeltaColumn()).toEqual({dataType: 'BOOLEAN', isNullable: true})
+  expect(await getDeltaUseMetadata()).toEqual([
+    {coalescedUseMetadata: false, deltaId: 'delta-human', useMetadata: false},
+    {coalescedUseMetadata: false, deltaId: 'delta-llm', useMetadata: false},
   ])
 
   await insertDelta({changeKind: 'judgment.llm.updated', deltaId: 'delta-new', useTitle: 'FALSE'})
+  await getDatabase().run(`
+    UPDATE app.review_change_delta
+    SET use_metadata = NULL
+    WHERE delta_id = 'delta-llm'
+  `)
 
-  expect(await getDeltaVariants()).toEqual([
-    {deltaId: 'delta-human', systemPromptVariant: 'legacy'},
-    {deltaId: 'delta-llm', systemPromptVariant: 'legacy'},
-    {deltaId: 'delta-new', systemPromptVariant: 'legacy'},
+  expect(await getDeltaUseMetadata()).toEqual([
+    {coalescedUseMetadata: false, deltaId: 'delta-human', useMetadata: false},
+    {coalescedUseMetadata: false, deltaId: 'delta-llm', useMetadata: null},
+    {coalescedUseMetadata: false, deltaId: 'delta-new', useMetadata: false},
   ])
   expect(
     await getDatabase().queryJson<{name: string}>(`
@@ -127,8 +135,11 @@ test('existing review change deltas read legacy after the migration and new delt
   ).toEqual([{name: migrationFileName}])
 })
 
-test('bulk and single delta appends write the typed system prompt variant column', async () => {
-  const [{appendLlmJudgmentReviewServingDeltas}, {appendReviewServingChangeDelta}] = await Promise.all([
+test('bulk and single delta appends write the typed article metadata column', async () => {
+  const [
+    {appendLlmJudgmentReviewServingDelta, appendLlmJudgmentReviewServingDeltas},
+    {appendReviewServingChangeDelta},
+  ] = await Promise.all([
     import('../server/reviewServing/llmJudgmentReviewServingDeltaService.ts'),
     import('../server/reviewServing/reviewServingDeltaLedger.ts'),
   ])
@@ -138,10 +149,10 @@ test('bulk and single delta appends write the typed system prompt variant column
     modelId: 'model-1',
     projectId: 'project-1',
     promptId: 'prompt-1',
+    systemPromptVariant: 'legacy' as const,
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
-    useMetadata: false,
     useTitle: true,
   }
 
@@ -150,19 +161,27 @@ test('bulk and single delta appends write the typed system prompt variant column
       {
         ...llmDelta,
         changeKind: 'judgment.llm.created',
-        sourceMutationKey: 'append:screening',
+        sourceMutationKey: 'append:metadata',
         sourceOperation: 'insert',
-        systemPromptVariant: 'screening_v1',
+        useMetadata: true,
       },
       {
         ...llmDelta,
         changeKind: 'judgment.llm.updated',
-        judgmentId: 'judgment-append-legacy',
-        sourceMutationKey: 'append:legacy',
+        judgmentId: 'judgment-append-plain',
+        sourceMutationKey: 'append:plain',
         sourceOperation: 'upsert',
-        systemPromptVariant: 'legacy',
+        useMetadata: false,
       },
     ])
+    await appendLlmJudgmentReviewServingDelta(tx, {
+      ...llmDelta,
+      changeKind: 'judgment.llm.deleted',
+      judgmentId: 'judgment-append-single',
+      sourceMutationKey: 'append:single',
+      sourceOperation: 'delete',
+      useMetadata: true,
+    })
     await appendReviewServingChangeDelta(tx, {
       articleId: 'article-append',
       changeKind: 'article.display.updated',
@@ -179,42 +198,38 @@ test('bulk and single delta appends write the typed system prompt variant column
   expect(
     await getDatabase().queryJson<{
       changeKind: string
-      contentFlagVariant: string | null
+      contentFlagUseMetadata: boolean | null
       judgmentId: string | null
-      systemPromptVariant: string | null
-      useTitle: boolean | null
+      useMetadata: boolean | null
     }>(`
       SELECT
         change_kind AS changeKind,
         judgment_id AS judgmentId,
-        use_title AS useTitle,
-        system_prompt_variant AS systemPromptVariant,
-        json_extract_string(payload_json, '$.contentFlags.systemPromptVariant') AS contentFlagVariant
+        use_metadata AS useMetadata,
+        CAST(json_extract(payload_json, '$.contentFlags.useMetadata') AS BOOLEAN) AS contentFlagUseMetadata
       FROM app.review_change_delta
       WHERE article_id = 'article-append'
       ORDER BY change_kind
     `),
   ).toEqual([
-    {
-      changeKind: 'article.display.updated',
-      contentFlagVariant: null,
-      judgmentId: null,
-      systemPromptVariant: 'legacy',
-      useTitle: null,
-    },
+    {changeKind: 'article.display.updated', contentFlagUseMetadata: null, judgmentId: null, useMetadata: false},
     {
       changeKind: 'judgment.llm.created',
-      contentFlagVariant: 'screening_v1',
+      contentFlagUseMetadata: true,
       judgmentId: 'judgment-append',
-      systemPromptVariant: 'screening_v1',
-      useTitle: true,
+      useMetadata: true,
+    },
+    {
+      changeKind: 'judgment.llm.deleted',
+      contentFlagUseMetadata: true,
+      judgmentId: 'judgment-append-single',
+      useMetadata: true,
     },
     {
       changeKind: 'judgment.llm.updated',
-      contentFlagVariant: 'legacy',
-      judgmentId: 'judgment-append-legacy',
-      systemPromptVariant: 'legacy',
-      useTitle: true,
+      contentFlagUseMetadata: false,
+      judgmentId: 'judgment-append-plain',
+      useMetadata: false,
     },
   ])
 })
@@ -222,15 +237,15 @@ test('bulk and single delta appends write the typed system prompt variant column
 test('re-running the migration keeps the column and existing values', async () => {
   await getDatabase().run(`
     UPDATE app.review_change_delta
-    SET system_prompt_variant = 'screening_v1'
+    SET use_metadata = TRUE
     WHERE delta_id = 'delta-new'
   `)
 
   await getDatabase().run(migrationSql)
 
-  expect(await getDeltaVariants()).toEqual([
-    {deltaId: 'delta-human', systemPromptVariant: 'legacy'},
-    {deltaId: 'delta-llm', systemPromptVariant: 'legacy'},
-    {deltaId: 'delta-new', systemPromptVariant: 'screening_v1'},
+  expect(await getDeltaUseMetadata()).toEqual([
+    {coalescedUseMetadata: false, deltaId: 'delta-human', useMetadata: false},
+    {coalescedUseMetadata: false, deltaId: 'delta-llm', useMetadata: null},
+    {coalescedUseMetadata: true, deltaId: 'delta-new', useMetadata: true},
   ])
 })

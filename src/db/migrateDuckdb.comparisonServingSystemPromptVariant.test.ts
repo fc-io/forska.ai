@@ -78,7 +78,7 @@ test('the migration only creates the served variant table', () => {
 test('the migration creates an empty served variant table that defaults to legacy and is idempotent', async () => {
   expect(await getVariantServingColumns()).toEqual([])
 
-  await getMigrateDuckdb()()
+  await getMigrateDuckdb()({throughFileName: migrationFileName})
 
   expect(await getVariantServingColumns()).toEqual([
     {columnDefault: null, columnName: 'comparison_project_id', dataType: 'VARCHAR'},
@@ -91,7 +91,7 @@ test('the migration creates an empty served variant table that defaults to legac
     INSERT INTO mart.comparison_system_prompt_variant_serving (comparison_project_id, generation)
     VALUES ('comparison-1', 1)
   `)
-  await getMigrateDuckdb()()
+  await getMigrateDuckdb()({throughFileName: migrationFileName})
 
   expect(
     await getDatabase().queryJson<{systemPromptVariant: string}>(`

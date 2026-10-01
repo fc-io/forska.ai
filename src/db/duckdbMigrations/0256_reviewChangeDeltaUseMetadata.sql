@@ -1,0 +1,1 @@
+ALTER TABLE app.review_change_delta ADD COLUMN IF NOT EXISTS use_metadata BOOLEAN DEFAULT FALSE;
