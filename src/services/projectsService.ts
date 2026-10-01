@@ -27,6 +27,7 @@ export type ProjectListItem = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 
@@ -83,6 +84,8 @@ const isProjectListItem = (value: unknown): value is ProjectListItem => {
     && typeof value.useFulltext === 'boolean'
     && 'useFulltextNoImages' in value
     && typeof value.useFulltextNoImages === 'boolean'
+    && 'useMetadata' in value
+    && typeof value.useMetadata === 'boolean'
     && 'useTitle' in value
     && typeof value.useTitle === 'boolean'
   )

@@ -31,6 +31,7 @@ type ProjectWithPrompts = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   prompts: Array<{id: string; promptHeading: string | null; originalText: string; type: string | null}>
 }
 
@@ -43,6 +44,7 @@ type ProjectBound = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
 }
 
@@ -87,6 +89,15 @@ const linkProjectPromptTx = async (tx: AppTx, params: {order: number; projectId:
   `)
 }
 
+const getSubprojectUseMetadata = (projectBounds: ProjectBound[]) => {
+  return (
+    projectBounds.length > 0
+    && projectBounds.every((project) => {
+      return project.useMetadata
+    })
+  )
+}
+
 const getProjectArticleWhereClause = (params: {
   projectId: string
   routeIds: string[]
@@ -119,6 +130,7 @@ const queryArticlesWithPromptFilters = async (
         useAbstract: project.useAbstract,
         useFulltext: project.useFulltext,
         useFulltextNoImages: project.useFulltextNoImages,
+        useMetadata: project.useMetadata,
         systemPromptVariant: project.systemPromptVariant,
       }
     }),
@@ -197,6 +209,7 @@ export const subprojectsRoutes = new Elysia()
         useAbstract: boolean | null
         useFulltext: boolean | null
         useFulltextNoImages: boolean | null
+        useMetadata: boolean | null
       }>(`
         SELECT
           p.id AS id,
@@ -207,7 +220,8 @@ export const subprojectsRoutes = new Elysia()
           p.use_title AS useTitle,
           p.use_abstract AS useAbstract,
           p.use_fulltext AS useFulltext,
-          p.use_fulltext_no_images AS useFulltextNoImages
+          p.use_fulltext_no_images AS useFulltextNoImages,
+          COALESCE(p.use_metadata, FALSE) AS useMetadata
         FROM app.project p
         INNER JOIN app.model m ON p.model_id = m.id
         WHERE p.archived = FALSE
@@ -254,6 +268,7 @@ export const subprojectsRoutes = new Elysia()
               useAbstract: project.useAbstract ?? true,
               useFulltext: project.useFulltext ?? false,
               useFulltextNoImages: project.useFulltextNoImages ?? false,
+              useMetadata: project.useMetadata ?? false,
               prompts: projectPrompts.map((prompt) => {
                 return {
                   id: prompt.id,
@@ -336,6 +351,7 @@ export const subprojectsRoutes = new Elysia()
                 useAbstract: boolean | null
                 useFulltext: boolean | null
                 useFulltextNoImages: boolean | null
+                useMetadata: boolean | null
                 systemPromptVariant: string | null
               }>(`
                 SELECT
@@ -347,6 +363,7 @@ export const subprojectsRoutes = new Elysia()
                   use_abstract AS useAbstract,
                   use_fulltext AS useFulltext,
                   use_fulltext_no_images AS useFulltextNoImages,
+                  COALESCE(use_metadata, FALSE) AS useMetadata,
                   system_prompt_variant AS systemPromptVariant
                 FROM app.project
                 WHERE id IN (${appQueryHelpers.getQuotedStringList(body.sourceProjectIds).join(', ')})
@@ -362,6 +379,7 @@ export const subprojectsRoutes = new Elysia()
           useAbstract: row.useAbstract ?? true,
           useFulltext: row.useFulltext ?? false,
           useFulltextNoImages: row.useFulltextNoImages ?? false,
+          useMetadata: row.useMetadata ?? false,
           systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
         }
       })
@@ -461,6 +479,7 @@ export const subprojectsRoutes = new Elysia()
           useAbstract: boolean
           useFulltext: boolean
           useFulltextNoImages: boolean
+          useMetadata: boolean
           dateFrom: unknown
           dateTo: unknown
           updatedAt: Date | string
@@ -473,6 +492,7 @@ export const subprojectsRoutes = new Elysia()
             use_title,
             use_abstract,
             use_fulltext,
+            use_metadata,
             date_from,
             date_to
           )
@@ -484,6 +504,7 @@ export const subprojectsRoutes = new Elysia()
             TRUE,
             TRUE,
             FALSE,
+            ${getSubprojectUseMetadata(projectBounds) ? 'TRUE' : 'FALSE'},
             ${appQueryHelpers.getSqlLiteral(body.dateFrom ? new Date(body.dateFrom) : null)},
             ${appQueryHelpers.getSqlLiteral(body.dateTo ? new Date(body.dateTo) : null)}
           )
@@ -496,6 +517,7 @@ export const subprojectsRoutes = new Elysia()
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
             use_fulltext_no_images AS useFulltextNoImages,
+            COALESCE(use_metadata, FALSE) AS useMetadata,
             date_from AS dateFrom,
             date_to AS dateTo,
             updated_at AS updatedAt
@@ -532,6 +554,7 @@ export const subprojectsRoutes = new Elysia()
             'useAbstract',
             'useFulltext',
             'useFulltextNoImages',
+            'useMetadata',
             'systemPromptVariant',
             ...(body.dateFrom ? (['dateFrom'] as const) : []),
             ...(body.dateTo ? (['dateTo'] as const) : []),
@@ -601,6 +624,7 @@ export const subprojectsRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        useMetadata: boolean
         dateFrom: unknown
         dateTo: unknown
         updatedAt: Date | string

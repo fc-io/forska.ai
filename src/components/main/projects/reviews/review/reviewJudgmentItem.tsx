@@ -72,6 +72,7 @@ type ReviewJudgmentItemProps = {
     useAbstract?: boolean
     useFulltext?: boolean
     useFulltextNoImages?: boolean
+    useMetadata?: boolean
     chunkingStrategy?: string | null
   }
   setArticleViewToShow: SetArticleViewToShow
@@ -131,6 +132,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
       || j.useAbstract !== undefined
       || j.useFulltext !== undefined
       || j.useFulltextNoImages !== undefined
+      || j.useMetadata !== undefined
     )
   }
 
@@ -289,6 +291,15 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
               >
                 Full text - no images
               </span>
+              <Show when={props.judgment.useMetadata !== undefined}>
+                <span
+                  class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                    props.judgment.useMetadata ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'
+                  }`}
+                >
+                  Metadata
+                </span>
+              </Show>
             </div>
           </Show>
         </div>

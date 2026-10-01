@@ -195,6 +195,7 @@ export type UnassessedCountParams = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   disableRawFallback?: boolean

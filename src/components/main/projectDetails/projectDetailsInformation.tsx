@@ -17,6 +17,7 @@ type ProjectDetailsInformationProject = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
 }
 
 type ProjectDetailsInformationProps = {
@@ -77,6 +78,7 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
       abstract: props.project.useAbstract,
       fulltext: props.project.useFulltext,
       fulltextNoImages: props.project.useFulltextNoImages,
+      metadata: props.project.useMetadata,
     }
   })
 
@@ -165,6 +167,13 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
             }`}
           >
             Full text - no images: {useFlags().fulltextNoImages ? 'on' : 'off'}
+          </span>
+          <span
+            class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+              useFlags().metadata ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            Article metadata {useFlags().metadata ? 'on' : 'off'}
           </span>
         </div>
       </div>

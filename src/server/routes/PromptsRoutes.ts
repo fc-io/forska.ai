@@ -47,6 +47,7 @@ type JudgmentPromptCollisionRow = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type JudgmentHumanPromptMoveRow = {
@@ -179,6 +180,7 @@ const getJudgmentPromptCollisions = async ({
            merge_row.use_abstract AS useAbstract,
            merge_row.use_fulltext AS useFulltext,
            merge_row.use_fulltext_no_images AS useFulltextNoImages,
+           merge_row.use_metadata AS useMetadata,
            merge_row.use_title AS useTitle,
            merge_row.system_prompt_variant AS systemPromptVariant
     FROM app.judgment merge_row
@@ -190,6 +192,7 @@ const getJudgmentPromptCollisions = async ({
      AND keep_row.use_abstract = merge_row.use_abstract
      AND keep_row.use_fulltext = merge_row.use_fulltext
      AND keep_row.use_fulltext_no_images = merge_row.use_fulltext_no_images
+     AND keep_row.use_metadata = merge_row.use_metadata
      AND keep_row.system_prompt_variant = merge_row.system_prompt_variant
      AND keep_row.delete_generation = merge_row.delete_generation
     WHERE merge_row.prompt_id = '${escapeSqlString(mergeId)}'
@@ -280,6 +283,7 @@ const resolveJudgmentPromptCollisions = async ({
           useAbstract: collision.useAbstract,
           useFulltext: collision.useFulltext,
           useFulltextNoImages: collision.useFulltextNoImages,
+          useMetadata: collision.useMetadata,
           useTitle: collision.useTitle,
         }
       }),
@@ -881,6 +885,7 @@ const promptsAdminRoutes = new Elysia()
           useAbstract: boolean
           useFulltext: boolean
           useFulltextNoImages: boolean
+          useMetadata: boolean
           useTitle: boolean
         }>(`
           SELECT
@@ -892,6 +897,7 @@ const promptsAdminRoutes = new Elysia()
             COALESCE(use_abstract, FALSE) AS useAbstract,
             COALESCE(use_fulltext, FALSE) AS useFulltext,
             COALESCE(use_fulltext_no_images, FALSE) AS useFulltextNoImages,
+            COALESCE(use_metadata, FALSE) AS useMetadata,
             COALESCE(use_title, FALSE) AS useTitle,
             system_prompt_variant AS systemPromptVariant
           FROM app.judgment
@@ -926,6 +932,7 @@ const promptsAdminRoutes = new Elysia()
                 useAbstract: judgment.useAbstract,
                 useFulltext: judgment.useFulltext,
                 useFulltextNoImages: judgment.useFulltextNoImages,
+                useMetadata: judgment.useMetadata,
                 useTitle: judgment.useTitle,
               }
             }),

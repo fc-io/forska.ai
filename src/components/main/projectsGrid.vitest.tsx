@@ -86,6 +86,7 @@ const getProject = (overrides: Partial<ProjectListItem> = {}): ProjectListItem =
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,
+    useMetadata: false,
     useTitle: true,
     ...overrides,
   }
@@ -142,6 +143,27 @@ beforeEach(() => {
 afterEach(() => {
   document.body.innerHTML = ''
   vi.restoreAllMocks()
+})
+
+describe('ProjectsGrid content used label', () => {
+  test('lists metadata only when the project uses metadata', async () => {
+    const {container, dispose, queryClient} = await renderProjectsGrid([
+      getProject(),
+      getProject({id: 'project-2', name: 'Metadata project', useMetadata: true}),
+    ])
+
+    try {
+      const text = container.textContent ?? ''
+
+      expect(text).toContain('Content: title, abstract')
+      expect(text).toContain('Content: title, abstract, metadata')
+      expect(text.match(/metadata/g)).toHaveLength(1)
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
 })
 
 describe('ProjectsGrid export project link', () => {

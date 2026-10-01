@@ -394,6 +394,63 @@ test('merging a prompt keeps judgments of a different system prompt variant', as
   ])
 })
 
+test('merging a prompt keeps judgments of a different metadata flag', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const suffix = `${Date.now()}-metadata`
+  const keepPromptId = `keep-metadata-judgment-prompt-${suffix}`
+  const mergePromptId = `merge-metadata-judgment-prompt-${suffix}`
+  const articleId = `metadata-judgment-article-${suffix}`
+  const connectionId = `metadata-judgment-connection-${suffix}`
+  const modelId = `metadata-judgment-model-${suffix}`
+
+  await insertPromptFixture({promptId: keepPromptId})
+  await insertPromptFixture({promptId: mergePromptId})
+  await insertModelFixture({connectionId, modelId})
+  await insertArticleFixture({articleId})
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      use_metadata,
+      system_prompt_variant,
+      delete_generation,
+      is_answered,
+      explanation
+    ) VALUES
+      ('${keepPromptId}-judgment', '${articleId}', '${keepPromptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 0, TRUE, 'keep'),
+      ('${mergePromptId}-judgment', '${articleId}', '${mergePromptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE, TRUE, 'legacy', 0, TRUE, 'merge')
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/prompts/merge', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({keepPromptId, mergePromptIds: [mergePromptId]}),
+    }),
+  )
+  const remainingJudgments = await queryDatabase<{id: string; promptId: string; useMetadata: boolean}>(`
+    SELECT id, prompt_id AS promptId, use_metadata AS useMetadata
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+    ORDER BY id
+  `)
+
+  expect(response.status).toBe(200)
+  expect(remainingJudgments).toEqual([
+    {id: `${keepPromptId}-judgment`, promptId: keepPromptId, useMetadata: false},
+    {id: `${mergePromptId}-judgment`, promptId: keepPromptId, useMetadata: true},
+  ])
+})
+
 test('merging a prompt deletes colliding human judgment rows before rewriting prompt ids', async () => {
   if (!app || !queryDatabase) {
     throw new Error('Test app not initialized')

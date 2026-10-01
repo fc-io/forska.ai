@@ -56,6 +56,7 @@ type ProjectSummary = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
 }
 
 type ModelOption = {
@@ -128,6 +129,7 @@ type ProjectUpdatePayload = {
   useAbstract?: boolean
   useFulltext?: boolean
   useFulltextNoImages?: boolean
+  useMetadata?: boolean
 }
 
 const isNullableString = (value: unknown): value is string | null => {
@@ -151,6 +153,7 @@ const isProjectSummary = (value: unknown): value is ProjectSummary => {
   const useAbstract = summary.useAbstract
   const useFulltext = summary.useFulltext
   const useFulltextNoImages = summary.useFulltextNoImages
+  const useMetadata = summary.useMetadata
   const hasValidDates = isNullableStringOrDate(dateFrom) && isNullableStringOrDate(dateTo)
   return (
     typeof name === 'string'
@@ -160,6 +163,7 @@ const isProjectSummary = (value: unknown): value is ProjectSummary => {
     && typeof useAbstract === 'boolean'
     && typeof useFulltext === 'boolean'
     && typeof useFulltextNoImages === 'boolean'
+    && typeof useMetadata === 'boolean'
   )
 }
 
@@ -378,6 +382,7 @@ const EditProject = (): JSX.Element => {
   const [useAbstract, setUseAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
   const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
+  const [useMetadata, setUseMetadata] = createSignal(false)
   const [promptCleanupSummary, setPromptCleanupSummary] = createSignal<ProjectPromptCleanupSummary | null>(null)
 
   // Track whether we've loaded initial data to avoid overwriting local changes on refetch
@@ -570,6 +575,7 @@ const EditProject = (): JSX.Element => {
       setUseAbstract(details.project.useAbstract)
       setUseFulltext(details.project.useFulltext)
       setUseFulltextNoImages(details.project.useFulltextNoImages)
+      setUseMetadata(details.project.useMetadata)
       if (!initialModelLoaded && details.model?.id) {
         const provider = String(details.model?.provider ?? '')
           .trim()
@@ -680,6 +686,7 @@ const EditProject = (): JSX.Element => {
         ...(payload.useAbstract !== undefined ? {useAbstract: payload.useAbstract} : {}),
         ...(payload.useFulltext !== undefined ? {useFulltext: payload.useFulltext} : {}),
         ...(payload.useFulltextNoImages !== undefined ? {useFulltextNoImages: payload.useFulltextNoImages} : {}),
+        ...(payload.useMetadata !== undefined ? {useMetadata: payload.useMetadata} : {}),
       })
 
     const result = handleApiResponse<ProjectUpdateResponse>(
@@ -773,6 +780,7 @@ const EditProject = (): JSX.Element => {
       useAbstract: useAbstract(),
       useFulltext: useFulltext(),
       useFulltextNoImages: useFulltextNoImages(),
+      useMetadata: useMetadata(),
       useTitle: useTitle(),
     }
     const updatePromise = canEditJudgmentConfig()
@@ -1105,6 +1113,26 @@ const EditProject = (): JSX.Element => {
                         <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
                         <p class="text-xs text-gray-500 mt-0.5">
                           Include article text but strip embedded base64 images to reduce token usage
+                        </p>
+                      </div>
+                    </label>
+                    <label
+                      class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
+                        canEditJudgmentConfig() ? 'border-input' : 'opacity-60'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        class="mt-1"
+                        checked={useMetadata()}
+                        onChange={(event) => {
+                          return setUseMetadata(event.currentTarget.checked)
+                        }}
+                        disabled={!canEditJudgmentConfig()}
+                      />
+                      <div class="flex-1">
+                        <p class="text-sm font-medium text-gray-900">
+                          Article metadata (journal, year, publication type)
                         </p>
                       </div>
                     </label>

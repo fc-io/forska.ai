@@ -52,6 +52,7 @@ type ExportReviewConfig = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  useMetadata: boolean
   useTitle: boolean
 }
 type ExportArticleRow = ReviewServingExportArticleRow
@@ -180,7 +181,8 @@ const getProjectReviewConfig = async (projectId: string) => {
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
-      use_fulltext_no_images AS useFulltextNoImages
+      use_fulltext_no_images AS useFulltextNoImages,
+      COALESCE(use_metadata, FALSE) AS useMetadata
     FROM app.project
     WHERE id = ${getSqlLiteral(projectId)}
     LIMIT 1

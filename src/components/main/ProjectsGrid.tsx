@@ -28,9 +28,12 @@ const getProjectName = (project: Project) => {
 
 const getProjectContentUsedLabel = (project: Project) => {
   const fulltextLabel = project.useFulltextNoImages ? 'fulltext (no images)' : project.useFulltext ? 'fulltext' : null
-  const parts = [project.useTitle ? 'title' : null, project.useAbstract ? 'abstract' : null, fulltextLabel].filter(
-    Boolean,
-  ) as string[]
+  const parts = [
+    project.useTitle ? 'title' : null,
+    project.useAbstract ? 'abstract' : null,
+    fulltextLabel,
+    project.useMetadata ? 'metadata' : null,
+  ].filter(Boolean) as string[]
 
   return parts.length > 0 ? parts.join(', ') : 'none'
 }
