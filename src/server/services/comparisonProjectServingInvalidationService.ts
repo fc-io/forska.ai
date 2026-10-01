@@ -1,11 +1,6 @@
-import {
-  defaultSystemPromptVariant,
-  getSystemPromptVariant,
-  type SystemPromptVariant,
-} from '../../agent/judge/systemPromptVariant.ts'
+import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getSqlLiteral} from './appQueryHelpers.ts'
-import {getComparisonProjectSystemPromptVariantSql} from './comparisonProjectServingGenerationConfig.ts'
+import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {getComparisonProjectServingRebuildService} from './comparisonProjectServingRebuildService.ts'
 import {getComparisonProjectServingWorkloadContext} from './comparisonProjectServingWorkloadContext.ts'
 
@@ -208,27 +203,6 @@ const getComparisonProjectContentOverlapSql = (comparisonProjectAlias: string, c
   )`
 }
 
-const getComparisonProjectSystemPromptVariantOverlapSql = (comparisonProjectAlias: string, changeAlias: string) => {
-  return `(
-    EXISTS (
-      SELECT 1
-      FROM app.comparison_project_source_project cpsp
-      INNER JOIN app.project source_project ON source_project.id = cpsp.source_project_id
-      WHERE cpsp.comparison_project_id = ${comparisonProjectAlias}.id
-        AND ${getComparisonProjectSystemPromptVariantSql('source_project.system_prompt_variant')} = ${changeAlias}.system_prompt_variant
-    )
-    OR (
-      ${changeAlias}.system_prompt_variant = ${getSqlLiteral(defaultSystemPromptVariant)}
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.comparison_project_source_project cpsp
-        INNER JOIN app.project source_project ON source_project.id = cpsp.source_project_id
-        WHERE cpsp.comparison_project_id = ${comparisonProjectAlias}.id
-      )
-    )
-  )`
-}
-
 const getComparisonProjectSourceProjectLinkExistsSql = (comparisonProjectAlias: string) => {
   return `EXISTS (
     SELECT 1
@@ -313,7 +287,6 @@ const getComparisonProjectAnySummarySourcePromptSql = (comparisonProjectAlias: s
 const getLlmJudgmentAffectedComparisonProjectIdsSql = (changes: ComparisonProjectLlmJudgmentChange[]) => {
   const modelOverlapSql = getComparisonProjectModelOverlapSql('cp', 'cj')
   const contentOverlapSql = getComparisonProjectContentOverlapSql('cp', 'cj')
-  const systemPromptVariantOverlapSql = getComparisonProjectSystemPromptVariantOverlapSql('cp', 'cj')
   const articleScopeOverlapSql = getComparisonProjectArticleScopeOverlapSql('cp', 'cj')
   const promptOverlapSql = getComparisonProjectPromptOverlapSql('cp', 'cj')
   const summarySourcePromptOverlapSql = getComparisonProjectSummarySourcePromptOverlapSql('cp', 'cj')
@@ -332,7 +305,6 @@ const getLlmJudgmentAffectedComparisonProjectIdsSql = (changes: ComparisonProjec
         )
         AND ${modelOverlapSql}
         AND ${contentOverlapSql}
-        AND ${systemPromptVariantOverlapSql}
         AND ${articleScopeOverlapSql}
         AND ${promptOverlapSql}
     ),
@@ -345,7 +317,6 @@ const getLlmJudgmentAffectedComparisonProjectIdsSql = (changes: ComparisonProjec
         AND COALESCE(cp.human_judgment_mode, 'prompt') = 'summary'
         AND ${modelOverlapSql}
         AND ${contentOverlapSql}
-        AND ${systemPromptVariantOverlapSql}
         AND ${articleScopeOverlapSql}
         AND ${summarySourcePromptOverlapSql}
     ),
@@ -359,7 +330,6 @@ const getLlmJudgmentAffectedComparisonProjectIdsSql = (changes: ComparisonProjec
         AND NOT ${anySummarySourcePromptSql}
         AND ${modelOverlapSql}
         AND ${contentOverlapSql}
-        AND ${systemPromptVariantOverlapSql}
         AND ${articleScopeOverlapSql}
         AND ${promptOverlapSql}
     )
@@ -482,13 +452,46 @@ const markComparisonProjectsServingStaleForHumanSummaryJudgments = async (
   return markComparisonProjectsServingStaleForAffectedRows(getComparisonProjectIds(rows), dependencies)
 }
 
+const getSourceProjectAffectedComparisonProjectIdsSql = (projectIds: string[]) => {
+  return `
+    SELECT DISTINCT cp.id AS comparisonProjectId
+    FROM app.comparison_project cp
+    INNER JOIN app.comparison_project_source_project cpsp ON cpsp.comparison_project_id = cp.id
+    WHERE cp.archived = FALSE
+      AND cpsp.source_project_id IN (${getQuotedStringList(projectIds).join(', ')})
+    ORDER BY comparisonProjectId ASC
+  `
+}
+
+const markComparisonProjectsServingStaleForSourceProjects = async (
+  projectIds: readonly string[],
+  options: ComparisonProjectServingInvalidationOptions = {},
+) => {
+  const uniqueProjectIds = getUniqueEntries(projectIds, (projectId) => {
+    return projectId
+  })
+  const dependencies = getComparisonProjectServingInvalidationDependencies(options)
+
+  if (uniqueProjectIds.length === 0) {
+    return []
+  }
+
+  const rows = await dependencies.database.queryJson<ComparisonProjectIdRow>(
+    getSourceProjectAffectedComparisonProjectIdsSql(uniqueProjectIds),
+  )
+
+  return markComparisonProjectsServingStaleForAffectedRows(getComparisonProjectIds(rows), dependencies)
+}
+
 const comparisonProjectServingInvalidationService = {
   getHumanPromptJudgmentAffectedComparisonProjectIdsSql,
   getHumanSummaryJudgmentAffectedComparisonProjectIdsSql,
   getLlmJudgmentAffectedComparisonProjectIdsSql,
+  getSourceProjectAffectedComparisonProjectIdsSql,
   markComparisonProjectsServingStaleForHumanPromptJudgments,
   markComparisonProjectsServingStaleForHumanSummaryJudgments,
   markComparisonProjectsServingStaleForLlmJudgments,
+  markComparisonProjectsServingStaleForSourceProjects,
 }
 
 export const getComparisonProjectServingInvalidationService = () => {

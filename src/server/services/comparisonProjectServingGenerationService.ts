@@ -18,6 +18,7 @@ type ComparisonProjectServingGenerationMartCleanupTableName =
   | 'mart.comparison_cell_serving'
   | 'mart.comparison_filter_member'
   | 'mart.comparison_filter_stats'
+  | 'mart.comparison_system_prompt_variant_serving'
 type ComparisonProjectServingGenerationCleanupTableName =
   | ComparisonProjectServingGenerationMartCleanupTableName
   | 'app.comparison_project_serving_generation'
@@ -37,6 +38,7 @@ const comparisonProjectServingGenerationCleanupTableNames: ComparisonProjectServ
   'mart.comparison_filter_stats',
   'mart.comparison_article_identifier_serving',
   'mart.comparison_article_serving',
+  'mart.comparison_system_prompt_variant_serving',
 ]
 
 const getDefaultComparisonProjectServingGenerationDependencies = (): ComparisonProjectServingGenerationDependencies => {
