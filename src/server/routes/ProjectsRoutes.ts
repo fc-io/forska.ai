@@ -30,6 +30,7 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
+import {getComparisonProjectServingInvalidationService} from '../services/comparisonProjectServingInvalidationService.ts'
 import {getComparisonProjectServingRebuildService} from '../services/comparisonProjectServingRebuildService.ts'
 import {
   getOrCreateImmutablePromptTx,
@@ -2208,6 +2209,13 @@ export const projectsRoutes = new Elysia()
 
           if (promptCleanupSummary) {
             await markComparisonServingStaleForProjectPromptEditTx(tx, params.id)
+          }
+
+          if (!hasExistingJob && hasSystemPromptVariantUpdate) {
+            await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForSourceProjects(
+              [params.id],
+              {runner: tx},
+            )
           }
 
           if (hasImportRouteChanges && !hasExistingJob) {

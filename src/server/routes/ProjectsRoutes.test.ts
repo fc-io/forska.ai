@@ -1952,6 +1952,78 @@ test('edit route switches the system prompt variant before a judgment job exists
   expect(configDeltaRows).toEqual([{configFieldSet: 'systemPromptVariant'}, {configFieldSet: 'systemPromptVariant'}])
 })
 
+test('edit route marks comparisons linking the project stale when the system prompt variant changes', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-variant-comparison-connection'
+  const modelId = 'edit-variant-comparison-model'
+  const projectId = 'edit-variant-comparison-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.comparison_project (id, name, model_ids, compare_with_humans, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES
+      ('edit-variant-comparison-linked', 'Linked comparison', ['${modelId}'], FALSE, TRUE, TRUE, FALSE, FALSE),
+      ('edit-variant-comparison-unlinked', 'Unlinked comparison', ['${modelId}'], FALSE, TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id)
+    VALUES ('edit-variant-comparison-link', 'edit-variant-comparison-linked', '${projectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.comparison_project_serving_generation (
+      comparison_project_id,
+      active_generation,
+      generation_updated_at,
+      serving_status,
+      serving_generation,
+      serving_completed_at
+    )
+    VALUES
+      ('edit-variant-comparison-linked', 1, current_timestamp, 'ready', 1, current_timestamp),
+      ('edit-variant-comparison-unlinked', 1, current_timestamp, 'ready', 1, current_timestamp)
+  `)
+
+  const query = queryDatabase
+  const getServingStatuses = () => {
+    return query<{comparisonProjectId: string; servingStatus: string}>(`
+      SELECT comparison_project_id AS comparisonProjectId, serving_status AS servingStatus
+      FROM app.comparison_project_serving_generation
+      WHERE comparison_project_id LIKE 'edit-variant-comparison-%'
+      ORDER BY comparison_project_id
+    `)
+  }
+  const nameResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({name: 'Renamed variant comparison project'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(nameResponse.status).toBe(200)
+  expect(await getServingStatuses()).toEqual([
+    {comparisonProjectId: 'edit-variant-comparison-linked', servingStatus: 'ready'},
+    {comparisonProjectId: 'edit-variant-comparison-unlinked', servingStatus: 'ready'},
+  ])
+
+  const variantResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({systemPromptVariant: 'screening_v1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(variantResponse.status).toBe(200)
+  expect(await getServingStatuses()).toEqual([
+    {comparisonProjectId: 'edit-variant-comparison-linked', servingStatus: 'stale'},
+    {comparisonProjectId: 'edit-variant-comparison-unlinked', servingStatus: 'ready'},
+  ])
+})
+
 test('edit route rejects a system prompt variant change when a judgment job exists', async () => {
   if (!app || !queryDatabase || !runDatabase) {
     throw new Error('Test app not initialized')
