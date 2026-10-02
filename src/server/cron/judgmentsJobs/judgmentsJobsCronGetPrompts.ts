@@ -1,4 +1,7 @@
-import {getJudgmentJobUnassessedPairsFromServing} from '../../reviewServing/reviewServingJudgmentJobQueueService.ts'
+import {
+  getJudgmentJobUnassessedPairsFromServing,
+  type JudgmentJobHumanAnsweredMode,
+} from '../../reviewServing/reviewServingJudgmentJobQueueService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
@@ -35,6 +38,7 @@ const getUnassessedPairsCursor = (cursor: JobCursor | null) => {
  *
  * Uses the V4 serving queue to find unassessed pairs without raw DuckDB fallback windows.
  * Uses cursor-based pagination to avoid re-fetching already-queued pairs.
+ * With `humanAnsweredMode`, only pairs that already have a human answer are returned.
  */
 // Refill metadata reads run on the DuckDB owner at foreground priority, ahead of background
 // review-serving projector work.
@@ -51,6 +55,7 @@ export const judgmentsJobsCronGetPrompts = async (
   jobId: string,
   numberOfPromptsToGet: number,
   cursor: JobCursor | null = null,
+  humanAnsweredMode: JudgmentJobHumanAnsweredMode | null = null,
 ): Promise<QueuePromptsResult> => {
   const [projectResult, enabledPromptCount] = await Promise.all([
     getJudgeRefillReadDatabaseService().queryJson<{id: string; archived: boolean}>(
@@ -133,6 +138,7 @@ export const judgmentsJobsCronGetPrompts = async (
       projectId,
       requested: numberOfPromptsToGet,
       cursor: cursorSummary,
+      humanAnsweredMode,
       readSource: 'review_unassessed_queue_serving_v4',
       runningForMs: Date.now() - startedAtMs,
     })
@@ -143,6 +149,7 @@ export const judgmentsJobsCronGetPrompts = async (
     jobId,
     numberOfPromptsToGet,
     cursor: getUnassessedPairsCursor(cursor),
+    humanAnsweredMode,
   }).finally(() => {
     clearTimeout(slowTimer)
   })
@@ -159,7 +166,8 @@ export const judgmentsJobsCronGetPrompts = async (
 
   const cursorAction = result.nextCursor ? 'advance' : cursor ? 'clear' : 'none'
 
-  if (numberOfPromptsToGet > 0 && result.promptEntries.length === 0) {
+  // An empty human-answered read is the normal steady state, not a starved queue.
+  if (numberOfPromptsToGet > 0 && result.promptEntries.length === 0 && humanAnsweredMode === null) {
     getPromptsLogger.warn(`judgmentQueue.getPrompts.empty.${jobId}`, '[getPrompts] serving queue returned 0 pairs', {
       component: getPromptsComponent,
       event: 'emptyServingQueueResult',
@@ -184,6 +192,7 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
+      humanAnsweredMode,
       readSource: 'review_unassessed_queue_serving_v4',
     })
   }

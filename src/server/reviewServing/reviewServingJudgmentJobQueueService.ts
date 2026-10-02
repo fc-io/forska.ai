@@ -31,6 +31,8 @@ type JudgmentJobServingCursorRow = {
 
 type JudgmentJobServingPromptRow = JudgmentJobServingCursorRow
 
+export type JudgmentJobHumanAnsweredMode = 'prompt' | 'summary'
+
 type JudgmentJobServingScope = {projectId: string; reviewConfigHash: string; snapshotId: string}
 type JudgmentJobServingScopeRow = JudgmentJobServingScope & {
   componentStateJson: unknown
@@ -343,6 +345,46 @@ const getCursorPredicate = (cursor: UnassessedPairsCursor | null, promptIdExpres
       )`
 }
 
+const getHumanAnsweredPromptPairJoin = (projectId: string) => {
+  return `
+    INNER JOIN (
+      SELECT DISTINCT human.article_id, human.prompt_id
+      FROM app.judgment_human human
+      WHERE human.project_id = ${getSqlLiteral(projectId)}
+        AND human.is_answered = TRUE
+    ) human_answered
+      ON human_answered.article_id = queue.article_id
+      AND human_answered.prompt_id = queue.prompt_id
+  `
+}
+
+const getHumanAnsweredSummaryArticleJoin = (projectId: string) => {
+  return `
+    INNER JOIN (
+      SELECT DISTINCT human_summary.article_id
+      FROM app.judgment_human_summary human_summary
+      WHERE human_summary.project_id = ${getSqlLiteral(projectId)}
+        AND NULLIF(TRIM(COALESCE(human_summary.answer, '')), '') IS NOT NULL
+    ) human_answered
+      ON human_answered.article_id = queue.article_id
+  `
+}
+
+// Narrows a refill read to pairs a human has already answered, so the judge can serve them ahead of
+// the rest of the queue. Summary mode answers whole articles, so every prompt of such an article counts.
+const humanAnsweredJoinByMode: Record<JudgmentJobHumanAnsweredMode, (projectId: string) => string> = {
+  prompt: getHumanAnsweredPromptPairJoin,
+  summary: getHumanAnsweredSummaryArticleJoin,
+}
+
+const getHumanAnsweredPairJoin = (projectId: string, humanAnsweredMode: JudgmentJobHumanAnsweredMode | null) => {
+  return humanAnsweredMode === null ? '' : humanAnsweredJoinByMode[humanAnsweredMode](projectId)
+}
+
+const getUnassessedPairsRouteSuffix = (humanAnsweredMode: JudgmentJobHumanAnsweredMode | null) => {
+  return humanAnsweredMode === null ? 'unassessedPairs' : 'humanAnsweredUnassessedPairs'
+}
+
 const getDatePredicate = (column: string, from: Date | null | undefined, to: Date | null | undefined) => {
   const fromPredicate = from ? `AND ${column} >= TIMESTAMPTZ ${getSqlLiteral(from.toISOString())}` : ''
   const dateOnlyUpperBound = to && getIsUtcMidnight(to) ? getNextUtcDay(to) : null
@@ -356,7 +398,12 @@ const getDatePredicate = (column: string, from: Date | null | undefined, to: Dat
 }
 
 const getJudgmentJobUnassessedPairsFromCurrentProjectTables = async (
-  params: {cursor: UnassessedPairsCursor | null; jobId: string; projectId: string},
+  params: {
+    cursor: UnassessedPairsCursor | null
+    humanAnsweredMode: JudgmentJobHumanAnsweredMode | null
+    jobId: string
+    projectId: string
+  },
   database: AppReadOnlyDatabaseService,
   limit: number,
 ): Promise<UnassessedPairsResult> => {
@@ -491,13 +538,14 @@ const getJudgmentJobUnassessedPairsFromCurrentProjectTables = async (
       queue.priority_bucket AS priorityBucket,
       queue.activity_sort_at AS activitySortAt
     FROM filtered_queue queue
+    ${getHumanAnsweredPairJoin(params.projectId, params.humanAnsweredMode)}
     WHERE TRUE
       ${getCursorPredicate(params.cursor)}
     ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC, queue.prompt_id DESC
     LIMIT ${limit + 1}
   `,
     getJudgmentJobQueueWorkloadContext(
-      `judgmentQueue.${params.jobId}.unassessedPairsCurrentProjectTables`,
+      `judgmentQueue.${params.jobId}.${getUnassessedPairsRouteSuffix(params.humanAnsweredMode)}CurrentProjectTables`,
       params.projectId,
       limit + 1,
       currentProjectTableFallbackTimeoutMs,
@@ -735,22 +783,21 @@ const getJudgeRefillReadDatabaseService = () => {
 
 export const getJudgmentJobUnassessedPairsFromServing = async (params: {
   cursor: UnassessedPairsCursor | null
+  humanAnsweredMode?: JudgmentJobHumanAnsweredMode | null
   jobId: string
   numberOfPromptsToGet: number
   projectId: string
 }): Promise<UnassessedPairsResult> => {
   const limit = Math.max(0, Math.min(5_000, Math.trunc(params.numberOfPromptsToGet)))
+  const humanAnsweredMode = params.humanAnsweredMode ?? null
+  const routeOrJobKey = `judgmentQueue.${params.jobId}.${getUnassessedPairsRouteSuffix(humanAnsweredMode)}`
   const database = getJudgeRefillReadDatabaseService()
-  const scopeResolution = await getActiveServingScopeResolution(
-    params.projectId,
-    `judgmentQueue.${params.jobId}.unassessedPairs`,
-    database,
-  )
+  const scopeResolution = await getActiveServingScopeResolution(params.projectId, routeOrJobKey, database)
   const scope = scopeResolution.scope
 
   if (scope === null || limit === 0) {
     return !scopeResolution.hasServingScopeRows && limit > 0
-      ? getJudgmentJobUnassessedPairsFromCurrentProjectTables(params, database, limit)
+      ? getJudgmentJobUnassessedPairsFromCurrentProjectTables({...params, humanAnsweredMode}, database, limit)
       : {nextCursor: null, promptEntries: []}
   }
 
@@ -799,12 +846,13 @@ export const getJudgmentJobUnassessedPairsFromServing = async (params: {
       queue.priority_bucket AS priorityBucket,
       queue.activity_sort_at AS activitySortAt
     FROM filtered_queue queue
+    ${getHumanAnsweredPairJoin(scope.projectId, humanAnsweredMode)}
     WHERE TRUE
       ${getCursorPredicate(params.cursor)}
     ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC, queue.prompt_id DESC
     LIMIT ${limit + 1}
   `,
-    getJudgmentJobQueueWorkloadContext(`judgmentQueue.${params.jobId}.unassessedPairs`, params.projectId, limit + 1),
+    getJudgmentJobQueueWorkloadContext(routeOrJobKey, params.projectId, limit + 1),
   )
   const limitedRows = rows.slice(0, limit)
   const promptEntries = limitedRows.flatMap<PromptQueueEntry>((row) => {

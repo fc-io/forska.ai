@@ -1,4 +1,5 @@
 import type {SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
+import type {JudgmentJobHumanAnsweredMode} from '../../reviewServing/reviewServingJudgmentJobQueueService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
@@ -23,7 +24,7 @@ import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>[number]
 
 type JobConfig = {
-  humanJudgmentMode: 'prompt' | 'summary'
+  humanJudgmentMode: JudgmentJobHumanAnsweredMode
   modelId: string
   useTitle: boolean
   useAbstract: boolean
@@ -44,8 +45,14 @@ const defaultServingQueueReadTimeoutMs = 15_000
 const servingQueueReadTimeoutCooldownMs = 30_000
 const sqliteReadyRefillLowWatermarkRatio = 0.75
 const sqliteReadyRefillLowWatermarkMinimumTarget = 32
+const humanAnsweredScanMaxWindowsPerTick = 4
+const humanAnsweredScanIdleCooldownMs = 30_000
 let configuredServingQueueReadTimeoutMs = defaultServingQueueReadTimeoutMs
 const servingQueueReadTimeoutCooldownUntilByJobId = new Map<string, number>()
+
+type HumanAnsweredScanState = {cooldownUntil: number; cursor: JobCursor | null; passFilledDeficit: boolean}
+
+const humanAnsweredScanStateByJobId = new Map<string, HumanAnsweredScanState>()
 
 type AddToQueueBucket = {addToQueueMaxBatchSize: number; jobs: Job[]; label: string; readyTargetPerJob: number}
 
@@ -177,16 +184,18 @@ const isServingQueueReadCoolingDown = (jobId: string): boolean => {
 
 const readServingQueuePromptsWithTimeout = async ({
   cursor,
+  humanAnsweredMode = null,
   job,
   requestedWindowSize,
 }: {
   cursor: JobCursor | null
+  humanAnsweredMode?: JudgmentJobHumanAnsweredMode | null
   job: Job
   requestedWindowSize: number
 }): Promise<ServingQueueReadResult> => {
   let timeout: ReturnType<typeof setTimeout> | null = null
   const timedOut = Symbol('servingQueueReadTimedOut')
-  const promptRead = judgmentsJobsCronGetPrompts(job.projectId, job.id, requestedWindowSize, cursor)
+  const promptRead = judgmentsJobsCronGetPrompts(job.projectId, job.id, requestedWindowSize, cursor, humanAnsweredMode)
   const timeoutRead = new Promise<typeof timedOut>((resolve) => {
     timeout = setTimeout(() => {
       resolve(timedOut)
@@ -225,6 +234,7 @@ const readServingQueuePromptsWithTimeout = async ({
     {
       component: addToQueueComponent,
       event: 'servingQueueReadTimedOut',
+      humanAnsweredMode,
       jobId: job.id,
       projectId: job.projectId,
       requested: requestedWindowSize,
@@ -271,6 +281,10 @@ export const setJudgmentsJobsAddToQueueServingReadTimeoutMsForTests = (timeoutMs
 export const resetJudgmentsJobsAddToQueueServingReadTimeoutMsForTests = (): void => {
   configuredServingQueueReadTimeoutMs = defaultServingQueueReadTimeoutMs
   servingQueueReadTimeoutCooldownUntilByJobId.clear()
+}
+
+export const resetJudgmentsJobsAddToQueueHumanAnsweredScanStateForTests = (): void => {
+  humanAnsweredScanStateByJobId.clear()
 }
 
 const getPromptQueueEntryKey = (entry: PromptQueueEntry) => {
@@ -412,7 +426,10 @@ const partitionPromptQueueEntriesByHumanSummaryAnswered = (
 
 const getPrioritizedPromptQueueEntries = async (
   filteredEntries: PromptQueueEntry[],
-  {humanJudgmentMode, projectId}: {humanJudgmentMode: 'prompt' | 'summary' | null | undefined; projectId: string},
+  {
+    humanJudgmentMode,
+    projectId,
+  }: {humanJudgmentMode: JudgmentJobHumanAnsweredMode | null | undefined; projectId: string},
 ) => {
   const resolvedHumanJudgmentMode = humanJudgmentMode ?? 'prompt'
 
@@ -614,6 +631,128 @@ const getInsertedReadyCount = async ({
   return insertedCount
 }
 
+const getHumanAnsweredScanState = (jobId: string): HumanAnsweredScanState => {
+  const existingState = humanAnsweredScanStateByJobId.get(jobId)
+
+  if (existingState) {
+    return existingState
+  }
+
+  const nextState = {cooldownUntil: 0, cursor: null, passFilledDeficit: false}
+  humanAnsweredScanStateByJobId.set(jobId, nextState)
+
+  return nextState
+}
+
+// The serving queue orders pairs by retry bucket and article activity, not by human answers, so the
+// regular cursor scan only reaches human-answered pairs when it happens to pass them. This pass walks
+// only the human-answered unassessed pairs, with its own in-memory cursor, and fills the ready deficit
+// from them before the regular scan runs. A pass that never filled the deficit has queued every
+// human-answered pair it saw, so it cools down instead of rereading from the top.
+const topUpHumanAnsweredPromptsForJob = async ({
+  addToQueueMaxBatchSize,
+  humanJudgmentMode,
+  job,
+  readyDeficit,
+  serverJobId,
+  sqliteService,
+}: {
+  addToQueueMaxBatchSize: number
+  humanJudgmentMode: JudgmentJobHumanAnsweredMode
+  job: Job
+  readyDeficit: number
+  serverJobId: string
+  sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
+}): Promise<number> => {
+  const scanState = getHumanAnsweredScanState(job.id)
+
+  if (readyDeficit <= 0 || scanState.cooldownUntil > Date.now()) {
+    return 0
+  }
+
+  const requestedWindowSize = Math.min(sqliteScanMaxWindowSize, addToQueueMaxBatchSize)
+
+  const scanWindow = async ({
+    insertedCount,
+    windowsLeft,
+  }: {
+    insertedCount: number
+    windowsLeft: number
+  }): Promise<number> => {
+    const remainingDeficit = readyDeficit - insertedCount
+
+    if (remainingDeficit <= 0 || windowsLeft <= 0) {
+      return insertedCount
+    }
+
+    const promptRead = await readServingQueuePromptsWithTimeout({
+      cursor: scanState.cursor,
+      humanAnsweredMode: humanJudgmentMode,
+      job,
+      requestedWindowSize,
+    })
+
+    if (promptRead.timedOut) {
+      return insertedCount
+    }
+
+    const filteredEntries = await filterAlreadyJudged(
+      promptRead.promptData.promptEntries,
+      job.id,
+      job.projectId,
+      remainingDeficit,
+      serverJobId,
+    )
+    const windowInsertedCount =
+      filteredEntries.length === 0
+        ? 0
+        : await sqliteService.addReadyPrompts(job.id, filteredEntries, serverJobId, remainingDeficit)
+    const nextInsertedCount = insertedCount + windowInsertedCount
+
+    scanState.passFilledDeficit = scanState.passFilledDeficit || windowInsertedCount >= remainingDeficit
+
+    if (promptRead.promptData.nextCursor) {
+      scanState.cursor = promptRead.promptData.nextCursor
+
+      return scanWindow({insertedCount: nextInsertedCount, windowsLeft: windowsLeft - 1})
+    }
+
+    const passFilledDeficit = scanState.passFilledDeficit
+
+    scanState.cursor = null
+    scanState.passFilledDeficit = false
+
+    if (!passFilledDeficit) {
+      scanState.cooldownUntil = Date.now() + humanAnsweredScanIdleCooldownMs
+
+      return nextInsertedCount
+    }
+
+    // A filled deficit may have passed over pairs that now sit behind the wrapped cursor; restart at the top.
+    return scanWindow({insertedCount: nextInsertedCount, windowsLeft: windowsLeft - 1})
+  }
+
+  const insertedCount = await scanWindow({insertedCount: 0, windowsLeft: humanAnsweredScanMaxWindowsPerTick})
+
+  if (insertedCount > 0) {
+    addToQueueLogger.log(
+      `judgmentQueue.addToQueue.humanAnsweredTopUp.${job.id}`,
+      '[addToQueue] queued human-answered entries ahead of the regular scan',
+      {
+        component: addToQueueComponent,
+        event: 'humanAnsweredTopUp',
+        humanJudgmentMode,
+        insertedCount,
+        jobId: job.id,
+        projectId: job.projectId,
+        readyDeficit,
+      },
+    )
+  }
+
+  return insertedCount
+}
+
 const hasSqliteExhaustedCooldown = (scanState: {exhaustedAt: Date | null; wrapVisibilityAckSeq: number | null}) => {
   return scanState.exhaustedAt && scanState.wrapVisibilityAckSeq !== null
     ? Date.now() - scanState.exhaustedAt.getTime() < sqliteScanExhaustedCooldownMs
@@ -721,6 +860,18 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     return
   }
 
+  const getNewStartMs = Date.now()
+  const humanAnsweredInsertedCount = await topUpHumanAnsweredPromptsForJob({
+    addToQueueMaxBatchSize,
+    humanJudgmentMode: jobConfig.humanJudgmentMode ?? 'prompt',
+    job,
+    readyDeficit: Math.max(0, readyTargetPerJob - countOfReadyPrompts),
+    serverJobId,
+    sqliteService,
+  })
+  const readyCountBeforeScan =
+    humanAnsweredInsertedCount > 0 ? await sqliteService.getReadyCount(job.id) : countOfReadyPrompts
+
   const baseCursor = scanState.exhaustedAt ? null : scanState.cursor
   const initializeScanState = scanState.exhaustedAt
     ? sqliteService.setScanState(job.id, {
@@ -790,9 +941,10 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       : undefined
   }
 
-  const getNewStartMs = Date.now()
-
-  await scanWindow({cursor: baseCursor, readyCount: countOfReadyPrompts, windowsLeft: sqliteScanMaxWindowsPerTick})
+  // A timed-out human-answered read means DuckDB is stalled; skip the regular read this tick too.
+  await (isServingQueueReadCoolingDown(job.id)
+    ? Promise.resolve()
+    : scanWindow({cursor: baseCursor, readyCount: readyCountBeforeScan, windowsLeft: sqliteScanMaxWindowsPerTick}))
   // Prepare the rows this refill just inserted so they are claimable without DuckDB this tick.
   await prepareReadyPromptsForJob({job, serverJobId, sqliteService})
 
@@ -803,6 +955,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     component: addToQueueComponent,
     event: 'topUp',
     fetchedNeeded: promptsToFetchCount,
+    humanAnsweredInserted: humanAnsweredInsertedCount,
     jobId: job.id,
     ms: getNewMs,
     projectId: job.projectId,
