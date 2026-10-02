@@ -199,6 +199,7 @@ const registerSharedMocks = (
   {
     jobConfigRow = getJobConfigRow(),
     getPromptsImpl,
+    getHumanAnsweredPromptsImpl,
     answeredHumanRows = [],
     answeredHumanSummaryRows = [],
     answeredHumanSummaryTableRows,
@@ -215,6 +216,13 @@ const registerSharedMocks = (
       jobId: string,
       numberOfPromptsToGet: number,
       cursor?: MockCursor | null,
+    ) => Promise<{nextCursor: MockCursor | null; promptEntries: Array<{articleId: string; promptId: string}>}>
+    getHumanAnsweredPromptsImpl?: (
+      projectId: string,
+      jobId: string,
+      numberOfPromptsToGet: number,
+      cursor: MockCursor | null | undefined,
+      humanAnsweredMode: 'prompt' | 'summary',
     ) => Promise<{nextCursor: MockCursor | null; promptEntries: Array<{articleId: string; promptId: string}>}>
     answeredHumanRows?: Array<{articleId: string; promptId: string}>
     answeredHumanSummaryRows?: Array<{articleId: string}>
@@ -279,7 +287,14 @@ const registerSharedMocks = (
         jobId: string,
         numberOfPromptsToGet: number,
         cursor?: MockCursor | null,
+        humanAnsweredMode?: 'prompt' | 'summary' | null,
       ) => {
+        if (humanAnsweredMode) {
+          return getHumanAnsweredPromptsImpl
+            ? getHumanAnsweredPromptsImpl(projectId, jobId, numberOfPromptsToGet, cursor, humanAnsweredMode)
+            : {nextCursor: null, promptEntries: []}
+        }
+
         getPromptsCalls.count += 1
         return getPromptsImpl
           ? getPromptsImpl(projectId, jobId, numberOfPromptsToGet, cursor)
@@ -1553,15 +1568,17 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
         judgmentsAddToQueueMaxBatchSize: 1,
         judgmentsReadyTargetMultiplier: 1,
       },
-      judgmentsJobsCronGetPrompts: async () => {
-        return {
-          nextCursor: null,
-          promptEntries: [
-            {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
-            {articleId: 'article-human-late', promptId: 'prompt-human-late'},
-            {articleId: 'article-rest-second', promptId: 'prompt-rest-second'},
-          ],
-        }
+      judgmentsJobsCronGetPrompts: async (...args: unknown[]) => {
+        return args[4]
+          ? {nextCursor: null, promptEntries: []}
+          : {
+              nextCursor: null,
+              promptEntries: [
+                {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
+                {articleId: 'article-human-late', promptId: 'prompt-human-late'},
+                {articleId: 'article-rest-second', promptId: 'prompt-rest-second'},
+              ],
+            }
       },
       judgmentsJobsGetRunningJobs: async () => {
         return [{id: jobId, modelProvider: 'openai', projectId}]
@@ -1662,15 +1679,17 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
         judgmentsAddToQueueMaxBatchSize: 1,
         judgmentsReadyTargetMultiplier: 1,
       },
-      judgmentsJobsCronGetPrompts: async () => {
-        return {
-          nextCursor: null,
-          promptEntries: [
-            {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
-            {articleId: summaryArticleId, promptId: summaryPromptId},
-            {articleId: 'article-rest-second', promptId: 'prompt-rest-second'},
-          ],
-        }
+      judgmentsJobsCronGetPrompts: async (...args: unknown[]) => {
+        return args[4]
+          ? {nextCursor: null, promptEntries: []}
+          : {
+              nextCursor: null,
+              promptEntries: [
+                {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
+                {articleId: summaryArticleId, promptId: summaryPromptId},
+                {articleId: 'article-rest-second', promptId: 'prompt-rest-second'},
+              ],
+            }
       },
       judgmentsJobsGetRunningJobs: async () => {
         return [{id: jobId, modelProvider: 'openai', projectId}]
@@ -2005,6 +2024,237 @@ test('treats null human judgment mode as prompt mode', async () => {
   ])
 })
 
+type PromptEntry = {articleId: string; promptId: string}
+
+// Mirrors SQLite ready semantics: INSERT OR IGNORE per pair, capped by the deficit, with a ready count
+// the test can drain between ticks to simulate the judge claiming rows.
+const getQueueingSqliteService = () => {
+  const queuedKeys = new Set<string>()
+  const state = {addReadyPromptsCalls: [] as Array<{entries: PromptEntry[]; readyDeficit: number}>, readyCount: 0}
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (_jobId, entries, _serverJobId, readyDeficit) => {
+      state.addReadyPromptsCalls.push({entries, readyDeficit})
+
+      const insertedCount = entries.reduce((count, entry) => {
+        const key = `${entry.articleId}:${entry.promptId}`
+
+        if (count >= readyDeficit || queuedKeys.has(key)) {
+          return count
+        }
+
+        queuedKeys.add(key)
+        return count + 1
+      }, 0)
+
+      state.readyCount += insertedCount
+      return insertedCount
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries.filter((entry) => {
+        return !queuedKeys.has(`${entry.articleId}:${entry.promptId}`)
+      })
+    },
+    getReadyCount: async () => {
+      return state.readyCount
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  return {sqliteService, state}
+}
+
+test('queues human-answered serving pairs before reading the regular scan window', async () => {
+  const getPromptsCalls = {count: 0}
+  const humanAnsweredReads: Array<{cursor: MockCursor | null | undefined; humanAnsweredMode: string}> = []
+  const {sqliteService, state} = getQueueingSqliteService()
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getHumanAnsweredPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, cursor, humanAnsweredMode) => {
+      humanAnsweredReads.push({cursor, humanAnsweredMode})
+      return {nextCursor: null, promptEntries: [{articleId: 'article-human-far', promptId: 'prompt-1'}]}
+    },
+    getPromptsImpl: async () => {
+      return {nextCursor: null, promptEntries: [{articleId: 'article-rest', promptId: 'prompt-0'}]}
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?human-answered-pre-pass=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  module.resetJudgmentsJobsAddToQueueHumanAnsweredScanStateForTests()
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(humanAnsweredReads).toEqual([{cursor: null, humanAnsweredMode: 'prompt'}])
+  expect(state.addReadyPromptsCalls).toEqual([
+    {entries: [{articleId: 'article-human-far', promptId: 'prompt-1'}], readyDeficit: 1},
+  ])
+  expect(getPromptsCalls.count).toBe(0)
+})
+
+test('fills the rest of the ready deficit from the regular scan once human-answered pairs run out', async () => {
+  const getPromptsCalls = {count: 0}
+  const {sqliteService, state} = getQueueingSqliteService()
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getHumanAnsweredPromptsImpl: async () => {
+      return {nextCursor: null, promptEntries: [{articleId: 'article-human', promptId: 'prompt-1'}]}
+    },
+    getPromptsImpl: async () => {
+      return {
+        nextCursor: null,
+        promptEntries: [
+          {articleId: 'article-human', promptId: 'prompt-1'},
+          {articleId: 'article-rest', promptId: 'prompt-0'},
+        ],
+      }
+    },
+    inferenceConfig: {codexMaxInflight: 1, judgmentsAddToQueueMaxBatchSize: 100, judgmentsReadyTargetMultiplier: 1},
+    runningJobs: [getRunningJob({providerLimit: 1})],
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?human-answered-then-regular=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  module.resetJudgmentsJobsAddToQueueHumanAnsweredScanStateForTests()
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(state.addReadyPromptsCalls).toEqual([
+    {entries: [{articleId: 'article-human', promptId: 'prompt-1'}], readyDeficit: 10},
+    {
+      entries: [
+        {articleId: 'article-human', promptId: 'prompt-1'},
+        {articleId: 'article-rest', promptId: 'prompt-0'},
+      ],
+      readyDeficit: 9,
+    },
+  ])
+  expect(state.readyCount).toBe(2)
+})
+
+test('walks the human-answered cursor across ticks and cools down once a pass leaves the deficit unfilled', async () => {
+  const getPromptsCalls = {count: 0}
+  const humanCursor = {
+    lastArticleId: 'article-human-1',
+    lastDate: new Date('2026-09-20T10:00:00.000Z'),
+    priorityBucket: 0,
+  }
+  const humanAnsweredCursors: Array<MockCursor | null | undefined> = []
+  const {sqliteService, state} = getQueueingSqliteService()
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getHumanAnsweredPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, cursor) => {
+      humanAnsweredCursors.push(cursor)
+      return cursor
+        ? {nextCursor: null, promptEntries: []}
+        : {nextCursor: humanCursor, promptEntries: [{articleId: 'article-human-1', promptId: 'prompt-1'}]}
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?human-answered-cursor=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  module.resetJudgmentsJobsAddToQueueHumanAnsweredScanStateForTests()
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(humanAnsweredCursors).toEqual([null])
+  expect(getPromptsCalls.count).toBe(0)
+
+  state.readyCount = 0
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  // Tick 1 filled the deficit, so the wrap rereads the top; everything there is queued, so it cools down.
+  expect(humanAnsweredCursors).toEqual([null, humanCursor, null, humanCursor])
+  expect(getPromptsCalls.count).toBe(1)
+
+  state.readyCount = 0
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(humanAnsweredCursors).toHaveLength(4)
+  expect(getPromptsCalls.count).toBe(2)
+})
+
+test('reads human-answered summary articles for summary-mode projects', async () => {
+  const getPromptsCalls = {count: 0}
+  const humanAnsweredModes: string[] = []
+  const {sqliteService} = getQueueingSqliteService()
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getHumanAnsweredPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, _cursor, humanAnsweredMode) => {
+      humanAnsweredModes.push(humanAnsweredMode)
+      return {nextCursor: null, promptEntries: []}
+    },
+    jobConfigRow: {...getJobConfigRow(), humanJudgmentMode: 'summary'},
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?human-answered-summary=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  module.resetJudgmentsJobsAddToQueueHumanAnsweredScanStateForTests()
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(humanAnsweredModes).toEqual(['summary'])
+  expect(getPromptsCalls.count).toBe(1)
+})
+
+test('skips the regular scan read when the human-answered read times out', async () => {
+  const getPromptsCalls = {count: 0}
+  const {sqliteService, state} = getQueueingSqliteService()
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getHumanAnsweredPromptsImpl: async () => {
+      return new Promise<{nextCursor: MockCursor | null; promptEntries: PromptEntry[]}>(() => {
+        return undefined
+      })
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?human-answered-timeout=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  module.resetJudgmentsJobsAddToQueueHumanAnsweredScanStateForTests()
+
+  module.setJudgmentsJobsAddToQueueServingReadTimeoutMsForTests(1)
+
+  try {
+    await module.judgmentsJobsAddToQueue('server-1')
+  } finally {
+    module.resetJudgmentsJobsAddToQueueServingReadTimeoutMsForTests()
+  }
+
+  expect(getPromptsCalls.count).toBe(0)
+  expect(state.addReadyPromptsCalls).toEqual([])
+})
+
 test('queue reuse skips unchanged scoped clone judgments and keeps changed settings queued', async () => {
   if (!queryDatabase || !runDatabase) {
     throw new Error('Test database not initialized')
@@ -2130,17 +2380,19 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
         judgmentsReadyTargetMultiplier: 1,
       },
       JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
-      judgmentsJobsCronGetPrompts: async () => {
-        return {
-          nextCursor: null,
-          promptEntries: [
-            {articleId: unchangedArticleId, promptId},
-            {articleId: changedModelArticleId, promptId},
-            {articleId: changedFulltextArticleId, promptId},
-            {articleId: changedVariantArticleId, promptId},
-            {articleId: changedMetadataArticleId, promptId},
-          ],
-        }
+      judgmentsJobsCronGetPrompts: async (...args: unknown[]) => {
+        return args[4]
+          ? {nextCursor: null, promptEntries: []}
+          : {
+              nextCursor: null,
+              promptEntries: [
+                {articleId: unchangedArticleId, promptId},
+                {articleId: changedModelArticleId, promptId},
+                {articleId: changedFulltextArticleId, promptId},
+                {articleId: changedVariantArticleId, promptId},
+                {articleId: changedMetadataArticleId, promptId},
+              ],
+            }
       },
       judgmentsJobsGetRunningJobs: async () => {
         return [{id: jobId, maxInflightRequests: null, modelProvider: 'openai', projectId, providerConnectionId: null}]
@@ -2277,8 +2529,10 @@ test('queue reuse keeps cloned prompt edits queued when source judgments stay on
         judgmentsReadyTargetMultiplier: 1,
       },
       JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
-      judgmentsJobsCronGetPrompts: async () => {
-        return {nextCursor: null, promptEntries: [{articleId, promptId: editedClonePromptId}]}
+      judgmentsJobsCronGetPrompts: async (...args: unknown[]) => {
+        return args[4]
+          ? {nextCursor: null, promptEntries: []}
+          : {nextCursor: null, promptEntries: [{articleId, promptId: editedClonePromptId}]}
       },
       judgmentsJobsGetRunningJobs: async () => {
         return [
@@ -2411,14 +2665,16 @@ test('queue reuse does not skip matching judgments outside the target project sc
         judgmentsReadyTargetMultiplier: 1,
       },
       JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
-      judgmentsJobsCronGetPrompts: async () => {
-        return {
-          nextCursor: null,
-          promptEntries: [
-            {articleId: scopedArticleId, promptId},
-            {articleId: outOfScopeArticleId, promptId},
-          ],
-        }
+      judgmentsJobsCronGetPrompts: async (...args: unknown[]) => {
+        return args[4]
+          ? {nextCursor: null, promptEntries: []}
+          : {
+              nextCursor: null,
+              promptEntries: [
+                {articleId: scopedArticleId, promptId},
+                {articleId: outOfScopeArticleId, promptId},
+              ],
+            }
       },
       judgmentsJobsGetRunningJobs: async () => {
         return [{id: jobId, maxInflightRequests: null, modelProvider: 'openai', projectId, providerConnectionId: null}]
