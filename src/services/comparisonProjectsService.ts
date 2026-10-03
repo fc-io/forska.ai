@@ -894,6 +894,17 @@ export const fetchComparisonProjectStats = async (comparisonProjectId: string) =
   return getResponseData<ComparisonProjectStats>(response, 'Failed to fetch comparison project stats')
 }
 
+const comparisonProjectServingRefetchIntervals: Partial<Record<ComparisonProjectServingStatus, number>> = {
+  refreshing: 5000,
+  stale: 15_000,
+}
+
+export const getComparisonProjectServingRefetchInterval = (
+  servingStatus: ComparisonProjectServingStatus | undefined,
+) => {
+  return servingStatus === undefined ? false : (comparisonProjectServingRefetchIntervals[servingStatus] ?? false)
+}
+
 export const getComparisonProjectConflictResolutionExportRequestPath = (comparisonProjectId: string) => {
   return `/api/comparison-projects/${encodeURIComponent(comparisonProjectId)}/conflict-resolutions/export`
 }

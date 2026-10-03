@@ -191,6 +191,7 @@ const getComparisonProjectServingStatusRowResetSql = (comparisonProjectId: strin
       serving_completed_at = NULL,
       serving_failed_at = NULL,
       serving_error = NULL,
+      serving_invalidated_at = NULL,
       serving_phase = NULL,
       serving_phase_started_at = NULL,
       serving_last_progressed_at = NULL,
