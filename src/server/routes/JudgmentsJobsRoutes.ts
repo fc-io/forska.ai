@@ -11,6 +11,7 @@ import {
   type CronRuntimeTickState,
   getCronRuntimeDiagnostics,
 } from '../cron/cronRuntimeState.ts'
+import {parseConnectionFailureMessage} from '../cron/judgmentsJobs/connectionHealth.ts'
 import type {OwnerBackedJudgmentJobInfo} from '../cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {
   isJudgeWorkerPausedAfterArmedTestClaim,
@@ -93,6 +94,19 @@ import {
   retryPendingJudgmentJobSqliteDeletes,
 } from '../services/judgmentJobDeleteService.ts'
 import {
+  getJudgmentJobProviderClaimGate,
+  getJudgmentJobProviderHealth,
+  getJudgmentJobProviderHealthMap,
+  getProviderFailureRetryDelayMs,
+  isJudgmentJobProviderHealthActive,
+  type JudgmentJobProviderHealth,
+  type JudgmentJobProviderHealthApi,
+  markJudgmentJobProviderProbeClaimed,
+  recordJudgmentJobProviderFailure,
+  recordJudgmentJobProviderSuccess,
+  toJudgmentJobProviderHealthApi,
+} from '../services/judgmentJobProviderHealthService.ts'
+import {
   getJudgmentJobSqliteHealthProjectionService,
   type JudgmentJobSqliteHealthProjectionReader,
   type JudgmentJobSqliteHealthProjectionRecord,
@@ -108,6 +122,7 @@ import {
   getDuckdbOwnerConnectionsOverview,
 } from '../utils/duckdbOwnerConnections.ts'
 import {HttpError} from '../utils/httpError.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
 import {
@@ -157,9 +172,12 @@ type JudgmentJobHealthBadge =
   | 'Large WAL'
   | 'Offline Repair'
   | 'Orphaned Local Queue'
+  | 'Provider Failing'
   | 'Quarantined'
   | 'Retained Outbox'
   | 'Stale Import'
+type ProviderFailureDetail = {failureCode: string | null; message: string | null}
+type ProviderClaimGate = Awaited<ReturnType<typeof getJudgmentJobProviderClaimGate>>
 type OwnerBackedRuntimeResolution = Pick<
   OwnerBackedJudgmentJobInfo,
   'resolvedRuntime' | 'runtimeMatchReason' | 'runtimeMatchStatus' | 'runtimeResolutionMode'
@@ -370,6 +388,10 @@ const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
 const ownerBackedClaimRecoveryCheckedAt = new Map<string, number>()
+const providerHealthLogWindowMs = 60_000
+const providerHealthLogger = createRateLimitedLogger({sink: 'both', windowMs: providerHealthLogWindowMs})
+const providerClaimGateLoggedAt = new Map<string, number>()
+const openProviderClaimGate: ProviderClaimGate = {backoffUntil: null, claimsAllowed: true, maxClaims: null}
 const systemSqliteFallbackStepsSchema = t.Array(
   t.Union([t.Literal('checkpoint'), t.Literal('diagnostic'), t.Literal('export')]),
 )
@@ -812,20 +834,110 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
   }
 }
 
+const getOwnerProviderClaimGate = async (jobId: string): Promise<ProviderClaimGate> => {
+  return getJudgmentJobProviderClaimGate(jobId).catch((error: unknown) => {
+    providerHealthLogger.warn(
+      `judgmentsJobs.providerHealth.claimGateFailed.${jobId}`,
+      '[judgmentsJobs] provider claim gate lookup failed, claims allowed',
+      {
+        component: 'JudgmentsJobsRoutes',
+        error: error instanceof Error ? error.message : String(error),
+        event: 'providerClaimGateFailed',
+        jobId,
+      },
+    )
+    return openProviderClaimGate
+  })
+}
+
+const getProviderGatedClaimLimit = (limit: number, providerClaimGate: ProviderClaimGate): number => {
+  return providerClaimGate.maxClaims === null ? limit : Math.min(limit, providerClaimGate.maxClaims)
+}
+
+const markOwnerProviderProbeClaimed = ({
+  claimedCount,
+  jobId,
+  providerClaimGate,
+}: {
+  claimedCount: number
+  jobId: string
+  providerClaimGate: ProviderClaimGate
+}): void => {
+  if (providerClaimGate.maxClaims === null || claimedCount === 0) {
+    return undefined
+  }
+
+  try {
+    markJudgmentJobProviderProbeClaimed(jobId)
+  } catch (error) {
+    providerHealthLogger.warn(
+      `judgmentsJobs.providerHealth.probeClaimMarkFailed.${jobId}`,
+      '[judgmentsJobs] provider probe claim could not be recorded',
+      {
+        component: 'JudgmentsJobsRoutes',
+        error: error instanceof Error ? error.message : String(error),
+        event: 'providerProbeClaimMarkFailed',
+        jobId,
+      },
+    )
+  }
+}
+
+const shouldLogProviderClaimGate = (jobId: string): boolean => {
+  const now = Date.now()
+  const shouldLog = now - (providerClaimGateLoggedAt.get(jobId) ?? 0) >= providerHealthLogWindowMs
+
+  if (shouldLog) {
+    providerClaimGateLoggedAt.set(jobId, now)
+  }
+
+  return shouldLog
+}
+
+const logProviderClaimGate = async (jobId: string, providerClaimGate: ProviderClaimGate): Promise<void> => {
+  if (!shouldLogProviderClaimGate(jobId)) {
+    return undefined
+  }
+
+  const providerHealth = await getJudgmentJobProviderHealth(jobId).catch(() => {
+    return null
+  })
+
+  providerHealthLogger.log(
+    `judgmentsJobs.providerHealth.claimGated.${jobId}`,
+    '[judgmentsJobs] claims held back while the LLM provider is failing',
+    {
+      backoffUntil: providerClaimGate.backoffUntil?.toISOString() ?? null,
+      component: 'JudgmentsJobsRoutes',
+      consecutiveFailureCount: providerHealth?.consecutiveFailureCount ?? null,
+      event: 'providerClaimGated',
+      failureKind: providerHealth?.failureKind ?? null,
+      jobId,
+    },
+  )
+}
+
 const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {
   const claimedBy = body?.claimedBy ?? judgmentJobServerId
   if (isJudgeWorkerPausedAfterArmedTestClaim({claimedBy})) {
     return {data: {claims: []}, error: null}
   }
   await runOwnerBackedClaimRecovery({claimedBy, jobId, protectedRecordIds: body?.protectedRecordIds})
+  const providerClaimGate = await getOwnerProviderClaimGate(jobId)
+
+  if (!providerClaimGate.claimsAllowed) {
+    void logProviderClaimGate(jobId, providerClaimGate)
+    return {data: {claims: []}, error: null}
+  }
 
   try {
     const claims = await getJudgmentJobSqliteService().claimReadyPrompts(
       jobId,
       claimedBy,
-      getNormalizedClaimLimit(body?.limit ?? 1),
+      getProviderGatedClaimLimit(getNormalizedClaimLimit(body?.limit ?? 1), providerClaimGate),
     )
     pauseJudgeWorkerAfterArmedTestClaim({claimedBy, claimedCount: claims.length})
+    markOwnerProviderProbeClaimed({claimedCount: claims.length, jobId, providerClaimGate})
 
     return {data: {claims: getOwnerBackedClaimResponse(claims)}, error: null}
   } catch (error) {
@@ -958,6 +1070,90 @@ const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCom
   }
 }
 
+const getNonEmptyString = (value: unknown): string | null => {
+  return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+const getProviderDiagnosticsMessage = (detail: FailedRequestDetailRecord): string | null => {
+  const providerDiagnostics = detail.providerDiagnostics
+
+  return providerDiagnostics && typeof providerDiagnostics === 'object' && !Array.isArray(providerDiagnostics)
+    ? getNonEmptyString((providerDiagnostics as Record<string, unknown>).message)
+    : null
+}
+
+const getProviderFailureDetails = (detail: FailedRequestDetailRecord): ProviderFailureDetail[] => {
+  const failureCode = getNonEmptyString(detail.failureCode)
+  const error = getNonEmptyString(detail.error)
+
+  return failureCode || error ? [{failureCode, message: getProviderDiagnosticsMessage(detail) ?? error}] : []
+}
+
+const getLastProviderFailureDetail = (body: JudgmentCompletionBody): ProviderFailureDetail | null => {
+  const failureDetails = getFailedRequestDetailRecords(body.tokenUse?.failedRequestsDetails ?? []).flatMap((detail) => {
+    return getProviderFailureDetails(detail)
+  })
+
+  return failureDetails.at(-1) ?? null
+}
+
+const getCompletionConnectionFailure = (message: string | null) => {
+  return message ? parseConnectionFailureMessage(message.replace(/^Connection error:\s*/, '')) : null
+}
+
+const logProviderHealthWriteFailure = (jobId: string, error: unknown): null => {
+  providerHealthLogger.warn(
+    `judgmentsJobs.providerHealth.writeFailed.${jobId}`,
+    '[judgmentsJobs] provider health write failed',
+    {
+      component: 'JudgmentsJobsRoutes',
+      error: error instanceof Error ? error.message : String(error),
+      event: 'providerHealthWriteFailed',
+      jobId,
+    },
+  )
+
+  return null
+}
+
+const recordCompletionProviderFailure = async (
+  jobId: string,
+  body: JudgmentCompletionBody,
+): Promise<JudgmentJobProviderHealth | null> => {
+  const failureDetail = getLastProviderFailureDetail(body)
+  const connectionFailure = getCompletionConnectionFailure(failureDetail?.message ?? null)
+
+  return failureDetail && connectionFailure?.kind !== 'circuit_open'
+    ? recordJudgmentJobProviderFailure({
+        connectionFailureKind: connectionFailure?.kind ?? null,
+        failureCode: failureDetail.failureCode,
+        jobId,
+        message: failureDetail.message,
+        modelId: body.modelId,
+        statusCode: connectionFailure?.statusCode ?? null,
+      }).catch((error: unknown) => {
+        return logProviderHealthWriteFailure(jobId, error)
+      })
+    : null
+}
+
+const recordCompletionProviderSuccess = async (jobId: string): Promise<void> => {
+  await recordJudgmentJobProviderSuccess({jobId}).catch((error: unknown) => {
+    return logProviderHealthWriteFailure(jobId, error)
+  })
+}
+
+const getProviderHealthRetryAfterMs = (providerHealth: JudgmentJobProviderHealth | null): number | null => {
+  return providerHealth ? getProviderFailureRetryDelayMs(providerHealth) : null
+}
+
+const getCompletionRetryAfterMs = (
+  body: JudgmentCompletionBody,
+  providerHealth: JudgmentJobProviderHealth | null,
+): number | null => {
+  return body.retryAfterMs ?? getProviderHealthRetryAfterMs(providerHealth)
+}
+
 const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletionBody) => {
   if (body.jobId !== jobId) {
     throw new HttpError(409, 'jobId mismatch for judgment completion')
@@ -983,13 +1179,20 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
   const completionAckRequestAttemptsJson = getCompletionRequestAttemptsJson(body, 'completion_ack', tokenUseId)
 
   if (body.status === 'retry') {
-    await getJudgmentJobSqliteService().markPromptAsRetry(jobId, body.queueRecordId, body.retryAfterMs ?? null, {
-      claimId: body.claimId,
-      queuePromptId: body.queueRecordId,
-      status: 'retry',
-      requestAttemptsJson: completionAckRequestAttemptsJson,
-      tokenUseId,
-    })
+    const providerHealth = await recordCompletionProviderFailure(jobId, body)
+
+    await getJudgmentJobSqliteService().markPromptAsRetry(
+      jobId,
+      body.queueRecordId,
+      getCompletionRetryAfterMs(body, providerHealth),
+      {
+        claimId: body.claimId,
+        queuePromptId: body.queueRecordId,
+        status: 'retry',
+        requestAttemptsJson: completionAckRequestAttemptsJson,
+        tokenUseId,
+      },
+    )
     await enqueueCompletionTokenUse(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}, error: null}
   }
@@ -1019,6 +1222,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
       requestAttemptsJson: completionAckRequestAttemptsJson,
       tokenUseId,
     })
+    await recordCompletionProviderFailure(jobId, body)
     await enqueueCompletionTokenUse(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'failed'}, error: null}
   }
@@ -1071,6 +1275,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
 
     throw error
   }
+  await recordCompletionProviderSuccess(jobId)
   await enqueueCompletionTokenUse(body)
 
   return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}, error: null}
@@ -1711,11 +1916,53 @@ const getStoragePolicy = ({
   }
 }
 
+const logProviderHealthReadFailure = (error: unknown) => {
+  providerHealthLogger.warn('judgmentsJobs.providerHealth.readFailed', '[judgmentsJobs] provider health read failed', {
+    component: 'JudgmentsJobsRoutes',
+    error: error instanceof Error ? error.message : String(error),
+    event: 'providerHealthReadFailed',
+  })
+}
+
+const getProviderHealthMapForReadableRoute = async ({
+  db,
+  jobIds,
+}: {
+  db: JudgmentJobMutationQueryRunner
+  jobIds: string[]
+}): Promise<Map<string, JudgmentJobProviderHealth>> => {
+  return getJudgmentJobProviderHealthMap(jobIds, {database: db}).catch((error: unknown) => {
+    logProviderHealthReadFailure(error)
+    return new Map<string, JudgmentJobProviderHealth>()
+  })
+}
+
+const getProviderHealthForReadableRoute = async ({
+  db,
+  jobId,
+}: {
+  db: JudgmentJobMutationQueryRunner
+  jobId: string
+}): Promise<JudgmentJobProviderHealth | null> => {
+  return getJudgmentJobProviderHealth(jobId, {database: db}).catch((error: unknown) => {
+    logProviderHealthReadFailure(error)
+    return null
+  })
+}
+
+const getProviderHealthApi = (
+  providerHealth: JudgmentJobProviderHealth | null | undefined,
+): JudgmentJobProviderHealthApi | null => {
+  return providerHealth ? toJudgmentJobProviderHealthApi(providerHealth) : null
+}
+
 const getJobHealthBadges = ({
   job,
+  providerHealth,
   sqliteHealth,
 }: {
   job: {status: string; storageState: string; lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}
+  providerHealth: JudgmentJobProviderHealth | null
   sqliteHealth: JudgmentJobSqliteHealthSnapshot
 }): JudgmentJobHealthBadge[] => {
   const badges: JudgmentJobHealthBadge[] = []
@@ -1723,6 +1970,10 @@ const getJobHealthBadges = ({
 
   if (storagePolicy.repairMode === 'offline_repair_required') {
     badges.push('Offline Repair')
+  }
+
+  if (providerHealth && isJudgmentJobProviderHealthActive(providerHealth)) {
+    badges.push('Provider Failing')
   }
 
   if (job.storageState === 'quarantined') {
@@ -2773,12 +3024,14 @@ export const judgmentsJobsRoutes = new Elysia()
           const currentNow = new Date()
           const {job, projectModelId} = await getJobContext({db, jobId: params.id})
           const workIdentity = getJudgmentJobWorkIdentity({job, modelId: projectModelId})
-          const [sqliteHealth, importConsumer, importWorkLeasesByJobId, endpointHealth] = await Promise.all([
-            getSqliteHealthForReadableRoute({db, job, jobId: job.id}),
-            getJudgmentImportConsumerAvailability(),
-            getJudgmentImportWorkLeasesByJobId({db, jobIds: [job.id], now: currentNow}),
-            getJudgmentJobEndpointHealth({db, modelId: projectModelId}),
-          ])
+          const [sqliteHealth, importConsumer, importWorkLeasesByJobId, endpointHealth, providerHealth] =
+            await Promise.all([
+              getSqliteHealthForReadableRoute({db, job, jobId: job.id}),
+              getJudgmentImportConsumerAvailability(),
+              getJudgmentImportWorkLeasesByJobId({db, jobIds: [job.id], now: currentNow}),
+              getJudgmentJobEndpointHealth({db, modelId: projectModelId}),
+              getProviderHealthForReadableRoute({db, jobId: job.id}),
+            ])
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recommendedNextAction = getRecommendedHealthAction({job, sqliteHealth})
           const controlPlane = getJudgmentJobControlPlaneDiagnostics()
@@ -2801,6 +3054,7 @@ export const judgmentsJobsRoutes = new Elysia()
             recommendedNextAction,
             endpointAvailability: endpointHealth.diagnostics,
             providerDiagnostics: endpointHealth.providerDiagnostics,
+            providerHealth: getProviderHealthApi(providerHealth),
             controlPlane,
             importMetadata: {
               importFailureCount: job.importFailureCount,
@@ -2946,6 +3200,7 @@ export const judgmentsJobsRoutes = new Elysia()
             failedRequestSummary,
             judgingRuntime,
             providerConnection,
+            providerHealth,
           ] = await Promise.all([
             sqliteHealthPromise,
             leaseMetadataPromise,
@@ -2966,6 +3221,7 @@ export const judgmentsJobsRoutes = new Elysia()
             failedRequestSummaryPromise,
             judgingRuntimePromise,
             providerConnectionPromise,
+            getProviderHealthForReadableRoute({db, jobId: job.id}),
           ])
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
@@ -3012,6 +3268,7 @@ export const judgmentsJobsRoutes = new Elysia()
             ...job,
             leaseMetadata,
             promptStats,
+            providerHealth: getProviderHealthApi(providerHealth),
             storagePolicy,
             storageHealth,
             judgingRuntime,
@@ -3187,7 +3444,15 @@ export const judgmentsJobsRoutes = new Elysia()
         WHERE p.archived = FALSE
         ORDER BY jj.created_at ASC
       `)
-        const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({db, jobs})
+        const [sqliteHealthByJobId, providerHealthByJobId] = await Promise.all([
+          getSqliteHealthMapForReadableRoute({db, jobs}),
+          getProviderHealthMapForReadableRoute({
+            db,
+            jobIds: jobs.map((job) => {
+              return job.id
+            }),
+          }),
+        ])
         const jobsWithHealth = jobs.map((job) => {
           const normalizedJob = {
             ...job,
@@ -3209,9 +3474,14 @@ export const judgmentsJobsRoutes = new Elysia()
             )
           }
 
-          const badges = getJobHealthBadges({job: normalizedJob, sqliteHealth})
+          const providerHealth = providerHealthByJobId.get(job.id) ?? null
+          const badges = getJobHealthBadges({job: normalizedJob, providerHealth, sqliteHealth})
 
-          return {...normalizedJob, health: {badges, isHealthy: badges.length === 1 && badges[0] === 'Healthy'}}
+          return {
+            ...normalizedJob,
+            health: {badges, isHealthy: badges.length === 1 && badges[0] === 'Healthy'},
+            providerHealth: getProviderHealthApi(providerHealth),
+          }
         })
 
         return {data: jobsWithHealth, error: null}
@@ -3275,9 +3545,10 @@ export const judgmentsJobsRoutes = new Elysia()
           return job.id
         })
         const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({db, jobs})
-        const [importConsumer, importWorkLeasesByJobId] = await Promise.all([
+        const [importConsumer, importWorkLeasesByJobId, providerHealthByJobId] = await Promise.all([
           getJudgmentImportConsumerAvailability(),
           getJudgmentImportWorkLeasesByJobId({db, jobIds, now: currentNow}),
+          getProviderHealthMapForReadableRoute({db, jobIds}),
         ])
         const jobsWithHealth = await Promise.all(
           jobs.map(async (job) => {
@@ -3346,6 +3617,7 @@ export const judgmentsJobsRoutes = new Elysia()
               job: normalizedJob,
               jobId: job.id,
               providerDiagnostics,
+              providerHealth: getProviderHealthApi(providerHealthByJobId.get(job.id)),
               sqliteHealth,
             }
           },

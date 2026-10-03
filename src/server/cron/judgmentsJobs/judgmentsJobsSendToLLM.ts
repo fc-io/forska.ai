@@ -1,3 +1,8 @@
+import {
+  getJudgmentJobProviderClaimGate,
+  getJudgmentJobProviderHealth,
+  markJudgmentJobProviderProbeClaimed,
+} from '../../services/judgmentJobProviderHealthService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getEndpointAvailabilityKey} from './endpointAvailabilityKey.ts'
@@ -70,9 +75,15 @@ type DispatchAvailability =
   | {dispatchMode: 'full'; status: 'healthy'}
   | {dispatchMode: 'probe'; status: 'cooldown'}
   | {dispatchMode: 'skip'; status: 'cooldown' | 'misconfigured' | 'probing'}
+type ProviderClaimGate = Awaited<ReturnType<typeof getJudgmentJobProviderClaimGate>>
+type PromptClaimRequestResult = {fetched: number; requested: number}
 
 const schedulerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const schedulerFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const providerClaimGateLogWindowMs = 60_000
+const providerClaimGateLogger = createRateLimitedLogger({sink: 'both', windowMs: providerClaimGateLogWindowMs})
+const providerClaimGateLoggedAt = new Map<string, number>()
+const openProviderClaimGate: ProviderClaimGate = {backoffUntil: null, claimsAllowed: true, maxClaims: null}
 const sendToLLMComponent = 'judgmentsJobsSendToLLM'
 const initialPromptClaimDispatchChunkSize = 16
 const promptClaimDispatchChunkSize = 64
@@ -630,6 +641,141 @@ const claimAndEnqueuePromptChunks = async ({
   }
 }
 
+const getLocalProviderClaimGate = async (jobId: string): Promise<ProviderClaimGate> => {
+  return shouldUseJudgeWorkerOwnerHandoff()
+    ? openProviderClaimGate
+    : getJudgmentJobProviderClaimGate(jobId).catch((error: unknown) => {
+        providerClaimGateLogger.warn(
+          `judgmentsJobs.providerHealth.claimGateFailed.${jobId}`,
+          '[capacity] provider claim gate lookup failed, claims allowed',
+          {
+            component: sendToLLMComponent,
+            error: error instanceof Error ? error.message : String(error),
+            event: 'providerClaimGateFailed',
+            jobId,
+          },
+        )
+        return openProviderClaimGate
+      })
+}
+
+const shouldLogProviderClaimGate = (jobId: string): boolean => {
+  const now = Date.now()
+  const shouldLog = now - (providerClaimGateLoggedAt.get(jobId) ?? 0) >= providerClaimGateLogWindowMs
+
+  if (shouldLog) {
+    providerClaimGateLoggedAt.set(jobId, now)
+  }
+
+  return shouldLog
+}
+
+const logProviderClaimGate = async (jobId: string, providerClaimGate: ProviderClaimGate): Promise<void> => {
+  if (!shouldLogProviderClaimGate(jobId)) {
+    return undefined
+  }
+
+  const providerHealth = await getJudgmentJobProviderHealth(jobId).catch(() => {
+    return null
+  })
+
+  providerClaimGateLogger.log(
+    `judgmentsJobs.providerHealth.claimGated.${jobId}`,
+    '[capacity] claims held back while the LLM provider is failing',
+    {
+      backoffUntil: providerClaimGate.backoffUntil?.toISOString() ?? null,
+      component: sendToLLMComponent,
+      consecutiveFailureCount: providerHealth?.consecutiveFailureCount ?? null,
+      event: 'providerClaimGated',
+      failureKind: providerHealth?.failureKind ?? null,
+      jobId,
+    },
+  )
+}
+
+const getProviderGatedLimit = (limit: number, providerClaimGate: ProviderClaimGate): number => {
+  const maxClaims = providerClaimGate.claimsAllowed ? providerClaimGate.maxClaims : 0
+
+  return maxClaims === null ? limit : Math.min(limit, maxClaims)
+}
+
+const markLocalProviderProbeClaimed = ({
+  claimedCount,
+  jobId,
+  providerClaimGate,
+}: {
+  claimedCount: number
+  jobId: string
+  providerClaimGate: ProviderClaimGate
+}): void => {
+  if (providerClaimGate.maxClaims === null || claimedCount === 0) {
+    return undefined
+  }
+
+  try {
+    markJudgmentJobProviderProbeClaimed(jobId)
+  } catch (error) {
+    providerClaimGateLogger.warn(
+      `judgmentsJobs.providerHealth.probeClaimMarkFailed.${jobId}`,
+      '[capacity] provider probe claim could not be recorded',
+      {
+        component: sendToLLMComponent,
+        error: error instanceof Error ? error.message : String(error),
+        event: 'providerProbeClaimMarkFailed',
+        jobId,
+      },
+    )
+  }
+}
+
+export const claimWithProviderClaimGate = async ({
+  claim,
+  jobId,
+  limit,
+}: {
+  claim: (gatedLimit: number) => Promise<PromptClaimRequestResult>
+  jobId: string
+  limit: number
+}): Promise<PromptClaimRequestResult> => {
+  const providerClaimGate = await getLocalProviderClaimGate(jobId)
+
+  if (!providerClaimGate.claimsAllowed) {
+    void logProviderClaimGate(jobId, providerClaimGate)
+  }
+
+  const claimResult = await claim(getProviderGatedLimit(limit, providerClaimGate))
+  markLocalProviderProbeClaimed({claimedCount: claimResult.fetched, jobId, providerClaimGate})
+
+  return claimResult
+}
+
+const claimAndEnqueueGatedPromptChunks = async ({
+  gatedLimit,
+  job,
+  label,
+  ownerBacked,
+  runtime,
+  serverJobId,
+}: {
+  gatedLimit: number
+  job: RunningJudgmentJob
+  label: string
+  ownerBacked: boolean
+  runtime: PromptRuntime
+  serverJobId: string
+}): Promise<PromptClaimRequestResult> => {
+  const fetched = await claimAndEnqueuePromptChunks({
+    chunkLimits: getPromptClaimDispatchChunkLimits({limit: gatedLimit, ownerBacked}),
+    job,
+    label,
+    ownerBacked,
+    ownerBackedJobInfo: runtime.ownerBackedJobInfo,
+    serverJobId,
+  })
+
+  return {fetched, requested: getPromptClaimDispatchRequestedCount({limit: gatedLimit, ownerBacked})}
+}
+
 const claimAndEnqueuePromptRequest = async ({
   job,
   label,
@@ -642,16 +788,14 @@ const claimAndEnqueuePromptRequest = async ({
   limit: number
   runtime: PromptRuntime
   serverJobId: string
-}): Promise<{fetched: number; requested: number}> => {
+}): Promise<PromptClaimRequestResult> => {
   const ownerBacked = shouldUseJudgeWorkerOwnerHandoff()
-  const requested = getPromptClaimDispatchRequestedCount({limit, ownerBacked})
-  const fetched = await claimAndEnqueuePromptChunks({
-    chunkLimits: getPromptClaimDispatchChunkLimits({limit, ownerBacked}),
-    job,
-    label,
-    ownerBacked,
-    ownerBackedJobInfo: runtime.ownerBackedJobInfo,
-    serverJobId,
+  const {fetched, requested} = await claimWithProviderClaimGate({
+    claim: (gatedLimit) => {
+      return claimAndEnqueueGatedPromptChunks({gatedLimit, job, label, ownerBacked, runtime, serverJobId})
+    },
+    jobId: job.id,
+    limit,
   })
 
   recordJudgmentReadyWorkClaimResult({

@@ -979,3 +979,168 @@ test('judge claim buffer covers ~45 s of measured completions within burst and m
   expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 12})).toBe(540)
   expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 100})).toBe(1200)
 })
+type ProviderClaimGateResult = {backoffUntil: Date | null; claimsAllowed: boolean; maxClaims: number | null}
+
+const providerHealthServiceModulePath = new URL('../../services/judgmentJobProviderHealthService.ts', import.meta.url)
+  .href
+const openProviderClaimGateResult: ProviderClaimGateResult = {backoffUntil: null, claimsAllowed: true, maxClaims: null}
+const getJudgmentJobProviderClaimGateMock = mock(async (_jobId: string, _now?: Date) => {
+  return openProviderClaimGateResult
+})
+const getJudgmentJobProviderHealthMock = mock(async (_jobId: string) => {
+  return null
+})
+const markJudgmentJobProviderProbeClaimedMock = mock((_jobId: string, _now?: Date) => {
+  return undefined
+})
+
+const loadSendToLLMWithProviderClaimGate = async (gate: (jobId: string) => Promise<ProviderClaimGateResult>) => {
+  const realProviderHealthModule = await import('../../services/judgmentJobProviderHealthService.ts')
+
+  getJudgmentJobProviderClaimGateMock.mockClear()
+  getJudgmentJobProviderHealthMock.mockClear()
+  markJudgmentJobProviderProbeClaimedMock.mockClear()
+  getJudgmentJobProviderClaimGateMock.mockImplementation(gate)
+  markJudgmentJobProviderProbeClaimedMock.mockImplementation((_jobId: string, _now?: Date) => {
+    return undefined
+  })
+  void mock.module(providerHealthServiceModulePath, () => {
+    return {
+      ...realProviderHealthModule,
+      getJudgmentJobProviderClaimGate: getJudgmentJobProviderClaimGateMock,
+      getJudgmentJobProviderHealth: getJudgmentJobProviderHealthMock,
+      markJudgmentJobProviderProbeClaimed: markJudgmentJobProviderProbeClaimedMock,
+    }
+  })
+
+  return import(`./judgmentsJobsSendToLLM.ts?test=${Date.now()}-${Math.random()}`) as Promise<
+    typeof import('./judgmentsJobsSendToLLM.ts')
+  >
+}
+
+const createReadyPromptClaim = (readyCount: number) => {
+  return mock(async (gatedLimit: number) => {
+    return {fetched: Math.min(gatedLimit, readyCount), requested: gatedLimit}
+  })
+}
+
+test('dev-single claim gate holds back prompt claims inside the provider backoff window', async () => {
+  const backoffUntil = new Date('2026-10-03T19:33:00.000Z')
+  const {claimWithProviderClaimGate} = await loadSendToLLMWithProviderClaimGate(async () => {
+    return {backoffUntil, claimsAllowed: false, maxClaims: 0}
+  })
+  const claim = createReadyPromptClaim(3)
+
+  const firstResult = await claimWithProviderClaimGate({claim, jobId: 'job-gated', limit: 16})
+  const secondResult = await claimWithProviderClaimGate({claim, jobId: 'job-gated', limit: 16})
+  await flush()
+
+  expect(firstResult).toEqual({fetched: 0, requested: 0})
+  expect(secondResult).toEqual({fetched: 0, requested: 0})
+  expect(claim.mock.calls).toEqual([[0], [0]])
+  expect(getJudgmentJobProviderClaimGateMock).toHaveBeenCalledWith('job-gated')
+  expect(getJudgmentJobProviderHealthMock).toHaveBeenCalledTimes(1)
+  expect(markJudgmentJobProviderProbeClaimedMock).not.toHaveBeenCalled()
+})
+
+test('dev-single probe claim after the window blocks further claims until the probe completes', async () => {
+  const probeClaimedJobIds = new Set<string>()
+  const backoffUntil = new Date('2026-10-03T19:33:00.000Z')
+  const {claimWithProviderClaimGate} = await loadSendToLLMWithProviderClaimGate(async (jobId: string) => {
+    return probeClaimedJobIds.has(jobId)
+      ? {backoffUntil, claimsAllowed: false, maxClaims: 0}
+      : {backoffUntil, claimsAllowed: true, maxClaims: 1}
+  })
+  const claim = createReadyPromptClaim(3)
+
+  markJudgmentJobProviderProbeClaimedMock.mockImplementation((jobId: string) => {
+    probeClaimedJobIds.add(jobId)
+  })
+
+  const probeResult = await claimWithProviderClaimGate({claim, jobId: 'job-probe', limit: 16})
+  const nextResult = await claimWithProviderClaimGate({claim, jobId: 'job-probe', limit: 16})
+
+  expect(probeResult).toEqual({fetched: 1, requested: 1})
+  expect(markJudgmentJobProviderProbeClaimedMock).toHaveBeenCalledTimes(1)
+  expect(markJudgmentJobProviderProbeClaimedMock).toHaveBeenCalledWith('job-probe')
+  expect(nextResult).toEqual({fetched: 0, requested: 0})
+})
+
+test('dev-single claim gate claims fully when healthy and skips the probe mark when nothing was claimed', async () => {
+  const healthyModule = await loadSendToLLMWithProviderClaimGate(async () => {
+    return openProviderClaimGateResult
+  })
+  const healthyResult = await healthyModule.claimWithProviderClaimGate({
+    claim: createReadyPromptClaim(32),
+    jobId: 'job-healthy',
+    limit: 16,
+  })
+  const emptyProbeModule = await loadSendToLLMWithProviderClaimGate(async () => {
+    return {backoffUntil: new Date('2026-10-03T19:33:00.000Z'), claimsAllowed: true, maxClaims: 1}
+  })
+  const emptyProbeResult = await emptyProbeModule.claimWithProviderClaimGate({
+    claim: createReadyPromptClaim(0),
+    jobId: 'job-empty-probe',
+    limit: 16,
+  })
+
+  expect(healthyResult).toEqual({fetched: 16, requested: 16})
+  expect(emptyProbeResult).toEqual({fetched: 0, requested: 1})
+  expect(markJudgmentJobProviderProbeClaimedMock).not.toHaveBeenCalled()
+})
+
+test('dev-single claim gate lookup or probe mark failure still allows the claim', async () => {
+  const failingGateModule = await loadSendToLLMWithProviderClaimGate(async () => {
+    throw new Error('provider health cache unavailable')
+  })
+  const failingGateResult = await failingGateModule.claimWithProviderClaimGate({
+    claim: createReadyPromptClaim(32),
+    jobId: 'job-gate-error',
+    limit: 16,
+  })
+  const failingMarkModule = await loadSendToLLMWithProviderClaimGate(async () => {
+    return {backoffUntil: new Date('2026-10-03T19:33:00.000Z'), claimsAllowed: true, maxClaims: 1}
+  })
+
+  markJudgmentJobProviderProbeClaimedMock.mockImplementation(() => {
+    throw new Error('probe state unavailable')
+  })
+
+  const failingMarkResult = await failingMarkModule.claimWithProviderClaimGate({
+    claim: createReadyPromptClaim(32),
+    jobId: 'job-mark-error',
+    limit: 16,
+  })
+
+  expect(failingGateResult).toEqual({fetched: 16, requested: 16})
+  expect(failingMarkResult).toEqual({fetched: 1, requested: 1})
+})
+
+test('judge-worker dispatch never reads the provider claim gate', async () => {
+  const previousServerRole = process.env.SERVER_ROLE
+  const {claimWithProviderClaimGate} = await loadSendToLLMWithProviderClaimGate(async () => {
+    return {backoffUntil: null, claimsAllowed: false, maxClaims: 0}
+  })
+
+  process.env.SERVER_ROLE = 'judge-worker'
+
+  try {
+    const result = await claimWithProviderClaimGate({
+      claim: createReadyPromptClaim(32),
+      jobId: 'job-judge-worker',
+      limit: 16,
+    })
+
+    expect(result).toEqual({fetched: 16, requested: 16})
+    expect(getJudgmentJobProviderClaimGateMock).not.toHaveBeenCalled()
+    expect(markJudgmentJobProviderProbeClaimedMock).not.toHaveBeenCalled()
+  } finally {
+    if (previousServerRole === undefined) {
+      delete process.env.SERVER_ROLE
+    }
+
+    if (previousServerRole !== undefined) {
+      process.env.SERVER_ROLE = previousServerRole
+    }
+  }
+})

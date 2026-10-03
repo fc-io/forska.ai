@@ -3,6 +3,7 @@ import {Effect, Fiber} from 'effect'
 
 import * as realReadOnlyDatabaseModule from '../../services/appReadOnlyDatabaseService.ts'
 import * as realReadOnlyQueryModule from '../../services/getAppReadOnlyQueryService.ts'
+import * as realProviderHealthModule from '../../services/judgmentJobProviderHealthService.ts'
 import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} from './connectionHealth.ts'
 import * as realSqliteModule from './judgmentJobSqliteService.ts'
 import * as realProviderAdmissionLeaseModule from './providerAdmissionLease.ts'
@@ -20,6 +21,8 @@ type ProviderAdmissionLeaseHeartbeatInput = Parameters<
   typeof realProviderAdmissionLeaseModule.heartbeatProviderAdmissionLeaseThroughOwner
 >[0]
 type ProviderHealthResult = {lastError: string | null; message: string; modelCount: number | null; ok: boolean}
+type JudgmentJobProviderHealth = realProviderHealthModule.JudgmentJobProviderHealth
+type ProviderFailureRecordInput = Parameters<typeof realProviderHealthModule.recordJudgmentJobProviderFailure>[0]
 
 const providerConnectionRepositoryModulePath = new URL(
   '../../providers/providerConnectionRepository.ts',
@@ -33,6 +36,10 @@ const appReadOnlyDatabaseServiceModulePath = new URL('../../services/appReadOnly
 const appReadOnlyQueryServiceModulePath = new URL('../../services/getAppReadOnlyQueryService.ts', import.meta.url).href
 const ensureFullTextModulePath = new URL('../../utils/ensureFullText.ts', import.meta.url).href
 const judgeWorkerCompletionJournalModulePath = new URL('./judgeWorkerCompletionJournal.ts', import.meta.url).href
+const providerHealthRecordServiceModulePath = new URL(
+  '../../services/judgmentJobProviderHealthService.ts',
+  import.meta.url,
+).href
 const sqliteServiceModulePath = new URL('./judgmentJobSqliteService.ts', import.meta.url).href
 const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', import.meta.url).href
 const getRealJudgeWorkerReadOnlyAppDatabaseService = realReadOnlyDatabaseModule.getJudgeWorkerReadOnlyAppDatabaseService
@@ -213,6 +220,31 @@ const hasUnackedJudgeWorkerCompletion = mock(async (_claimId: string) => {
 const hasJudgeWorkerCompletionIntent = mock((_claimId: string) => {
   return false
 })
+const createProviderHealthRow = (overrides: Partial<JudgmentJobProviderHealth> = {}): JudgmentJobProviderHealth => {
+  return {
+    consecutiveFailureCount: 1,
+    failureCode: null,
+    failureKind: 'other',
+    failureMessage: null,
+    firstFailedAt: new Date('2026-10-03T12:00:00.000Z'),
+    jobId: 'job-a',
+    lastFailedAt: new Date('2026-10-03T12:00:00.000Z'),
+    lastSuccessAt: null,
+    modelId: 'model-a',
+    recoveredAt: null,
+    retryAfterAt: null,
+    status: 'failing',
+    totalFailureCount: 1,
+    updatedAt: new Date('2026-10-03T12:00:00.000Z'),
+    ...overrides,
+  }
+}
+const recordJudgmentJobProviderFailure = mock(async (_input: ProviderFailureRecordInput) => {
+  return createProviderHealthRow()
+})
+const recordJudgmentJobProviderSuccess = mock(async (_input: {jobId: string; now?: Date}) => {
+  return undefined
+})
 const sqliteStateTransitions: string[] = []
 let usePromptRuntimeMocks = false
 let useJudgeWorkerOwnerHandoffMocks = false
@@ -328,6 +360,10 @@ const registerPromptModuleMocks = () => {
       },
     }
   })
+
+  void mock.module(providerHealthRecordServiceModulePath, () => {
+    return {...realProviderHealthModule, recordJudgmentJobProviderFailure, recordJudgmentJobProviderSuccess}
+  })
 }
 
 const loadProcessPromptModule = (): Promise<ProcessPromptModule> => {
@@ -412,6 +448,14 @@ afterEach(async () => {
   sqliteServiceMock.consumePromptExtraRetry.mockClear()
   sqliteServiceMock.markPromptAsRunning.mockClear()
   sqliteServiceMock.markPromptAsSkipped.mockClear()
+  recordJudgmentJobProviderFailure.mockClear()
+  recordJudgmentJobProviderSuccess.mockClear()
+  recordJudgmentJobProviderFailure.mockImplementation(async (_input: ProviderFailureRecordInput) => {
+    return createProviderHealthRow()
+  })
+  recordJudgmentJobProviderSuccess.mockImplementation(async (_input: {jobId: string; now?: Date}) => {
+    return undefined
+  })
   sqliteStateTransitions.splice(0, sqliteStateTransitions.length)
   usePromptRuntimeMocks = false
   useJudgeWorkerOwnerHandoffMocks = false
@@ -2360,4 +2404,152 @@ test('prompt release stops requeueing after recoverable retry budget is exhauste
 
   expect(sqliteStateTransitions).toEqual(['running', 'closed'])
   expect(sqliteServiceMock.markPromptAsRetry).not.toHaveBeenCalled()
+})
+
+const codexUsageLimitMessage =
+  "codex app-server: turn failed: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 3rd, 2026 9:33 PM."
+
+test('local recoverable provider failure records provider health and backs off the retry', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  let caughtError: unknown = null
+
+  recordJudgmentJobProviderFailure.mockImplementationOnce(async (_input: ProviderFailureRecordInput) => {
+    return createProviderHealthRow({
+      failureCode: 'codex_transient_turn_failure',
+      failureKind: 'usage_limit',
+      failureMessage: codexUsageLimitMessage,
+    })
+  })
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new RecoverableJudgeError(`Request failed: ${codexUsageLimitMessage}`, {
+      failureCode: 'codex_transient_turn_failure',
+      providerDiagnostics: {message: codexUsageLimitMessage},
+    })
+  })
+
+  try {
+    await processPromptWithLLM(createPromptToProcess())
+  } catch (error) {
+    caughtError = error
+  }
+
+  expect(String(caughtError)).toContain('RecoverableJudgeError')
+  expect(recordJudgmentJobProviderFailure).toHaveBeenCalledTimes(1)
+  expect(recordJudgmentJobProviderFailure).toHaveBeenCalledWith({
+    failureCode: 'codex_transient_turn_failure',
+    jobId: 'job-a',
+    message: codexUsageLimitMessage,
+    modelId: 'model-a',
+  })
+  expect(sqliteStateTransitions).toEqual(['running', 'ready'])
+  expect(sqliteServiceMock.markPromptAsRetry).toHaveBeenCalledWith('job-a', 'record-a', 5 * 60_000)
+  expect(recordJudgmentJobProviderSuccess).not.toHaveBeenCalled()
+})
+
+test('local exhausted recoverable provider failure still records provider health', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  sqliteServiceMock.consumePromptExtraRetry.mockImplementationOnce(async () => {
+    return false
+  })
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new RecoverableJudgeError(`Request failed: ${codexUsageLimitMessage}`, {
+      failureCode: 'codex_transient_turn_failure',
+      providerDiagnostics: {message: codexUsageLimitMessage},
+    })
+  })
+
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(recordJudgmentJobProviderFailure).toHaveBeenCalledWith(
+    expect.objectContaining({failureCode: 'codex_transient_turn_failure', jobId: 'job-a'}),
+  )
+  expect(sqliteStateTransitions).toEqual(['running', 'closed'])
+  expect(sqliteServiceMock.markPromptAsRetry).not.toHaveBeenCalled()
+})
+
+test('local connection failure records provider health with the connection failure kind', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: 'http://runtime.test/v1', endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 503},
+  })
+
+  recordJudgmentJobProviderFailure.mockImplementationOnce(async (_input: ProviderFailureRecordInput) => {
+    return createProviderHealthRow({failureKind: 'endpoint_unavailable'})
+  })
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new ConnectionError(failure.message, 'http://runtime.test/v1', failure)
+  })
+
+  await processPromptWithLLM(createPromptToProcess()).catch(() => {
+    return undefined
+  })
+
+  expect(recordJudgmentJobProviderFailure).toHaveBeenCalledWith(
+    expect.objectContaining({
+      connectionFailureKind: 'endpoint_unavailable',
+      jobId: 'job-a',
+      modelId: 'model-a',
+      statusCode: 503,
+    }),
+  )
+  expect(sqliteServiceMock.markPromptAsRetry).toHaveBeenCalledWith('job-a', 'record-a', 30_000)
+})
+
+test('local prompt success records provider recovery', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(sqliteStateTransitions).toEqual(['running', 'judged'])
+  expect(recordJudgmentJobProviderSuccess).toHaveBeenCalledWith({jobId: 'job-a'})
+  expect(recordJudgmentJobProviderFailure).not.toHaveBeenCalled()
+})
+
+test('local provider health write failure keeps the immediate retry', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  let caughtError: unknown = null
+
+  recordJudgmentJobProviderFailure.mockImplementationOnce(async (_input: ProviderFailureRecordInput) => {
+    throw new Error('provider health table unavailable')
+  })
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new RecoverableJudgeError(`Request failed: ${codexUsageLimitMessage}`, {
+      failureCode: 'codex_transient_turn_failure',
+      providerDiagnostics: {message: codexUsageLimitMessage},
+    })
+  })
+
+  try {
+    await processPromptWithLLM(createPromptToProcess())
+  } catch (error) {
+    caughtError = error
+  }
+
+  expect(String(caughtError)).toContain('RecoverableJudgeError')
+  expect(sqliteStateTransitions).toEqual(['running', 'ready'])
+  expect(sqliteServiceMock.markPromptAsRetry).toHaveBeenCalledWith('job-a', 'record-a', null)
+})
+
+test('judge-worker recoverable provider failure leaves provider health to the owner', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new RecoverableJudgeError(`Request failed: ${codexUsageLimitMessage}`, {
+      failureCode: 'codex_transient_turn_failure',
+      providerDiagnostics: {message: codexUsageLimitMessage},
+    })
+  })
+
+  await processPromptWithLLM(createPromptToProcess()).catch(() => {
+    return undefined
+  })
+
+  expect(recordJudgmentJobProviderFailure).not.toHaveBeenCalled()
+  expect(recordJudgmentJobProviderSuccess).not.toHaveBeenCalled()
+  expect(enqueueJudgeWorkerCompletion).toHaveBeenCalledWith(
+    expect.objectContaining({claimId: 'claim-a', retryAfterMs: null, status: 'retry'}),
+  )
 })

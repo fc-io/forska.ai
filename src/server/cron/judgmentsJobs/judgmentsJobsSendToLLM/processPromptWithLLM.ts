@@ -9,6 +9,12 @@ import {getProviderModelMetadataPromptTokenLimit} from '../../../providers/provi
 import {escapeSqlString} from '../../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appReadOnlyDatabaseService.ts'
 import {getJudgeWorkerReadOnlyAppQueryService} from '../../../services/getAppReadOnlyQueryService.ts'
+import {
+  getProviderFailureRetryDelayMs,
+  type JudgmentJobProviderHealth,
+  recordJudgmentJobProviderFailure,
+  recordJudgmentJobProviderSuccess,
+} from '../../../services/judgmentJobProviderHealthService.ts'
 import {normalizeProviderKind} from '../../../services/providerCatalog.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {createRateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
@@ -81,6 +87,13 @@ type PreparedPromptResult =
 
 type PromptPreparationWaiter = {limit: number; resolve: (release: () => void) => void}
 
+type LocalProviderFailure = {
+  connectionFailureKind?: string | null
+  failureCode?: string | null
+  message: string | null
+  statusCode?: number | null
+}
+
 type PromptTerminalState =
   | {kind: 'closed'; closeoutReason: PromptCloseoutReason}
   | {kind: 'completed'; noRequestSuccessReason?: PromptNoRequestSuccessReason}
@@ -89,6 +102,7 @@ type PromptTerminalState =
 
 const processPromptLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const processPromptFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const providerHealthWriteLogger = createRateLimitedLogger({sink: 'both', windowMs: 60_000})
 const processPromptComponent = 'processPromptWithLLM'
 const cachedArticleLookups = new Map<string, Promise<ArticleRecord | null>>()
 const cachedOwnerBackedPromptLookups = new Map<string, Promise<{article: ArticleRecord; prompt: PromptDefinition}>>()
@@ -772,8 +786,65 @@ const releaseJudgeWorkerTerminalState = async (
   })
 }
 
-const getRecoverableRetryDelayMs = (_failureCode: string): number | null => {
+const getProviderDiagnosticsMessage = (providerDiagnostics: unknown): string | null => {
+  return isObjectRecord(providerDiagnostics) ? getStringValue(providerDiagnostics.message) : null
+}
+
+const logProviderHealthWriteFailure = (promptToProcess: PromptToProcess, error: unknown): null => {
+  providerHealthWriteLogger.warn(
+    `llm.providerHealth.writeFailed.${promptToProcess.jobId}`,
+    '[llm] provider health write failed',
+    {
+      component: processPromptComponent,
+      error: error instanceof Error ? error.message : String(error),
+      event: 'providerHealthWriteFailed',
+      jobId: promptToProcess.jobId,
+    },
+  )
+
   return null
+}
+
+const recordLocalProviderFailure = async (
+  promptToProcess: PromptToProcess,
+  failure: LocalProviderFailure,
+): Promise<JudgmentJobProviderHealth | null> => {
+  return shouldUseJudgeWorkerOwnerHandoff()
+    ? null
+    : recordJudgmentJobProviderFailure({
+        ...failure,
+        jobId: promptToProcess.jobId,
+        modelId: promptToProcess.modelId,
+      }).catch((error: unknown) => {
+        return logProviderHealthWriteFailure(promptToProcess, error)
+      })
+}
+
+const recordLocalConnectionFailure = async (
+  promptToProcess: PromptToProcess,
+  error: ConnectionError,
+): Promise<JudgmentJobProviderHealth | null> => {
+  return error.failure.kind === 'circuit_open'
+    ? null
+    : recordLocalProviderFailure(promptToProcess, {
+        connectionFailureKind: error.failure.kind,
+        message: error.failure.errorDetail ?? error.failure.message,
+        statusCode: error.failure.statusCode,
+      })
+}
+
+const recordLocalProviderSuccess = async (promptToProcess: PromptToProcess): Promise<void> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return undefined
+  }
+
+  await recordJudgmentJobProviderSuccess({jobId: promptToProcess.jobId}).catch((error: unknown) => {
+    return logProviderHealthWriteFailure(promptToProcess, error)
+  })
+}
+
+const getProviderHealthRetryAfterMs = (providerHealth: JudgmentJobProviderHealth | null): number | null => {
+  return providerHealth ? getProviderFailureRetryDelayMs(providerHealth) : null
 }
 
 const getPromptPreparationCloseoutReason = (error: unknown): PromptCloseoutReason => {
@@ -872,6 +943,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
               promptId: promptToProcess.promptId,
               recordId: promptToProcess.recordId,
             })
+            await recordLocalProviderSuccess(promptToProcess)
             return undefined
           } catch (error) {
             if (error instanceof ConnectionError) {
@@ -903,7 +975,8 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
                   recordId: promptToProcess.recordId,
                 },
               )
-              terminalState = {kind: 'ready', retryAfterMs: null}
+              const providerHealth = await recordLocalConnectionFailure(promptToProcess, error)
+              terminalState = {kind: 'ready', retryAfterMs: getProviderHealthRetryAfterMs(providerHealth)}
               throw error
             }
 
@@ -939,9 +1012,13 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
                     maxExtraRetries: maxRecoverablePromptExtraRetries,
                     recordId: promptToProcess.recordId,
                   })
+              const providerHealth = await recordLocalProviderFailure(promptToProcess, {
+                failureCode: error.failureCode,
+                message: getProviderDiagnosticsMessage(error.providerDiagnostics) ?? error.message,
+              })
 
               if (consumed) {
-                terminalState = {kind: 'ready', retryAfterMs: getRecoverableRetryDelayMs(error.failureCode)}
+                terminalState = {kind: 'ready', retryAfterMs: getProviderHealthRetryAfterMs(providerHealth)}
                 processPromptFailureLogger.warn(
                   'llm.prompt.recoverableProviderFailureRequeued',
                   '[llm] Requeued prompt after recoverable provider failure',
@@ -987,6 +1064,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
               promptId: promptToProcess.promptId,
               recordId: promptToProcess.recordId,
             })
+            await recordLocalProviderFailure(promptToProcess, {message: errorMessage})
             terminalState = {closeoutReason: 'requestFailure', kind: 'closed'}
             return undefined
           }

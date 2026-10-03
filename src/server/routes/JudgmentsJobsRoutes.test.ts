@@ -1,5 +1,5 @@
 import {Database} from 'bun:sqlite'
-import {afterAll, afterEach, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, mock, setDefaultTimeout, spyOn, test} from 'bun:test'
 import {Elysia} from 'elysia'
 import {existsSync, rmSync, writeFileSync} from 'fs'
 
@@ -4381,7 +4381,9 @@ test('judgment jobs list includes inline health badges for risky jobs', async ()
   `)
 
   const response = await app.handle(new Request('http://localhost/api/judgmentsjobs'))
-  const body = (await response.json()) as {data: Array<{health: {badges: string[]; isHealthy: boolean}; id: string}>}
+  const body = (await response.json()) as {
+    data: Array<{health: {badges: string[]; isHealthy: boolean}; id: string; providerHealth: unknown}>
+  }
 
   const drainingJob = body.data.find((job) => {
     return job.id === drainingJobId
@@ -4405,6 +4407,521 @@ test('judgment jobs list includes inline health badges for risky jobs', async ()
   expect(retainedJob?.health).toEqual({badges: ['Retained Outbox'], isHealthy: false})
   expect(orphanedJob?.health).toEqual({badges: ['Orphaned Local Queue'], isHealthy: false})
   expect(staleJob?.health).toEqual({badges: ['Stale Import'], isHealthy: false})
+  expect(drainingJob?.providerHealth).toBeNull()
+  expect(staleJob?.providerHealth).toBeNull()
+})
+
+const codexUsageLimitMessage =
+  "codex app-server: turn failed: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 3rd, 2026 9:33 PM."
+
+type OwnerBackedClaimFixture = {
+  articleId: string
+  claimId: string
+  executionSnapshotHash: string
+  executionSnapshotId: string
+  modelId: string
+  projectId: string
+  promptId: string
+  recordId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+type ProviderHealthResponse = {
+  consecutiveFailureCount: number
+  failureCode: string | null
+  failureKind: string
+  failureMessage: string | null
+  isActive: boolean
+  lastSuccessAt: string | null
+  recoveredAt: string | null
+  retryAfterAt: string | null
+  status: string
+  totalFailureCount: number
+}
+
+type ListedJobWithProviderHealth = {
+  health: {badges: string[]; isHealthy: boolean}
+  id: string
+  providerHealth: ProviderHealthResponse | null
+}
+
+const createOwnerBackedClaimsFixture = async ({prefix, promptCount}: {prefix: string; promptCount: number}) => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const projectId = `${prefix}-project-${suffix}`
+  const jobId = `${prefix}-job-${suffix}`
+
+  await insertProjectFixture({
+    connectionId: `${prefix}-connection-${suffix}`,
+    modelId: `${prefix}-model-${suffix}`,
+    projectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(
+    jobId,
+    Array.from({length: promptCount}, (_value, index) => {
+      return {articleId: `${prefix}-article-${index}-${suffix}`, promptId: `${prefix}-prompt-${suffix}`}
+    }),
+    'server-a',
+  )
+
+  const claimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit: promptCount}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const claimBody = (await claimResponse.json()) as {data: {claims: OwnerBackedClaimFixture[]}}
+
+  if (claimBody.data.claims.length !== promptCount) {
+    throw new Error(`Expected ${promptCount} owner-backed claims for ${jobId}`)
+  }
+
+  return {claims: claimBody.data.claims, jobId, sqliteService}
+}
+
+const getOwnerBackedCompletionBody = (jobId: string, claim: OwnerBackedClaimFixture) => {
+  return {
+    articleId: claim.articleId,
+    claimId: claim.claimId,
+    executionSnapshotHash: claim.executionSnapshotHash,
+    executionSnapshotId: claim.executionSnapshotId,
+    jobId,
+    modelId: claim.modelId,
+    projectId: claim.projectId,
+    promptId: claim.promptId,
+    queueRecordId: claim.recordId,
+    useAbstract: claim.useAbstract,
+    useFulltext: claim.useFulltext,
+    useFulltextNoImages: claim.useFulltextNoImages,
+    useTitle: claim.useTitle,
+  }
+}
+
+const getUsageLimitRetryCompletionBody = (jobId: string, claim: OwnerBackedClaimFixture) => {
+  return {
+    ...getOwnerBackedCompletionBody(jobId, claim),
+    status: 'retry',
+    tokenUse: {
+      failedRequests: 3,
+      failedRequestsDetails: [
+        {
+          articleId: claim.articleId,
+          attempts: 3,
+          baseURL: null,
+          error: codexUsageLimitMessage,
+          failedAttempts: 3,
+          failedCompletionTokens: 0,
+          failedPromptTokens: 0,
+          failedTotalTokens: 0,
+          failureCode: 'codex_transient_turn_failure',
+          failureType: 'retry',
+          modelId: claim.modelId,
+          modelName: 'GPT-6-Astra',
+          promptIds: [claim.promptId],
+          providerDiagnostics: {message: codexUsageLimitMessage},
+        },
+      ],
+      hasFailedRequests: true,
+      modelName: 'GPT-6-Astra',
+      successfulRequests: 0,
+      totalCompletionTokens: 0,
+      totalFailedCompletionTokens: 0,
+      totalFailedPromptTokens: 0,
+      totalFailedTokens: 0,
+      totalPromptTokens: 0,
+      totalRequests: 3,
+      totalSuccessCompletionTokens: 0,
+      totalSuccessPromptTokens: 0,
+      totalSuccessTokens: 0,
+      totalTokens: 0,
+    },
+  }
+}
+
+const postOwnerBackedCompletion = async (jobId: string, completionBody: Record<string, unknown>) => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
+      body: JSON.stringify(completionBody),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  return {body: (await response.json()) as {data: {status: string}}, status: response.status}
+}
+
+const getListedJobWithProviderHealth = async (jobId: string) => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const response = await app.handle(new Request('http://localhost/api/judgmentsjobs'))
+  const body = (await response.json()) as {data: ListedJobWithProviderHealth[]}
+
+  return {
+    job: body.data.find((job) => {
+      return job.id === jobId
+    }),
+    status: response.status,
+  }
+}
+
+const getJobDetailWithProviderHealth = async (jobId: string) => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+
+  return {body: (await response.json()) as {providerHealth: ProviderHealthResponse | null}, status: response.status}
+}
+
+test('owner-backed retry completion records provider usage-limit health and backs off the requeue', async () => {
+  const {getJudgmentJobProviderHealth} = await import('../services/judgmentJobProviderHealthService.ts')
+  const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
+    prefix: 'provider-health-retry',
+    promptCount: 1,
+  })
+  const [claim] = claims
+
+  if (!claim) {
+    throw new Error('Expected owner-backed claim')
+  }
+
+  const markPromptAsRetrySpy = spyOn(sqliteService, 'markPromptAsRetry')
+
+  try {
+    const completion = await postOwnerBackedCompletion(jobId, getUsageLimitRetryCompletionBody(jobId, claim))
+    const providerHealth = await getJudgmentJobProviderHealth(jobId)
+    const [retryJobId, retryRecordId, retryAfterMs] = markPromptAsRetrySpy.mock.calls[0] ?? []
+
+    expect(completion.status).toBe(200)
+    expect(completion.body.data.status).toBe('retry')
+    expect(markPromptAsRetrySpy).toHaveBeenCalledTimes(1)
+    expect(retryJobId).toBe(jobId)
+    expect(retryRecordId).toBe(claim.recordId)
+    expect(typeof retryAfterMs).toBe('number')
+    expect(Number(retryAfterMs)).toBeGreaterThan(0)
+    expect(providerHealth).toMatchObject({
+      consecutiveFailureCount: 1,
+      failureCode: 'codex_transient_turn_failure',
+      failureKind: 'usage_limit',
+      failureMessage: codexUsageLimitMessage,
+      jobId,
+      modelId: claim.modelId,
+      status: 'failing',
+      totalFailureCount: 1,
+    })
+    expect(providerHealth?.retryAfterAt?.toISOString()).toBe(new Date(2026, 9, 3, 21, 33).toISOString())
+  } finally {
+    markPromptAsRetrySpy.mockRestore()
+    await sqliteService.closeAll()
+  }
+})
+
+test('job list and detail show provider failing health until a success completion recovers it', async () => {
+  const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
+    prefix: 'provider-health-recovery',
+    promptCount: 2,
+  })
+  const [failedClaim, succeededClaim] = claims
+
+  if (!failedClaim || !succeededClaim) {
+    throw new Error('Expected two owner-backed claims')
+  }
+
+  const failedCompletion = await postOwnerBackedCompletion(jobId, getUsageLimitRetryCompletionBody(jobId, failedClaim))
+  const failingDetail = await getJobDetailWithProviderHealth(jobId)
+  const failingList = await getListedJobWithProviderHealth(jobId)
+
+  expect(failedCompletion.status).toBe(200)
+  expect(failingDetail.status).toBe(200)
+  expect(failingDetail.body.providerHealth).toMatchObject({
+    consecutiveFailureCount: 1,
+    failureKind: 'usage_limit',
+    failureMessage: codexUsageLimitMessage,
+    isActive: true,
+    retryAfterAt: new Date(2026, 9, 3, 21, 33).toISOString(),
+    status: 'failing',
+  })
+  expect(failingList.status).toBe(200)
+  expect(failingList.job?.health).toEqual({badges: ['Provider Failing'], isHealthy: false})
+  expect(failingList.job?.providerHealth).toMatchObject({failureKind: 'usage_limit', isActive: true, status: 'failing'})
+
+  const succeededCompletion = await postOwnerBackedCompletion(jobId, {
+    ...getOwnerBackedCompletionBody(jobId, succeededClaim),
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+  })
+  const recoveredDetail = await getJobDetailWithProviderHealth(jobId)
+  const recoveredList = await getListedJobWithProviderHealth(jobId)
+
+  expect(succeededCompletion.status).toBe(200)
+  expect(succeededCompletion.body.data.status).toBe('judged')
+  expect(recoveredDetail.body.providerHealth).toMatchObject({
+    consecutiveFailureCount: 0,
+    failureKind: 'usage_limit',
+    isActive: false,
+    status: 'recovered',
+    totalFailureCount: 1,
+  })
+  expect(typeof recoveredDetail.body.providerHealth?.recoveredAt).toBe('string')
+  expect(typeof recoveredDetail.body.providerHealth?.lastSuccessAt).toBe('string')
+  expect(recoveredList.job?.health.badges).not.toContain('Provider Failing')
+  expect(recoveredList.job?.providerHealth).toMatchObject({isActive: false, status: 'recovered'})
+
+  await sqliteService.closeAll()
+})
+
+test('owner-backed retry completion classifies judge connection failures and ignores circuit-open blocks', async () => {
+  const [{classifyConnectionFailure}, {getJudgmentJobProviderHealth}] = await Promise.all([
+    import('../cron/judgmentsJobs/connectionHealth.ts'),
+    import('../services/judgmentJobProviderHealthService.ts'),
+  ])
+  const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
+    prefix: 'provider-health-connection',
+    promptCount: 2,
+  })
+  const [misconfiguredClaim, circuitOpenClaim] = claims
+
+  if (!misconfiguredClaim || !circuitOpenClaim) {
+    throw new Error('Expected two owner-backed claims')
+  }
+
+  const connectionContext = {
+    effectiveBaseURL: 'http://owner-sglang:30000/v1',
+    endpointPath: '/v1/chat/completions',
+    providerKind: 'sglang',
+  }
+  const misconfiguredFailure = classifyConnectionFailure({context: connectionContext, error: {status: 405}})
+  const circuitOpenFailure = classifyConnectionFailure({
+    context: connectionContext,
+    error: new Error('Request blocked by circuit breaker'),
+  })
+  const getConnectionRetryCompletionBody = (claim: OwnerBackedClaimFixture, message: string) => {
+    const usageLimitBody = getUsageLimitRetryCompletionBody(jobId, claim)
+    const [failedRequestDetail] = usageLimitBody.tokenUse.failedRequestsDetails
+
+    return {
+      ...usageLimitBody,
+      tokenUse: {
+        ...usageLimitBody.tokenUse,
+        failedRequestsDetails: [
+          {...failedRequestDetail, error: `Connection error: ${message}`, failureCode: null, providerDiagnostics: null},
+        ],
+      },
+    }
+  }
+  const markPromptAsRetrySpy = spyOn(sqliteService, 'markPromptAsRetry')
+
+  try {
+    const misconfiguredCompletion = await postOwnerBackedCompletion(
+      jobId,
+      getConnectionRetryCompletionBody(misconfiguredClaim, misconfiguredFailure.message),
+    )
+    const misconfiguredHealth = await getJudgmentJobProviderHealth(jobId)
+    const circuitOpenCompletion = await postOwnerBackedCompletion(
+      jobId,
+      getConnectionRetryCompletionBody(circuitOpenClaim, circuitOpenFailure.message),
+    )
+    const circuitOpenHealth = await getJudgmentJobProviderHealth(jobId)
+
+    expect(misconfiguredFailure.kind).toBe('endpoint_misconfigured')
+    expect(circuitOpenFailure.kind).toBe('circuit_open')
+    expect(misconfiguredCompletion.status).toBe(200)
+    expect(circuitOpenCompletion.status).toBe(200)
+    expect(misconfiguredHealth).toMatchObject({
+      consecutiveFailureCount: 1,
+      failureKind: 'endpoint_unavailable',
+      status: 'failing',
+      totalFailureCount: 1,
+    })
+    expect(circuitOpenHealth).toMatchObject({consecutiveFailureCount: 1, totalFailureCount: 1})
+    expect(
+      markPromptAsRetrySpy.mock.calls.map((call) => {
+        return call[2]
+      }),
+    ).toEqual([30_000, null])
+  } finally {
+    markPromptAsRetrySpy.mockRestore()
+    await sqliteService.closeAll()
+  }
+})
+
+const postOwnerBackedClaims = async (jobId: string, limit: number) => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  return {
+    body: (await response.json()) as {data: {claims: OwnerBackedClaimFixture[]}; error: unknown},
+    status: response.status,
+  }
+}
+
+test('owner claim gate holds claims in the backoff window, allows one probe at a time, and lifts on success', async () => {
+  if (!runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {resetJudgmentJobProviderHealthCacheForTests} = await import('../services/judgmentJobProviderHealthService.ts')
+  const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
+    prefix: 'provider-health-claim-gate',
+    promptCount: 1,
+  })
+  const [failedClaim] = claims
+
+  if (!failedClaim) {
+    throw new Error('Expected owner-backed claim')
+  }
+
+  await sqliteService.addReadyPrompts(
+    jobId,
+    [0, 1, 2].map((index) => {
+      return {articleId: `provider-health-claim-gate-extra-${index}-${jobId}`, promptId: failedClaim.promptId}
+    }),
+    'server-a',
+  )
+
+  const emptyJob = await createOwnerBackedClaimsFixture({prefix: 'provider-health-claim-empty', promptCount: 0})
+  const emptyQueueClaims = await postOwnerBackedClaims(emptyJob.jobId, 5)
+  const failedCompletion = await postOwnerBackedCompletion(jobId, getUsageLimitRetryCompletionBody(jobId, failedClaim))
+  const gatedClaims = await postOwnerBackedClaims(jobId, 5)
+
+  expect(failedCompletion.body.data.status).toBe('retry')
+  expect(emptyQueueClaims).toEqual({body: {data: {claims: []}, error: null}, status: 200})
+  expect(gatedClaims).toEqual(emptyQueueClaims)
+
+  await runDatabase(`
+    UPDATE app.judgment_job_provider_health
+    SET last_failed_at = '${new Date(Date.now() - 31 * 60_000).toISOString()}'::TIMESTAMPTZ
+    WHERE job_id = '${jobId}'
+  `)
+  resetJudgmentJobProviderHealthCacheForTests()
+
+  const probeClaims = await postOwnerBackedClaims(jobId, 5)
+  const [probeClaim] = probeClaims.body.data.claims
+  const claimsWhileProbeRuns = await postOwnerBackedClaims(jobId, 5)
+
+  expect(probeClaims.status).toBe(200)
+  expect(probeClaims.body.data.claims).toHaveLength(1)
+  expect(claimsWhileProbeRuns).toEqual(emptyQueueClaims)
+
+  if (!probeClaim) {
+    throw new Error('Expected one probe claim')
+  }
+
+  const probeCompletion = await postOwnerBackedCompletion(jobId, {
+    ...getOwnerBackedCompletionBody(jobId, probeClaim),
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+  })
+  const recoveredClaims = await postOwnerBackedClaims(jobId, 5)
+
+  expect(probeCompletion.body.data.status).toBe('judged')
+  expect(recoveredClaims.status).toBe(200)
+  expect(recoveredClaims.body.data.claims).toHaveLength(2)
+
+  await sqliteService.closeAll()
+})
+
+test('list badge needs three consecutive failures of kind other', async () => {
+  const {recordJudgmentJobProviderFailure} = await import('../services/judgmentJobProviderHealthService.ts')
+  const otherJob = await createOwnerBackedClaimsFixture({prefix: 'provider-health-badge-other', promptCount: 0})
+  const recordOtherFailure = () => {
+    return recordJudgmentJobProviderFailure({
+      jobId: otherJob.jobId,
+      message: 'Unexpected token in JSON response from the model',
+    })
+  }
+
+  await recordOtherFailure()
+  const afterOneFailure = await getListedJobWithProviderHealth(otherJob.jobId)
+
+  await recordOtherFailure()
+  await recordOtherFailure()
+  const afterThreeFailures = await getListedJobWithProviderHealth(otherJob.jobId)
+
+  expect(afterOneFailure.job?.health).toEqual({badges: ['Healthy'], isHealthy: true})
+  expect(afterOneFailure.job?.providerHealth).toMatchObject({
+    consecutiveFailureCount: 1,
+    failureKind: 'other',
+    isActive: false,
+    status: 'failing',
+  })
+  expect(afterThreeFailures.job?.health).toEqual({badges: ['Provider Failing'], isHealthy: false})
+  expect(afterThreeFailures.job?.providerHealth).toMatchObject({
+    consecutiveFailureCount: 3,
+    failureKind: 'other',
+    isActive: true,
+  })
+
+  await otherJob.sqliteService.closeAll()
+})
+
+test('owner-backed retry completion still succeeds when the provider health table is unavailable', async () => {
+  if (!runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const testRunDatabase = runDatabase
+  const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
+    prefix: 'provider-health-unavailable',
+    promptCount: 1,
+  })
+  const [claim] = claims
+
+  if (!claim) {
+    throw new Error('Expected owner-backed claim')
+  }
+
+  const markPromptAsRetrySpy = spyOn(sqliteService, 'markPromptAsRetry')
+
+  await testRunDatabase(
+    'ALTER TABLE app.judgment_job_provider_health RENAME TO judgment_job_provider_health_unavailable',
+  )
+
+  try {
+    const completion = await postOwnerBackedCompletion(jobId, getUsageLimitRetryCompletionBody(jobId, claim))
+    const listed = await getListedJobWithProviderHealth(jobId)
+
+    expect(completion.status).toBe(200)
+    expect(completion.body.data.status).toBe('retry')
+    expect(markPromptAsRetrySpy.mock.calls[0]?.[2]).toBeNull()
+    expect(listed.status).toBe(200)
+    expect(listed.job?.providerHealth).toBeNull()
+    expect(listed.job?.health.badges).not.toContain('Provider Failing')
+  } finally {
+    await testRunDatabase(
+      'ALTER TABLE app.judgment_job_provider_health_unavailable RENAME TO judgment_job_provider_health',
+    )
+    markPromptAsRetrySpy.mockRestore()
+    await sqliteService.closeAll()
+  }
 })
 
 test('repair action routes return structured preflight, quarantine, unquarantine, and checkpoint results', async () => {
