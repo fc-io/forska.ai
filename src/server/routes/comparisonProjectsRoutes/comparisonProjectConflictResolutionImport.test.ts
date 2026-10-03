@@ -12,6 +12,8 @@ import {
   getComparisonProjectConflictResolutionImportAnalyzeResult,
   getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql,
   getComparisonProjectConflictResolutionImportCommitResult,
+  getComparisonProjectConflictResolutionImportCovidenceArticleKey,
+  getComparisonProjectConflictResolutionImportCovidenceIdTitleKey,
   getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
@@ -909,6 +911,99 @@ test('import plan matches articles by normalized external ID and title', () => {
   ])
 })
 
+test('import plan uses Covidence article key and title to resolve duplicate title matches across routes', () => {
+  expect(
+    getComparisonProjectConflictResolutionImportCovidenceArticleKey({
+      externalArticleId: 'covidence:source-route:covidence%3A%2340264',
+    }),
+  ).toBe('covidence:#40264')
+  expect(
+    getComparisonProjectConflictResolutionImportCovidenceIdTitleKey({
+      externalArticleId: 'covidence:source-route:covidence%3A%2340264',
+      title: ' A Shared Title ',
+    }),
+  ).toBe('covidence:#40264\u001Fa shared title')
+
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        doi: null,
+        externalArticleId: 'covidence:source-route:covidence%3A%2340264',
+        title: ' A Shared Title ',
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-other-covidence-record',
+        doi: null,
+        externalArticleId: 'covidence:target-route:covidence%3A%2340542',
+        title: 'a  shared\ntitle',
+      }),
+      getTargetArticle({
+        articleId: 'target-matching-covidence-record',
+        doi: null,
+        externalArticleId: 'covidence:target-route:covidence%3A%2340264',
+        title: 'a  shared\ntitle',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [
+        {
+          matchKey: 'covidence:#40264\u001Fa shared title',
+          matchKind: 'covidence-id-title',
+          sourceRowId: 'source-row-1',
+        },
+      ],
+      targetArticleId: 'target-matching-covidence-record',
+    },
+  ])
+})
+
+test('import plan keeps duplicate title matches ambiguous when no Covidence article key matches', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        doi: null,
+        externalArticleId: 'covidence:source-route:covidence%3A%2340264',
+        title: 'Shared',
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle({
+        articleId: 'target-a',
+        doi: null,
+        externalArticleId: 'covidence:target-route:covidence%3A%2340542',
+        title: 'Shared',
+      }),
+      getTargetArticle({
+        articleId: 'target-b',
+        doi: null,
+        externalArticleId: 'covidence:target-route:covidence%3A%2341158',
+        title: ' Shared ',
+      }),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts({ambiguousTarget: 1}))
+  expect(plan.skippedRows).toEqual([{reason: 'ambiguous-target-match', sourceRowId: 'source-row-1'}])
+  expect(plan.warnings).toMatchObject([
+    {
+      code: 'ambiguous-target-match',
+      matchKey: 'shared',
+      matchKind: 'title',
+      targetArticles: [{articleId: 'target-a'}, {articleId: 'target-b'}],
+    },
+  ])
+})
+
 test('import plan matches title-only source rows by exact normalized title', () => {
   const plan = getPlan({
     sourceRows: [
@@ -928,9 +1023,49 @@ test('import plan matches title-only source rows by exact normalized title', () 
   ])
 })
 
+test('import plan falls back to title when source and target external IDs differ', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: null, externalArticleId: 'source-ext', title: ' A Shared Title '})],
+    targetArticles: [getTargetArticle({doi: null, externalArticleId: 'target-ext', title: 'a  shared\ntitle'})],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [{matchKey: 'a shared title', matchKind: 'title', sourceRowId: 'source-row-1'}],
+      targetArticleId: 'target-article-1',
+    },
+  ])
+})
+
 test('import plan skips ambiguous title-only target matches', () => {
   const plan = getPlan({
     sourceRows: [getSourceRow({doi: null, externalArticleId: null, sourceExternalArticleId: null, title: 'Shared'})],
+    targetArticles: [
+      getTargetArticle({articleId: 'target-a', doi: null, externalArticleId: 'target-a-ext', title: 'Shared'}),
+      getTargetArticle({articleId: 'target-b', doi: null, externalArticleId: 'target-b-ext', title: ' Shared '}),
+    ],
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts({ambiguousTarget: 1}))
+  expect(plan.skippedRows).toEqual([{reason: 'ambiguous-target-match', sourceRowId: 'source-row-1'}])
+  expect(plan.warnings).toMatchObject([
+    {
+      code: 'ambiguous-target-match',
+      matchKey: 'shared',
+      matchKind: 'title',
+      targetArticles: [{articleId: 'target-a'}, {articleId: 'target-b'}],
+    },
+  ])
+})
+
+test('import plan skips ambiguous title fallback target matches', () => {
+  const plan = getPlan({
+    sourceRows: [getSourceRow({doi: null, externalArticleId: 'source-ext', title: 'Shared'})],
     targetArticles: [
       getTargetArticle({articleId: 'target-a', doi: null, externalArticleId: 'target-a-ext', title: 'Shared'}),
       getTargetArticle({articleId: 'target-b', doi: null, externalArticleId: 'target-b-ext', title: ' Shared '}),

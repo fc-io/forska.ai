@@ -8,6 +8,8 @@ export const comparisonProjectConflictResolutionTransferVersion = 1
 export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' | 'doi' | 'pmid'
 export type ComparisonProjectConflictResolutionTransferMatchKind =
   | ComparisonProjectConflictResolutionTransferIdentifierKind
+  | 'article-id'
+  | 'covidence-id-title'
   | 'id-title'
   | 'title'
 

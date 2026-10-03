@@ -103,7 +103,12 @@ describe('compare project import resolutions helpers', () => {
   test('formats analyze result labels for tables and summary cards', () => {
     expect(getSkipReasonLabel('existing-target-resolution')).toBe('Skipped because target already has a resolution')
     expect(getMatchKindLabel('article-id')).toBe('Article ID')
+    expect(getMatchKindLabel('covidence-id-title')).toBe('Covidence ID + title')
     expect(getMatchKindLabel('id-title')).toBe('External ID + title')
+    expect(getMatchKindLabel('title')).toBe('Title')
+    expect(getMatchKeyLabel('covidence-id-title', 'covidence:#40264\u001ftitle 1')).toBe(
+      'covidence:#40264 / title 1',
+    )
     expect(getMatchKeyLabel('id-title', 'external-1\u001ftitle 1')).toBe('external-1 / title 1')
     expect(
       getImportSummaryStats({

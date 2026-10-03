@@ -30,6 +30,7 @@ export type ComparisonProjectConflictResolutionImportSourceQueryRow = {
 export type ComparisonProjectConflictResolutionImportMatchKind =
   | ArticleStrongIdentifierKind
   | 'article-id'
+  | 'covidence-id-title'
   | 'id-title'
   | 'title'
 
@@ -293,6 +294,7 @@ type NormalizedSourceRow = Omit<
   ComparisonProjectConflictResolutionImportSourceRow,
   'doiKeys' | 'identifierKeys' | 'resolutionMode'
 > & {
+  covidenceIdTitleKey: string | null
   doiKeys: string[]
   identifierKeys: NormalizedIdentifierKey[]
   idTitleKey: string | null
@@ -304,7 +306,13 @@ type NormalizedSourceRow = Omit<
 type NormalizedTargetArticle = Omit<
   ComparisonProjectConflictResolutionImportTargetArticle,
   'doiKeys' | 'identifierKeys'
-> & {doiKeys: string[]; identifierKeys: NormalizedIdentifierKey[]; idTitleKey: string | null; titleKey: string | null}
+> & {
+  covidenceIdTitleKey: string | null
+  doiKeys: string[]
+  identifierKeys: NormalizedIdentifierKey[]
+  idTitleKey: string | null
+  titleKey: string | null
+}
 
 type ImportCandidateRow = {
   isOverwrite: boolean
@@ -1187,12 +1195,54 @@ export const getComparisonProjectConflictResolutionImportTitleKey = (params: {ti
   return normalizeComparisonProjectConflictResolutionImportTitle(params.title)
 }
 
+const getDecodedExternalArticleIdTail = (value: string) => {
+  const tail = value.slice(value.lastIndexOf(':') + 1)
+
+  try {
+    return decodeURIComponent(tail)
+  } catch {
+    return tail
+  }
+}
+
+export const getComparisonProjectConflictResolutionImportCovidenceArticleKey = (params: {
+  externalArticleId?: string | null
+}) => {
+  const externalArticleId = getTrimmedText(params.externalArticleId)
+
+  if (!externalArticleId) {
+    return null
+  }
+
+  const normalizedExternalArticleId = externalArticleId.toLowerCase()
+  const articleKey = normalizedExternalArticleId.startsWith('covidence:#')
+    ? normalizedExternalArticleId
+    : normalizedExternalArticleId.startsWith('covidence:')
+      ? normalizeComparisonProjectConflictResolutionImportExternalArticleId(
+          getDecodedExternalArticleIdTail(externalArticleId),
+        )
+      : null
+
+  return articleKey?.startsWith('covidence:#') && articleKey.length > 'covidence:#'.length ? articleKey : null
+}
+
+export const getComparisonProjectConflictResolutionImportCovidenceIdTitleKey = (params: {
+  externalArticleId?: string | null
+  title?: string | null
+}) => {
+  const covidenceArticleKey = getComparisonProjectConflictResolutionImportCovidenceArticleKey(params)
+  const title = normalizeComparisonProjectConflictResolutionImportTitle(params.title)
+
+  return covidenceArticleKey && title ? `${covidenceArticleKey}${idTitleKeySeparator}${title}` : null
+}
+
 const getNormalizedSourceRows = (
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
 ): NormalizedSourceRow[] => {
   return sourceRows.map((row) => {
     return {
       ...row,
+      covidenceIdTitleKey: getComparisonProjectConflictResolutionImportCovidenceIdTitleKey(row),
       doiKeys: getComparisonProjectConflictResolutionImportDoiKeys(row),
       identifierKeys: getNormalizedIdentifierKeys(row),
       idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(row),
@@ -1211,6 +1261,7 @@ const getNormalizedTargetArticles = (
 
     return {
       ...article,
+      covidenceIdTitleKey: getComparisonProjectConflictResolutionImportCovidenceIdTitleKey(article),
       doiKeys,
       identifierKeys: getNormalizedIdentifierKeys(article),
       idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(article),
@@ -1262,6 +1313,12 @@ const getTargetArticlesByIdTitleKey = (targetArticles: readonly NormalizedTarget
   })
 }
 
+const getTargetArticlesByCovidenceIdTitleKey = (targetArticles: readonly NormalizedTargetArticle[]) => {
+  return getTargetArticleGroupsByKey(targetArticles, (article) => {
+    return article.covidenceIdTitleKey
+  })
+}
+
 const getTargetArticlesByTitleKey = (targetArticles: readonly NormalizedTargetArticle[]) => {
   return getTargetArticleGroupsByKey(targetArticles, (article) => {
     return article.titleKey
@@ -1298,10 +1355,19 @@ const getCanUseIdTitleFallbackTargetArticle = (row: NormalizedSourceRow, targetA
   )
 }
 
+const getCanUseCovidenceIdTitleFallbackTargetArticle = (
+  row: NormalizedSourceRow,
+  targetArticle: NormalizedTargetArticle,
+) => {
+  return (
+    row.covidenceIdTitleKey === targetArticle.covidenceIdTitleKey
+    && (row.identifierKeys.length === 0 || targetArticle.identifierKeys.length === 0)
+  )
+}
+
 const getCanUseTitleFallbackTargetArticle = (row: NormalizedSourceRow, targetArticle: NormalizedTargetArticle) => {
   return (
-    !row.idTitleKey
-    && row.titleKey === targetArticle.titleKey
+    row.titleKey === targetArticle.titleKey
     && (row.identifierKeys.length === 0 || targetArticle.identifierKeys.length === 0)
   )
 }
@@ -1403,9 +1469,11 @@ const getPreferredSourceRowMatchDetail = (row: NormalizedSourceRow): ImportRowMa
     ? {matchKey: identifierKey.matchKey, matchKind: identifierKey.kind, sourceRow: row, targetArticles: []}
     : row.idTitleKey
       ? {matchKey: row.idTitleKey, matchKind: 'id-title', sourceRow: row, targetArticles: []}
-      : row.titleKey
-        ? {matchKey: row.titleKey, matchKind: 'title', sourceRow: row, targetArticles: []}
-        : {matchKey: null, matchKind: null, sourceRow: row, targetArticles: []}
+      : row.covidenceIdTitleKey
+        ? {matchKey: row.covidenceIdTitleKey, matchKind: 'covidence-id-title', sourceRow: row, targetArticles: []}
+        : row.titleKey
+          ? {matchKey: row.titleKey, matchKind: 'title', sourceRow: row, targetArticles: []}
+          : {matchKey: null, matchKind: null, sourceRow: row, targetArticles: []}
 }
 
 const getImportRowMatchDetail = (params: {
@@ -1472,6 +1540,7 @@ const getInvalidTargetResolutionValueWarning = (
 const getTargetArticleMaps = (targetArticles: readonly NormalizedTargetArticle[]) => {
   return {
     byArticleId: getTargetArticlesByArticleId(targetArticles),
+    byCovidenceIdTitleKey: getTargetArticlesByCovidenceIdTitleKey(targetArticles),
     byIdentifierKey: getTargetArticlesByIdentifierKey(targetArticles),
     byIdTitleKey: getTargetArticlesByIdTitleKey(targetArticles),
     byTitleKey: getTargetArticlesByTitleKey(targetArticles),
@@ -1782,6 +1851,74 @@ const getIdTitleImportCandidateRow = (
         }
 }
 
+const getCovidenceIdTitleImportCandidateRow = (
+  importMode: ComparisonProjectConflictResolutionImportMode,
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
+  row: NormalizedSourceRow,
+  targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
+): ImportCandidateRowResult => {
+  const targetMatches = getUniqueTargetArticleMatches(
+    row.covidenceIdTitleKey
+      ? (targetArticleMaps.byCovidenceIdTitleKey.get(row.covidenceIdTitleKey) ?? [])
+          .filter((targetArticle) => {
+            return getCanUseCovidenceIdTitleFallbackTargetArticle(row, targetArticle)
+          })
+          .map((targetArticle) => {
+            return {matchKey: row.covidenceIdTitleKey ?? '', matchKind: 'covidence-id-title' as const, targetArticle}
+          })
+      : [],
+  )
+  const eligibleMatches = getEligibleTargetMatches(targetMatches, importMode)
+  const selectedMatch = eligibleMatches.length === 1 ? eligibleMatches[0] : null
+  const existingResolutionResult = selectedMatch
+    ? getExistingTargetResolutionResult(row, selectedMatch, overwriteMode)
+    : null
+  const skipReason =
+    targetMatches.length === 0
+      ? 'no-target-match'
+      : eligibleMatches.length === 0
+        ? 'not-conflicting'
+        : selectedMatch
+          ? null
+          : 'ambiguous-target-match'
+
+  return existingResolutionResult
+    ? existingResolutionResult
+    : selectedMatch
+      ? {
+          candidate: getCandidateRow({
+            matchKey: selectedMatch.matchKey,
+            matchKind: 'covidence-id-title',
+            row,
+            targetArticle: selectedMatch.targetArticle,
+          }),
+          detail: getImportRowMatchDetailFromMatch(row, selectedMatch),
+          skippedRow: null,
+          warnings: [],
+        }
+      : {
+          candidate: null,
+          detail: getImportRowMatchDetail({
+            matchKey: row.covidenceIdTitleKey,
+            matchKind: row.covidenceIdTitleKey ? 'covidence-id-title' : null,
+            sourceRow: row,
+            targetArticles: getTargetArticlesFromMatches(eligibleMatches.length > 0 ? eligibleMatches : targetMatches),
+          }),
+          skippedRow: getSkippedRow(row.sourceRowId, skipReason),
+          warnings:
+            skipReason === 'ambiguous-target-match'
+              ? [
+                  getAmbiguousTargetMatchWarning({
+                    matchKey: getAmbiguousMatchKey(eligibleMatches),
+                    matchKind: 'covidence-id-title',
+                    sourceRow: row,
+                    targetArticles: getTargetArticlesFromMatches(eligibleMatches),
+                  }),
+                ]
+              : [],
+        }
+}
+
 const getTitleImportCandidateRow = (
   importMode: ComparisonProjectConflictResolutionImportMode,
   overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
@@ -1789,7 +1926,7 @@ const getTitleImportCandidateRow = (
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult | null => {
   const targetMatches = getUniqueTargetArticleMatches(
-    row.titleKey && !row.idTitleKey
+    row.titleKey
       ? (targetArticleMaps.byTitleKey.get(row.titleKey) ?? [])
           .filter((targetArticle) => {
             return getCanUseTitleFallbackTargetArticle(row, targetArticle)
@@ -1813,7 +1950,7 @@ const getTitleImportCandidateRow = (
           ? null
           : 'ambiguous-target-match'
 
-  return !row.titleKey || row.idTitleKey
+  return !row.titleKey
     ? null
     : existingResolutionResult
       ? existingResolutionResult
@@ -1854,6 +1991,13 @@ const getTitleImportCandidateRow = (
           }
 }
 
+const getCanUseFallbackResultAfterResult = (
+  previousResult: ImportCandidateRowResult | null,
+  fallbackResult: ImportCandidateRowResult | null,
+) => {
+  return previousResult?.skippedRow?.reason === 'no-target-match' && fallbackResult !== null
+}
+
 const getNoTargetMatchImportCandidateRow = (row: NormalizedSourceRow): ImportCandidateRowResult => {
   return {
     candidate: null,
@@ -1869,7 +2013,8 @@ const getImportCandidateRow = (
   row: NormalizedSourceRow,
   targetArticleMaps: ReturnType<typeof getTargetArticleMaps>,
 ): ImportCandidateRowResult => {
-  const hasUsableKey = row.identifierKeys.length > 0 || Boolean(row.idTitleKey) || Boolean(row.titleKey)
+  const hasUsableKey =
+    row.identifierKeys.length > 0 || Boolean(row.idTitleKey) || Boolean(row.covidenceIdTitleKey) || Boolean(row.titleKey)
   const articleIdResult = getArticleIdImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
   const identifierResult =
     row.identifierKeys.length > 0
@@ -1877,6 +2022,9 @@ const getImportCandidateRow = (
       : null
   const idTitleResult = row.idTitleKey
     ? getIdTitleImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
+    : null
+  const covidenceIdTitleResult = row.covidenceIdTitleKey
+    ? getCovidenceIdTitleImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
     : null
   const titleResult = row.titleKey
     ? getTitleImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
@@ -1900,11 +2048,13 @@ const getImportCandidateRow = (
           }
         : identifierResult
           ? identifierResult
-          : idTitleResult
+          : idTitleResult && !getCanUseFallbackResultAfterResult(idTitleResult, covidenceIdTitleResult ?? titleResult)
             ? idTitleResult
-            : titleResult
-              ? titleResult
-              : getNoTargetMatchImportCandidateRow(row)
+            : covidenceIdTitleResult && !getCanUseFallbackResultAfterResult(covidenceIdTitleResult, titleResult)
+              ? covidenceIdTitleResult
+              : titleResult
+                ? titleResult
+                : getNoTargetMatchImportCandidateRow(row)
 }
 
 const getCandidateRows = (

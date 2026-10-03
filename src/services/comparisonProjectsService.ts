@@ -87,7 +87,14 @@ export type ComparisonProjectConflictResolutionImportSource = {
   resolutionCount: number
 }
 
-export type ConflictResolutionImportMatchKind = 'doi' | 'pmid' | 'arxiv' | 'article-id' | 'id-title'
+export type ConflictResolutionImportMatchKind =
+  | 'doi'
+  | 'pmid'
+  | 'arxiv'
+  | 'article-id'
+  | 'covidence-id-title'
+  | 'id-title'
+  | 'title'
 
 export type ConflictResolutionImportWarningCode =
   | 'ambiguous-target-match'
@@ -438,7 +445,9 @@ export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' 
 export type ComparisonProjectConflictResolutionTransferMatchKind =
   | ComparisonProjectConflictResolutionTransferIdentifierKind
   | 'article-id'
+  | 'covidence-id-title'
   | 'id-title'
+  | 'title'
 export type ComparisonProjectConflictResolutionTransferIdentifier = {
   sourceIdentifierId: string
   kind: ComparisonProjectConflictResolutionTransferIdentifierKind

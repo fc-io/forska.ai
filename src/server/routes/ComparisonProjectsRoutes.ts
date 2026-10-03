@@ -1827,10 +1827,8 @@ const getConflictResolutionImportTitleKeys = (
 ) => {
   return getUniqueStringValues(
     sourceRows
-      .flatMap((row) => {
-        return getComparisonProjectConflictResolutionImportIdTitleKey(row)
-          ? []
-          : [getComparisonProjectConflictResolutionImportTitleKey(row) ?? '']
+      .map((row) => {
+        return getComparisonProjectConflictResolutionImportTitleKey(row) ?? ''
       })
       .filter(Boolean),
   )

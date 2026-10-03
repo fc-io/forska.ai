@@ -119,9 +119,11 @@ export const getMatchKindLabel = (matchKind: ComparisonProjectConflictResolution
   const labels: Record<ComparisonProjectConflictResolutionTransferMatchKind, string> = {
     arxiv: 'arXiv',
     'article-id': 'Article ID',
+    'covidence-id-title': 'Covidence ID + title',
     doi: 'DOI',
     'id-title': 'External ID + title',
     pmid: 'PMID',
+    title: 'Title',
   }
 
   return matchKind ? labels[matchKind] : 'Unknown'
@@ -131,7 +133,7 @@ export const getMatchKeyLabel = (
   matchKind: ComparisonProjectConflictResolutionTransferMatchKind | null,
   matchKey: string | null,
 ) => {
-  return matchKind === 'id-title' && matchKey
+  return (matchKind === 'id-title' || matchKind === 'covidence-id-title') && matchKey
     ? matchKey.split(String.fromCharCode(31)).join(' / ')
     : getOptionalImportValueLabel(matchKey)
 }
