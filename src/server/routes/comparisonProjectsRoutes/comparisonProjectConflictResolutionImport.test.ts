@@ -199,6 +199,14 @@ test('target article queries are constrained by selected normalized matching key
     articleTable: 'app.article',
     titleKeys: [titleKey ?? ''],
   })
+  const scopedTitleSql = getComparisonProjectConflictResolutionImportTitleTargetArticlesSql({
+    articleIdentifierTable: 'app.article_identifier',
+    articleImportRouteTable: 'app.article_import_route',
+    articleScopeConditions: ['EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)'],
+    articleTable: 'app.article',
+    externalArticleImportRouteIds: ['import-route-1'],
+    titleKeys: [titleKey ?? ''],
+  })
 
   expect(idTitleKey).toBe('external-1\u001Fa multi line title')
   expect(titleKey).toBe('a multi line title')
@@ -234,6 +242,13 @@ test('target article queries are constrained by selected normalized matching key
   expect(titleSql).toContain('strong_identifier.normalizedValue')
   expect(titleSql).toContain(titleKey ?? '')
   expect(titleSql).toContain('EXISTS (SELECT 1 FROM app.project_article pa WHERE pa.article_id = a.id)')
+  expect(scopedTitleSql).toContain('scoped_external_article AS')
+  expect(scopedTitleSql).toContain('FROM app.article_import_route')
+  expect(scopedTitleSql).toContain("import_route_id IN ('import-route-1')")
+  expect(scopedTitleSql).toContain(
+    'COALESCE(scoped_external_article.externalArticleId, a.article_id) AS externalArticleId',
+  )
+  expect(scopedTitleSql).toContain('LEFT JOIN scoped_external_article ON scoped_external_article.articleId = a.id')
 })
 
 test('serving target article queries use active comparison serving identity tables', () => {

@@ -3604,6 +3604,9 @@ test('comparison project conflict resolution import preview returns counts witho
 
   const body = JSON.parse(bodyText) as {data: ConflictResolutionImportSummaryResponse}
   const state = getMockDatabaseState()
+  const scopedTargetQuery = state.queryStatements.find((statement) => {
+    return statement.includes('scoped_external_article AS') && statement.includes('FROM app.article_import_route')
+  })
 
   expect(response.status).toBe(200)
   expect(body.data).toEqual({
@@ -3629,6 +3632,10 @@ test('comparison project conflict resolution import preview returns counts witho
   expect(state.conflictResolutionRows).toHaveLength(2)
   expect(state.staleServingIds).toEqual([])
   expect(state.transactionCalls).toBe(0)
+  expect(scopedTargetQuery ?? '').toContain("import_route_id IN ('import-route-1')")
+  expect(scopedTargetQuery ?? '').toContain(
+    'COALESCE(scoped_external_article.externalArticleId, a.article_id) AS externalArticleId',
+  )
 })
 
 test('comparison project conflict resolution import analyze returns row details without creating upload session', async () => {

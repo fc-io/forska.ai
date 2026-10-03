@@ -1665,6 +1665,32 @@ const getComparisonProjectSourceSummaryPromptConfigsFromSources = (
   })
 }
 
+const getImportRouteIdsForRoutes = async (tx: AppQueryRunner, importRoutes: string[]) => {
+  if (importRoutes.length === 0) {
+    return []
+  }
+
+  const routeRows = await tx.queryJson<{id: string; route: string}>(`
+    SELECT id, route
+    FROM ${importRouteTable}
+    WHERE route IN (${getInClause(importRoutes)})
+  `)
+
+  if (routeRows.length !== importRoutes.length) {
+    throw new Error('One or more import routes were not found')
+  }
+
+  const routeIdByRoute = new Map(
+    routeRows.map((routeRow) => {
+      return [routeRow.route, routeRow.id] as const
+    }),
+  )
+
+  return importRoutes.map((importRoute) => {
+    return routeIdByRoute.get(importRoute) ?? importRoute
+  })
+}
+
 const getCreateFromProjectImportScope = async (params: {
   createdComparisonProject: ReturnType<typeof getComparisonProjectRecordValue>
   promptSelections: PromptSelection[]
@@ -1685,6 +1711,7 @@ const getCreateFromProjectImportScope = async (params: {
     params.createdComparisonProject,
     getComparisonProjectContentDimensions(sourceProjects),
   )
+  const selectedImportRouteIds = await getImportRouteIdsForRoutes(params.tx, params.selectedImportRoutes)
   const sourceProjectSummaryPrompts = getComparisonProjectSourceSummaryPromptConfigsFromSources(
     params.selectedSourceProjects,
   )
@@ -1717,7 +1744,7 @@ const getCreateFromProjectImportScope = async (params: {
     prompts: promptConfigs,
     sourceProjectSummaryPrompts,
     models: modelRows,
-    importRouteIds: params.selectedImportRoutes,
+    importRouteIds: selectedImportRouteIds,
     columns,
   }
 }
@@ -1950,8 +1977,10 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
           getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql({
             articleIds: sourceArticleIds,
             articleIdentifierTable,
+            articleImportRouteTable,
             articleScopeConditions,
             articleTable,
+            externalArticleImportRouteIds: params.scope.importRouteIds,
           }),
         )
       : []
@@ -1967,8 +1996,10 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
       ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
           getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql({
             articleIdentifierTable,
+            articleImportRouteTable,
             articleScopeConditions,
             articleTable,
+            externalArticleImportRouteIds: params.scope.importRouteIds,
             identifierKeys,
           }),
         )
@@ -1978,8 +2009,10 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
       ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
           getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql({
             articleIdentifierTable,
+            articleImportRouteTable,
             articleScopeConditions,
             articleTable,
+            externalArticleImportRouteIds: params.scope.importRouteIds,
             idTitleKeys,
           }),
         )
@@ -1989,8 +2022,10 @@ const getConflictResolutionImportCandidateTargetRows = async (params: {
       ? await params.tx.queryJson<ComparisonProjectConflictResolutionImportTargetArticleQueryRow>(
           getComparisonProjectConflictResolutionImportTitleTargetArticlesSql({
             articleIdentifierTable,
+            articleImportRouteTable,
             articleScopeConditions,
             articleTable,
+            externalArticleImportRouteIds: params.scope.importRouteIds,
             titleKeys,
           }),
         )

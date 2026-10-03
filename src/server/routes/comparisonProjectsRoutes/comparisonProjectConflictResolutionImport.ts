@@ -384,6 +384,71 @@ const getComparisonProjectConflictResolutionImportIdTitleKeySql = (params: {
   return `LOWER(TRIM(COALESCE(${params.externalArticleIdColumn}, ''))) || ${getSqlLiteral(idTitleKeySeparator)} || ${getComparisonProjectConflictResolutionImportTitleKeySql(params.titleColumn)}`
 }
 
+type ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams = {
+  articleImportRouteTable?: string
+  externalArticleImportRouteIds?: readonly string[]
+}
+
+const hasComparisonProjectConflictResolutionImportScopedExternalArticleSql = (
+  params: ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams,
+) => {
+  return Boolean(params.articleImportRouteTable && params.externalArticleImportRouteIds?.length)
+}
+
+const getComparisonProjectConflictResolutionImportScopedExternalArticleCteSql = (
+  params: ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams,
+) => {
+  if (!hasComparisonProjectConflictResolutionImportScopedExternalArticleSql(params)) {
+    return null
+  }
+  const importRouteIds = params.externalArticleImportRouteIds ?? []
+
+  return `
+    scoped_external_article AS (
+      SELECT
+        article_id AS articleId,
+        MIN(external_article_id) AS externalArticleId
+      FROM ${params.articleImportRouteTable}
+      WHERE import_route_id IN (${getInClause([...importRouteIds])})
+        AND NULLIF(TRIM(COALESCE(external_article_id, '')), '') IS NOT NULL
+      GROUP BY article_id
+    )`
+}
+
+const getComparisonProjectConflictResolutionImportWithCtesSql = (
+  ctes: Array<string | null | undefined>,
+) => {
+  const filteredCtes = ctes.filter((cte): cte is string => {
+    return Boolean(cte)
+  })
+
+  return filteredCtes.length > 0 ? `WITH ${filteredCtes.join(',\n')}` : ''
+}
+
+const getComparisonProjectConflictResolutionImportTargetExternalArticleIdSql = (
+  params: ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams,
+) => {
+  return hasComparisonProjectConflictResolutionImportScopedExternalArticleSql(params)
+    ? 'COALESCE(scoped_external_article.externalArticleId, a.article_id)'
+    : 'a.article_id'
+}
+
+const getComparisonProjectConflictResolutionImportScopedExternalArticleJoinSql = (
+  params: ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams,
+) => {
+  return hasComparisonProjectConflictResolutionImportScopedExternalArticleSql(params)
+    ? 'LEFT JOIN scoped_external_article ON scoped_external_article.articleId = a.id'
+    : ''
+}
+
+const getComparisonProjectConflictResolutionImportTargetExternalArticleIdGroupBySql = (
+  params: ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams,
+) => {
+  return hasComparisonProjectConflictResolutionImportScopedExternalArticleSql(params)
+    ? 'a.article_id, scoped_external_article.externalArticleId'
+    : 'a.article_id'
+}
+
 const getComparisonProjectConflictResolutionImportDoiIdentifierValueSql = (column: string) => {
   return `regexp_replace(LOWER(TRIM(COALESCE(${column}, ''))), '^(https?://(dx\\.)?doi\\.org/|doi:\\s*)', '')`
 }
@@ -537,22 +602,28 @@ export const getComparisonProjectConflictResolutionImportDoiTargetArticlesSql = 
   articleScopeConditions: readonly string[]
   articleTable: string
   doiKeys: string[]
-}) => {
+} & ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams) => {
+  const externalArticleIdSql = getComparisonProjectConflictResolutionImportTargetExternalArticleIdSql(params)
+
   return `
+    ${getComparisonProjectConflictResolutionImportWithCtesSql([
+      getComparisonProjectConflictResolutionImportScopedExternalArticleCteSql(params),
+    ])}
     SELECT
       a.id AS articleId,
       MIN(doi_identifier.normalized_value) AS doi,
       LIST(DISTINCT doi_identifier.normalized_value ORDER BY doi_identifier.normalized_value) AS doiKeys,
-      a.article_id AS externalArticleId,
+      ${externalArticleIdSql} AS externalArticleId,
       a.article_title AS title
     FROM ${params.articleIdentifierTable} doi_identifier
     INNER JOIN ${params.articleTable} a ON a.id = doi_identifier.article_id
+    ${getComparisonProjectConflictResolutionImportScopedExternalArticleJoinSql(params)}
     ${getWhereClause([
       ...params.articleScopeConditions,
       "doi_identifier.kind = 'doi'",
       params.doiKeys.length > 0 ? `doi_identifier.normalized_value IN (${getInClause(params.doiKeys)})` : 'FALSE',
     ])}
-    GROUP BY a.id, a.article_id, a.article_title
+    GROUP BY a.id, ${getComparisonProjectConflictResolutionImportTargetExternalArticleIdGroupBySql(params)}, a.article_title
     ORDER BY a.id ASC
   `
 }
@@ -562,21 +633,25 @@ export const getComparisonProjectConflictResolutionImportIdentifierTargetArticle
   articleScopeConditions: readonly string[]
   articleTable: string
   identifierKeys: string[]
-}) => {
+} & ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams) => {
   const identifierKeySql = `strong_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || strong_identifier.normalizedValue`
   const matchedIdentifierKeySql = `target_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || target_identifier.normalizedValue`
+  const externalArticleIdSql = getComparisonProjectConflictResolutionImportTargetExternalArticleIdSql(params)
 
   return `
-    WITH ${getComparisonProjectConflictResolutionImportTargetIdentifierCtesSql({
-      articleIdentifierTable: params.articleIdentifierTable,
-      articleTable: params.articleTable,
-    })},
-    matched_article AS (
+    ${getComparisonProjectConflictResolutionImportWithCtesSql([
+      getComparisonProjectConflictResolutionImportTargetIdentifierCtesSql({
+        articleIdentifierTable: params.articleIdentifierTable,
+        articleTable: params.articleTable,
+      }),
+      getComparisonProjectConflictResolutionImportScopedExternalArticleCteSql(params),
+      `matched_article AS (
       SELECT DISTINCT target_identifier.articleId AS articleId
       FROM target_identifier
       WHERE target_identifier.kind IN ('doi', 'pmid', 'arxiv')
         AND ${matchedIdentifierKeySql} IN (${params.identifierKeys.length > 0 ? getInClause(params.identifierKeys) : 'NULL'})
-    )
+    )`,
+    ])}
     SELECT
       a.id AS articleId,
       MIN(CASE WHEN strong_identifier.kind = 'doi' THEN strong_identifier.normalizedValue ELSE NULL END) AS doi,
@@ -584,14 +659,15 @@ export const getComparisonProjectConflictResolutionImportIdentifierTargetArticle
       a.doi AS legacyDoi,
       a.pubmed_id AS pubmedId,
       a.arxiv_id AS arxivId,
-      a.article_id AS externalArticleId,
+      ${externalArticleIdSql} AS externalArticleId,
       a.article_title AS title
     FROM matched_article
     INNER JOIN ${params.articleTable} a ON a.id = matched_article.articleId
     LEFT JOIN target_identifier strong_identifier
       ON strong_identifier.articleId = a.id
+    ${getComparisonProjectConflictResolutionImportScopedExternalArticleJoinSql(params)}
     ${getWhereClause(params.articleScopeConditions)}
-    GROUP BY a.id, a.doi, a.pubmed_id, a.arxiv_id, a.article_id, a.article_title
+    GROUP BY a.id, a.doi, a.pubmed_id, a.arxiv_id, ${getComparisonProjectConflictResolutionImportTargetExternalArticleIdGroupBySql(params)}, a.article_title
     ORDER BY a.id ASC
   `
 }
@@ -601,10 +677,14 @@ export const getComparisonProjectConflictResolutionImportArticleIdTargetArticles
   articleIdentifierTable: string
   articleScopeConditions: readonly string[]
   articleTable: string
-}) => {
+} & ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams) => {
   const identifierKeySql = `strong_identifier.kind || ${getSqlLiteral(identifierKeySeparator)} || strong_identifier.normalized_value`
+  const externalArticleIdSql = getComparisonProjectConflictResolutionImportTargetExternalArticleIdSql(params)
 
   return `
+    ${getComparisonProjectConflictResolutionImportWithCtesSql([
+      getComparisonProjectConflictResolutionImportScopedExternalArticleCteSql(params),
+    ])}
     SELECT
       a.id AS articleId,
       MIN(CASE WHEN strong_identifier.kind = 'doi' THEN strong_identifier.normalized_value ELSE NULL END) AS doi,
@@ -612,17 +692,18 @@ export const getComparisonProjectConflictResolutionImportArticleIdTargetArticles
       a.doi AS legacyDoi,
       a.pubmed_id AS pubmedId,
       a.arxiv_id AS arxivId,
-      a.article_id AS externalArticleId,
+      ${externalArticleIdSql} AS externalArticleId,
       a.article_title AS title
     FROM ${params.articleTable} a
     LEFT JOIN ${params.articleIdentifierTable} strong_identifier
       ON strong_identifier.article_id = a.id
       AND strong_identifier.kind IN ('doi', 'pmid', 'arxiv')
+    ${getComparisonProjectConflictResolutionImportScopedExternalArticleJoinSql(params)}
     ${getWhereClause([
       ...params.articleScopeConditions,
       params.articleIds.length > 0 ? `a.id IN (${getInClause(params.articleIds)})` : 'FALSE',
     ])}
-    GROUP BY a.id, a.doi, a.pubmed_id, a.arxiv_id, a.article_id, a.article_title
+    GROUP BY a.id, a.doi, a.pubmed_id, a.arxiv_id, ${getComparisonProjectConflictResolutionImportTargetExternalArticleIdGroupBySql(params)}, a.article_title
     ORDER BY a.id ASC
   `
 }
@@ -799,25 +880,29 @@ export const getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSq
   articleScopeConditions: readonly string[]
   articleTable: string
   idTitleKeys: string[]
-}) => {
+} & ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams) => {
+  const externalArticleIdSql = getComparisonProjectConflictResolutionImportTargetExternalArticleIdSql(params)
   const idTitleKeySql = getComparisonProjectConflictResolutionImportIdTitleKeySql({
-    externalArticleIdColumn: 'a.article_id',
+    externalArticleIdColumn: externalArticleIdSql,
     titleColumn: 'a.article_title',
   })
 
   return `
-    WITH doi_identifier AS (
+    ${getComparisonProjectConflictResolutionImportWithCtesSql([
+      `doi_identifier AS (
       SELECT
         article_id AS articleId,
         MIN(normalized_value) AS doi
       FROM ${params.articleIdentifierTable}
       WHERE kind = 'doi'
       GROUP BY article_id
-    ),
-    ${getComparisonProjectConflictResolutionImportTargetIdentifierCtesSql({
-      articleIdentifierTable: params.articleIdentifierTable,
-      articleTable: params.articleTable,
-    })}
+    )`,
+      getComparisonProjectConflictResolutionImportTargetIdentifierCtesSql({
+        articleIdentifierTable: params.articleIdentifierTable,
+        articleTable: params.articleTable,
+      }),
+      getComparisonProjectConflictResolutionImportScopedExternalArticleCteSql(params),
+    ])}
     SELECT
       a.id AS articleId,
       doi_identifier.doi AS doi,
@@ -825,16 +910,17 @@ export const getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSq
       a.doi AS legacyDoi,
       a.pubmed_id AS pubmedId,
       a.arxiv_id AS arxivId,
-      a.article_id AS externalArticleId,
+      ${externalArticleIdSql} AS externalArticleId,
       a.article_title AS title
     FROM ${params.articleTable} a
     LEFT JOIN doi_identifier ON doi_identifier.articleId = a.id
     LEFT JOIN target_identifier strong_identifier ON strong_identifier.articleId = a.id
+    ${getComparisonProjectConflictResolutionImportScopedExternalArticleJoinSql(params)}
     ${getWhereClause([
       ...params.articleScopeConditions,
       params.idTitleKeys.length > 0 ? `${idTitleKeySql} IN (${getInClause(params.idTitleKeys)})` : 'FALSE',
     ])}
-    GROUP BY a.id, doi_identifier.doi, a.doi, a.pubmed_id, a.arxiv_id, a.article_id, a.article_title
+    GROUP BY a.id, doi_identifier.doi, a.doi, a.pubmed_id, a.arxiv_id, ${getComparisonProjectConflictResolutionImportTargetExternalArticleIdGroupBySql(params)}, a.article_title
     ORDER BY a.id ASC
   `
 }
@@ -844,22 +930,26 @@ export const getComparisonProjectConflictResolutionImportTitleTargetArticlesSql 
   articleScopeConditions: readonly string[]
   articleTable: string
   titleKeys: string[]
-}) => {
+} & ComparisonProjectConflictResolutionImportScopedExternalArticleSqlParams) => {
+  const externalArticleIdSql = getComparisonProjectConflictResolutionImportTargetExternalArticleIdSql(params)
   const titleKeySql = getComparisonProjectConflictResolutionImportTitleKeySql('a.article_title')
 
   return `
-    WITH doi_identifier AS (
+    ${getComparisonProjectConflictResolutionImportWithCtesSql([
+      `doi_identifier AS (
       SELECT
         article_id AS articleId,
         MIN(normalized_value) AS doi
       FROM ${params.articleIdentifierTable}
       WHERE kind = 'doi'
       GROUP BY article_id
-    ),
-    ${getComparisonProjectConflictResolutionImportTargetIdentifierCtesSql({
-      articleIdentifierTable: params.articleIdentifierTable,
-      articleTable: params.articleTable,
-    })}
+    )`,
+      getComparisonProjectConflictResolutionImportTargetIdentifierCtesSql({
+        articleIdentifierTable: params.articleIdentifierTable,
+        articleTable: params.articleTable,
+      }),
+      getComparisonProjectConflictResolutionImportScopedExternalArticleCteSql(params),
+    ])}
     SELECT
       a.id AS articleId,
       doi_identifier.doi AS doi,
@@ -867,16 +957,17 @@ export const getComparisonProjectConflictResolutionImportTitleTargetArticlesSql 
       a.doi AS legacyDoi,
       a.pubmed_id AS pubmedId,
       a.arxiv_id AS arxivId,
-      a.article_id AS externalArticleId,
+      ${externalArticleIdSql} AS externalArticleId,
       a.article_title AS title
     FROM ${params.articleTable} a
     LEFT JOIN doi_identifier ON doi_identifier.articleId = a.id
     LEFT JOIN target_identifier strong_identifier ON strong_identifier.articleId = a.id
+    ${getComparisonProjectConflictResolutionImportScopedExternalArticleJoinSql(params)}
     ${getWhereClause([
       ...params.articleScopeConditions,
       params.titleKeys.length > 0 ? `${titleKeySql} IN (${getInClause(params.titleKeys)})` : 'FALSE',
     ])}
-    GROUP BY a.id, doi_identifier.doi, a.doi, a.pubmed_id, a.arxiv_id, a.article_id, a.article_title
+    GROUP BY a.id, doi_identifier.doi, a.doi, a.pubmed_id, a.arxiv_id, ${getComparisonProjectConflictResolutionImportTargetExternalArticleIdGroupBySql(params)}, a.article_title
     ORDER BY a.id ASC
   `
 }
