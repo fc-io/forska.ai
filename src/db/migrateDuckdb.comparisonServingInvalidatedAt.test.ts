@@ -13,8 +13,8 @@ const tempRuntimeRoot = createTempRuntimeRoot('migrate-comparison-serving-invali
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
 
-const migrationFileName = '0259_comparisonServingInvalidatedAt.sql'
-const previousMigrationFileName = '0258_comparisonServingUseMetadata.sql'
+const migrationFileName = '0260_comparisonServingInvalidatedAt.sql'
+const previousMigrationFileName = '0259_judgmentJobProviderHealth.sql'
 const migrationSql = readFileSync(resolve(import.meta.dir, 'duckdbMigrations', migrationFileName), 'utf8')
 
 let database: ReturnType<typeof getAppDatabaseService> | null = null
