@@ -105,6 +105,18 @@ const archivedProjectJobCleanupMutations: CleanupMutation[] = [
   },
   {
     phase: 'runtime_state_cleanup',
+    tableName: 'app.judgment_job_provider_health',
+    whereSql: (projectId: string) => {
+      return `EXISTS (
+        SELECT 1
+        FROM app.judgment_job job
+        WHERE job.id = app.judgment_job_provider_health.job_id
+          AND job.project_id = ${getSqlLiteral(projectId)}
+      )`
+    },
+  },
+  {
+    phase: 'runtime_state_cleanup',
     tableName: 'app.request_attempt_closeout',
     whereSql: (projectId: string) => {
       return `token_use_id IN (
