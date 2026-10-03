@@ -416,6 +416,15 @@ test('comparison serving rebuild invokes bulk phases outside transactions and ke
     },
     database,
     generationService: {
+      cleanupOldComparisonProjectServingGenerations: async (_comparisonProjectId, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        recordEvent('generation:cleanup')
+
+        return generationDependencies.transaction(async () => {
+          return {deletedRowCount: 0, tables: []}
+        })
+      },
       promoteComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
         const generationDependencies = dependencies ?? database
 
@@ -527,6 +536,15 @@ test('comparison serving rebuild skips prompt cell phase for summary-mode projec
     },
     database,
     generationService: {
+      cleanupOldComparisonProjectServingGenerations: async (_comparisonProjectId, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        recordEvent('generation:cleanup')
+
+        return generationDependencies.transaction(async () => {
+          return {deletedRowCount: 0, tables: []}
+        })
+      },
       promoteComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
         const generationDependencies = dependencies ?? database
 
@@ -641,6 +659,13 @@ test('comparison serving rebuild persists staged counts from batch progress call
     },
     database,
     generationService: {
+      cleanupOldComparisonProjectServingGenerations: async (_comparisonProjectId, dependencies) => {
+        const generationDependencies = dependencies ?? database
+
+        return generationDependencies.transaction(async () => {
+          return {deletedRowCount: 0, tables: []}
+        })
+      },
       promoteComparisonProjectServingGeneration: async (_comparisonProjectId, _generation, dependencies) => {
         const generationDependencies = dependencies ?? database
 
@@ -895,7 +920,7 @@ test('comparison serving rebuild reclaims expired refreshing status with a newer
     result.rows.some((row) => {
       return row.generation === '1'
     }),
-  ).toBe(true)
+  ).toBe(false)
   expect(
     result.rows.some((row) => {
       return row.generation === '3'
@@ -1000,7 +1025,7 @@ test('comparison serving stale marker preserves active generation and clears tar
   expect(result.statusRow.servingStatus).toBe('stale')
 })
 
-test('comparison serving stale markers during a live rebuild keep the claim and complete the rebuild as stale', () => {
+test('comparison serving data invalidations during a live rebuild keep the claim and complete the rebuild as stale', () => {
   const result = runScript<{
     followUpInvalidationRow: InvalidationRow
     followUpResult: {comparisonProjectId: string | null; rebuilt: boolean}
@@ -1020,7 +1045,8 @@ test('comparison serving stale markers during a live rebuild keep the claim and 
       cellBuilder: {
         insertPromptModeComparisonProjectCells: async (params, runner) => {
           await realCellBuilder.insertPromptModeComparisonProjectCells(params, runner)
-          statusDuringPromptCells = await service.markComparisonProjectServingStale(comparisonProjectId)
+          await service.markComparisonProjectsServingStale([comparisonProjectId])
+          statusDuringPromptCells = await service.getComparisonProjectServingStatus(comparisonProjectId)
         },
         insertSummaryModeComparisonProjectCells: async (params, runner) => {
           await realCellBuilder.insertSummaryModeComparisonProjectCells(params, runner)
@@ -1071,6 +1097,126 @@ test('comparison serving stale markers during a live rebuild keep the claim and 
   expect(result.followUpStatusRow.servingStatus).toBe('ready')
   expect(result.followUpInvalidationRow.isInvalidated).toBe(false)
   expect(result.followUpInvalidationRow.servingPhase).toBe('ready')
+})
+
+test('comparison serving stale marker for a comparison config change aborts a live rebuild', () => {
+  const result = runScript<{
+    failureText: string
+    followUpResult: {comparisonProjectId: string | null; rebuilt: boolean}
+    followUpStatusRow: StatusRow
+    rows: GenerationRow[]
+    statusDuringPromptCells: ServingStatusSnapshot | null
+    statusRow: StatusRow
+  }>(`
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+
+    const realCellBuilder = getComparisonProjectServingCellBuilder()
+    let failureText = ''
+    let statusDuringPromptCells = null
+
+    try {
+      await service.rebuildComparisonProjectServing(comparisonProjectId, {
+        cellBuilder: {
+          insertPromptModeComparisonProjectCells: async (params, runner) => {
+            await realCellBuilder.insertPromptModeComparisonProjectCells(params, runner)
+            statusDuringPromptCells = await service.markComparisonProjectServingStale(comparisonProjectId)
+          },
+          insertSummaryModeComparisonProjectCells: realCellBuilder.insertSummaryModeComparisonProjectCells,
+        },
+      })
+    } catch (error) {
+      failureText = error instanceof Error ? error.message : String(error)
+    }
+
+    const statusRow = await getStatusRow()
+    const followUpResult = await service.rebuildNextUnavailableComparisonProjectServing()
+    const followUpStatusRow = await getStatusRow()
+    const rows = await getGenerationRows()
+
+    console.log(JSON.stringify({
+      failureText,
+      followUpResult: {comparisonProjectId: followUpResult.comparisonProjectId, rebuilt: followUpResult.rebuilt},
+      followUpStatusRow,
+      rows,
+      statusDuringPromptCells,
+      statusRow,
+    }))
+    await database.close()
+  `)
+
+  expect(result.failureText).toContain('is no longer claimed')
+  expect(result.statusDuringPromptCells?.servingStatus).toBe('stale')
+  expect(result.statusDuringPromptCells?.servingGeneration).toBe(2)
+  expect(result.statusDuringPromptCells?.servingStartedAt).toBeNull()
+  expect(result.statusRow.activeGeneration).toBe('1')
+  expect(result.statusRow.servingGeneration).toBe('2')
+  expect(result.statusRow.servingStatus).toBe('stale')
+  expect(result.followUpResult).toEqual({comparisonProjectId: '9fd6f6e9-5191-4d3e-a688-d1f86088d93c', rebuilt: true})
+  expect(result.followUpStatusRow.activeGeneration).toBe('3')
+  expect(result.followUpStatusRow.servingGeneration).toBe('3')
+  expect(result.followUpStatusRow.servingStatus).toBe('ready')
+  expect(result.rows.length).toBeGreaterThan(0)
+  expect(
+    result.rows.every((row) => {
+      return row.generation === '3'
+    }),
+  ).toBe(true)
+})
+
+test('comparison serving orphaned claim release resets claims progressed before the cutoff', () => {
+  const result = runScript<{
+    keptStatus: ServingStatusSnapshot
+    releasedAfterCutoff: string[]
+    releasedBeforeCutoff: string[]
+    releasedStatus: ServingStatusSnapshot
+    releasedStatusRow: StatusRow
+  }>(`
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+    await database.run(\`
+      UPDATE app.comparison_project_serving_generation
+      SET
+        serving_status = 'refreshing',
+        serving_generation = 2,
+        serving_started_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        serving_phase = 'rollups',
+        serving_phase_started_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        serving_last_progressed_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+      WHERE comparison_project_id = '\${comparisonProjectId}'
+    \`)
+
+    const cutoff = new Date('2026-04-01T00:00:01.000Z')
+    const releasedBeforeCutoff = await service.releaseComparisonProjectServingClaimsProgressedBefore(cutoff)
+    const releasedStatus = await service.getComparisonProjectServingStatus(comparisonProjectId)
+    const releasedStatusRow = await getStatusRow()
+
+    await database.run(\`
+      UPDATE app.comparison_project_serving_generation
+      SET
+        serving_status = 'refreshing',
+        serving_generation = 3,
+        serving_started_at = TIMESTAMPTZ '2026-04-02T00:00:00.000Z',
+        serving_phase = 'rollups',
+        serving_phase_started_at = TIMESTAMPTZ '2026-04-02T00:00:00.000Z',
+        serving_last_progressed_at = TIMESTAMPTZ '2026-04-02T00:00:00.000Z'
+      WHERE comparison_project_id = '\${comparisonProjectId}'
+    \`)
+
+    const releasedAfterCutoff = await service.releaseComparisonProjectServingClaimsProgressedBefore(cutoff)
+    const keptStatus = await service.getComparisonProjectServingStatus(comparisonProjectId)
+
+    console.log(JSON.stringify({keptStatus, releasedAfterCutoff, releasedBeforeCutoff, releasedStatus, releasedStatusRow}))
+    await database.close()
+  `)
+
+  expect(result.releasedBeforeCutoff).toEqual(['9fd6f6e9-5191-4d3e-a688-d1f86088d93c'])
+  expect(result.releasedStatus.servingStatus).toBe('stale')
+  expect(result.releasedStatus.servingGeneration).toBe(2)
+  expect(result.releasedStatus.servingStartedAt).toBeNull()
+  expect(result.releasedStatus.servingInvalidatedAt).not.toBeNull()
+  expect(result.releasedStatusRow.activeGeneration).toBe('1')
+  expect(result.releasedAfterCutoff).toEqual([])
+  expect(result.keptStatus.servingStatus).toBe('refreshing')
+  expect(result.keptStatus.servingGeneration).toBe(3)
 })
 
 test('comparison serving stale marker resets an expired refreshing claim', () => {
@@ -1175,7 +1321,7 @@ test('comparison serving rebuild treats stale promotion as failed', () => {
   ).toBe(true)
 })
 
-test('comparison serving rebuild retains old generations after a successful promotion', () => {
+test('comparison serving rebuild deletes older generations after a successful promotion', () => {
   const result = runScript<{
     rebuildResult: {cleanupResult: {deletedRowCount: number}; generation: number}
     rows: GenerationRow[]
@@ -1191,17 +1337,13 @@ test('comparison serving rebuild retains old generations after a successful prom
   `)
 
   expect(result.rebuildResult.generation).toBe(2)
-  expect(result.rebuildResult.cleanupResult.deletedRowCount).toBe(0)
+  expect(result.rebuildResult.cleanupResult.deletedRowCount).toBeGreaterThan(0)
   expect(result.statusRow.activeGeneration).toBe('2')
   expect(result.statusRow.servingGeneration).toBe('2')
   expect(result.statusRow.servingStatus).toBe('ready')
+  expect(result.rows.length).toBeGreaterThan(0)
   expect(
-    result.rows.some((row) => {
-      return row.generation === '1'
-    }),
-  ).toBe(true)
-  expect(
-    result.rows.some((row) => {
+    result.rows.every((row) => {
       return row.generation === '2'
     }),
   ).toBe(true)
@@ -1250,7 +1392,6 @@ test('comparison serving rebuild persists the discovered system prompt variants 
   expect(result.secondStatus.activeGeneration).toBe(2)
   expect(result.secondStatus.activeSystemPromptVariants).toEqual(['legacy', 'screening_v1'])
   expect(result.servedVariantRows).toEqual([
-    {generation: '1', systemPromptVariant: 'legacy'},
     {generation: '2', systemPromptVariant: 'legacy'},
     {generation: '2', systemPromptVariant: 'screening_v1'},
   ])

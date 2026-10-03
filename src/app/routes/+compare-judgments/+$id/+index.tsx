@@ -269,7 +269,6 @@ const CompareProjectJudgmentsPage = () => {
         return fetchComparisonProjectStats(comparisonProjectId())
       },
       enabled: comparisonProjectId().length > 0,
-      refetchInterval: getComparisonProjectServingRefetchInterval(comparisonProjectQuery.data?.servingStatus),
       refetchOnWindowFocus: false,
       staleTime: 5000,
     }
@@ -723,10 +722,12 @@ const CompareProjectJudgmentsPage = () => {
                     <div class={`rounded-lg border p-4 ${statusBanner().className}`}>
                       <p class="font-medium">{statusBanner().title}</p>
                       <p class="mt-1 text-sm opacity-90">{statusBanner().body}</p>
-                      <ComparisonProjectServingProgress
-                        progress={comparisonProject().servingProgress}
-                        showWaiting={comparisonProject().servingStatus === 'refreshing'}
-                      />
+                      <Show when={comparisonProject().servingStatus !== 'stale'}>
+                        <ComparisonProjectServingProgress
+                          progress={comparisonProject().servingProgress}
+                          showWaiting={comparisonProject().servingStatus === 'refreshing'}
+                        />
+                      </Show>
                     </div>
                   )
                 }}

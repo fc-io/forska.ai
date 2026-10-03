@@ -1,3 +1,4 @@
+import {getComparisonProjectServingRebuildService} from '../services/comparisonProjectServingRebuildService.ts'
 import {runComparisonProjectServingMaintenanceWorkerOnce} from '../workers/comparisonProjectServingMaintenanceWorker.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
@@ -11,6 +12,10 @@ const defaultPollIntervalMs = 30_000
 
 const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
+}
+
+const getProcessStartedAt = () => {
+  return new Date(Date.now() - process.uptime() * 1000)
 }
 
 const logComparisonProjectServingMaintenanceWorkerError = (error: unknown) => {
@@ -71,7 +76,30 @@ export const startComparisonProjectServingMaintenanceWorkerHeartbeat = (
     }
   }
 
-  void runWake()
+  const releaseOrphanedClaims = async () => {
+    try {
+      const releasedComparisonProjectIds =
+        await getComparisonProjectServingRebuildService().releaseComparisonProjectServingClaimsProgressedBefore(
+          getProcessStartedAt(),
+        )
+
+      if (releasedComparisonProjectIds.length > 0) {
+        comparisonProjectServingMaintenanceWorkerLogger.log(
+          'comparison-project-serving-maintenance-worker:orphaned-claims-released',
+          '[comparisonProjectServingMaintenanceWorker] released comparison serving claims left by a previous process',
+          {
+            comparisonProjectIds: releasedComparisonProjectIds,
+            component: comparisonProjectServingMaintenanceWorkerComponent,
+            event: 'orphanedClaimsReleased',
+          },
+        )
+      }
+    } catch (error) {
+      logComparisonProjectServingMaintenanceWorkerError(error)
+    }
+  }
+
+  void releaseOrphanedClaims().then(runWake)
   timer = setInterval(() => {
     void runWake()
   }, pollIntervalMs)

@@ -28,7 +28,7 @@ type ComparisonProjectServingCellBuilder = Pick<
 
 type ComparisonProjectServingGenerationService = Pick<
   ReturnType<typeof getComparisonProjectServingGenerationService>,
-  'promoteComparisonProjectServingGeneration'
+  'cleanupOldComparisonProjectServingGenerations' | 'promoteComparisonProjectServingGeneration'
 >
 
 type ComparisonProjectServingRollupBuilder = Pick<
@@ -511,7 +511,49 @@ const recordComparisonProjectServingRebuildFailed = async ({
   return failed !== undefined
 }
 
-const recordComparisonProjectServingStaleRows = async ({
+const getComparisonProjectServingStaleResetAssignmentsSql = (now: Date) => {
+  return `
+    serving_status = 'stale',
+    serving_generation = CASE
+      WHEN serving_status = 'refreshing' THEN serving_generation
+      ELSE NULL
+    END,
+    serving_started_at = NULL,
+    serving_completed_at = NULL,
+    serving_failed_at = NULL,
+    serving_error = NULL,
+    serving_invalidated_at = ${getTimestampLiteral(now)},
+    serving_phase = NULL,
+    serving_phase_started_at = NULL,
+    serving_last_progressed_at = NULL,
+    serving_staged_article_count = 0,
+    serving_staged_cell_count = 0,
+    serving_staged_filter_member_count = 0,
+    serving_staged_filter_stats_count = 0,
+    serving_total_article_count = NULL,
+    serving_total_cell_count = NULL,
+    generation_updated_at = ${getTimestampLiteral(now)}
+  `
+}
+
+const resetComparisonProjectServingRows = async ({
+  comparisonProjectPredicateSql,
+  now,
+  runner,
+}: {
+  comparisonProjectPredicateSql: string
+  now: Date
+  runner: ComparisonProjectServingRebuildRunner
+}) => {
+  await runner.run(`
+    UPDATE ${comparisonProjectServingGenerationTable}
+    SET ${getComparisonProjectServingStaleResetAssignmentsSql(now)}
+    WHERE ${comparisonProjectPredicateSql}
+      AND ${getUnarchivedComparisonProjectPredicateSql()}
+  `)
+}
+
+const invalidateComparisonProjectServingRows = async ({
   comparisonProjectPredicateSql,
   now,
   runner,
@@ -532,27 +574,7 @@ const recordComparisonProjectServingStaleRows = async ({
   `)
   await runner.run(`
     UPDATE ${comparisonProjectServingGenerationTable}
-    SET
-      serving_status = 'stale',
-      serving_generation = CASE
-        WHEN serving_status = 'refreshing' THEN serving_generation
-        ELSE NULL
-      END,
-      serving_started_at = NULL,
-      serving_completed_at = NULL,
-      serving_failed_at = NULL,
-      serving_error = NULL,
-      serving_invalidated_at = ${getTimestampLiteral(now)},
-      serving_phase = NULL,
-      serving_phase_started_at = NULL,
-      serving_last_progressed_at = NULL,
-      serving_staged_article_count = 0,
-      serving_staged_cell_count = 0,
-      serving_staged_filter_member_count = 0,
-      serving_staged_filter_stats_count = 0,
-      serving_total_article_count = NULL,
-      serving_total_cell_count = NULL,
-      generation_updated_at = ${getTimestampLiteral(now)}
+    SET ${getComparisonProjectServingStaleResetAssignmentsSql(now)}
     WHERE ${comparisonProjectPredicateSql}
       AND ${unarchivedPredicateSql}
       AND NOT ${liveClaimPredicateSql}
@@ -569,7 +591,7 @@ const recordComparisonProjectServingStale = async ({
   runner: ComparisonProjectServingRebuildRunner
 }) => {
   await ensureComparisonProjectServingStatusRow(runner, comparisonProjectId)
-  await recordComparisonProjectServingStaleRows({
+  await resetComparisonProjectServingRows({
     comparisonProjectPredicateSql: `comparison_project_id = ${getSqlLiteral(comparisonProjectId)}`,
     now,
     runner,
@@ -592,10 +614,36 @@ const recordComparisonProjectsServingStale = async ({
   }
 
   await ensureComparisonProjectServingStatusRows(runner, uniqueComparisonProjectIds, now)
-  await recordComparisonProjectServingStaleRows({
+  await invalidateComparisonProjectServingRows({
     comparisonProjectPredicateSql: `comparison_project_id IN (${getQuotedStringList(uniqueComparisonProjectIds).join(', ')})`,
     now,
     runner,
+  })
+}
+
+const releaseComparisonProjectServingClaimsProgressedBefore = async (
+  before: Date,
+  overrides: Pick<ComparisonProjectServingRebuildDependencyOverrides, 'database'> = {},
+) => {
+  const dependencies = getComparisonProjectServingRebuildDependencies(overrides)
+  const now = new Date()
+
+  return dependencies.database.transaction(async (runner) => {
+    const releasedRows = await runner.queryJson<{comparisonProjectId: string}>(`
+      UPDATE ${comparisonProjectServingGenerationTable}
+      SET ${getComparisonProjectServingStaleResetAssignmentsSql(now)}
+      WHERE COALESCE(serving_status, 'missing') = 'refreshing'
+        AND (
+          serving_last_progressed_at IS NULL
+          OR serving_last_progressed_at < ${getTimestampLiteral(before)}
+        )
+        AND ${getUnarchivedComparisonProjectPredicateSql()}
+      RETURNING comparison_project_id AS comparisonProjectId
+    `)
+
+    return releasedRows.map((row) => {
+      return row.comparisonProjectId
+    })
   })
 }
 
@@ -886,7 +934,10 @@ const buildComparisonProjectServingGeneration = async ({
     }
   })
 
-  return emptyComparisonProjectServingCleanupResult
+  return dependencies.generationService.cleanupOldComparisonProjectServingGenerations(
+    comparisonProjectId,
+    getComparisonProjectServingDatabaseGenerationDependencies(dependencies.database),
+  )
 }
 
 const rebuildComparisonProjectServing = async (
@@ -1128,6 +1179,7 @@ const comparisonProjectServingRebuildService = {
   markComparisonProjectsServingStaleTx,
   rebuildNextUnavailableComparisonProjectServing,
   rebuildComparisonProjectServing: rebuildComparisonProjectServingSerialized,
+  releaseComparisonProjectServingClaimsProgressedBefore,
 }
 
 export const getComparisonProjectServingRebuildService = () => {
