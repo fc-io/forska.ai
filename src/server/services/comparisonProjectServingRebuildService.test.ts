@@ -20,6 +20,17 @@ type StatusRow = {
   servingTotalCellCount: string | null
 }
 
+type InvalidationRow = {hasCompletedAt: boolean; isInvalidated: boolean; servingPhase: string | null}
+
+type ServingStatusSnapshot = {
+  activeGeneration: number | null
+  servingGeneration: number | null
+  servingInvalidatedAt: string | null
+  servingPhase: string | null
+  servingStartedAt: string | null
+  servingStatus: string
+}
+
 type RebuildBoundaryEvent = {activeTransaction: boolean; kind: string}
 
 const comparisonProjectServingPhaseNames = [
@@ -285,6 +296,20 @@ const getScript = (body: string) => {
           serving_error AS servingError,
           CAST(serving_total_article_count AS VARCHAR) AS servingTotalArticleCount,
           CAST(serving_total_cell_count AS VARCHAR) AS servingTotalCellCount
+        FROM app.comparison_project_serving_generation
+        WHERE comparison_project_id = '\${comparisonProjectId}'
+        LIMIT 1
+      \`)
+
+      return row
+    }
+
+    const getInvalidationRow = async () => {
+      const [row = null] = await database.queryJson(\`
+        SELECT
+          serving_invalidated_at IS NOT NULL AS isInvalidated,
+          serving_completed_at IS NOT NULL AS hasCompletedAt,
+          serving_phase AS servingPhase
         FROM app.comparison_project_serving_generation
         WHERE comparison_project_id = '\${comparisonProjectId}'
         LIMIT 1
@@ -956,7 +981,7 @@ test('comparison serving rebuild failure records error and preserves the active 
 })
 
 test('comparison serving stale marker preserves active generation and clears target rebuild fields', () => {
-  const result = runScript<{status: {activeGeneration: number | null; servingStatus: string}; statusRow: StatusRow}>(`
+  const result = runScript<{status: ServingStatusSnapshot; statusRow: StatusRow}>(`
     await service.rebuildComparisonProjectServing(comparisonProjectId)
     const status = await service.markComparisonProjectServingStale(comparisonProjectId)
     const statusRow = await getStatusRow()
@@ -967,10 +992,119 @@ test('comparison serving stale marker preserves active generation and clears tar
 
   expect(result.status.activeGeneration).toBe(1)
   expect(result.status.servingStatus).toBe('stale')
+  expect(result.status.servingInvalidatedAt).not.toBeNull()
+  expect(result.status.servingStartedAt).toBeNull()
   expect(result.statusRow.activeGeneration).toBe('1')
   expect(result.statusRow.servingError).toBeNull()
   expect(result.statusRow.servingGeneration).toBeNull()
   expect(result.statusRow.servingStatus).toBe('stale')
+})
+
+test('comparison serving stale markers during a live rebuild keep the claim and complete the rebuild as stale', () => {
+  const result = runScript<{
+    followUpInvalidationRow: InvalidationRow
+    followUpResult: {comparisonProjectId: string | null; rebuilt: boolean}
+    followUpStatusRow: StatusRow
+    invalidationRow: InvalidationRow
+    rebuildResult: {generation: number | null; status: {activeGeneration: number | null; servingStatus: string}}
+    statusDuringPromptCells: ServingStatusSnapshot | null
+    statusDuringSummaryCells: ServingStatusSnapshot | null
+    statusRow: StatusRow
+  }>(`
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+
+    const realCellBuilder = getComparisonProjectServingCellBuilder()
+    let statusDuringPromptCells = null
+    let statusDuringSummaryCells = null
+    const rebuildResult = await service.rebuildComparisonProjectServing(comparisonProjectId, {
+      cellBuilder: {
+        insertPromptModeComparisonProjectCells: async (params, runner) => {
+          await realCellBuilder.insertPromptModeComparisonProjectCells(params, runner)
+          statusDuringPromptCells = await service.markComparisonProjectServingStale(comparisonProjectId)
+        },
+        insertSummaryModeComparisonProjectCells: async (params, runner) => {
+          await realCellBuilder.insertSummaryModeComparisonProjectCells(params, runner)
+          await service.markComparisonProjectsServingStale([comparisonProjectId])
+          statusDuringSummaryCells = await service.getComparisonProjectServingStatus(comparisonProjectId)
+        },
+      },
+    })
+    const statusRow = await getStatusRow()
+    const invalidationRow = await getInvalidationRow()
+    const followUpResult = await service.rebuildNextUnavailableComparisonProjectServing()
+    const followUpStatusRow = await getStatusRow()
+    const followUpInvalidationRow = await getInvalidationRow()
+
+    console.log(JSON.stringify({
+      followUpInvalidationRow,
+      followUpResult: {comparisonProjectId: followUpResult.comparisonProjectId, rebuilt: followUpResult.rebuilt},
+      followUpStatusRow,
+      invalidationRow,
+      rebuildResult,
+      statusDuringPromptCells,
+      statusDuringSummaryCells,
+      statusRow,
+    }))
+    await database.close()
+  `)
+
+  expect(result.statusDuringPromptCells?.servingStatus).toBe('refreshing')
+  expect(result.statusDuringPromptCells?.servingGeneration).toBe(2)
+  expect(result.statusDuringPromptCells?.servingInvalidatedAt).not.toBeNull()
+  expect(result.statusDuringPromptCells?.servingStartedAt).not.toBeNull()
+  expect(result.statusDuringSummaryCells?.servingStatus).toBe('refreshing')
+  expect(result.statusDuringSummaryCells?.servingGeneration).toBe(2)
+  expect(result.statusDuringSummaryCells?.servingPhase).toBe('summary_cells')
+  expect(result.rebuildResult.generation).toBe(2)
+  expect(result.rebuildResult.status.activeGeneration).toBe(2)
+  expect(result.rebuildResult.status.servingStatus).toBe('stale')
+  expect(result.statusRow.activeGeneration).toBe('2')
+  expect(result.statusRow.servingGeneration).toBe('2')
+  expect(result.statusRow.servingStatus).toBe('stale')
+  expect(result.statusRow.servingError).toBeNull()
+  expect(result.invalidationRow.isInvalidated).toBe(true)
+  expect(result.invalidationRow.servingPhase).toBe('ready')
+  expect(result.invalidationRow.hasCompletedAt).toBe(true)
+  expect(result.followUpResult).toEqual({comparisonProjectId: '9fd6f6e9-5191-4d3e-a688-d1f86088d93c', rebuilt: true})
+  expect(result.followUpStatusRow.activeGeneration).toBe('3')
+  expect(result.followUpStatusRow.servingGeneration).toBe('3')
+  expect(result.followUpStatusRow.servingStatus).toBe('ready')
+  expect(result.followUpInvalidationRow.isInvalidated).toBe(false)
+  expect(result.followUpInvalidationRow.servingPhase).toBe('ready')
+})
+
+test('comparison serving stale marker resets an expired refreshing claim', () => {
+  const result = runScript<{invalidationRow: InvalidationRow; status: ServingStatusSnapshot; statusRow: StatusRow}>(`
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+    await database.run(\`
+      UPDATE app.comparison_project_serving_generation
+      SET
+        serving_status = 'refreshing',
+        serving_generation = 2,
+        serving_started_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        serving_phase = 'prompt_cells',
+        serving_phase_started_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        serving_last_progressed_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+      WHERE comparison_project_id = '\${comparisonProjectId}'
+    \`)
+
+    const status = await service.markComparisonProjectServingStale(comparisonProjectId)
+    const statusRow = await getStatusRow()
+    const invalidationRow = await getInvalidationRow()
+
+    console.log(JSON.stringify({invalidationRow, status, statusRow}))
+    await database.close()
+  `)
+
+  expect(result.status.servingStatus).toBe('stale')
+  expect(result.status.servingGeneration).toBe(2)
+  expect(result.status.servingStartedAt).toBeNull()
+  expect(result.status.servingInvalidatedAt).not.toBeNull()
+  expect(result.statusRow.activeGeneration).toBe('1')
+  expect(result.statusRow.servingStatus).toBe('stale')
+  expect(result.invalidationRow.isInvalidated).toBe(true)
+  expect(result.invalidationRow.servingPhase).toBeNull()
+  expect(result.invalidationRow.hasCompletedAt).toBe(false)
 })
 
 test('comparison serving rebuild skips archived comparison projects without creating status rows', () => {

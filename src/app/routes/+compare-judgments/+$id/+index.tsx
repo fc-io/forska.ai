@@ -15,6 +15,7 @@ import {
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectJudgmentsPage,
   fetchComparisonProjectStats,
+  getComparisonProjectServingRefetchInterval,
   resetComparisonProjectConflictResolution,
   setComparisonProjectConflictResolution,
 } from '../../../../services/comparisonProjectsService'
@@ -268,7 +269,7 @@ const CompareProjectJudgmentsPage = () => {
         return fetchComparisonProjectStats(comparisonProjectId())
       },
       enabled: comparisonProjectId().length > 0,
-      refetchInterval: comparisonProjectQuery.data?.servingStatus === 'refreshing' ? 5000 : false,
+      refetchInterval: getComparisonProjectServingRefetchInterval(comparisonProjectQuery.data?.servingStatus),
       refetchOnWindowFocus: false,
       staleTime: 5000,
     }
@@ -351,7 +352,7 @@ const CompareProjectJudgmentsPage = () => {
       },
       initialPageParam: null as string | null,
       placeholderData: keepPreviousData,
-      refetchInterval: comparisonProjectQuery.data?.servingStatus === 'refreshing' ? 5000 : false,
+      refetchInterval: getComparisonProjectServingRefetchInterval(comparisonProjectQuery.data?.servingStatus),
       refetchOnWindowFocus: false,
     }
   })
@@ -370,7 +371,7 @@ const CompareProjectJudgmentsPage = () => {
       },
       enabled: canFetchJudgmentsPage() && judgmentsPageQuery.isSuccess,
       placeholderData: keepPreviousData,
-      refetchInterval: comparisonProjectQuery.data?.servingStatus === 'refreshing' ? 5000 : false,
+      refetchInterval: getComparisonProjectServingRefetchInterval(comparisonProjectQuery.data?.servingStatus),
       refetchOnWindowFocus: false,
     }
   })

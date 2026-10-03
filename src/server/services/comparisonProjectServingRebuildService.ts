@@ -89,6 +89,7 @@ type ComparisonProjectServingStatusRow = {
   servingError: string | null
   servingFailedAt: Date | null
   servingGeneration: number | null
+  servingInvalidatedAt: Date | null
   servingLastProgressedAt: Date | null
   servingPhase: ComparisonProjectServingProgressPhase | null
   servingPhaseStartedAt: Date | null
@@ -110,6 +111,7 @@ type ComparisonProjectServingStatusRecordRow = {
   servingError: string | null
   servingFailedAt: unknown
   servingGeneration: unknown
+  servingInvalidatedAt?: unknown
   servingLastProgressedAt: unknown
   servingPhase: string | null
   servingPhaseStartedAt: unknown
@@ -225,6 +227,26 @@ const getComparisonProjectServingRebuildRetryableFailedBefore = (now: Date) => {
   return getComparisonProjectServingRebuildClaimExpiredBefore(now)
 }
 
+const getComparisonProjectServingLiveClaimPredicateSql = (now: Date) => {
+  const staleBefore = getComparisonProjectServingRebuildClaimExpiredBefore(now)
+
+  return `(
+    COALESCE(serving_status, 'missing') = 'refreshing'
+    AND serving_generation IS NOT NULL
+    AND serving_last_progressed_at IS NOT NULL
+    AND serving_last_progressed_at >= ${getTimestampLiteral(staleBefore)}
+  )`
+}
+
+const getUnarchivedComparisonProjectPredicateSql = () => {
+  return `EXISTS (
+    SELECT 1
+    FROM ${comparisonProjectTable} project
+    WHERE project.id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+      AND project.archived = FALSE
+  )`
+}
+
 const getComparisonProjectServingSystemPromptVariantsValue = (value: unknown): SystemPromptVariant[] => {
   const parsedValue = getJsonValue(value)
   const servedSystemPromptVariants = new Set(Array.isArray(parsedValue) ? parsedValue : [])
@@ -245,6 +267,7 @@ const getComparisonProjectServingStatusRowValue = (
     servingError: row?.servingError ?? null,
     servingFailedAt: getDateValue(row?.servingFailedAt),
     servingGeneration: getComparisonProjectServingGenerationValue(row?.servingGeneration),
+    servingInvalidatedAt: getDateValue(row?.servingInvalidatedAt),
     servingLastProgressedAt: getDateValue(row?.servingLastProgressedAt),
     servingPhase: getComparisonProjectServingProgressPhaseValue(row?.servingPhase ?? null),
     servingPhaseStartedAt: getDateValue(row?.servingPhaseStartedAt),
@@ -377,8 +400,6 @@ const claimComparisonProjectServingRebuild = async ({
   dependencies: ComparisonProjectServingRebuildDependencies
   now: Date
 }) => {
-  const staleBefore = getComparisonProjectServingRebuildClaimExpiredBefore(now)
-
   return dependencies.database.transaction(async (runner) => {
     await ensureComparisonProjectServingStatusRow(runner, comparisonProjectId)
 
@@ -391,6 +412,7 @@ const claimComparisonProjectServingRebuild = async ({
         serving_completed_at = NULL,
         serving_failed_at = NULL,
         serving_error = NULL,
+        serving_invalidated_at = NULL,
         serving_phase = 'queued',
         serving_phase_started_at = ${getTimestampLiteral(now)},
         serving_last_progressed_at = ${getTimestampLiteral(now)},
@@ -402,18 +424,8 @@ const claimComparisonProjectServingRebuild = async ({
         serving_total_cell_count = NULL,
         generation_updated_at = ${getTimestampLiteral(now)}
       WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
-        AND EXISTS (
-          SELECT 1
-          FROM ${comparisonProjectTable} project
-          WHERE project.id = ${comparisonProjectServingGenerationTable}.comparison_project_id
-            AND project.archived = FALSE
-        )
-        AND (
-          COALESCE(serving_status, 'missing') <> 'refreshing'
-          OR serving_generation IS NULL
-          OR serving_last_progressed_at IS NULL
-          OR serving_last_progressed_at < ${getTimestampLiteral(staleBefore)}
-        )
+        AND ${getUnarchivedComparisonProjectPredicateSql()}
+        AND NOT ${getComparisonProjectServingLiveClaimPredicateSql(now)}
       RETURNING CAST(serving_generation AS INTEGER) AS generation
     `)
     const generation = getComparisonProjectServingGenerationValue(claim?.generation)
@@ -442,7 +454,10 @@ const recordComparisonProjectServingRebuildReady = async ({
   const [ready] = await runner.queryJson<{comparisonProjectId: string}>(`
     UPDATE ${comparisonProjectServingGenerationTable}
     SET
-      serving_status = 'ready',
+      serving_status = CASE
+        WHEN serving_invalidated_at IS NULL THEN 'ready'
+        ELSE 'stale'
+      END,
       serving_generation = ${getSqlLiteral(generation)},
       serving_completed_at = ${getTimestampLiteral(now)},
       serving_failed_at = NULL,
@@ -496,16 +511,25 @@ const recordComparisonProjectServingRebuildFailed = async ({
   return failed !== undefined
 }
 
-const recordComparisonProjectServingStale = async ({
-  comparisonProjectId,
+const recordComparisonProjectServingStaleRows = async ({
+  comparisonProjectPredicateSql,
   now,
   runner,
 }: {
-  comparisonProjectId: string
+  comparisonProjectPredicateSql: string
   now: Date
   runner: ComparisonProjectServingRebuildRunner
 }) => {
-  await ensureComparisonProjectServingStatusRow(runner, comparisonProjectId)
+  const liveClaimPredicateSql = getComparisonProjectServingLiveClaimPredicateSql(now)
+  const unarchivedPredicateSql = getUnarchivedComparisonProjectPredicateSql()
+
+  await runner.run(`
+    UPDATE ${comparisonProjectServingGenerationTable}
+    SET serving_invalidated_at = ${getTimestampLiteral(now)}
+    WHERE ${comparisonProjectPredicateSql}
+      AND ${unarchivedPredicateSql}
+      AND ${liveClaimPredicateSql}
+  `)
   await runner.run(`
     UPDATE ${comparisonProjectServingGenerationTable}
     SET
@@ -518,6 +542,7 @@ const recordComparisonProjectServingStale = async ({
       serving_completed_at = NULL,
       serving_failed_at = NULL,
       serving_error = NULL,
+      serving_invalidated_at = ${getTimestampLiteral(now)},
       serving_phase = NULL,
       serving_phase_started_at = NULL,
       serving_last_progressed_at = NULL,
@@ -528,14 +553,27 @@ const recordComparisonProjectServingStale = async ({
       serving_total_article_count = NULL,
       serving_total_cell_count = NULL,
       generation_updated_at = ${getTimestampLiteral(now)}
-    WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
-      AND EXISTS (
-        SELECT 1
-        FROM ${comparisonProjectTable} project
-        WHERE project.id = ${comparisonProjectServingGenerationTable}.comparison_project_id
-          AND project.archived = FALSE
-      )
+    WHERE ${comparisonProjectPredicateSql}
+      AND ${unarchivedPredicateSql}
+      AND NOT ${liveClaimPredicateSql}
   `)
+}
+
+const recordComparisonProjectServingStale = async ({
+  comparisonProjectId,
+  now,
+  runner,
+}: {
+  comparisonProjectId: string
+  now: Date
+  runner: ComparisonProjectServingRebuildRunner
+}) => {
+  await ensureComparisonProjectServingStatusRow(runner, comparisonProjectId)
+  await recordComparisonProjectServingStaleRows({
+    comparisonProjectPredicateSql: `comparison_project_id = ${getSqlLiteral(comparisonProjectId)}`,
+    now,
+    runner,
+  })
 }
 
 const recordComparisonProjectsServingStale = async ({
@@ -554,36 +592,11 @@ const recordComparisonProjectsServingStale = async ({
   }
 
   await ensureComparisonProjectServingStatusRows(runner, uniqueComparisonProjectIds, now)
-  await runner.run(`
-    UPDATE ${comparisonProjectServingGenerationTable}
-    SET
-      serving_status = 'stale',
-      serving_generation = CASE
-        WHEN serving_status = 'refreshing' THEN serving_generation
-        ELSE NULL
-      END,
-      serving_started_at = NULL,
-      serving_completed_at = NULL,
-      serving_failed_at = NULL,
-      serving_error = NULL,
-      serving_phase = NULL,
-      serving_phase_started_at = NULL,
-      serving_last_progressed_at = NULL,
-      serving_staged_article_count = 0,
-      serving_staged_cell_count = 0,
-      serving_staged_filter_member_count = 0,
-      serving_staged_filter_stats_count = 0,
-      serving_total_article_count = NULL,
-      serving_total_cell_count = NULL,
-      generation_updated_at = ${getTimestampLiteral(now)}
-    WHERE comparison_project_id IN (${getQuotedStringList(uniqueComparisonProjectIds).join(', ')})
-      AND EXISTS (
-        SELECT 1
-        FROM ${comparisonProjectTable} project
-        WHERE project.id = ${comparisonProjectServingGenerationTable}.comparison_project_id
-          AND project.archived = FALSE
-      )
-  `)
+  await recordComparisonProjectServingStaleRows({
+    comparisonProjectPredicateSql: `comparison_project_id IN (${getQuotedStringList(uniqueComparisonProjectIds).join(', ')})`,
+    now,
+    runner,
+  })
 }
 
 const getComparisonProjectServingRebuildErrorMessage = (error: unknown) => {
@@ -1040,6 +1053,7 @@ const getComparisonProjectServingStatus = async (
       serving_completed_at AS servingCompletedAt,
       serving_failed_at AS servingFailedAt,
       serving_error AS servingError,
+      serving_invalidated_at AS servingInvalidatedAt,
       serving_phase AS servingPhase,
       serving_phase_started_at AS servingPhaseStartedAt,
       serving_last_progressed_at AS servingLastProgressedAt,
