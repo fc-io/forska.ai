@@ -265,6 +265,31 @@ const getScript = (body: string, resultPath: string) => {
         1
       );
 
+      INSERT INTO app.judgment_job_provider_health (
+        job_id,
+        model_id,
+        status,
+        failure_kind,
+        failure_code,
+        failure_message,
+        first_failed_at,
+        last_failed_at,
+        consecutive_failure_count,
+        total_failure_count
+      )
+      VALUES (
+        'archived-cleanup-job',
+        'archived-cleanup-model',
+        'failing',
+        'usage_limit',
+        'codex_transient_turn_failure',
+        'archived cleanup provider failure',
+        current_timestamp,
+        current_timestamp,
+        1,
+        1
+      );
+
       INSERT INTO mart.project_scope_article (
         project_id,
         article_id,
@@ -395,6 +420,7 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
           + (SELECT COUNT(*) FROM app.project_mart_large_rebuild_state WHERE project_id = 'archived-cleanup-project')
         )::INTEGER AS runtimeRows,
         (SELECT COUNT(*) FROM app.review_answer_dictionary WHERE project_id = 'archived-cleanup-project')::INTEGER AS reviewAnswerDictionaryRows,
+        (SELECT COUNT(*) FROM app.judgment_job_provider_health WHERE job_id = 'archived-cleanup-job')::INTEGER AS providerHealthRows,
         (SELECT project_id FROM app.judgment WHERE id = 'archived-cleanup-judgment') AS appJudgmentProjectId,
         (SELECT project_id FROM mart.judgment_fact WHERE judgment_id = 'archived-cleanup-judgment') AS martJudgmentProjectId
     \`)
@@ -421,6 +447,7 @@ test('bounded cleanup keeps tombstoned project identity until blockers are clear
     martJudgmentProjectId: null,
     projectArticleRows: 0,
     projectRows: 0,
+    providerHealthRows: 0,
     reviewAnswerDictionaryRows: 0,
     runtimeRows: 0,
   })
