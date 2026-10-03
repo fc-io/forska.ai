@@ -8,7 +8,6 @@ import {
   type ComparisonProjectJudgmentsColumn,
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectStats,
-  getComparisonProjectServingRefetchInterval,
 } from '../../../../services/comparisonProjectsService'
 import {
   type ComparisonProjectArticleCategory,
@@ -105,7 +104,6 @@ const CompareProjectExportPage = () => {
         return fetchComparisonProjectStats(comparisonProjectId())
       },
       enabled: comparisonProjectId().length > 0,
-      refetchInterval: getComparisonProjectServingRefetchInterval(comparisonProjectQuery.data?.servingStatus),
       refetchOnWindowFocus: false,
       staleTime: 5000,
     }
