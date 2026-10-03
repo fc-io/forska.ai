@@ -23,6 +23,17 @@ import {
   fetchProviderConnections,
   formatProviderMaxInflightRequests,
 } from '../../../+admin/+models/providerConnectionsClient.ts'
+import {
+  formatProviderFailureMeta,
+  formatProviderRecoveryNote,
+  formatProviderRetryAfter,
+  getProviderFailureKindLabel,
+  getProviderHealthGuidance,
+  getProviderHealthTone,
+  getProviderHealthToneClass,
+  isRecentProviderRecovery,
+  type JudgmentJobProviderHealth,
+} from '../jobsPageShared'
 import {JobTelemetryPanel} from './jobTelemetryPanel.tsx'
 import {JobTelemetryHistoryChart} from './jobTelemetryPanel/jobTelemetryHistoryChart.tsx'
 
@@ -261,6 +272,7 @@ type JobData = {
     startupHandling?: 'auto_drain' | 'idle' | 'skip_offline_repair'
   }
   judgingRuntime?: {enabled?: boolean; reason?: string | null}
+  providerHealth?: JudgmentJobProviderHealth | null
   error?: string[]
 }
 
@@ -353,7 +365,43 @@ const MetricGroup = (props: MetricGroupProps) => {
   )
 }
 
-const AdminJudgmentJobDetail = () => {
+const ProviderHealthFailureBanner = (props: {health: JudgmentJobProviderHealth}) => {
+  return (
+    <div
+      role="alert"
+      class={`break-words rounded-md border px-4 py-3 text-sm [overflow-wrap:anywhere] ${getProviderHealthToneClass(
+        getProviderHealthTone(props.health.failureKind),
+      )}`}
+    >
+      <p class="font-medium">{getProviderFailureKindLabel(props.health.failureKind)}</p>
+      <Show when={props.health.failureMessage}>
+        {(message) => {
+          return <p class="mt-1 opacity-90">{message()}</p>
+        }}
+      </Show>
+      <p class="mt-2 text-xs opacity-75">{formatProviderFailureMeta(props.health, formatDateTime)}</p>
+      <Show when={formatProviderRetryAfter(props.health.retryAfterAt)}>
+        {(retryAfter) => {
+          return <p class="mt-1 text-xs opacity-75">{retryAfter()}</p>
+        }}
+      </Show>
+      <p class="mt-2">{getProviderHealthGuidance(props.health.failureKind)}</p>
+    </div>
+  )
+}
+
+const ProviderRecoveryNote = (props: {health: JudgmentJobProviderHealth}) => {
+  return (
+    <div
+      role="status"
+      class="break-words rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 [overflow-wrap:anywhere]"
+    >
+      {formatProviderRecoveryNote(props.health, formatDateTime)}
+    </div>
+  )
+}
+
+export const AdminJudgmentJobDetail = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
   const [isDeleting, setIsDeleting] = createSignal(false)
@@ -687,6 +735,14 @@ const AdminJudgmentJobDetail = () => {
               const runtime = data()?.judgingRuntime
               return runtime?.enabled === false ? (runtime.reason ?? 'Judging is disabled for this server.') : null
             }
+            const activeProviderHealth = () => {
+              const providerHealth = data()?.providerHealth ?? null
+              return providerHealth?.isActive ? providerHealth : null
+            }
+            const recentProviderRecovery = () => {
+              const providerHealth = data()?.providerHealth ?? null
+              return isRecentProviderRecovery(providerHealth) ? providerHealth : null
+            }
             const liveRequestLlmCalls = () => {
               return data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0
             }
@@ -823,7 +879,9 @@ const AdminJudgmentJobDetail = () => {
 
                   <Show
                     when={
-                      runtimeModelNotice()
+                      activeProviderHealth()
+                      || recentProviderRecovery()
+                      || runtimeModelNotice()
                       || judgingRuntimeWarning()
                       || actionError()
                       || actionNotice()
@@ -831,6 +889,16 @@ const AdminJudgmentJobDetail = () => {
                     }
                   >
                     <div class="mt-4 min-w-0 space-y-3 border-t border-gray-200 pt-4">
+                      <Show when={activeProviderHealth()}>
+                        {(providerHealth) => {
+                          return <ProviderHealthFailureBanner health={providerHealth()} />
+                        }}
+                      </Show>
+                      <Show when={recentProviderRecovery()}>
+                        {(providerHealth) => {
+                          return <ProviderRecoveryNote health={providerHealth()} />
+                        }}
+                      </Show>
                       <RuntimeModelNotice class="break-words [overflow-wrap:anywhere]" notice={runtimeModelNotice()} />
                       <Show when={judgingRuntimeWarning()}>
                         {(warning) => {

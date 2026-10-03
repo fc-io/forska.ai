@@ -10,14 +10,18 @@ import {fetchProjects} from '../../../../services/projectsService'
 import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
 import {fetchProviderConnections} from '../+models/providerConnectionsClient.ts'
 import {
+  buildJobsProviderHealthBanner,
   formatNumber,
+  formatProviderRetryAfter,
   formatStatus,
   getActionErrorMessage,
   getHealthBadgeColor,
   getJudgmentsJobsQuery,
+  getProviderHealthToneClass,
   getStatusColor,
   isHealthyBadge,
   type JobHealthBadge,
+  truncateProviderFailureMessage,
 } from './jobsPageShared'
 
 const TokenUsageTimelineCardFallback = () => {
@@ -103,6 +107,77 @@ const JudgmentsJobsCounts = () => {
           <span class="font-semibold text-red-600">{counts().failed}</span> failed
         </span>
       </>
+    </Show>
+  )
+}
+
+const JobsProviderHealthBannerFallback = () => {
+  return null
+}
+
+const JobsProviderHealthBanner = () => {
+  const jobs = useQuery(getJudgmentsJobsQuery)
+  const banner = createMemo(() => {
+    return buildJobsProviderHealthBanner(jobs.data)
+  })
+
+  return (
+    <Show when={banner()}>
+      {(currentBanner) => {
+        return (
+          <div role="alert" class={`mb-6 rounded-lg border p-4 ${getProviderHealthToneClass(currentBanner().tone)}`}>
+            <p class="font-medium">{currentBanner().title}</p>
+            <div class="mt-3 space-y-4">
+              <For each={currentBanner().groups}>
+                {(group) => {
+                  return (
+                    <div class="min-w-0 text-sm">
+                      <p class="font-medium">{group.label}</p>
+                      <Show when={group.message}>
+                        {(message) => {
+                          return (
+                            <p class="mt-1 break-words opacity-90 [overflow-wrap:anywhere]">
+                              {truncateProviderFailureMessage(message())}
+                            </p>
+                          )
+                        }}
+                      </Show>
+                      <Show when={formatProviderRetryAfter(group.retryAfterAt)}>
+                        {(retryAfter) => {
+                          return <p class="mt-2 text-xs opacity-75">{retryAfter()}</p>
+                        }}
+                      </Show>
+                      <div class="mt-2 flex flex-wrap items-center gap-2">
+                        <span class="text-xs font-medium">Affected jobs:</span>
+                        <For each={group.jobs}>
+                          {(affectedJob) => {
+                            return (
+                              <Link
+                                to="/admin/jobs/$id"
+                                params={{id: affectedJob.id}}
+                                class="inline-flex items-center gap-2 rounded-md bg-white/70 px-2 py-1 text-xs font-medium hover:underline"
+                              >
+                                <span>{affectedJob.projectName}</span>
+                                <span
+                                  class={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
+                                    affectedJob.status,
+                                  )}`}
+                                >
+                                  {formatStatus(affectedJob.status)}
+                                </span>
+                              </Link>
+                            )
+                          }}
+                        </For>
+                      </div>
+                    </div>
+                  )
+                }}
+              </For>
+            </div>
+          </div>
+        )
+      }}
     </Show>
   )
 }
@@ -477,7 +552,7 @@ const JudgmentsJobsTable = () => {
   )
 }
 
-const AdminJobs = () => {
+export const AdminJobs = () => {
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
@@ -497,6 +572,10 @@ const AdminJobs = () => {
           </Link>
         </div>
       </div>
+
+      <Suspense fallback={<JobsProviderHealthBannerFallback />}>
+        <JobsProviderHealthBanner />
+      </Suspense>
 
       <div class="mb-6">
         <Suspense fallback={<TokenUsageTimelineCardFallback />}>

@@ -398,6 +398,7 @@ export const buildTelemetryJob = (scenario: TelemetryScenario) => {
     projectId: telemetryProjectId,
     projectName: 'Telemetry Project',
     promptStats: {claimed: 1, judged: 2, ready: 12, running: 1, skipped: 0},
+    providerHealth: null,
     quarantineReason: null,
     quarantinedAt: null,
     requestStats: {

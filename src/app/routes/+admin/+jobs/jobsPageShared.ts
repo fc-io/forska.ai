@@ -1,3 +1,5 @@
+import {formatDate} from 'date-fns'
+
 import {
   fetchJudgmentsJobs,
   type JudgmentJobProviderTelemetry,
@@ -10,10 +12,55 @@ export type JobHealthBadge =
   | 'Healthy'
   | 'Draining'
   | 'Large WAL'
+  | 'Offline Repair'
   | 'Orphaned Local Queue'
+  | 'Provider Failing'
   | 'Quarantined'
   | 'Retained Outbox'
   | 'Stale Import'
+export type JudgmentJobProviderFailureKind =
+  | 'auth'
+  | 'endpoint_unavailable'
+  | 'network'
+  | 'other'
+  | 'rate_limited'
+  | 'timeout'
+  | 'usage_limit'
+export type JudgmentJobProviderHealth = {
+  consecutiveFailureCount: number
+  failureCode: string | null
+  failureKind: JudgmentJobProviderFailureKind
+  failureMessage: string | null
+  firstFailedAt: string
+  isActive: boolean
+  jobId: string
+  lastFailedAt: string
+  lastSuccessAt: string | null
+  modelId: string | null
+  recoveredAt: string | null
+  retryAfterAt: string | null
+  status: 'failing' | 'recovered'
+  totalFailureCount: number
+  updatedAt: string
+}
+export type ProviderHealthTone = 'amber' | 'rose'
+export type JobsProviderHealthBannerJob = {id: string; projectName: string; status: string | null}
+export type JobsProviderHealthBannerGroup = {
+  jobs: JobsProviderHealthBannerJob[]
+  kind: JudgmentJobProviderFailureKind
+  label: string
+  lastFailedAt: string
+  message: string | null
+  modelId: string | null
+  retryAfterAt: string | null
+  tone: ProviderHealthTone
+}
+export type JobsProviderHealthBanner = {
+  groups: JobsProviderHealthBannerGroup[]
+  title: string
+  tone: ProviderHealthTone
+}
+type ProviderHealthBannerSourceJob = {id: string; projectName?: string | null; status?: string | null}
 export type JobHealthFilter =
   | 'draining'
   | 'quarantined'
@@ -108,7 +155,10 @@ export const getHealthBadgeColor = (badge: JobHealthBadge) => {
     case 'Draining':
       return 'bg-amber-50 text-amber-700 ring-amber-200'
     case 'Quarantined':
+    case 'Offline Repair':
       return 'bg-red-50 text-red-700 ring-red-200'
+    case 'Provider Failing':
+      return 'bg-rose-100 text-rose-800 ring-rose-300'
     case 'Orphaned Local Queue':
       return 'bg-rose-50 text-rose-700 ring-rose-200'
     case 'Retained Outbox':
@@ -159,10 +209,10 @@ export const jobMatchesHealthFilter = (job: JudgmentsJobListItem, filter: JobHea
 }
 
 export const getJobRiskScore = (job: JudgmentsJobListItem) => {
-  return job.health.badges.reduce((score, badge) => {
+  return (job.health.badges as JobHealthBadge[]).reduce((score, badge) => {
     return (
       score
-      + (badge === 'Quarantined'
+      + (badge === 'Quarantined' || badge === 'Provider Failing'
         ? 16
         : badge === 'Draining'
           ? 8
@@ -181,6 +231,198 @@ export const getJobRiskScore = (job: JudgmentsJobListItem) => {
 
 export const isRiskyJudgmentJob = (job: JudgmentsJobListItem) => {
   return getJobRiskScore(job) > 0
+}
+
+const jobsProviderHealthBannerTitle = 'LLM provider failing'
+const providerFailureMessagePreviewLength = 300
+const providerRecoveryNoteWindowMs = 24 * 60 * 60 * 1000
+const providerFailureKindLabels: Record<JudgmentJobProviderFailureKind, string> = {
+  auth: 'Authentication failed',
+  endpoint_unavailable: 'Endpoint unavailable',
+  network: 'Network error',
+  other: 'Provider errors',
+  rate_limited: 'Rate limited',
+  timeout: 'Timeouts',
+  usage_limit: 'Usage limit reached',
+}
+const providerFailureGuidance: Record<JudgmentJobProviderFailureKind, string> = {
+  auth: 'Check the provider connection and its API key.',
+  endpoint_unavailable: 'Check that the endpoint is running and reachable.',
+  network: 'Check that the endpoint is running and reachable.',
+  other: 'Retries continue with backoff. Check the provider if it persists.',
+  rate_limited: 'Retries continue with backoff.',
+  timeout: 'Retries continue with backoff. Check the provider if it persists.',
+  usage_limit: 'Buy credits or wait for the limit to reset; the job resumes by itself once the provider accepts calls.',
+}
+const providerHealthToneClasses: Record<ProviderHealthTone, string> = {
+  amber: 'border-amber-200 bg-amber-50 text-amber-900',
+  rose: 'border-rose-200 bg-rose-50 text-rose-900',
+}
+const roseProviderFailureKinds = new Set<string>(['auth', 'usage_limit'])
+
+export const getJobProviderHealth = (job: object | null | undefined): JudgmentJobProviderHealth | null => {
+  return (job as {providerHealth?: JudgmentJobProviderHealth | null} | null | undefined)?.providerHealth ?? null
+}
+
+export const getProviderFailureKindLabel = (kind: JudgmentJobProviderFailureKind): string => {
+  return providerFailureKindLabels[kind] ?? providerFailureKindLabels.other
+}
+
+export const getProviderHealthTone = (kind: JudgmentJobProviderFailureKind): ProviderHealthTone => {
+  return roseProviderFailureKinds.has(kind) ? 'rose' : 'amber'
+}
+
+export const getProviderHealthToneClass = (tone: ProviderHealthTone): string => {
+  return providerHealthToneClasses[tone]
+}
+
+export const getProviderHealthGuidance = (kind: JudgmentJobProviderFailureKind): string => {
+  return providerFailureGuidance[kind] ?? providerFailureGuidance.other
+}
+
+export const formatProviderRetryAfter = (value: string | null | undefined): string | null => {
+  const retryAfterAt = value ? new Date(value) : null
+
+  return retryAfterAt && Number.isFinite(retryAfterAt.getTime())
+    ? `Provider says try again at ${formatDate(retryAfterAt, 'yyyy-MM-dd HH:mm')}`
+    : null
+}
+
+export const truncateProviderFailureMessage = (
+  message: string,
+  maxLength = providerFailureMessagePreviewLength,
+): string => {
+  return message.length > maxLength ? `${message.slice(0, maxLength - 1)}…` : message
+}
+
+const formatCountWithNoun = (count: number, singular: string, plural: string): string => {
+  return `${count.toLocaleString('en-US')} ${count === 1 ? singular : plural}`
+}
+
+export const formatProviderFailureMeta = (
+  health: Pick<JudgmentJobProviderHealth, 'consecutiveFailureCount' | 'firstFailedAt' | 'lastFailedAt'>,
+  formatTimestamp: (value: string) => string,
+): string => {
+  return `Since ${formatTimestamp(health.firstFailedAt)}, ${formatCountWithNoun(
+    health.consecutiveFailureCount,
+    'failed attempt',
+    'failed attempts',
+  )}, last at ${formatTimestamp(health.lastFailedAt)}`
+}
+
+export const isRecentProviderRecovery = (
+  health: Pick<JudgmentJobProviderHealth, 'isActive' | 'recoveredAt'> | null | undefined,
+  now = Date.now(),
+): boolean => {
+  const recoveredAtMs = health?.recoveredAt ? Date.parse(health.recoveredAt) : Number.NaN
+
+  return (
+    health?.isActive === false && Number.isFinite(recoveredAtMs) && now - recoveredAtMs <= providerRecoveryNoteWindowMs
+  )
+}
+
+export const formatProviderRecoveryNote = (
+  health: Pick<JudgmentJobProviderHealth, 'failureKind' | 'recoveredAt' | 'totalFailureCount'>,
+  formatTimestamp: (value: string) => string,
+): string => {
+  return `Provider recovered at ${formatTimestamp(health.recoveredAt ?? '')} after ${formatCountWithNoun(
+    health.totalFailureCount,
+    'failure',
+    'failures',
+  )} (${getProviderFailureKindLabel(health.failureKind)})`
+}
+
+const getTimestampMs = (value: string | null | undefined): number => {
+  const timestampMs = value ? Date.parse(value) : Number.NaN
+
+  return Number.isFinite(timestampMs) ? timestampMs : 0
+}
+
+const getLaterTimestamp = (left: string | null, right: string | null): string | null => {
+  return getTimestampMs(right) > getTimestampMs(left) ? right : left
+}
+
+const getProviderHealthGroupKey = (health: JudgmentJobProviderHealth): string => {
+  return JSON.stringify([health.modelId, health.failureKind, health.failureMessage])
+}
+
+const toProviderHealthBannerJob = (job: ProviderHealthBannerSourceJob): JobsProviderHealthBannerJob => {
+  return {id: job.id, projectName: job.projectName || 'Unknown Project', status: job.status ?? null}
+}
+
+const createProviderHealthBannerGroup = (health: JudgmentJobProviderHealth): JobsProviderHealthBannerGroup => {
+  return {
+    jobs: [],
+    kind: health.failureKind,
+    label: getProviderFailureKindLabel(health.failureKind),
+    lastFailedAt: health.lastFailedAt,
+    message: health.failureMessage,
+    modelId: health.modelId,
+    retryAfterAt: health.retryAfterAt,
+    tone: getProviderHealthTone(health.failureKind),
+  }
+}
+
+const addJobToProviderHealthBannerGroup = (
+  group: JobsProviderHealthBannerGroup,
+  job: ProviderHealthBannerSourceJob,
+  health: JudgmentJobProviderHealth,
+): JobsProviderHealthBannerGroup => {
+  return {
+    ...group,
+    jobs: [...group.jobs, toProviderHealthBannerJob(job)],
+    lastFailedAt: getLaterTimestamp(group.lastFailedAt, health.lastFailedAt) ?? group.lastFailedAt,
+    retryAfterAt: getLaterTimestamp(group.retryAfterAt, health.retryAfterAt),
+  }
+}
+
+const sortProviderHealthBannerGroupJobs = (group: JobsProviderHealthBannerGroup): JobsProviderHealthBannerGroup => {
+  return {
+    ...group,
+    jobs: group.jobs.slice().sort((left, right) => {
+      return left.projectName.localeCompare(right.projectName) || left.id.localeCompare(right.id)
+    }),
+  }
+}
+
+const compareProviderHealthBannerGroups = (
+  left: JobsProviderHealthBannerGroup,
+  right: JobsProviderHealthBannerGroup,
+): number => {
+  const toneDelta = Number(right.tone === 'rose') - Number(left.tone === 'rose')
+
+  return toneDelta === 0 ? getTimestampMs(right.lastFailedAt) - getTimestampMs(left.lastFailedAt) : toneDelta
+}
+
+export const buildJobsProviderHealthBanner = (
+  jobs: readonly ProviderHealthBannerSourceJob[] | null | undefined,
+): JobsProviderHealthBanner | null => {
+  const groupsByKey = (jobs ?? []).reduce((groups, job) => {
+    const health = getJobProviderHealth(job)
+    const key = health ? getProviderHealthGroupKey(health) : ''
+
+    return health?.isActive
+      ? groups.set(
+          key,
+          addJobToProviderHealthBannerGroup(groups.get(key) ?? createProviderHealthBannerGroup(health), job, health),
+        )
+      : groups
+  }, new Map<string, JobsProviderHealthBannerGroup>())
+  const groups = [...groupsByKey.values()]
+    .map(sortProviderHealthBannerGroupJobs)
+    .sort(compareProviderHealthBannerGroups)
+
+  return groups.length === 0
+    ? null
+    : {
+        groups,
+        title: jobsProviderHealthBannerTitle,
+        tone: groups.some((group) => {
+          return group.tone === 'rose'
+        })
+          ? 'rose'
+          : 'amber',
+      }
 }
 
 const providerBottleneckDetails: Record<string, {description: string; label: string}> = {
