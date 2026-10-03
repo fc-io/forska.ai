@@ -361,6 +361,7 @@ const buildMissingJob = () => {
     lastImportExitCode: null,
     importFailureCount: 0,
     pauseRequestedAt: null,
+    providerHealth: null,
     error: '',
     projectName: '',
     promptStats: {claimed: 0, ready: 0, running: 0, judged: 0, skipped: 0} satisfies JudgmentJobPromptStats,
