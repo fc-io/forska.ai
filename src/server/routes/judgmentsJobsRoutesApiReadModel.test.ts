@@ -42,8 +42,10 @@ test('judgment jobs list allows stale health projections for drained jobs on api
         }
         const appReadOnlyModulePath = getModulePath('./src/server/services/appReadOnlyDatabaseService.ts')
         const appDatabaseServiceModule = await import('./src/server/services/appDatabaseService.ts')
+        const apiReadStatements = []
         const apiReadModelTestDatabaseService = {
           queryJson: (statement) => {
+            apiReadStatements.push(statement)
             return appDatabaseServiceModule.getAppDatabaseService().queryJson(statement, {
               fallbackIntent: 'serveStale',
               maxResultRows: 1_000,
@@ -67,12 +69,14 @@ test('judgment jobs list allows stale health projections for drained jobs on api
           {resetServerRuntimeRoleForTests, withCurrentServerRoleOverride},
           {judgmentsJobsRoutes},
           {getJudgmentJobSqliteHealthProjectionService},
+          {recordJudgmentJobProviderFailure},
         ] = await Promise.all([
           import('./src/db/migrateDuckdb.ts'),
           import('./src/server/utils/duckdbService.ts'),
           import('./src/server/utils/serverRuntimeRole.ts'),
           import('./src/server/routes/JudgmentsJobsRoutes.ts'),
           import('./src/server/services/judgmentJobSqliteHealthProjectionService.ts'),
+          import('./src/server/services/judgmentJobProviderHealthService.ts'),
         ])
 
         resetDuckdbServiceForTests()
@@ -86,6 +90,7 @@ test('judgment jobs list allows stale health projections for drained jobs on api
         const modelId = 'api-drained-projection-model-' + now
         const projectId = 'api-drained-projection-project-' + now
         const jobId = 'api-drained-projection-job-' + now
+        const failingJobId = 'api-drained-provider-failing-job-' + now
         const projectedHealth = {
           claimedOutboxCount: 0,
           hasOutboxRows: false,
@@ -107,6 +112,7 @@ test('judgment jobs list allows stale health projections for drained jobs on api
         await db.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('" + modelId + "', '" + connectionId + "', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)")
         await db.run("INSERT INTO app.project (id, name, model_id) VALUES ('" + projectId + "', 'API Read Model Project', '" + modelId + "')")
         await db.run("INSERT INTO app.judgment_job (id, project_id, status, storage_state) VALUES ('" + jobId + "', '" + projectId + "', 'paused', 'drained')")
+        await db.run("INSERT INTO app.judgment_job (id, project_id, status, storage_state) VALUES ('" + failingJobId + "', '" + projectId + "', 'paused', 'drained')")
 
         await getJudgmentJobSqliteHealthProjectionService().publishJudgmentJobSqliteHealthProjection({
           health: projectedHealth,
@@ -115,13 +121,29 @@ test('judgment jobs list allows stale health projections for drained jobs on api
           projectedBy: 'test-judge-worker',
           projectionSource: 'test',
         })
+        await getJudgmentJobSqliteHealthProjectionService().publishJudgmentJobSqliteHealthProjection({
+          health: projectedHealth,
+          jobId: failingJobId,
+          now: new Date(now - 60_000),
+          projectedBy: 'test-judge-worker',
+          projectionSource: 'test',
+        })
+        await recordJudgmentJobProviderFailure({
+          failureCode: 'codex_transient_turn_failure',
+          jobId: failingJobId,
+          message: "codex app-server: turn failed: You've hit your usage limit.",
+          modelId,
+        })
 
         await withCurrentServerRoleOverride('api', async () => {
           const response = await app.handle(new Request('http://localhost/api/judgmentsjobs'))
           const bodyText = await response.text()
           const body = JSON.parse(bodyText)
+          const providerHealthReadCount = apiReadStatements.filter((statement) => {
+            return statement.includes('app.judgment_job_provider_health')
+          }).length
 
-          console.log(JSON.stringify({body, jobId, status: response.status}))
+          console.log(JSON.stringify({body, failingJobId, jobId, providerHealthReadCount, status: response.status}))
         })
 
         await db.close()
@@ -138,14 +160,29 @@ test('judgment jobs list allows stale health projections for drained jobs on api
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-    body: {data: Array<{health: {badges: string[]; isHealthy: boolean}; id: string}>}
+    body: {
+      data: Array<{
+        health: {badges: string[]; isHealthy: boolean}
+        id: string
+        providerHealth: {failureKind: string; isActive: boolean; status: string} | null
+      }>
+    }
+    failingJobId: string
     jobId: string
+    providerHealthReadCount: number
     status: number
   }
   const listedJob = result.body.data.find((job) => {
     return job.id === result.jobId
   })
+  const failingJob = result.body.data.find((job) => {
+    return job.id === result.failingJobId
+  })
 
   expect(result.status).toBe(200)
   expect(listedJob?.health).toEqual({badges: ['Healthy'], isHealthy: true})
+  expect(listedJob?.providerHealth).toBeNull()
+  expect(failingJob?.health).toEqual({badges: ['Provider Failing'], isHealthy: false})
+  expect(failingJob?.providerHealth).toMatchObject({failureKind: 'usage_limit', isActive: true, status: 'failing'})
+  expect(result.providerHealthReadCount).toBe(1)
 })
