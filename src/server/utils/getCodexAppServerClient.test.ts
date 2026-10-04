@@ -5,6 +5,7 @@ import {expect, mock, test} from 'bun:test'
 import {
   type CodexAppServerClient,
   createCodexAppServerClient,
+  getCodexAppServerLaunchArgs,
   getCodexAppServerSingletonForTests,
   getCodexThreadTokenUsageUpdate,
   getCodexTurnAgentMessageText,
@@ -1035,4 +1036,139 @@ test('runJsonTurn rejects active turns when app-server exits', async () => {
   expect(result).toBeInstanceOf(Error)
   expect(result instanceof Error ? result.message : '').toContain('codex app-server exited')
   expect(result instanceof Error ? result.message : '').toContain('code=133')
+})
+
+type MockJsonRpcResponse = {id: number; result?: unknown; error?: {code: number; message: string}}
+
+const createMockServerRequestCodexClient = ({
+  readCodexConfigToml,
+}: {readCodexConfigToml?: () => string | null} = {}) => {
+  const stdout = new EventEmitter()
+  const stderr = new EventEmitter()
+  const proc = new EventEmitter() as EventEmitter & {
+    stderr: EventEmitter
+    stdin: {write: (data: string) => boolean}
+    stdout: EventEmitter
+  }
+  const responses: MockJsonRpcResponse[] = []
+  const spawnArgs: string[][] = []
+
+  const send = (message: unknown) => {
+    stdout.emit('data', Buffer.from(`${JSON.stringify(message)}\n`))
+  }
+
+  proc.stdout = stdout
+  proc.stderr = stderr
+  proc.stdin = {
+    write(payload) {
+      String(payload)
+        .split('\n')
+        .map((line) => {
+          return line.trim()
+        })
+        .filter((line) => {
+          return line.length > 0
+        })
+        .forEach((line) => {
+          const message = JSON.parse(line) as MockJsonRpcRequest & MockJsonRpcResponse
+
+          if (message.method === 'initialize') {
+            send({id: message.id, result: {}})
+            return
+          }
+
+          if (message.method === undefined) {
+            responses.push(message)
+          }
+        })
+
+      return true
+    },
+  }
+
+  const spawnProcess: SpawnCodexAppServer = (_command, args) => {
+    spawnArgs.push(args)
+    return proc
+  }
+
+  return {
+    client: createCodexAppServerClient({readCodexConfigToml, spawnProcess}),
+    responses,
+    sendServerRequest: send,
+    spawnArgs,
+  }
+}
+
+test('codex app-server launch args disable every MCP server declared in the user config', () => {
+  const configToml = [
+    'model = "gpt-5.5"',
+    '[mcp_servers]',
+    'inline = { command = "inline-server" }',
+    '[mcp_servers.node_repl]',
+    'command = "/usr/bin/node_repl"',
+    'startup_timeout_sec = 120',
+    '[mcp_servers.node_repl.env]',
+    'CODEX_HOME = "/Users/example/.codex"',
+    '[mcp_servers.computer-use]',
+    'command = "cua"',
+    'enabled = false',
+    '[mcp_servers."needs quoting"]',
+    'command = "quoted"',
+  ].join('\n')
+
+  expect(getCodexAppServerLaunchArgs(configToml)).toEqual([
+    '-c',
+    'mcp_servers.inline.enabled=false',
+    '-c',
+    'mcp_servers.node_repl.enabled=false',
+    '-c',
+    'mcp_servers.computer-use.enabled=false',
+    'app-server',
+  ])
+})
+
+test('codex app-server launch args stay plain without MCP servers, without a config, or with invalid TOML', () => {
+  expect(getCodexAppServerLaunchArgs(null)).toEqual(['app-server'])
+  expect(getCodexAppServerLaunchArgs('model = "gpt-5.5"')).toEqual(['app-server'])
+  expect(getCodexAppServerLaunchArgs('mcp_servers = "not a table"')).toEqual(['app-server'])
+  expect(getCodexAppServerLaunchArgs('[mcp_servers')).toEqual(['app-server'])
+})
+
+test('codex app-server client spawns codex with the MCP overrides read from the user config', () => {
+  const {spawnArgs} = createMockServerRequestCodexClient({
+    readCodexConfigToml: () => {
+      return '[mcp_servers.node_repl]\ncommand = "node_repl"\n'
+    },
+  })
+
+  expect(spawnArgs).toEqual([['-c', 'mcp_servers.node_repl.enabled=false', 'app-server']])
+})
+
+test('codex server requests that need a human are declined with the response shape codex expects', () => {
+  resetCodexStderrLogRateLimitForTests()
+  const {responses, sendServerRequest} = createMockServerRequestCodexClient({
+    readCodexConfigToml: () => {
+      return null
+    },
+  })
+
+  sendServerRequest({
+    id: 11,
+    method: 'mcpServer/elicitation/request',
+    params: {serverName: 'node_repl', threadId: 't1'},
+  })
+  sendServerRequest({id: 12, method: 'item/tool/requestUserInput', params: {threadId: 't1'}})
+  sendServerRequest({id: 13, method: 'item/permissions/requestApproval', params: {threadId: 't1'}})
+  sendServerRequest({id: 14, method: 'item/commandExecution/requestApproval', params: {threadId: 't1'}})
+  sendServerRequest({id: 15, method: 'item/fileChange/requestApproval', params: {threadId: 't1'}})
+  sendServerRequest({id: 16, method: 'thread/unknownRequest', params: {}})
+
+  expect(responses).toEqual([
+    {id: 11, result: {action: 'decline'}},
+    {id: 12, result: {answers: {}}},
+    {id: 13, result: {permissions: {}, scope: 'turn'}},
+    {id: 14, result: {decision: 'decline'}},
+    {id: 15, result: {decision: 'decline'}},
+    {id: 16, error: {code: -32601, message: 'Unsupported request: thread/unknownRequest'}},
+  ])
 })
