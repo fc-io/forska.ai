@@ -78,6 +78,18 @@ const getQueueActivitySortAtExpression = () => {
   return "date_trunc('millisecond', queue.activity_sort_at)"
 }
 
+// Articles the judge has already started (fewer unassessed pairs than enabled prompts) rank above
+// untouched articles within the same retry bucket, so partially judged articles get completed first.
+const getPartialArticleFirstPriorityBucketExpression = (input: {
+  articleIdExpression: string
+  priorityBucketExpression: string
+}) => {
+  return `(${input.priorityBucketExpression}) * 2 + CASE
+          WHEN COUNT(*) OVER (PARTITION BY ${input.articleIdExpression}) < (SELECT COUNT(*) FROM enabled_prompt) THEN 1
+          ELSE 0
+        END`
+}
+
 const getUnassessedServingArticleJoin = (articleAlias = 'article') => {
   return `
     INNER JOIN mart.review_article_serving_base_v4 ${articleAlias}
@@ -519,7 +531,10 @@ const getJudgmentJobUnassessedPairsFromCurrentProjectTables = async (
       SELECT
         pair.article_id,
         pair.prompt_id,
-        CASE WHEN judgment.created_at IS NULL THEN 0 ELSE 1 END AS priority_bucket,
+        ${getPartialArticleFirstPriorityBucketExpression({
+          articleIdExpression: 'pair.article_id',
+          priorityBucketExpression: 'CASE WHEN judgment.created_at IS NULL THEN 0 ELSE 1 END',
+        })} AS priority_bucket,
         COALESCE(judgment.created_at, pair.activity_sort_at) AS activity_sort_at
       FROM candidate_pair pair
       LEFT JOIN latest_judgment judgment
@@ -818,7 +833,10 @@ export const getJudgmentJobUnassessedPairsFromServing = async (params: {
         ${getSqlLiteral(scope.snapshotId)} AS snapshot_id,
         queue.article_id,
         queue.prompt_id,
-        queue.priority_bucket,
+        ${getPartialArticleFirstPriorityBucketExpression({
+          articleIdExpression: 'queue.article_id',
+          priorityBucketExpression: 'queue.priority_bucket',
+        })} AS priority_bucket,
         queue.activity_sort_at
       FROM (
         SELECT
