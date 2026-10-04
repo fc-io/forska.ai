@@ -192,18 +192,34 @@ const insertAnsweredLlmJudgment = async (input: {articleId: string; projectId: s
   `)
 }
 
-const getPairs = async (input: {humanAnsweredMode: 'prompt' | 'summary' | null; projectId: string}) => {
+type PairsCursor = NonNullable<
+  Awaited<ReturnType<QueueServiceModule['getJudgmentJobUnassessedPairsFromServing']>>['nextCursor']
+>
+
+const getPairsPage = async (input: {
+  cursor?: PairsCursor | null
+  humanAnsweredMode: 'prompt' | 'summary' | null
+  numberOfPromptsToGet?: number
+  projectId: string
+}) => {
   const result = await getQueueService().getJudgmentJobUnassessedPairsFromServing({
-    cursor: null,
+    cursor: input.cursor ?? null,
     humanAnsweredMode: input.humanAnsweredMode,
     jobId: getId(input.projectId, 'job'),
-    numberOfPromptsToGet: 100,
+    numberOfPromptsToGet: input.numberOfPromptsToGet ?? 100,
     projectId: input.projectId,
   })
 
-  return result.promptEntries.map((entry) => {
-    return `${entry.articleId.replace(`${input.projectId}-`, '')}:${entry.promptId.replace(`${input.projectId}-`, '')}`
-  })
+  return {
+    nextCursor: result.nextCursor,
+    pairs: result.promptEntries.map((entry) => {
+      return `${entry.articleId.replace(`${input.projectId}-`, '')}:${entry.promptId.replace(`${input.projectId}-`, '')}`
+    }),
+  }
+}
+
+const getPairs = async (input: {humanAnsweredMode: 'prompt' | 'summary' | null; projectId: string}) => {
+  return (await getPairsPage(input)).pairs
 }
 
 // article-a/prompt-2 is human answered, article-b/prompt-1 is human answered but already LLM judged,
@@ -259,13 +275,38 @@ test('serving refill returns only unassessed pairs with an answered human row in
   await seedPromptModeHumanAnswers(projectId)
 
   expect(await getPairs({humanAnsweredMode: 'prompt', projectId})).toEqual(['article-a:prompt-2'])
+  // article-b is partially judged, so its remaining prompt outranks the untouched articles.
   expect(await getPairs({humanAnsweredMode: null, projectId})).toEqual([
+    'article-b:prompt-2',
     'article-c:prompt-2',
     'article-c:prompt-1',
-    'article-b:prompt-2',
     'article-a:prompt-2',
     'article-a:prompt-1',
   ])
+})
+
+test('serving refill cursor carries the partial-article bucket across pages', async () => {
+  const projectId = 'project-serving-cursor'
+
+  await seedProject({humanJudgmentMode: 'prompt', projectId})
+  await seedActiveServingSnapshot(projectId)
+  await seedPromptModeHumanAnswers(projectId)
+
+  const firstPage = await getPairsPage({humanAnsweredMode: null, numberOfPromptsToGet: 1, projectId})
+  const secondPage = await getPairsPage({
+    cursor: firstPage.nextCursor,
+    humanAnsweredMode: null,
+    numberOfPromptsToGet: 2,
+    projectId,
+  })
+  const lastPage = await getPairsPage({cursor: secondPage.nextCursor, humanAnsweredMode: null, projectId})
+
+  expect(firstPage.pairs).toEqual(['article-b:prompt-2'])
+  expect(firstPage.nextCursor).toMatchObject({lastArticleId: getId(projectId, 'article-b'), priorityBucket: 1})
+  expect(secondPage.pairs).toEqual(['article-c:prompt-2', 'article-c:prompt-1'])
+  expect(secondPage.nextCursor).toMatchObject({lastArticleId: getId(projectId, 'article-c'), priorityBucket: 0})
+  expect(lastPage.pairs).toEqual(['article-a:prompt-2', 'article-a:prompt-1'])
+  expect(lastPage.nextCursor).toBeNull()
 })
 
 test('current project table refill applies the same human-answered filter when no serving scope exists', async () => {
@@ -275,7 +316,13 @@ test('current project table refill applies the same human-answered filter when n
   await seedPromptModeHumanAnswers(projectId)
 
   expect(await getPairs({humanAnsweredMode: 'prompt', projectId})).toEqual(['article-a:prompt-2'])
-  expect(await getPairs({humanAnsweredMode: null, projectId})).toHaveLength(5)
+  expect(await getPairs({humanAnsweredMode: null, projectId})).toEqual([
+    'article-b:prompt-2',
+    'article-c:prompt-2',
+    'article-c:prompt-1',
+    'article-a:prompt-2',
+    'article-a:prompt-1',
+  ])
 })
 
 test('summary-mode serving refill returns every unassessed prompt of articles with a non-blank human summary', async () => {

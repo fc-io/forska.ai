@@ -415,6 +415,9 @@ test('judgment job refill scope rechecks current project dates routes and curate
   expect(refillStatement ?? '').toContain('INNER JOIN app.article_import_route current_article_route_scope')
   expect(refillStatement ?? '').toContain('FROM app.project_article current_project_article_scope')
   expect(refillStatement ?? '').toContain(
+    'COUNT(*) OVER (PARTITION BY queue.article_id) < (SELECT COUNT(*) FROM enabled_prompt)',
+  )
+  expect(refillStatement ?? '').toContain(
     'ORDER BY queue.priority_bucket DESC, queue.activity_sort_at DESC, queue.article_id DESC, queue.prompt_id DESC',
   )
 })
