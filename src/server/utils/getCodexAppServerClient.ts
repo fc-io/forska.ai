@@ -88,8 +88,16 @@ const isNotification = (msg: JsonRpcMessage): msg is JsonRpcRequest => {
   return 'method' in msg && msg.id == null
 }
 
-const shouldDeclineApproval = (method: string): boolean => {
-  return method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval'
+const codexDeclinedServerRequestResults: Record<string, Record<string, unknown>> = {
+  'item/commandExecution/requestApproval': {decision: 'decline'},
+  'item/fileChange/requestApproval': {decision: 'decline'},
+  'item/permissions/requestApproval': {permissions: {}, scope: 'turn'},
+  'item/tool/requestUserInput': {answers: {}},
+  'mcpServer/elicitation/request': {action: 'decline'},
+}
+
+export const getCodexDeclinedServerRequestResult = (method: string): Record<string, unknown> | null => {
+  return codexDeclinedServerRequestResults[method] ?? null
 }
 
 const buildSafeTurnConfig = () => {
@@ -180,6 +188,50 @@ const getNumber = (value: unknown): number | null => {
 
 const getString = (value: unknown): string | null => {
   return typeof value === 'string' ? value : null
+}
+
+const getCodexHomeDir = (): string => {
+  const codexHome = process.env.CODEX_HOME
+  return codexHome ? codexHome : path.join(os.homedir(), '.codex')
+}
+
+export const readCodexUserConfigToml = (): string | null => {
+  try {
+    return fs.readFileSync(path.join(getCodexHomeDir(), 'config.toml'), 'utf8')
+  } catch {
+    return null
+  }
+}
+
+const parseCodexConfigToml = (configToml: string): Record<string, unknown> | null => {
+  try {
+    const parsed: unknown = globalThis.Bun.TOML.parse(configToml)
+    return isRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+const isTomlBareKey = (value: string): boolean => {
+  return /^[A-Za-z0-9_-]+$/.test(value)
+}
+
+export const getCodexConfiguredMcpServerNames = (configToml: string | null): string[] => {
+  const servers = configToml === null ? null : parseCodexConfigToml(configToml)?.mcp_servers
+
+  return isRecord(servers)
+    ? Object.keys(servers).filter((name) => {
+        return isRecord(servers[name]) && isTomlBareKey(name)
+      })
+    : []
+}
+
+export const getCodexAppServerLaunchArgs = (configToml: string | null): string[] => {
+  const mcpServerOverrides = getCodexConfiguredMcpServerNames(configToml).flatMap((name) => {
+    return ['-c', `mcp_servers.${name}.enabled=false`]
+  })
+
+  return [...mcpServerOverrides, 'app-server']
 }
 
 const getCodexErrorMessage = (value: unknown): string | null => {
@@ -394,6 +446,18 @@ const logCodexStderr = (value: string): void => {
   logTransientCodexStderr(transientEvent, trimmed)
 }
 
+const logDeclinedCodexServerRequest = (msg: JsonRpcRequest & {id: JsonRpcId}): void => {
+  if (!shouldLogCodexTransientStderr(`codex:server-request-declined:${msg.method}`)) return
+  const serverName = isRecord(msg.params) ? getString(msg.params.serverName) : null
+
+  writeRuntimeLogEvent({
+    attrs: {method: msg.method, serverName},
+    event: 'codex:server-request-declined',
+    message: `[codex] Codex asked for ${msg.method}; declined because judge turns are non-interactive.`,
+    severity: 'INFO',
+  })
+}
+
 export const resetCodexStderrLogRateLimitForTests = (): void => {
   lastCodexTransientStderrLogAt.clear()
 }
@@ -412,6 +476,7 @@ export const warmCodexAppServer = async (): Promise<void> => {
 export const createCodexAppServerClient = ({
   initializeTimeoutMs,
   maxTurnsBeforeRecycle,
+  readCodexConfigToml = readCodexUserConfigToml,
   spawnProcess = (command, args, options) => {
     return spawn(command, args, options)
   },
@@ -421,6 +486,7 @@ export const createCodexAppServerClient = ({
 }: {
   initializeTimeoutMs?: number
   maxTurnsBeforeRecycle?: number
+  readCodexConfigToml?: () => string | null
   spawnProcess?: SpawnCodexAppServer
   threadReadMaxAttempts?: number
   threadReadRetryDelayMs?: number
@@ -437,7 +503,9 @@ export const createCodexAppServerClient = ({
   const resolvedThreadReadTimeoutMs = getPositiveInteger(threadReadTimeoutMs, CODEX_THREAD_READ_TIMEOUT_MS)
   const resolvedMaxTurnsBeforeRecycle = getPositiveInteger(maxTurnsBeforeRecycle, CODEX_MAX_TURNS_BEFORE_RECYCLE)
 
-  const proc = spawnProcess(codexBin, ['app-server'], {stdio: ['pipe', 'pipe', 'pipe']})
+  const proc = spawnProcess(codexBin, getCodexAppServerLaunchArgs(readCodexConfigToml()), {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
 
   let rawStdout = ''
   let rawStderr = ''
@@ -690,8 +758,10 @@ export const createCodexAppServerClient = ({
     }
 
     if (isServerRequest(msg)) {
-      if (shouldDeclineApproval(msg.method)) {
-        send({id: msg.id, result: {decision: 'decline'}})
+      const declinedResult = getCodexDeclinedServerRequestResult(msg.method)
+      if (declinedResult) {
+        logDeclinedCodexServerRequest(msg)
+        send({id: msg.id, result: declinedResult})
         return
       }
       send({id: msg.id, error: {code: -32601, message: `Unsupported request: ${msg.method}`}})
