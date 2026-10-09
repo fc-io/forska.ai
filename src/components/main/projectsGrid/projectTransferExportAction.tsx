@@ -3,7 +3,7 @@ import {createEffect, createMemo, createSignal, For, onCleanup, Show} from 'soli
 
 import {getApiRequestUrl} from '../../../app/utils/getApiRequestUrl.ts'
 import {apiClient} from '../../../services/apiClient.ts'
-import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
+import {getApiErrorMessage, handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 import {Button} from '../../ui/button'
 
 type ProjectTransferExportPendingStatus = 'assembling' | 'packaging' | 'queued'
@@ -311,8 +311,28 @@ export const getProjectTransferDownloadRequestUrl = (
     : getApiRequestUrl(downloadUrl, locationOrigin, desktopApiOrigin)
 }
 
+const projectTransferExportTerminalStatuses = new Set([404, 409, 410])
+const projectTransferExportTerminalErrorName = 'ProjectTransferExportTerminalError'
+
+const createProjectTransferExportTerminalError = (message: string) => {
+  const error = new Error(message)
+  error.name = projectTransferExportTerminalErrorName
+  return error
+}
+
+export const isProjectTransferExportTerminalError = (error: unknown) => {
+  return error instanceof Error && error.name === projectTransferExportTerminalErrorName
+}
+
 export const fetchProjectTransferExportSession = async (exportId: string): Promise<ProjectTransferExportSession> => {
   const response = await apiClient.api.projects.export({exportId}).get()
+
+  if (response.error && projectTransferExportTerminalStatuses.has(response.status)) {
+    throw createProjectTransferExportTerminalError(
+      getApiErrorMessage(response.error, 'Project transfer export is no longer available'),
+    )
+  }
+
   const data = handleApiResponse<unknown>(response, 'Failed to fetch project transfer export status')
 
   return parseProjectTransferExportSession(
@@ -613,6 +633,7 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
             return
           }
 
+          setErrorMessage(null)
           setSession(nextSession)
 
           if (nextSession.status !== 'ready') {
@@ -625,6 +646,12 @@ export const ProjectTransferExportAction = (props: ProjectTransferExportActionPr
           }
 
           setErrorMessage(getErrorMessage(error, 'Failed to fetch project transfer export status'))
+
+          if (isProjectTransferExportTerminalError(error)) {
+            setSession(null)
+            return
+          }
+
           timeoutId = window.setTimeout(pollSession, 2_000)
         })
     }
