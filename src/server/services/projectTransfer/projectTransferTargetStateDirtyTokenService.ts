@@ -38,7 +38,7 @@ type DirtyTokenRow = {dirtyToken: number; surface: string}
 
 type UnknownTokenRow = {dirtyToken: number}
 
-export const projectTransferTargetStateCoverageCodeVersion = 'project-transfer-target-state-coverage-v1'
+export const projectTransferTargetStateCoverageCodeVersion = 'project-transfer-target-state-coverage-v2'
 export const projectTransferDependencyFingerprintAlgorithm = 'project-transfer-snapshot-fingerprint'
 export const projectTransferDependencyFingerprintCodeVersion = 'provider-model-snapshot-v1'
 
@@ -71,6 +71,11 @@ export const projectTransferProviderDependencyDirtyTokenSurfaces = [
 ] as const satisfies readonly ProjectTransferTargetStateSafetySurface[]
 
 export type ProjectTransferTargetStateSafetySurface = (typeof projectTransferTargetStateSafetySurfaces)[number]
+
+export const projectTransferTargetStateTrackedSurfaces = [
+  ...projectTransferProviderDependencyDirtyTokenSurfaces,
+  'projectTransferHistory',
+] as const satisfies readonly ProjectTransferTargetStateSafetySurface[]
 
 export type ProjectTransferTargetStateCoverageVersion = {
   coverageCodeVersion: string
@@ -247,7 +252,7 @@ const initializeTargetStateCoverage = async ({
       ) VALUES (
         'current',
         ${getSqlLiteral(projectTransferTargetStateCoverageCodeVersion)},
-        ${getJsonLiteral(projectTransferTargetStateSafetySurfaces)},
+        ${getJsonLiteral(projectTransferTargetStateTrackedSurfaces)},
         ${getSqlLiteral(projectTransferDependencyFingerprintAlgorithm)},
         ${getSqlLiteral(projectTransferDependencyFingerprintCodeVersion)},
         ${getTimestampLiteral(currentNow)},
