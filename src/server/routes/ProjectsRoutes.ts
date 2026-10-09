@@ -64,9 +64,26 @@ const parseOptionalDate = (value?: string | null) => {
   const normalizedValue = hasIsoDateOnlyMatch ? `${trimmedValue}T00:00:00.000Z` : trimmedValue
   const parsedDate = new Date(normalizedValue)
   if (Number.isNaN(parsedDate.getTime())) {
-    throw new Error('Invalid date value provided')
+    throw new HttpError(400, 'Invalid date value provided')
   }
   return parsedDate
+}
+
+const selectedModelUnavailableErrorMessage = 'Selected model does not exist or is disabled'
+const fulltextModeConflictErrorMessage =
+  'Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time'
+
+const assertSelectableProjectModelId = async (
+  runner: Parameters<typeof assertSelectableProviderModelId>[0],
+  modelId: string,
+) => {
+  return assertSelectableProviderModelId(runner, {errorMessage: selectedModelUnavailableErrorMessage, modelId}).catch(
+    (error: unknown) => {
+      throw error instanceof Error && error.message === selectedModelUnavailableErrorMessage
+        ? new HttpError(400, selectedModelUnavailableErrorMessage, {cause: error})
+        : error
+    },
+  )
 }
 
 const getProjectModelLabel = ({
@@ -1548,17 +1565,14 @@ export const projectsRoutes = new Elysia()
       const dateFrom = parseOptionalDate(body.dateFrom)
       const dateTo = parseOptionalDate(body.dateTo)
       if (dateFrom && dateTo && dateFrom > dateTo) {
-        throw new Error('date_from must be on or before date_to')
+        throw new HttpError(400, 'date_from must be on or before date_to')
       }
 
-      await assertSelectableProviderModelId(getAppDatabaseService(), {
-        errorMessage: 'Selected model does not exist or is disabled',
-        modelId: body.modelId,
-      })
+      await assertSelectableProjectModelId(getAppDatabaseService(), body.modelId)
 
       // Validate mutual exclusivity of useFulltext and useFulltextNoImages
       if (body.useFulltext && body.useFulltextNoImages) {
-        throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
+        throw new HttpError(400, fulltextModeConflictErrorMessage)
       }
 
       const newProject = await getAppDatabaseService().transaction(async (tx) => {
@@ -1682,7 +1696,7 @@ export const projectsRoutes = new Elysia()
             `)
 
             if (!existingPrompt) {
-              throw new Error(`Existing prompt not found: ${existing.originalId}`)
+              throw new HttpError(400, `Existing prompt not found: ${existing.originalId}`)
             }
 
             await upsertProjectPromptTx(tx, {
@@ -1716,7 +1730,7 @@ export const projectsRoutes = new Elysia()
           `)
 
           if (routeRows.length !== selectedRoutes.length) {
-            throw new Error('One or more selected import routes are invalid')
+            throw new HttpError(400, 'One or more selected import routes are invalid')
           }
 
           await tx.run(`
@@ -1833,7 +1847,7 @@ export const projectsRoutes = new Elysia()
       const parsedDateFrom = body.dateFrom === undefined ? undefined : parseOptionalDate(body.dateFrom)
       const parsedDateTo = body.dateTo === undefined ? undefined : parseOptionalDate(body.dateTo)
       if (parsedDateFrom && parsedDateTo && parsedDateFrom > parsedDateTo) {
-        throw new Error('date_from must be on or before date_to')
+        throw new HttpError(400, 'date_from must be on or before date_to')
       }
 
       const [currentProject] = await getAppDatabaseService().queryJson<ProjectEditCurrentProject>(`
@@ -1933,16 +1947,13 @@ export const projectsRoutes = new Elysia()
           let promptCleanupSummary: ProjectPromptCleanupSummary | undefined
 
           if (hasModelIdUpdate) {
-            await assertSelectableProviderModelId(tx, {
-              errorMessage: 'Selected model does not exist or is disabled',
-              modelId: body.modelId as string,
-            })
+            await assertSelectableProjectModelId(tx, body.modelId as string)
           }
 
           const finalUseFulltext = body.useFulltext ?? currentProject.useFulltext
           const finalUseFulltextNoImages = body.useFulltextNoImages ?? currentProject.useFulltextNoImages
           if (finalUseFulltext && finalUseFulltextNoImages) {
-            throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
+            throw new HttpError(400, fulltextModeConflictErrorMessage)
           }
 
           const updateParts = [
@@ -2043,7 +2054,7 @@ export const projectsRoutes = new Elysia()
               `)
 
                 if (!existingPrompt) {
-                  throw new Error('Prompt not found')
+                  throw new HttpError(400, `Prompt not found: ${prompt.originalId}`)
                 }
 
                 const existingPromptHeading = getPromptMetadataValue(existingPrompt.promptHeading) ?? null
@@ -2272,7 +2283,7 @@ export const projectsRoutes = new Elysia()
             `)
 
               if (routeRows.length !== selectedRoutes.length) {
-                throw new Error('One or more selected import routes are invalid')
+                throw new HttpError(400, 'One or more selected import routes are invalid')
               }
 
               await tx.run(`
