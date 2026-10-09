@@ -3,6 +3,7 @@ import {Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
+import {getLocationHrefWithSearch, getLocationSearch} from '../../../../utils/locationSearch.ts'
 import {
   analyzeProjectImportSession,
   cancelProjectImportSession,
@@ -67,7 +68,7 @@ const getInitialSessionId = () => {
     return null
   }
 
-  const value = new URLSearchParams(window.location.search).get('sessionId')?.trim() ?? ''
+  const value = new URLSearchParams(getLocationSearch(window.location)).get('sessionId')?.trim() ?? ''
 
   return value.length > 0 ? value : null
 }
@@ -77,15 +78,15 @@ const setSessionSearchParam = (sessionId: string | null) => {
     return
   }
 
-  const url = new URL(window.location.href)
+  const searchParams = new URLSearchParams(getLocationSearch(window.location))
 
   if (sessionId === null) {
-    url.searchParams.delete('sessionId')
+    searchParams.delete('sessionId')
   } else {
-    url.searchParams.set('sessionId', sessionId)
+    searchParams.set('sessionId', sessionId)
   }
 
-  window.history.replaceState(null, '', url.pathname + url.search)
+  window.history.replaceState(null, '', getLocationHrefWithSearch(window.location, searchParams.toString()))
 }
 
 const getSessionUpdatedAtTime = (session: ProjectImportSession) => {
