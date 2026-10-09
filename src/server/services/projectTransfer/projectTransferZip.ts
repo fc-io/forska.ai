@@ -168,8 +168,10 @@ const zipEndOfCentralDirectorySignature = 0x06054b50
 const zip64EndOfCentralDirectorySignature = 0x06064b50
 const zip64EndOfCentralDirectoryLocatorSignature = 0x07064b50
 const zipEndOfCentralDirectoryLength = 22
+const zipCentralDirectoryHeaderLength = 46
 const zip64EndOfCentralDirectoryLocatorLength = 20
 const zipEndOfCentralDirectoryMaxCommentLength = 0xffff
+const zipInflateMaxOutputLength = 0x100000000
 const projectTransferZipTextDecoder = new TextDecoder()
 
 const getPathErrorMessage = (error: ProjectTransferPathValidationError) => {
@@ -1252,6 +1254,15 @@ const readProjectTransferZipCentralDirectoryEntry = (
   }
 }
 
+const assertProjectTransferZipEntryCount = (zipEnd: ProjectTransferZipEnd) => {
+  return zipEnd.entryCount * zipCentralDirectoryHeaderLength <= zipEnd.centralDirectorySize
+    ? undefined
+    : throwProjectTransferZipError(
+        'malformed_central_directory',
+        'Central directory entry count does not fit the central directory size',
+      )
+}
+
 const readProjectTransferZipCentralDirectoryEntries = (
   bytes: Uint8Array,
   zipEnd: ProjectTransferZipEnd,
@@ -1262,6 +1273,7 @@ const readProjectTransferZipCentralDirectoryEntries = (
     offset: zipEnd.centralDirectoryOffset,
     size: zipEnd.centralDirectorySize,
   })
+  assertProjectTransferZipEntryCount(zipEnd)
 
   const result = Array.from({length: zipEnd.entryCount}).reduce<{
     entries: ProjectTransferZipCentralDirectoryEntry[]
@@ -1323,13 +1335,30 @@ const inflateProjectTransferZipEntryBytes = (
   }
 
   try {
-    return new Uint8Array(inflateRawSync(compressedBytes))
-  } catch (error) {
-    return throwProjectTransferZipError(
-      'deflate_entry',
-      `Failed to inflate ${entry.path}: ${error instanceof Error ? error.message : String(error)}`,
+    return new Uint8Array(
+      inflateRawSync(compressedBytes, {maxOutputLength: getProjectTransferZipInflateMaxOutputLength(entry)}),
     )
+  } catch (error) {
+    return isProjectTransferZipInflateOutputTooLargeError(error) && entry.uncompressedSize < zipInflateMaxOutputLength
+      ? throwProjectTransferZipError('size_mismatch', `Uncompressed size does not match metadata for ${entry.path}`)
+      : throwProjectTransferZipError(
+          'deflate_entry',
+          `Failed to inflate ${entry.path}: ${error instanceof Error ? error.message : String(error)}`,
+        )
   }
+}
+
+const getProjectTransferZipInflateMaxOutputLength = (entry: ProjectTransferZipCentralDirectoryEntry) => {
+  return Math.min(Math.max(entry.uncompressedSize, 1), zipInflateMaxOutputLength)
+}
+
+const isProjectTransferZipInflateOutputTooLargeError = (error: unknown) => {
+  return (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as {code: unknown}).code === 'ERR_BUFFER_TOO_LARGE'
+  )
 }
 
 const readProjectTransferZipCentralDirectoryEntryBytes = (
