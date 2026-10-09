@@ -452,7 +452,7 @@ const waitForDuckdbOwnerProxyTarget = async (
           ? {error: getDuckdbOwnerProxyErrorMessage(result.error), status: result.status}
           : {message: result.message, runtimeVersion: result.runtimeVersion, status: result.status},
     })
-    return {response: getDuckdbOwnerProxyUnavailableResponse()}
+    return {response: getDuckdbOwnerProxyUnavailableResponse(requestTemplate)}
   }
 
   await waitForDuckdbOwnerProxyRetry()
@@ -591,12 +591,25 @@ const isBufferedDuckdbOwnerProxyRequestTemplate = (
   return requestTemplate.body === null || requestTemplate.body instanceof ArrayBuffer
 }
 
-const getDuckdbOwnerProxyUnavailableResponse = () => {
+const duckdbExclusiveWorkBusyCode = 'DUCKDB_EXCLUSIVE_WORK'
+
+const getDuckdbOwnerProxyUnavailableResponse = (requestTemplate?: DuckdbOwnerProxyRequestTemplate) => {
+  if (requestTemplate !== undefined && getImportSessionIdFromProxyPathname(requestTemplate) !== null) {
+    return Response.json(
+      {
+        code: duckdbExclusiveWorkBusyCode,
+        data: null,
+        error: 'The database is busy with a project import. Status will update when it finishes.',
+      },
+      {headers: {'Retry-After': '5'}, status: 503},
+    )
+  }
+
   return Response.json({data: null, error: 'DuckDB owner proxy target unavailable'}, {status: 502})
 }
 
-const getDuckdbOwnerProxyFailureResponse = (requestTemplate: {failClosedWithoutDuckdbOwner: boolean}) => {
-  return requestTemplate.failClosedWithoutDuckdbOwner ? getDuckdbOwnerProxyUnavailableResponse() : null
+const getDuckdbOwnerProxyFailureResponse = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  return requestTemplate.failClosedWithoutDuckdbOwner ? getDuckdbOwnerProxyUnavailableResponse(requestTemplate) : null
 }
 
 const getImportSessionIdFromProxyPathname = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
@@ -704,7 +717,10 @@ const getImportArtifactFallbackForOwnerFailure = (
   artifactResponse: Response | null,
 ) => {
   return artifactResponse !== null
-    && (ownerResponse === null || ownerResponse.status === 502 || ownerResponse.status === 504)
+    && (ownerResponse === null
+      || ownerResponse.status === 502
+      || ownerResponse.status === 503
+      || ownerResponse.status === 504)
     ? artifactResponse
     : ownerResponse
 }

@@ -5,6 +5,7 @@ import {
   type DataSourceImportResumerWakeResult,
   runDataSourceImportResumerWake,
 } from '../routes/DataSourcesImportRoutes/dataSourceImportResumer.ts'
+import {isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {
   canCurrentServerOwnDuckdb,
@@ -21,6 +22,13 @@ export type DataSourceImportResumeCronWakeResult =
 
 const logCronError = (error: unknown) => {
   if (isExpectedDuckdbOwnerRoleLossError(error)) {
+    return
+  }
+
+  if (isDuckdbExclusiveWorkAdmissionError(error)) {
+    console.info(
+      '[dataSourceImport] resume cron wake deferred: a project import has exclusive database access. Retrying on the next wake.',
+    )
     return
   }
 
