@@ -20,7 +20,7 @@ import {
   type ComparisonProjectRowFilter,
   getComparisonProjectPassesRowFilter,
 } from '../../../utils/comparisonProjectRowFilter.ts'
-import {getDateValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
+import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgmentDisplayAnswer, hasAnyJudgmentAnswer} from '../../utils/judgmentAnswers.ts'
 
 export type ComparisonProjectScopedArticle = {
@@ -316,16 +316,26 @@ const getComparisonProjectServingPageCursor = (cursor: string | null | undefined
   }
 }
 
+const comparisonProjectServingCursorTimestampPattern =
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}(:?\d{2})?)?$/
+
+const getComparisonProjectServingCursorCreatedAt = (value: unknown) => {
+  const rowSortCreatedAt = getDateValue(value)
+
+  return rowSortCreatedAt === null
+    ? null
+    : typeof value === 'string' && comparisonProjectServingCursorTimestampPattern.test(value)
+      ? value
+      : rowSortCreatedAt.toISOString()
+}
+
 const getComparisonProjectServingNextCursor = (memberRow: ComparisonProjectServingMemberRow | undefined) => {
-  const rowSortCreatedAt = getDateValue(memberRow?.rowSortCreatedAt)
+  const createdAt = getComparisonProjectServingCursorCreatedAt(memberRow?.rowSortCreatedAt)
   const articleId = memberRow?.rowSortArticleId
   const title = memberRow?.rowSortTitle
 
   return articleId !== null && articleId !== undefined && title !== null && title !== undefined
-    ? Buffer.from(
-        JSON.stringify({articleId, createdAt: rowSortCreatedAt?.toISOString() ?? null, title}),
-        'utf8',
-      ).toString('base64url')
+    ? Buffer.from(JSON.stringify({articleId, createdAt, title}), 'utf8').toString('base64url')
     : null
 }
 
@@ -345,15 +355,16 @@ const getComparisonProjectServingCursorWhereSql = (cursor: ComparisonProjectServ
     `
   }
 
-  const cursorCreatedAt = getDateValue(cursor.createdAt)
+  const cursorCreatedAt = getComparisonProjectServingCursorCreatedAt(cursor.createdAt)
+  const cursorCreatedAtLiteral = cursorCreatedAt === null ? null : `TIMESTAMPTZ ${getSqlLiteral(cursorCreatedAt)}`
 
-  return cursorCreatedAt
+  return cursorCreatedAtLiteral
     ? `
       AND (
-        article.row_sort_created_at < ${getTimestampLiteral(cursorCreatedAt)}
+        article.row_sort_created_at < ${cursorCreatedAtLiteral}
         OR article.row_sort_created_at IS NULL
         OR (
-          article.row_sort_created_at = ${getTimestampLiteral(cursorCreatedAt)}
+          article.row_sort_created_at = ${cursorCreatedAtLiteral}
           AND (${titleCondition})
         )
       )
