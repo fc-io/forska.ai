@@ -13,6 +13,7 @@ import {
   type ProjectTransferTargetStateDirtyTokenSnapshot,
   type ProjectTransferTargetStateSafetySurface,
   projectTransferTargetStateSafetySurfaces,
+  projectTransferTargetStateTrackedSurfaces,
 } from './projectTransferTargetStateDirtyTokenService.ts'
 
 setDefaultTimeout(120_000)
@@ -285,11 +286,58 @@ test('project transfer target-state service stores coverage and advances known a
     }))
   `)
 
-  expect(result.coverageComplete).toBe(true)
-  expect(result.coverageSurfaces).toEqual([...projectTransferTargetStateSafetySurfaces])
+  expect(result.coverageComplete).toBe(false)
+  expect(result.coverageSurfaces).toEqual([...projectTransferTargetStateTrackedSurfaces])
   expect(result.articleToken).toBe(1)
   expect(result.promptToken).toBe(1)
   expect(result.globalUnknownToken).toBe(1)
+})
+
+test('project transfer stored coverage only claims surfaces with dirty-token writers so unchanged tokens still require full revalidation', () => {
+  const result = runDirtyTokenServiceScript<{
+    coverageSurfaces: string[]
+    snapshot: ProjectTransferTargetStateDirtyTokenSnapshot
+  }>(`
+    const coverage = await service.initializeTargetStateCoverage({
+      now: new Date('2026-06-12T09:00:00.000Z'),
+    })
+    const snapshot = await service.getTargetStateDirtyTokenSnapshot()
+
+    console.log(JSON.stringify({coverageSurfaces: coverage.coveredSurfaces, snapshot}))
+  `)
+  const trackedSurfaces = new Set<string>(projectTransferTargetStateTrackedSurfaces)
+  const untrackedSurfaces = new Set<string>(
+    projectTransferTargetStateSafetySurfaces.filter((surface) => {
+      return !trackedSurfaces.has(surface)
+    }),
+  )
+  const decision = getProjectTransferDirtyTokenRevalidationDecision({
+    analyzedTargetState: result.snapshot,
+    currentTargetState: result.snapshot,
+  })
+
+  expect(untrackedSurfaces.has('article')).toBe(true)
+  expect(untrackedSurfaces.has('judgment')).toBe(true)
+  expect(untrackedSurfaces.has('prompt')).toBe(true)
+  expect(
+    result.coverageSurfaces.some((surface) => {
+      return untrackedSurfaces.has(surface)
+    }),
+  ).toBe(false)
+  expect(result.snapshot.coverage?.coverageCodeVersion).toBe(projectTransferTargetStateCoverageCodeVersion)
+  expect(decision.status).toBe('full_revalidation_required')
+  expect(decision.reason).toBe('analyzed_target_state_coverage_incomplete')
+  expect(Object.keys(getProjectTransferDirtyTokenStalePlanReasons(decision)).sort()).toEqual([
+    'assessment',
+    'dependency',
+    'duplicatePackageHistory',
+    'humanReview',
+    'judgment',
+    'targetArticle',
+    'targetProject',
+    'targetPrompt',
+    'targetRoute',
+  ])
 })
 
 test('project transfer set-based commit advances dirty tokens for touched write surfaces', () => {
