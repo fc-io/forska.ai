@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto'
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {deflateRawSync} from 'node:zlib'
 
 import {expect, test} from 'bun:test'
 
@@ -552,4 +553,190 @@ test('rejects write packages with unsafe paths or missing manifest before writin
   )
   expect(missingManifestModule.state.writtenEntries).toEqual([])
   expect(unsafePathModule.state.writtenEntries).toEqual([])
+})
+
+type RawZipEntryInput = {compressionMethod: 0 | 8; data: Uint8Array; declaredUncompressedSize?: number; path: string}
+
+const createRawZipBytes = (byteLength: number, write: (view: DataView) => void) => {
+  const bytes = new Uint8Array(byteLength)
+  write(new DataView(bytes.buffer))
+  return bytes
+}
+
+const concatRawZipBytes = (chunks: readonly Uint8Array[]) => {
+  return new Uint8Array(
+    Buffer.concat(
+      chunks.map((chunk) => {
+        return Buffer.from(chunk)
+      }),
+    ),
+  )
+}
+
+const getRawZipEntryBytes = (entry: RawZipEntryInput, localHeaderOffset: number) => {
+  const filenameBytes = getBytes(entry.path)
+  const payload = entry.compressionMethod === 8 ? new Uint8Array(deflateRawSync(entry.data)) : entry.data
+  const crc32 = getProjectTransferZipCrc32Digest(entry.data)
+  const uncompressedSize = entry.declaredUncompressedSize ?? entry.data.byteLength
+  const localHeader = createRawZipBytes(30, (view) => {
+    view.setUint32(0, 0x04034b50, true)
+    view.setUint16(4, 20, true)
+    view.setUint16(6, 0x0800, true)
+    view.setUint16(8, entry.compressionMethod, true)
+    view.setUint16(10, 0, true)
+    view.setUint16(12, 33, true)
+    view.setUint32(14, crc32, true)
+    view.setUint32(18, payload.byteLength, true)
+    view.setUint32(22, uncompressedSize, true)
+    view.setUint16(26, filenameBytes.byteLength, true)
+    view.setUint16(28, 0, true)
+  })
+  const centralHeader = createRawZipBytes(46, (view) => {
+    view.setUint32(0, 0x02014b50, true)
+    view.setUint16(4, 20, true)
+    view.setUint16(6, 20, true)
+    view.setUint16(8, 0x0800, true)
+    view.setUint16(10, entry.compressionMethod, true)
+    view.setUint16(12, 0, true)
+    view.setUint16(14, 33, true)
+    view.setUint32(16, crc32, true)
+    view.setUint32(20, payload.byteLength, true)
+    view.setUint32(24, uncompressedSize, true)
+    view.setUint16(28, filenameBytes.byteLength, true)
+    view.setUint16(30, 0, true)
+    view.setUint16(32, 0, true)
+    view.setUint16(34, 0, true)
+    view.setUint16(36, 0, true)
+    view.setUint32(38, 0, true)
+    view.setUint32(42, localHeaderOffset, true)
+  })
+
+  return {
+    central: concatRawZipBytes([centralHeader, filenameBytes]),
+    local: concatRawZipBytes([localHeader, filenameBytes, payload]),
+  }
+}
+
+const getRawZipEnd = ({
+  centralDirectoryOffset,
+  centralDirectorySize,
+  entryCount,
+  zip64EntryCount,
+}: {
+  centralDirectoryOffset: number
+  centralDirectorySize: number
+  entryCount: number
+  zip64EntryCount?: number
+}) => {
+  const end = createRawZipBytes(22, (view) => {
+    view.setUint32(0, 0x06054b50, true)
+    view.setUint16(4, 0, true)
+    view.setUint16(6, 0, true)
+    view.setUint16(8, zip64EntryCount === undefined ? entryCount : 0xffff, true)
+    view.setUint16(10, zip64EntryCount === undefined ? entryCount : 0xffff, true)
+    view.setUint32(12, centralDirectorySize, true)
+    view.setUint32(16, centralDirectoryOffset, true)
+    view.setUint16(20, 0, true)
+  })
+
+  if (zip64EntryCount === undefined) {
+    return end
+  }
+
+  const zip64EndOffset = centralDirectoryOffset + centralDirectorySize
+  const zip64End = createRawZipBytes(56, (view) => {
+    view.setUint32(0, 0x06064b50, true)
+    view.setBigUint64(4, 44n, true)
+    view.setUint16(12, 45, true)
+    view.setUint16(14, 45, true)
+    view.setUint32(16, 0, true)
+    view.setUint32(20, 0, true)
+    view.setBigUint64(24, BigInt(zip64EntryCount), true)
+    view.setBigUint64(32, BigInt(zip64EntryCount), true)
+    view.setBigUint64(40, BigInt(centralDirectorySize), true)
+    view.setBigUint64(48, BigInt(centralDirectoryOffset), true)
+  })
+  const locator = createRawZipBytes(20, (view) => {
+    view.setUint32(0, 0x07064b50, true)
+    view.setUint32(4, 0, true)
+    view.setBigUint64(8, BigInt(zip64EndOffset), true)
+    view.setUint32(16, 1, true)
+  })
+
+  return concatRawZipBytes([zip64End, locator, end])
+}
+
+const getRawZipBytes = ({entries, zip64EntryCount}: {entries: RawZipEntryInput[]; zip64EntryCount?: number}) => {
+  const written = entries.reduce<{centrals: Uint8Array[]; locals: Uint8Array[]; offset: number}>(
+    (state, entry) => {
+      const entryBytes = getRawZipEntryBytes(entry, state.offset)
+
+      return {
+        centrals: [...state.centrals, entryBytes.central],
+        locals: [...state.locals, entryBytes.local],
+        offset: state.offset + entryBytes.local.byteLength,
+      }
+    },
+    {centrals: [], locals: [], offset: 0},
+  )
+  const centralDirectory = concatRawZipBytes(written.centrals)
+  const end = getRawZipEnd({
+    centralDirectoryOffset: written.offset,
+    centralDirectorySize: centralDirectory.byteLength,
+    entryCount: entries.length,
+    zip64EntryCount,
+  })
+
+  return concatRawZipBytes([...written.locals, centralDirectory, end])
+}
+
+test('inflates DEFLATE entries only up to their declared uncompressed size', async () => {
+  const manifestBytes = getBytes('{"schemaVersion":1}')
+  const articleBytes = new Uint8Array(4 * 1024 * 1024).fill(97)
+  const honestArchive = getRawZipBytes({
+    entries: [
+      {compressionMethod: 0, data: manifestBytes, path: 'manifest.json'},
+      {compressionMethod: 8, data: articleBytes, path: 'assets/articles/article-1.txt'},
+    ],
+  })
+  const bombArchive = getRawZipBytes({
+    entries: [
+      {compressionMethod: 0, data: manifestBytes, path: 'manifest.json'},
+      {compressionMethod: 8, data: articleBytes, declaredUncompressedSize: 64, path: 'assets/articles/article-1.txt'},
+    ],
+  })
+
+  const honest = await readProjectTransferZipPackage({bytes: honestArchive})
+
+  expect(honest.entries[1]?.bytes).toEqual(articleBytes)
+  expect(honest.entries[1]?.uncompressedSize).toBe(articleBytes.byteLength)
+  expect(bombArchive.byteLength).toBeLessThan(16 * 1024)
+  await expectPromiseToRejectWithMessage(
+    readProjectTransferZipPackage({bytes: bombArchive}),
+    'Project transfer zip size_mismatch',
+  )
+})
+
+test('rejects ZIP64 entry counts that cannot fit the central directory before allocating entries', async () => {
+  const manifestBytes = getBytes('{"schemaVersion":1}')
+  const entries: RawZipEntryInput[] = [
+    {compressionMethod: 0, data: manifestBytes, path: 'manifest.json'},
+    {compressionMethod: 0, data: getBytes('article-one'), path: 'assets/articles/article-1.txt'},
+  ]
+
+  const honest = await readProjectTransferZipPackage({bytes: getRawZipBytes({entries, zip64EntryCount: 2})})
+
+  expect(
+    honest.entries.map((entry) => {
+      return entry.path
+    }),
+  ).toEqual(['manifest.json', 'assets/articles/article-1.txt'])
+  await expectPromiseToRejectWithMessage(
+    readProjectTransferZipPackage({bytes: getRawZipBytes({entries, zip64EntryCount: 1_000_000_000})}),
+    'Project transfer zip malformed_central_directory',
+  )
+  await expectPromiseToRejectWithMessage(
+    readProjectTransferZipPackage({bytes: getRawZipBytes({entries, zip64EntryCount: 3})}),
+    'Project transfer zip malformed_central_directory',
+  )
 })
