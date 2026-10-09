@@ -106,7 +106,8 @@ const HealthJobsPage = () => {
 
     try {
       const result = await runJudgmentsJobRepairAction({action, jobId})
-      setActionNoticeByJobId((previous) => {
+      const setResultMessage = result.ok ? setActionNoticeByJobId : setActionErrorByJobId
+      setResultMessage((previous) => {
         return {...previous, [jobId]: result.message}
       })
       await jobs.refetch()

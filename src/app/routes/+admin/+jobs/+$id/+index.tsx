@@ -539,7 +539,11 @@ export const AdminJudgmentJobDetail = () => {
     try {
       const result = await runJudgmentsJobRepairAction({action, jobId, reason})
       await job.refetch()
-      setActionNotice(result.message)
+      if (result.ok) {
+        setActionNotice(result.message)
+      } else {
+        setActionError(result.message)
+      }
     } catch (error) {
       setActionError(getActionErrorMessage(error, `Failed to ${action} local storage`))
     } finally {
@@ -549,6 +553,8 @@ export const AdminJudgmentJobDetail = () => {
   const handleDeleteJob = (jobId: string) => {
     if (!confirm('Are you sure you want to delete this job? This action cannot be undone.')) return
 
+    setActionError('')
+    setActionNotice('')
     setIsDeleting(true)
     deleteJudgmentsJob(jobId)
       .then(() => {
@@ -556,7 +562,9 @@ export const AdminJudgmentJobDetail = () => {
       })
       .catch((error) => {
         console.error('Failed to delete job:', error)
+        setActionError(getActionErrorMessage(error, 'Failed to delete job'))
         setIsDeleting(false)
+        void job.refetch()
       })
   }
   // console.log('job.data:', job.data?.unassessedArticlesCount)
