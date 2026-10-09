@@ -2,6 +2,7 @@ import type {Setter} from 'solid-js'
 import {createEffect, createSignal, on, onMount} from 'solid-js'
 
 import type {LlmStatus} from '../services/olap/olapTypes.ts'
+import {getLocationHrefWithSearch, getLocationSearch} from './locationSearch.ts'
 
 type UseUrlFiltersOptions = {routePath: string; routeParams: Record<string, string>; includeLlmStatus?: boolean}
 
@@ -52,7 +53,7 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
 
   // Parse URL params on mount
   onMount(() => {
-    const urlParams = new URLSearchParams(window.location.search)
+    const urlParams = new URLSearchParams(getLocationSearch(window.location))
 
     // Parse date filters
     const from = urlParams.get('from')
@@ -156,7 +157,7 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
         if (!initialized()) return
 
         const nextSearch = new URLSearchParams(buildSearchParams()).toString()
-        const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}`
+        const nextUrl = getLocationHrefWithSearch(window.location, nextSearch)
 
         window.history.replaceState(window.history.state, '', nextUrl)
       },
