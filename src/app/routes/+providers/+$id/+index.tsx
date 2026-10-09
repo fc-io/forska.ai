@@ -1,6 +1,6 @@
 import {createMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createEffect, createMemo, createSignal, For, onCleanup, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Index, onCleanup, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button.tsx'
@@ -2153,91 +2153,96 @@ const ProviderDetailPage = () => {
                                 </tr>
                               </thead>
                               <tbody class="divide-y divide-gray-200 bg-white">
-                                <For each={modelDrafts()}>
+                                <Index each={modelDrafts()}>
                                   {(model) => {
-                                    const thinkingInputMode = getProviderPageThinkingInputMode(model)
+                                    const thinkingInputMode = () => {
+                                      return getProviderPageThinkingInputMode(model())
+                                    }
 
                                     return (
                                       <tr>
                                         <td class="px-4 py-3 align-top">
                                           <Show
-                                            when={model.isThinkingOptionRow}
+                                            when={model().isThinkingOptionRow}
                                             fallback={
                                               <input
                                                 class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
                                                 onInput={(event) => {
                                                   return updateModelDraft({
-                                                    id: model.id,
+                                                    id: model().id,
                                                     updates: {displayNameValue: event.currentTarget.value},
                                                   })
                                                 }}
                                                 type="text"
-                                                value={model.displayNameValue}
+                                                value={model().displayNameValue}
                                               />
                                             }
                                           >
                                             <div class="text-sm font-medium text-gray-900">
-                                              {getProviderPageModelDisplayName(model)}
+                                              {getProviderPageModelDisplayName(model())}
                                             </div>
                                           </Show>
                                           <div class="mt-2 text-xs text-gray-500">
-                                            {model.remoteModelId ?? model.modelName ?? '-'} • {model.source ?? 'manual'}
+                                            {model().remoteModelId ?? model().modelName ?? '-'} •{' '}
+                                            {model().source ?? 'manual'}
                                           </div>
-                                          <Show when={getProviderModelContextLength(model.metadataJson)}>
+                                          <Show when={getProviderModelContextLength(model().metadataJson)}>
                                             <div class="mt-1 text-xs text-gray-500">
-                                              Context {getProviderModelContextLength(model.metadataJson)} tokens
+                                              Context {getProviderModelContextLength(model().metadataJson)} tokens
                                             </div>
                                           </Show>
-                                          <Show when={getProviderModelDiscoverySource(model.metadataJson)}>
+                                          <Show when={getProviderModelDiscoverySource(model().metadataJson)}>
                                             <div class="mt-1 text-xs text-gray-500">
-                                              Discovery {getProviderModelDiscoverySource(model.metadataJson)}
+                                              Discovery {getProviderModelDiscoverySource(model().metadataJson)}
                                             </div>
                                           </Show>
-                                          <Show when={getProviderModelReasoningEfforts(model.metadataJson).length > 0}>
+                                          <Show
+                                            when={getProviderModelReasoningEfforts(model().metadataJson).length > 0}
+                                          >
                                             <div class="mt-1 text-xs text-gray-500">
                                               Reasoning{' '}
-                                              {getProviderModelReasoningEfforts(model.metadataJson).join(', ')}
+                                              {getProviderModelReasoningEfforts(model().metadataJson).join(', ')}
                                             </div>
                                           </Show>
                                         </td>
                                         <td class="px-4 py-3 align-top">
                                           <Show
-                                            when={model.isThinkingOptionRow}
+                                            when={model().isThinkingOptionRow}
                                             fallback={
                                               <>
-                                                <Show when={shouldSubmitProviderPageVariant(model)}>
+                                                <Show when={shouldSubmitProviderPageVariant(model())}>
                                                   <input
                                                     class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
                                                     onInput={(event) => {
                                                       return updateModelDraft({
-                                                        id: model.id,
+                                                        id: model().id,
                                                         updates: {variantValue: event.currentTarget.value},
                                                       })
                                                     }}
                                                     type="text"
-                                                    value={model.variantValue}
+                                                    value={model().variantValue}
                                                   />
                                                 </Show>
-                                                <Show when={thinkingInputMode !== 'none'}>
+                                                <Show when={thinkingInputMode() !== 'none'}>
                                                   <div class="mt-2">
                                                     <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                                                      {getProviderPageThinkingInputLabel(thinkingInputMode)}
+                                                      {getProviderPageThinkingInputLabel(thinkingInputMode())}
                                                     </label>
                                                     <select
                                                       class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
                                                       onChange={(event) => {
                                                         return updateModelDraft({
-                                                          id: model.id,
+                                                          id: model().id,
                                                           updates: {
                                                             thinkingValue: event.currentTarget
                                                               .value as ProviderPageThinkingFormValue,
                                                           },
                                                         })
                                                       }}
-                                                      value={model.thinkingValue}
+                                                      value={model().thinkingValue}
                                                     >
                                                       <For
-                                                        each={getProviderPageThinkingSelectOptions(thinkingInputMode)}
+                                                        each={getProviderPageThinkingSelectOptions(thinkingInputMode())}
                                                       >
                                                         {(option) => {
                                                           return <option value={option.value}>{option.label}</option>
@@ -2246,7 +2251,7 @@ const ProviderDetailPage = () => {
                                                     </select>
                                                   </div>
                                                 </Show>
-                                                <Show when={supportsProviderPageThinkingModeInput(model)}>
+                                                <Show when={supportsProviderPageThinkingModeInput(model())}>
                                                   <div class="mt-2">
                                                     <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
                                                       Thinking mode
@@ -2255,14 +2260,14 @@ const ProviderDetailPage = () => {
                                                       class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
                                                       onChange={(event) => {
                                                         return updateModelDraft({
-                                                          id: model.id,
+                                                          id: model().id,
                                                           updates: {
                                                             thinkingModeValue: event.currentTarget
                                                               .value as ProviderPageThinkingModeFormValue,
                                                           },
                                                         })
                                                       }}
-                                                      value={model.thinkingModeValue}
+                                                      value={model().thinkingModeValue}
                                                     >
                                                       <For each={getProviderPageThinkingModeSelectOptions()}>
                                                         {(option) => {
@@ -2275,21 +2280,21 @@ const ProviderDetailPage = () => {
                                               </>
                                             }
                                           >
-                                            <span class={getCompactVariantBadgeClass(model.provider)}>
-                                              {getProviderPageThinkingRowLabel(model)}
+                                            <span class={getCompactVariantBadgeClass(model().provider)}>
+                                              {getProviderPageThinkingRowLabel(model())}
                                             </span>
                                           </Show>
                                           <div class="mt-2 text-xs text-gray-500">
-                                            Created {formatTimestamp(model.createdAt)}
+                                            Created {formatTimestamp(model().createdAt)}
                                           </div>
                                         </td>
                                         <td class="px-4 py-3 align-top">
                                           <label class="inline-flex items-center gap-2 text-sm text-gray-700">
                                             <input
-                                              checked={model.enabled}
+                                              checked={model().enabled}
                                               onChange={(event) => {
                                                 return updateModelDraft({
-                                                  id: model.id,
+                                                  id: model().id,
                                                   updates: {enabled: event.currentTarget.checked},
                                                 })
                                               }}
@@ -2301,7 +2306,7 @@ const ProviderDetailPage = () => {
                                       </tr>
                                     )
                                   }}
-                                </For>
+                                </Index>
                               </tbody>
                             </table>
                           }
@@ -2321,7 +2326,7 @@ const ProviderDetailPage = () => {
                               </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200 bg-white">
-                              <For each={modelDrafts()}>
+                              <Index each={modelDrafts()}>
                                 {(model) => {
                                   return (
                                     <tr>
@@ -2329,11 +2334,11 @@ const ProviderDetailPage = () => {
                                         <div class="flex items-center gap-2">
                                           <span
                                             class="font-medium"
-                                            title={model.remoteModelId ?? model.modelName ?? model.name}
+                                            title={model().remoteModelId ?? model().modelName ?? model().name}
                                           >
-                                            {getProviderPageModelDisplayName(model)}
+                                            {getProviderPageModelDisplayName(model())}
                                           </span>
-                                          <Show when={model.persistedId}>
+                                          <Show when={model().persistedId}>
                                             <span class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-gray-500">
                                               Saved
                                             </span>
@@ -2341,19 +2346,19 @@ const ProviderDetailPage = () => {
                                         </div>
                                       </td>
                                       <td class="px-4 py-2 align-middle">
-                                        <span class={getCompactVariantBadgeClass(model.provider)}>
-                                          {model.isThinkingOptionRow
-                                            ? getProviderPageThinkingRowLabel(model)
-                                            : getCompactVariantLabel(model)}
+                                        <span class={getCompactVariantBadgeClass(model().provider)}>
+                                          {model().isThinkingOptionRow
+                                            ? getProviderPageThinkingRowLabel(model())
+                                            : getCompactVariantLabel(model())}
                                         </span>
                                       </td>
                                       <td class="px-4 py-2 align-middle">
                                         <label class="inline-flex items-center gap-2 text-sm text-gray-700">
                                           <input
-                                            checked={model.enabled}
+                                            checked={model().enabled}
                                             onChange={(event) => {
                                               return updateModelDraft({
-                                                id: model.id,
+                                                id: model().id,
                                                 updates: {enabled: event.currentTarget.checked},
                                               })
                                             }}
@@ -2365,7 +2370,7 @@ const ProviderDetailPage = () => {
                                     </tr>
                                   )
                                 }}
-                              </For>
+                              </Index>
                             </tbody>
                           </table>
                         </Show>
