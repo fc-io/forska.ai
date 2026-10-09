@@ -1,5 +1,3 @@
-import {format} from 'date-fns'
-
 import {europePmcPprHarvest} from '../../../agent/europePmcPprHarvest.ts'
 import {
   type DataSourceImportPageProgress,
@@ -9,6 +7,7 @@ import {
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
 import {withDataSourceImportTrackingLease} from './dataSourceImportTrackingLease.ts'
 import {createCursorUpdater} from './dataSourcesImportCursor.ts'
+import {getDataSourceImportDateWindow} from './dataSourcesImportDateWindow.ts'
 import {startDataSourceImportInBackground} from './startDataSourceImportInBackground.ts'
 
 export const dataSourcesImportRoutesPostEuropePmcPpr = async (
@@ -21,10 +20,7 @@ export const dataSourcesImportRoutesPostEuropePmcPpr = async (
     throw new Error('Data source not found')
   }
   const importRoute = record.importRoute ?? '/api/datasources/import/europe-pmc-ppr'
-  const fromDate = record.dateFrom ? format(record.dateFrom, 'yyyy-MM-dd') : '2020-01-01'
-  const now = new Date()
-  const recordToDate = record.dateTo ? new Date(record.dateTo) : now
-  const toDate = recordToDate > now ? format(now, 'yyyy-MM-dd') : format(recordToDate, 'yyyy-MM-dd')
+  const {fromDate, toDate} = getDataSourceImportDateWindow(record)
   if (!record.dateFrom) {
     console.warn('dataSourcesImportRoutesPostEuropePmcPpr – From date is good to have')
   }

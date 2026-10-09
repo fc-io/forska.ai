@@ -1,13 +1,8 @@
-import {format} from 'date-fns'
-
 import type {InputData} from './arxivWorkflowHarvest.ts'
 
 const MAX_ITEMS_PER_PAGE = 2000
 
-const getArxivIdsQueryUrl = (fromDate: Date, toDate: Date, resumptionToken?: string): string => {
-  const from = format(fromDate, 'yyyy-MM-dd')
-  const to = format(toDate, 'yyyy-MM-dd')
-
+const getArxivIdsQueryUrl = (from: string, to: string, resumptionToken?: string): string => {
   const baseUrl = import.meta.env.DEV ? '/api/arxiv' : 'https://oaipmh.arxiv.org'
 
   // Add set parameter if searchTerm maps to a specific arXiv category
@@ -51,9 +46,7 @@ const getArxivIdsQueryUrl = (fromDate: Date, toDate: Date, resumptionToken?: str
 // }
 
 const arxivWorkflowGetQuery = (inputData: InputData, resumptionToken?: string) => {
-  const {fromDate: fromDateString, toDate: toDateString} = inputData
-  const fromDate = new Date(fromDateString)
-  const toDate = new Date(toDateString)
+  const {fromDate, toDate} = inputData
   const arxivQueryUrl = getArxivIdsQueryUrl(fromDate, toDate, resumptionToken)
 
   return arxivQueryUrl
