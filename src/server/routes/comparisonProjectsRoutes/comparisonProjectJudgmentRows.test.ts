@@ -1,3 +1,4 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import type {ComparisonProjectDifferenceColumn} from '../../../utils/comparisonProjectDifferenceFilter.ts'
@@ -810,4 +811,115 @@ test('serving judgment rows return empty page when active generation is missing'
   expect(statements[0]).toContain('FROM mart.comparison_article_serving article')
   expect(statements[0]).not.toContain('FROM app.article')
   expect(statements[0]).not.toContain('FROM app.judgment')
+})
+
+test('serving keyset cursor keeps microsecond timestamps so same-batch articles are not skipped', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+  const queryRunner = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+  }
+
+  await connection.run('CREATE SCHEMA app')
+  await connection.run('CREATE SCHEMA mart')
+  await connection.run(
+    'CREATE TABLE app.comparison_project_serving_generation (comparison_project_id VARCHAR, active_generation BIGINT)',
+  )
+  await connection.run(`
+    CREATE TABLE mart.comparison_article_serving (
+      comparison_project_id VARCHAR,
+      generation BIGINT,
+      article_id VARCHAR,
+      article_external_id VARCHAR,
+      article_title VARCHAR,
+      article_summary VARCHAR,
+      article_created_at TIMESTAMPTZ,
+      article_category VARCHAR,
+      has_conflict BOOLEAN,
+      row_sort_created_at TIMESTAMPTZ,
+      row_sort_title VARCHAR,
+      row_sort_article_id VARCHAR,
+      passes_row_filter_all BOOLEAN,
+      passes_difference_filter_all BOOLEAN
+    )
+  `)
+  await connection.run(`
+    CREATE TABLE mart.comparison_cell_serving (
+      comparison_project_id VARCHAR,
+      generation BIGINT,
+      article_id VARCHAR,
+      column_id VARCHAR,
+      column_order INTEGER,
+      display_answer VARCHAR
+    )
+  `)
+  await connection.run("INSERT INTO app.comparison_project_serving_generation VALUES ('comparison-project-1', 1)")
+  await connection.run(`
+    INSERT INTO mart.comparison_article_serving
+    SELECT
+      'comparison-project-1',
+      1,
+      article_id,
+      article_id,
+      article_id,
+      NULL,
+      created_at,
+      'english',
+      FALSE,
+      created_at,
+      article_id,
+      article_id,
+      TRUE,
+      TRUE
+    FROM (
+      VALUES
+        ('article-1', TIMESTAMPTZ '2026-04-01 10:00:00.123456+00'),
+        ('article-2', TIMESTAMPTZ '2026-04-01 10:00:00.123456+00'),
+        ('article-3', TIMESTAMPTZ '2026-04-01 10:00:00.123456+00'),
+        ('article-4', TIMESTAMPTZ '2026-04-01 10:00:00.123001+00'),
+        ('article-5', TIMESTAMPTZ '2026-03-31 10:00:00.000000+00'),
+        ('article-6', NULL)
+    ) AS seeded(article_id, created_at)
+  `)
+
+  const visitedArticleIds: string[][] = []
+
+  await forEachComparisonProjectServingJudgmentRowBatch({
+    comparisonProjectId: 'comparison-project-1',
+    differenceFilter: 'all',
+    limit: 2,
+    onRows: async (rows) => {
+      visitedArticleIds.push(
+        rows.map((row) => {
+          return row.id
+        }),
+      )
+    },
+    queryRunner,
+    rowFilter: 'all',
+  })
+
+  expect(visitedArticleIds).toEqual([
+    ['article-1', 'article-2'],
+    ['article-3', 'article-4'],
+    ['article-5', 'article-6'],
+  ])
+
+  const firstPage = await getComparisonProjectServingJudgmentRowsPage({
+    comparisonProjectId: 'comparison-project-1',
+    cursor: null,
+    differenceFilter: 'all',
+    limit: 2,
+    queryRunner,
+    rowFilter: 'all',
+  })
+  const decodedCursor = getDecodedServingCursor(firstPage.nextCursor) as {createdAt: string}
+
+  expect(decodedCursor.createdAt).toContain('.123456')
+
+  connection.closeSync()
 })
