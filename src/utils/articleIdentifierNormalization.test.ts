@@ -133,6 +133,36 @@ test('extracts identifiers only from trusted URL patterns', () => {
   })
 })
 
+test('keeps malformed percent-escapes in URLs as raw values instead of throwing', () => {
+  expect(normalizeTrustedUrlIdentifier('https://example.com/caf%E9')).toMatchObject({
+    reason: 'unsupported-url',
+    status: 'rejected',
+  })
+  expect(normalizeTrustedUrlIdentifier('https://pubmed.ncbi.nlm.nih.gov/123%E9/')).toMatchObject({
+    reason: 'malformed',
+    status: 'rejected',
+  })
+  expect(normalizeDoiIdentifier('https://doi.org/10.1000/caf%E9')).toMatchObject({
+    identifier: {kind: 'doi', normalizedValue: '10.1000/caf%e9'},
+    status: 'accepted',
+  })
+  expect(normalizeDoiIdentifier('https://doi.org/10.1000/caf%C3%A9')).toMatchObject({
+    identifier: {kind: 'doi', normalizedValue: '10.1000/café'},
+    status: 'accepted',
+  })
+  expect(normalizeArxivIdentifier('https://arxiv.org/abs/2401.12345%zz')).toMatchObject({
+    reason: 'malformed',
+    status: 'rejected',
+  })
+  expect(
+    normalizeSourceRowIdentifiers([
+      {inputKind: 'doi', source: 'doi', value: '10.1000/alpha'},
+      {inputKind: 'url', source: 'url', value: 'http://ovidsp.ovid.com/ovidweb.cgi?T=JS&D=emed7&AN=caf%E9'},
+      {inputKind: 'url', source: 'url', value: 'https://example.com/caf%E9'},
+    ]),
+  ).toMatchObject({conflicts: [], strongIdentifiers: [{kind: 'doi', normalizedValue: '10.1000/alpha'}]})
+})
+
 test('collapses duplicate normalized identifiers within one source row', () => {
   const result = normalizeSourceRowIdentifiers([
     {inputKind: 'doi', source: 'doi', value: 'https://doi.org/10.1000/Alpha'},

@@ -102,11 +102,19 @@ const getNormalizedHost = (url: URL) => {
   return url.hostname.toLowerCase().replace(/^www\./, '')
 }
 
+const getDecodedUriComponent = (value: string) => {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
 const getUrlPathSegments = (url: URL) => {
   return url.pathname
     .split('/')
     .map((segment) => {
-      return decodeURIComponent(segment)
+      return getDecodedUriComponent(segment)
     })
     .filter((segment) => {
       return segment !== ''
@@ -208,7 +216,7 @@ const getTrustedDoiUrlCandidate = (value: string) => {
   const host = url ? getNormalizedHost(url) : null
   const isDoiHost = host === 'doi.org' || host === 'dx.doi.org'
 
-  return url && isDoiHost ? decodeURIComponent(url.pathname.replace(/^\/+/, '')) : null
+  return url && isDoiHost ? getDecodedUriComponent(url.pathname.replace(/^\/+/, '')) : null
 }
 
 const getDoiCandidate = (rawValue: string) => {
