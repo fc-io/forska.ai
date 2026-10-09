@@ -1,7 +1,7 @@
 import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createSignal, Match, Suspense, Switch} from 'solid-js'
+import {createMemo, createSignal, Match, Suspense, Switch} from 'solid-js'
 
 import {ProjectDetailsCuratedArticles} from '../../../../components/main/projectDetails/projectDetailsCuratedArticles'
 import {ProjectDetailsImportProgress} from '../../../../components/main/projectDetails/projectDetailsImportProgress.tsx'
@@ -13,7 +13,96 @@ import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeMod
 import {fetchProviderConnections} from '../../+admin/+models/providerConnectionsClient.ts'
 import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
-const ProjectDetail = () => {
+type RawPrompt = {
+  id: string
+  createdAt?: Date | null
+  updatedAt?: Date | null
+  originalText: string
+  transformedText: string | null
+  promptHeading: string | null
+  provider?: string | null
+  modelName?: string | null
+  order: number | null
+  archived: boolean
+  promptArchived?: boolean
+  type: string | null
+  enabled?: boolean
+  originProjectId?: string | null
+  linkedToProject?: boolean
+}
+
+type ProviderConnectionsData = Awaited<ReturnType<typeof fetchProviderConnections>> | undefined
+
+const getProjectImportRoutes = (result: {importRoutes?: unknown}): string[] => {
+  return Array.isArray(result.importRoutes) ? (result.importRoutes as string[]) : []
+}
+
+const getProjectImportRouteNamesByRoute = (result: {importRouteNamesByRoute?: unknown}) => {
+  const namesByRouteCandidate = result.importRouteNamesByRoute
+
+  return namesByRouteCandidate && typeof namesByRouteCandidate === 'object' && !Array.isArray(namesByRouteCandidate)
+    ? (namesByRouteCandidate as Record<string, string | null>)
+    : undefined
+}
+
+const getVisibleProjectPrompts = (rawPrompts: RawPrompt[]) => {
+  return rawPrompts
+    .filter((p) => {
+      const isArchived = Boolean(p.promptArchived)
+      const isEnabled = p.enabled !== false
+      const isLinkedToProject = p.linkedToProject ?? p.order !== null
+      return !isArchived || isEnabled || isLinkedToProject
+    })
+    .map((p) => {
+      return {
+        ...p,
+        order: p.order ?? 0,
+        promptHeading: p.promptHeading ?? undefined,
+        type: p.type ?? undefined,
+        created_at: p.createdAt?.toString() ?? new Date().toISOString(),
+        original_text: p.originalText,
+        transformed_text: p.transformedText ?? undefined,
+        provider: p.provider ?? null,
+        modelName: p.modelName ?? null,
+        archived: p.promptArchived ?? undefined,
+        enabled: p.enabled ?? true,
+        originProjectId: p.originProjectId ?? null,
+        linkedToProject: p.linkedToProject ?? p.order !== null,
+      }
+    })
+}
+
+const getProviderModel = (providerConnections: ProviderConnectionsData, modelId: string | null | undefined) => {
+  return modelId
+    ? (providerConnections?.connections
+        .flatMap((connection) => {
+          return connection.models
+        })
+        .find((candidate) => {
+          return candidate.id === modelId
+        }) ?? null)
+    : null
+}
+
+const getProjectModelRuntimeNotice = (
+  providerConnections: ProviderConnectionsData,
+  modelId: string | null | undefined,
+) => {
+  const providerModel = getProviderModel(providerConnections, modelId)
+
+  return providerModel
+    ? getSglangRuntimeModelNotice({
+        candidateModelNames: [providerModel.remoteModelId, providerModel.modelName],
+        getMismatchMessage: (runtimeLabel) => {
+          return `Active SGLang runtime model: ${runtimeLabel}. Starting a job will be blocked until it matches this project's model.`
+        },
+        providerKind: providerModel.provider,
+        runtime: providerConnections?.runtime ?? null,
+      })
+    : null
+}
+
+export const ProjectDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const navigate = useNavigate()
@@ -134,83 +223,28 @@ const ProjectDetail = () => {
         </Match>
         <Match when={projectData.data}>
           {(data) => {
-            const result = data()
-            const {project, prompts: rawPrompts, model} = result
-            const providerModel = model?.id
-              ? (providerConnectionsQuery.data?.connections
-                  .flatMap((connection) => {
-                    return connection.models
-                  })
-                  .find((candidate) => {
-                    return candidate.id === model.id
-                  }) ?? null)
-              : null
-            const modelRuntimeNotice = providerModel
-              ? getSglangRuntimeModelNotice({
-                  candidateModelNames: [providerModel.remoteModelId, providerModel.modelName],
-                  getMismatchMessage: (runtimeLabel) => {
-                    return `Active SGLang runtime model: ${runtimeLabel}. Starting a job will be blocked until it matches this project's model.`
-                  },
-                  providerKind: providerModel.provider,
-                  runtime: providerConnectionsQuery.data?.runtime ?? null,
-                })
-              : null
-            const importRoutes = Array.isArray((result as {importRoutes?: unknown}).importRoutes)
-              ? (result as {importRoutes: string[]}).importRoutes
-              : []
-            const namesByRouteCandidate = (result as {importRouteNamesByRoute?: unknown}).importRouteNamesByRoute
-            const importRouteNamesByRoute =
-              namesByRouteCandidate
-              && typeof namesByRouteCandidate === 'object'
-              && !Array.isArray(namesByRouteCandidate)
-                ? (namesByRouteCandidate as Record<string, string | null>)
-                : undefined
-
-            type RawPrompt = {
-              id: string
-              createdAt?: Date | null
-              updatedAt?: Date | null
-              originalText: string
-              transformedText: string | null
-              promptHeading: string | null
-              provider?: string | null
-              modelName?: string | null
-              order: number | null
-              archived: boolean
-              promptArchived?: boolean
-              type: string | null
-              enabled?: boolean
-              originProjectId?: string | null
-              linkedToProject?: boolean
+            const project = () => {
+              return data().project
             }
-
-            const visibleRawPrompts = rawPrompts.filter((p: RawPrompt) => {
-              const isArchived = Boolean(p.promptArchived)
-              const isEnabled = p.enabled !== false
-              const isLinkedToProject = p.linkedToProject ?? p.order !== null
-              return !isArchived || isEnabled || isLinkedToProject
+            const model = () => {
+              return data().model
+            }
+            const modelRuntimeNotice = createMemo(() => {
+              return getProjectModelRuntimeNotice(providerConnectionsQuery.data, model()?.id)
+            })
+            const importRoutes = createMemo(() => {
+              return getProjectImportRoutes(data())
+            })
+            const importRouteNamesByRoute = createMemo(() => {
+              return getProjectImportRouteNamesByRoute(data())
+            })
+            const prompts = createMemo(() => {
+              return getVisibleProjectPrompts(data().prompts as RawPrompt[])
             })
 
-            const prompts = visibleRawPrompts.map((p: RawPrompt) => {
-              return {
-                ...p,
-                order: p.order ?? 0,
-                promptHeading: p.promptHeading ?? undefined,
-                type: p.type ?? undefined,
-                created_at: p.createdAt?.toString() ?? new Date().toISOString(),
-                original_text: p.originalText,
-                transformed_text: p.transformedText ?? undefined,
-                provider: p.provider ?? null,
-                modelName: p.modelName ?? null,
-                archived: p.promptArchived ?? undefined,
-                enabled: p.enabled ?? true,
-                originProjectId: p.originProjectId ?? null,
-                linkedToProject: p.linkedToProject ?? p.order !== null,
-              }
-            })
             return (
               <div class="space-y-4">
-                <ProjectDetailsImportProgress importRoutes={importRoutes} projectId={project.id} />
+                <ProjectDetailsImportProgress importRoutes={importRoutes()} projectId={project().id} />
 
                 {/* Project Information - Suspense Boundary */}
                 <Suspense
@@ -222,11 +256,11 @@ const ProjectDetail = () => {
                   }
                 >
                   <ProjectDetailsInformation
-                    project={project}
-                    importRoutes={importRoutes}
-                    importRouteNamesByRoute={importRouteNamesByRoute}
-                    model={model}
-                    modelRuntimeNotice={modelRuntimeNotice}
+                    project={project()}
+                    importRoutes={importRoutes()}
+                    importRouteNamesByRoute={importRouteNamesByRoute()}
+                    model={model()}
+                    modelRuntimeNotice={modelRuntimeNotice()}
                   />
                 </Suspense>
 
@@ -239,7 +273,7 @@ const ProjectDetail = () => {
                     </div>
                   }
                 >
-                  <ProjectDetailsPrompts projectId={project.id} prompts={prompts} formatDate={formatDate} />
+                  <ProjectDetailsPrompts projectId={project().id} prompts={prompts()} formatDate={formatDate} />
                 </Suspense>
 
                 {/* Curated Articles - Suspense Boundary */}
