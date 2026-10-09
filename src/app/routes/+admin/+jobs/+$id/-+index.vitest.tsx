@@ -11,7 +11,7 @@ import type {JudgmentJobProviderHealth} from '../jobsPageShared.ts'
 type MockLinkProps = ParentProps<{class?: string; params?: {id?: string}; to: string}>
 
 const mockState = vi.hoisted(() => {
-  return {job: {} as Record<string, unknown>, jobId: 'job-limited'}
+  return {job: {} as Record<string, unknown>, jobId: 'job-limited', responses: {} as Record<string, unknown>}
 })
 
 vi.mock('@tanstack/solid-router', () => {
@@ -46,13 +46,15 @@ vi.mock('@tanstack/solid-router', () => {
 vi.mock('../../../../../services/apiClient.ts', () => {
   const edenMethods = new Set(['delete', 'get', 'patch', 'post', 'put'])
   const getEdenResponse = (path: string) => {
-    return path === `api.judgmentsjobs.:${mockState.jobId}.get`
-      ? {data: mockState.job, error: null, status: 200}
-      : path === 'api.judgmentsjobs-unassessed-count.get'
-        ? {data: {count: 0}, error: null, status: 200}
-        : path === 'api.projects.:project-limited.get'
-          ? {data: {id: 'project-limited', model: null, name: 'cov 6 | 4'}, error: null, status: 200}
-          : {data: null, error: {message: `Not mocked in test: ${path}`}, status: 404}
+    return path in mockState.responses
+      ? mockState.responses[path]
+      : path === `api.judgmentsjobs.:${mockState.jobId}.get`
+        ? {data: mockState.job, error: null, status: 200}
+        : path === 'api.judgmentsjobs-unassessed-count.get'
+          ? {data: {count: 0}, error: null, status: 200}
+          : path === 'api.projects.:project-limited.get'
+            ? {data: {id: 'project-limited', model: null, name: 'cov 6 | 4'}, error: null, status: 200}
+            : {data: null, error: {message: `Not mocked in test: ${path}`}, status: 404}
   }
   const createEdenNode = (segments: string[]): unknown => {
     return new Proxy(
@@ -179,6 +181,7 @@ const renderJobDetailPage = async () => {
 beforeEach(() => {
   document.body.innerHTML = ''
   mockState.job = buildJob(null)
+  mockState.responses = {}
 })
 
 afterEach(() => {
@@ -281,6 +284,65 @@ describe('judgment job detail provider health notices', () => {
     try {
       expect(container.querySelector('[role="alert"]')).toBeNull()
       expect(container.textContent).not.toContain('Provider recovered at')
+    } finally {
+      cleanup()
+    }
+  })
+})
+
+const clickButtonByText = (container: HTMLElement, text: string) => {
+  const button = Array.from(container.querySelectorAll('button')).find((candidate) => {
+    return candidate.textContent?.trim() === text
+  })
+
+  expect(button).toBeInstanceOf(HTMLButtonElement)
+  button?.click()
+}
+
+describe('judgment job detail action feedback', () => {
+  test('shows a failed repair result as an error instead of a success notice', async () => {
+    const message = 'SQLite job DB is missing. Run Preflight after restoring the file.'
+    mockState.responses[`api.judgmentsjobs.:${mockState.jobId}.preflight.post`] = {
+      data: {action: 'preflight', changes: {}, job: {}, message, ok: false, preflight: null},
+      error: null,
+      status: 200,
+    }
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      clickButtonByText(container, 'Run Preflight')
+      await waitForCondition(() => {
+        expect(container.textContent).toContain(message)
+      })
+
+      const notice = Array.from(container.querySelectorAll('div'))
+        .filter((candidate) => {
+          return candidate.textContent === message
+        })
+        .at(-1)
+
+      expect(notice?.className).toContain('border-red-200')
+      expect(notice?.className).not.toContain('border-green-200')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('shows the server error when deleting the job is refused', async () => {
+    const message = 'Delete Job stopped safely for job-limited. Local SQLite data was left in place.'
+    mockState.responses[`api.judgmentsjobs.:${mockState.jobId}.delete`] = {data: null, error: {message}, status: 409}
+    vi.stubGlobal('confirm', () => {
+      return true
+    })
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      clickButtonByText(container, 'Delete Job')
+      await waitForCondition(() => {
+        expect(container.textContent).toContain(message)
+      })
+      expect(container.textContent).toContain('Delete Job')
+      expect(container.textContent).not.toContain('Deleting...')
     } finally {
       cleanup()
     }
