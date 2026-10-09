@@ -5,23 +5,12 @@ import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {getDuplicateGroupKey, getMergePromptIds} from './deduplicateShared'
+import {type OrphanPromptSummary, type OrphansResponse, parseOrphansResponse} from './parseOrphansResponse'
 
-type PromptUsage = {projects: number; judgments: number; humanJudgments: number}
-type PromptSummary = {
-  id: string
-  promptHeading: string | null
-  originalText: string | null
-  type: string | null
-  createdAt: string | Date
-  usage: PromptUsage
-}
+type PromptUsage = OrphanPromptSummary['usage']
+type PromptSummary = OrphanPromptSummary
 
 type DuplicateGroup = PromptSummary[]
-type OrphansResponse = {
-  noProjects: PromptSummary[]
-  noJudgments: PromptSummary[]
-  noProjectsAndJudgments?: PromptSummary[]
-}
 
 const readUsage = (value: unknown): PromptUsage => {
   if (!value || typeof value !== 'object') return {projects: 0, judgments: 0, humanJudgments: 0}
@@ -84,14 +73,7 @@ const fetchOrphans = async (): Promise<OrphansResponse> => {
     throw new Error('Failed to fetch orphans')
   }
 
-  const data = response.data?.data
-  if (!data || typeof data !== 'object') return {noProjects: [], noJudgments: []}
-  const obj = data as Record<string, unknown>
-  const readList = (value: unknown): PromptSummary[] => {
-    if (!Array.isArray(value)) return []
-    return value.map(toPromptSummary).filter(isPromptSummary)
-  }
-  return {noProjects: readList(obj.noProjects), noJudgments: readList(obj.noJudgments)}
+  return parseOrphansResponse(response.data?.data, toPromptSummary)
 }
 
 type InvalidJudgment = {
