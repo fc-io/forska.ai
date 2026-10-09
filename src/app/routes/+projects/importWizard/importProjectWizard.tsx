@@ -1283,6 +1283,17 @@ export const ImportProjectWizard = () => {
             {pageError()}
           </div>
         </Show>
+        <Show when={sessionQuery.isError && shouldPollSession(currentSession() ?? undefined)}>
+          <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status">
+            Can't reach the database right now. The import is most likely still running and the server is busy with it,
+            so this status is not updated. This page keeps retrying; there is no need to restart the import.
+          </div>
+        </Show>
+        <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Analyzing and creating an import takes exclusive use of the database. While it runs, background jobs
+          (judgments, data source imports and tracking) are paused and may log errors, and other pages can be slow or
+          fail to load. They resume automatically when the import finishes. Avoid starting other heavy work until then.
+        </div>
         <Show when={pageMessage()}>
           <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
             {pageMessage()}

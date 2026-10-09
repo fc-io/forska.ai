@@ -2,6 +2,7 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import {type DataSourceTrackingWorker, getDataSourceTrackingWorker} from '../services/dataSourceTrackingWorker.ts'
+import {isDuckdbExclusiveWorkAdmissionError} from '../utils/duckdbExclusiveWork.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 
@@ -14,6 +15,13 @@ export type DataSourceTrackingCronWakeResult =
 
 const logCronError = (error: unknown) => {
   if (isExpectedDuckdbOwnerRoleLossError(error)) {
+    return
+  }
+
+  if (isDuckdbExclusiveWorkAdmissionError(error)) {
+    console.info(
+      '[data-source-tracking] cron wake deferred: a project import has exclusive database access. Retrying on the next wake.',
+    )
     return
   }
 
