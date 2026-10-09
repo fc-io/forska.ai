@@ -4,6 +4,7 @@ import {formatDate} from 'date-fns'
 import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
+import {getDuplicateGroupKey, getMergePromptIds} from './deduplicateShared'
 
 type PromptUsage = {projects: number; judgments: number; humanJudgments: number}
 type PromptSummary = {
@@ -152,9 +153,10 @@ const DeduplicatePrompts = () => {
     })
   }
 
-  const handleMerge = async (groupIndex: number, prompts: PromptSummary[]) => {
-    const keepId = selectedKeepIds()[groupIndex]
-    if (!keepId) {
+  const handleMerge = async (groupKey: string, prompts: PromptSummary[]) => {
+    const keepId = selectedKeepIds()[groupKey]
+    const mergeIds = getMergePromptIds(prompts, keepId)
+    if (!keepId || !mergeIds) {
       alert('Please select a prompt to keep.')
       return
     }
@@ -163,16 +165,8 @@ const DeduplicatePrompts = () => {
       return
     }
 
-    const mergeIds = prompts
-      .filter((p) => {
-        return p.id !== keepId
-      })
-      .map((p) => {
-        return p.id
-      })
-
     setProcessingGroups((prev) => {
-      return {...prev, [groupIndex]: true}
+      return {...prev, [groupKey]: true}
     })
 
     try {
@@ -183,6 +177,11 @@ const DeduplicatePrompts = () => {
         alert('Merge failed. Check console for details.')
       } else {
         alert('Prompts merged successfully.')
+        setSelectedKeepIds((prev) => {
+          const {[groupKey]: _merged, ...rest} = prev
+
+          return rest
+        })
         void duplicatesQuery.refetch()
         void orphansQuery.refetch()
       }
@@ -191,7 +190,7 @@ const DeduplicatePrompts = () => {
       alert('An error occurred during merge.')
     } finally {
       setProcessingGroups((prev) => {
-        return {...prev, [groupIndex]: false}
+        return {...prev, [groupKey]: false}
       })
     }
   }
@@ -345,6 +344,13 @@ const DeduplicatePrompts = () => {
 
         <For each={duplicatesQuery.data ?? []}>
           {(group, index) => {
+            const groupKey = getDuplicateGroupKey(group)
+            const selectedKeepId = () => {
+              return selectedKeepIds()[groupKey]
+            }
+            const canMerge = () => {
+              return getMergePromptIds(group, selectedKeepId()) !== null && !processingGroups()[groupKey]
+            }
             return (
               <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                 <div class="mb-4">
@@ -386,16 +392,16 @@ const DeduplicatePrompts = () => {
                       <For each={group}>
                         {(prompt) => {
                           return (
-                            <tr class={selectedKeepIds()[index()] === prompt.id ? 'bg-blue-50' : 'hover:bg-gray-50'}>
+                            <tr class={selectedKeepId() === prompt.id ? 'bg-blue-50' : 'hover:bg-gray-50'}>
                               <td class="px-6 py-4 whitespace-nowrap">
                                 <input
                                   type="radio"
-                                  name={`group-${index()}`}
+                                  name={`group-${groupKey}`}
                                   value={prompt.id}
-                                  checked={selectedKeepIds()[index()] === prompt.id}
+                                  checked={selectedKeepId() === prompt.id}
                                   onChange={() => {
                                     return setSelectedKeepIds((prev) => {
-                                      return {...prev, [index()]: prompt.id}
+                                      return {...prev, [groupKey]: prompt.id}
                                     })
                                   }}
                                   class="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300"
@@ -423,16 +429,16 @@ const DeduplicatePrompts = () => {
                 <div class="mt-4 flex justify-end">
                   <button
                     onClick={() => {
-                      void handleMerge(index(), group)
+                      void handleMerge(groupKey, group)
                     }}
-                    disabled={!selectedKeepIds()[index()] || processingGroups()[index()]}
+                    disabled={!canMerge()}
                     class={`px-4 py-2 rounded-md text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-1 ${
-                      !selectedKeepIds()[index()] || processingGroups()[index()]
+                      !canMerge()
                         ? 'bg-gray-400 cursor-not-allowed'
                         : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500'
                     }`}
                   >
-                    {processingGroups()[index()] ? 'Merging...' : 'Merge Duplicates'}
+                    {processingGroups()[groupKey] ? 'Merging...' : 'Merge Duplicates'}
                   </button>
                 </div>
               </div>
