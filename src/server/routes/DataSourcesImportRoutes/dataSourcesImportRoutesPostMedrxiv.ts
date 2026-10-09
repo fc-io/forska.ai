@@ -1,5 +1,3 @@
-import {format} from 'date-fns'
-
 import {startMedrxivHarvest} from '../../../agent/startMedrxivHarvest.ts'
 import {
   type DataSourceImportTrigger,
@@ -7,6 +5,7 @@ import {
 } from '../../services/dataSourceImportStateRepository.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
 import {createCursorUpdater} from './dataSourcesImportCursor.ts'
+import {getDataSourceImportDateWindow} from './dataSourcesImportDateWindow.ts'
 import {startDataSourceImportInBackground} from './startDataSourceImportInBackground.ts'
 
 export const dataSourcesImportRoutesPostMedrxiv = async (
@@ -19,10 +18,7 @@ export const dataSourcesImportRoutesPostMedrxiv = async (
     throw new Error('Data source not found')
   }
   const importRoute = record.importRoute ?? '/api/datasources/import/medrxiv'
-  const fromDate = record.dateFrom ? format(record.dateFrom, 'yyyy-MM-dd') : '2020-01-01'
-  const now = new Date()
-  const recordToDate = record.dateTo ? new Date(record.dateTo) : now
-  const toDate = recordToDate > now ? format(now, 'yyyy-MM-dd') : format(recordToDate, 'yyyy-MM-dd')
+  const {fromDate, toDate} = getDataSourceImportDateWindow(record)
   if (!record.dateFrom) {
     console.warn('dataSourcesImportRoutesPostMedrxiv – From date is good to have')
   }
