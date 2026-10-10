@@ -6162,7 +6162,9 @@ test('comparison stats endpoint returns empty comparisons without active serving
     additionalProjectStats: {conflictResolutionAnswerComparisons: [], resolvedTruthComparisons: []},
     categoryBreakdowns: [],
     comparisons: [],
+    conflictResolutionProvenance: 'all',
     isServingReady: false,
+    judgmentContextId: null,
     servingStatus: 'refreshing',
     servingUpdatedAt: null,
   })
