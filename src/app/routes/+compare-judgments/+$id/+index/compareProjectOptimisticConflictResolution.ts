@@ -1,5 +1,9 @@
 import type {ComparisonProjectConflictResolutionValue} from '../../../../../services/comparisonProjectsService.ts'
 
+const getStringOrNull = (value: unknown) => {
+  return typeof value === 'string' ? value : null
+}
+
 export const getCompareProjectOptimisticConflictResolution = (params: {
   activeGeneration: number | null
   articleId: string
@@ -11,7 +15,7 @@ export const getCompareProjectOptimisticConflictResolution = (params: {
 }): ComparisonProjectConflictResolutionValue => {
   return {
     articleId: params.articleId,
-    comment: params.previousConflictResolution?.comment ?? null,
+    comment: getStringOrNull(params.previousConflictResolution?.comment),
     commentUpdatedAt: params.previousConflictResolution?.commentUpdatedAt ?? null,
     label: params.label,
     provenance: {

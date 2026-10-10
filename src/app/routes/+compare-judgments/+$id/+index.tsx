@@ -668,13 +668,6 @@ const CompareProjectJudgmentsPage = () => {
   const refetchComparisonProjectJudgmentsCount = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-count', comparisonProjectId()]})
   }
-  const refreshConflictResolutionCommentQueries = () => {
-    const refresh = shouldDeferCurrentJudgmentsPageRefetch() ? Promise.resolve() : refetchCurrentJudgmentsPage()
-
-    void refresh.catch((error) => {
-      console.error('Failed to refresh comparison project rows after a resolution comment', error)
-    })
-  }
   const refreshConflictResolutionQueries = () => {
     const refreshes = [
       shouldDeferCurrentJudgmentsPageRefetch() ? Promise.resolve() : refetchCurrentJudgmentsPage(),
@@ -802,7 +795,6 @@ const CompareProjectJudgmentsPage = () => {
         comment,
       })
       updateCurrentJudgmentsPageConflictResolution(articleId, conflictResolution)
-      refreshConflictResolutionCommentQueries()
       return true
     } catch (error) {
       updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)

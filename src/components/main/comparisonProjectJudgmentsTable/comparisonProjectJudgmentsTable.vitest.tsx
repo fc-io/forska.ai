@@ -640,7 +640,12 @@ describe('ComparisonProjectJudgmentsTable resolution comment', () => {
   test('marks the icon when a comment exists and shows it as the tooltip', async () => {
     const {container, dispose} = renderTable({
       rows: [
-        getConflictRow({conflictResolution: getProvenanceResolution({comment: 'Population unclear in abstract'})}),
+        getConflictRow({
+          conflictResolution: getProvenanceResolution({
+            comment: 'Population unclear in abstract',
+            commentUpdatedAt: '2026-10-10T09:30:00.000Z',
+          }),
+        }),
         getConflictRow({
           articleTitle: 'Second article',
           canonicalArticleId: 'article-2',
@@ -658,7 +663,9 @@ describe('ComparisonProjectJudgmentsTable resolution comment', () => {
 
       expect(commentedButton?.disabled).toBe(false)
       expect(commentedButton?.dataset.hasComment).toBe('true')
-      expect(commentedButton?.title).toBe('Population unclear in abstract')
+      expect(commentedButton?.title).toBe(
+        `Population unclear in abstract\nComment set ${format(new Date('2026-10-10T09:30:00.000Z'), 'yyyy-MM-dd HH:mm')}`,
+      )
       expect(commentedButton?.querySelector('svg')?.getAttribute('fill')).toBe('currentColor')
       expect(emptyButton?.dataset.hasComment).toBe('false')
       expect(emptyButton?.title).toBe('Add comment')
@@ -701,7 +708,7 @@ describe('ComparisonProjectJudgmentsTable resolution comment', () => {
     }
   })
 
-  test('saves with Cmd/Ctrl+Enter, keeps plain Enter for new lines and closes on Escape without saving', async () => {
+  test('saves with Cmd/Ctrl+Enter, keeps plain Enter for new lines and closes on Escape without saving or losing the draft', async () => {
     const onConflictResolutionCommentSave = vi.fn(() => {
       return true
     })
@@ -721,15 +728,17 @@ describe('ComparisonProjectJudgmentsTable resolution comment', () => {
 
       expect(onConflictResolutionCommentSave).not.toHaveBeenCalled()
       expect(getIsCommentPopoverOpen(container)).toBe(false)
+      expect(getCommentButton(container).dataset.hasDraft).toBe('true')
 
       const reopenedTextarea = await openCommentPopover(container)
 
-      expect(reopenedTextarea.value).toBe('')
+      expect(reopenedTextarea.value).toBe('Draft')
       typeComment(reopenedTextarea, 'Shortcut note')
       reopenedTextarea.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, ctrlKey: true, key: 'Enter'}))
       await waitForUpdates()
 
       expect(onConflictResolutionCommentSave).toHaveBeenCalledWith('article-chinese-1', 'Shortcut note')
+      expect(getCommentButton(container).dataset.hasDraft).toBe('false')
     } finally {
       dispose()
     }
@@ -809,6 +818,74 @@ describe('ComparisonProjectJudgmentsTable resolution comment', () => {
       expect(container.querySelector('select')).toBeNull()
       expect(button.disabled).toBe(false)
       expect(button.title).toBe('Kept note')
+      expect(button.dataset.hasComment).toBe('true')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('keeps an unsaved draft per article after an outside click, marks the icon and discards it on request', async () => {
+    const onConflictResolutionCommentSave = vi.fn(() => {
+      return true
+    })
+    const {container, dispose} = renderTable({
+      onConflictResolutionCommentSave,
+      rows: [getConflictRow({conflictResolution: getProvenanceResolution({comment: 'Saved note'})})],
+    })
+
+    try {
+      await Promise.resolve()
+      const textarea = await openCommentPopover(container)
+
+      typeComment(textarea, 'Saved note, plus the protocol check')
+      document.body.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}))
+      document.body.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}))
+      document.body.click()
+      await waitForUpdates()
+
+      const button = getCommentButton(container)
+
+      expect(getIsCommentPopoverOpen(container)).toBe(false)
+      expect(onConflictResolutionCommentSave).not.toHaveBeenCalled()
+      expect(button.dataset.hasDraft).toBe('true')
+      expect(button.title).toBe('Saved note\nUnsaved draft')
+      expect(button.querySelector('span.rounded-full')).not.toBeNull()
+
+      const reopenedTextarea = await openCommentPopover(container)
+
+      expect(reopenedTextarea.value).toBe('Saved note, plus the protocol check')
+
+      getPopoverButton('Discard').click()
+      await waitForUpdates()
+
+      expect(getIsCommentPopoverOpen(container)).toBe(false)
+      expect(button.dataset.hasDraft).toBe('false')
+      expect(button.title).toBe('Saved note')
+      expect(button.querySelector('span.rounded-full')).toBeNull()
+      expect((await openCommentPopover(container)).value).toBe('Saved note')
+      expect(getPopoverButton('Discard').disabled).toBe(true)
+      expect(onConflictResolutionCommentSave).not.toHaveBeenCalled()
+    } finally {
+      dispose()
+    }
+  })
+
+  test('renders a non-string comment from a misparsed response without crashing', async () => {
+    const {container, dispose} = renderTable({
+      rows: [
+        getConflictRow({
+          conflictResolution: getProvenanceResolution({comment: new Date('2026-10-10T00:00:00.000Z') as never}),
+        }),
+      ],
+    })
+
+    try {
+      await Promise.resolve()
+      const button = getCommentButton(container)
+
+      expect(button.dataset.hasComment).toBe('false')
+      expect(button.title).toBe('Add comment')
+      expect((await openCommentPopover(container)).value).toBe('')
     } finally {
       dispose()
     }

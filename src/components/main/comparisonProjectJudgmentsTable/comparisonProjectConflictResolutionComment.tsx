@@ -1,15 +1,25 @@
-import {createSignal, splitProps} from 'solid-js'
+import {createSignal, Show, splitProps} from 'solid-js'
 
 import type {ComparisonProjectConflictResolutionValue} from '../../../services/comparisonProjectsService.ts'
 import {cn} from '../../../utils/cn.ts'
 import {comparisonProjectConflictResolutionCommentMaxLength} from '../../../utils/comparisonProjectConflictResolutionComment.ts'
 import {Popover, PopoverContent, PopoverTrigger} from '../../ui/popover.tsx'
+import {
+  getConflictResolutionCommentButtonLabel,
+  getConflictResolutionCommentButtonTitle,
+  getHasUnsavedConflictResolutionCommentDraft,
+  getIsConflictResolutionCommentSaveShortcut,
+  getNormalizedConflictResolutionComment,
+  getSavedConflictResolutionComment,
+} from './comparisonProjectConflictResolutionComment/comparisonProjectConflictResolutionCommentText.ts'
 
 export type ComparisonProjectConflictResolutionCommentSaveResult = boolean | undefined
 
 type ComparisonProjectConflictResolutionCommentProps = {
   articleTitle: string
   disabled: boolean
+  draft: string | null
+  onDraftChange?: (draft: string | null) => void
   onSave?: (
     comment: string | null,
   ) =>
@@ -18,72 +28,73 @@ type ComparisonProjectConflictResolutionCommentProps = {
   resolution: ComparisonProjectConflictResolutionValue | null
 }
 
-const getSavedComment = (resolution: ComparisonProjectConflictResolutionValue | null) => {
-  return resolution?.comment?.trim() || null
-}
-
-const getNormalizedComment = (value: string) => {
-  return value.trim() || null
-}
-
-const getCommentButtonTitle = (resolution: ComparisonProjectConflictResolutionValue | null) => {
-  return resolution ? (getSavedComment(resolution) ?? 'Add comment') : 'Set a resolution first'
-}
-
-const getCommentButtonLabel = (hasComment: boolean, articleTitle: string) => {
-  return `${hasComment ? 'Edit' : 'Add'} comment on the conflict resolution for ${articleTitle}`
-}
-
-const getIsSaveShortcut = (event: KeyboardEvent) => {
-  return event.key === 'Enter' && (event.metaKey || event.ctrlKey)
-}
+const secondaryButtonClass =
+  'rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-700 shadow-sm hover:bg-gray-100 disabled:opacity-60'
 
 export const ComparisonProjectConflictResolutionComment = (props: ComparisonProjectConflictResolutionCommentProps) => {
-  const [local] = splitProps(props, ['articleTitle', 'disabled', 'onSave', 'resolution'])
+  const [local] = splitProps(props, ['articleTitle', 'disabled', 'draft', 'onDraftChange', 'onSave', 'resolution'])
   const [isOpen, setIsOpen] = createSignal(false)
   const [isSaving, setIsSaving] = createSignal(false)
-  const [draft, setDraft] = createSignal('')
   let textareaRef: HTMLTextAreaElement | undefined
 
+  const savedComment = () => {
+    return getSavedConflictResolutionComment(local.resolution)
+  }
   const hasComment = () => {
-    return getSavedComment(local.resolution) !== null
+    return savedComment() !== null
+  }
+  const hasUnsavedDraft = () => {
+    return getHasUnsavedConflictResolutionCommentDraft(local.draft, local.resolution)
+  }
+  const editorText = () => {
+    return local.draft ?? savedComment() ?? ''
   }
   const areControlsDisabled = () => {
     return local.disabled || isSaving() || !local.resolution
   }
-  const handleOpenChange = (open: boolean) => {
-    setDraft(local.resolution?.comment ?? '')
-    setIsOpen(open)
+  const updateDraft = (value: string) => {
+    local.onDraftChange?.(value === (savedComment() ?? '') ? null : value)
+  }
+  const discardDraft = () => {
+    local.onDraftChange?.(null)
+    setIsOpen(false)
   }
   const saveComment = async (comment: string | null) => {
     setIsSaving(true)
-    const result = await Promise.resolve(local.onSave?.(comment)).catch(() => {
-      return false
-    })
+    const isSaved =
+      (await Promise.resolve(local.onSave?.(comment)).catch(() => {
+        return false
+      })) !== false
     setIsSaving(false)
-    setIsOpen(result === false)
-  }
-  const saveDraft = () => {
-    const comment = getNormalizedComment(draft())
 
-    if (comment === getSavedComment(local.resolution)) {
-      setIsOpen(false)
+    if (isSaved) {
+      discardDraft()
+    } else {
+      textareaRef?.focus()
+    }
+  }
+  const saveEditorText = () => {
+    const comment = getNormalizedConflictResolutionComment(editorText())
+
+    if (comment === savedComment()) {
+      discardDraft()
     } else {
       void saveComment(comment)
     }
   }
 
   return (
-    <Popover open={isOpen()} onOpenChange={handleOpenChange} placement="bottom-end">
+    <Popover open={isOpen()} onOpenChange={setIsOpen} placement="bottom-end">
       <PopoverTrigger
         type="button"
         class={cn(
-          'inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60',
+          'relative inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60',
           hasComment() && 'border-blue-300 bg-blue-50 text-blue-700 hover:border-blue-400 hover:bg-blue-100',
         )}
-        title={getCommentButtonTitle(local.resolution)}
-        aria-label={getCommentButtonLabel(hasComment(), local.articleTitle)}
+        title={getConflictResolutionCommentButtonTitle(local.resolution, hasUnsavedDraft())}
+        aria-label={getConflictResolutionCommentButtonLabel(hasComment(), local.articleTitle)}
         data-has-comment={hasComment() ? 'true' : 'false'}
+        data-has-draft={hasUnsavedDraft() ? 'true' : 'false'}
         disabled={local.disabled || !local.resolution}
       >
         <svg
@@ -98,6 +109,9 @@ export const ComparisonProjectConflictResolutionComment = (props: ComparisonProj
         >
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
+        <Show when={hasUnsavedDraft()}>
+          <span class="absolute -right-1 -top-1 size-2 rounded-full bg-amber-500 ring-1 ring-white" />
+        </Show>
       </PopoverTrigger>
       <PopoverContent
         class="space-y-2"
@@ -105,7 +119,7 @@ export const ComparisonProjectConflictResolutionComment = (props: ComparisonProj
         onOpenAutoFocus={(event) => {
           event.preventDefault()
           textareaRef?.focus()
-          textareaRef?.setSelectionRange(draft().length, draft().length)
+          textareaRef?.setSelectionRange(editorText().length, editorText().length)
         }}
       >
         <textarea
@@ -113,29 +127,38 @@ export const ComparisonProjectConflictResolutionComment = (props: ComparisonProj
           autofocus
           rows={4}
           maxlength={comparisonProjectConflictResolutionCommentMaxLength}
-          value={draft()}
+          value={editorText()}
           disabled={areControlsDisabled()}
           aria-label={`Comment for ${local.articleTitle}`}
           placeholder="Why this resolution?"
           class="block w-full resize-y rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
           onInput={(event) => {
-            setDraft(event.currentTarget.value)
+            updateDraft(event.currentTarget.value)
           }}
           onKeyDown={(event) => {
-            if (getIsSaveShortcut(event) && !areControlsDisabled()) {
+            if (getIsConflictResolutionCommentSaveShortcut(event) && !areControlsDisabled()) {
               event.preventDefault()
-              saveDraft()
+              saveEditorText()
             }
           }}
         />
         <div class="flex items-center justify-between gap-2">
           <span class="text-[11px] text-gray-500">
-            {draft().length} / {comparisonProjectConflictResolutionCommentMaxLength}
+            {editorText().length} / {comparisonProjectConflictResolutionCommentMaxLength}
           </span>
           <div class="flex items-center gap-1.5">
             <button
               type="button"
-              class="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-700 shadow-sm hover:bg-gray-100 disabled:opacity-60"
+              class={secondaryButtonClass}
+              disabled={areControlsDisabled() || local.draft === null}
+              title="Drop the unsaved text and keep the saved comment"
+              onClick={discardDraft}
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              class={secondaryButtonClass}
               disabled={areControlsDisabled() || !hasComment()}
               onClick={() => {
                 void saveComment(null)
@@ -148,7 +171,7 @@ export const ComparisonProjectConflictResolutionComment = (props: ComparisonProj
               class="rounded border border-blue-600 bg-blue-600 px-2 py-0.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
               disabled={areControlsDisabled()}
               title="Save (Cmd/Ctrl+Enter)"
-              onClick={saveDraft}
+              onClick={saveEditorText}
             >
               Save
             </button>

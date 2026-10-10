@@ -1,6 +1,6 @@
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createMemo, For, Show} from 'solid-js'
+import {createMemo, createSignal, For, Show} from 'solid-js'
 
 import type {
   ComparisonJudgmentContextSummary,
@@ -70,6 +70,12 @@ const getRowHighlightState = (
   return new Set(answeredValues).size === 1 ? 'match' : 'mismatch'
 }
 
+const getCommentDraftsWithDraft = (drafts: Record<string, string>, articleId: string, draft: string | null) => {
+  const {[articleId]: _previousDraft, ...otherDrafts} = drafts
+
+  return draft === null ? otherDrafts : {...otherDrafts, [articleId]: draft}
+}
+
 const getRowHighlightClasses = (state: 'match' | 'mismatch' | 'neutral') => {
   return state === 'match'
     ? {cell: 'bg-green-50', stickyCell: 'bg-green-50'}
@@ -95,6 +101,15 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
   }
   const currentJudgmentContext = () => {
     return props.currentJudgmentContext ?? null
+  }
+  const [commentDrafts, setCommentDrafts] = createSignal<Record<string, string>>({})
+  const getCommentDraft = (articleId: string) => {
+    return commentDrafts()[articleId] ?? null
+  }
+  const setCommentDraft = (articleId: string, draft: string | null) => {
+    setCommentDrafts((drafts) => {
+      return getCommentDraftsWithDraft(drafts, articleId, draft)
+    })
   }
 
   return (
@@ -167,8 +182,14 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
               const rowArticleLabel = () => {
                 return row()?.articleTitle?.trim() || 'article'
               }
+              const rowArticleId = () => {
+                return row()?.canonicalArticleId ?? ''
+              }
               const saveRowConflictResolutionComment = (comment: string | null) => {
-                return props.onConflictResolutionCommentSave?.(row()?.canonicalArticleId ?? '', comment)
+                return props.onConflictResolutionCommentSave?.(rowArticleId(), comment)
+              }
+              const setRowCommentDraft = (draft: string | null) => {
+                setCommentDraft(rowArticleId(), draft)
               }
 
               return (
@@ -204,8 +225,10 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                     </span>
                                     <ComparisonProjectConflictResolutionComment
                                       articleTitle={rowArticleLabel()}
-                                      disabled={getIsConflictResolutionPending(row()?.canonicalArticleId ?? '')}
+                                      disabled={getIsConflictResolutionPending(rowArticleId())}
+                                      draft={getCommentDraft(rowArticleId())}
                                       resolution={resolution()}
+                                      onDraftChange={setRowCommentDraft}
                                       onSave={saveRowConflictResolutionComment}
                                     />
                                     <button
@@ -270,8 +293,10 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                             </select>
                             <ComparisonProjectConflictResolutionComment
                               articleTitle={rowArticleLabel()}
-                              disabled={getIsConflictResolutionPending(row()?.canonicalArticleId ?? '')}
+                              disabled={getIsConflictResolutionPending(rowArticleId())}
+                              draft={getCommentDraft(rowArticleId())}
                               resolution={row()?.conflictResolution ?? null}
+                              onDraftChange={setRowCommentDraft}
                               onSave={saveRowConflictResolutionComment}
                             />
                             <Show when={row().conflictResolution}>
