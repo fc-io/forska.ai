@@ -556,7 +556,10 @@ const CompareProjectJudgmentsPage = () => {
   )
   const judgmentContextIds = createMemo(
     () => {
-      return getComparisonJudgmentContextIds(visibleJudgmentRows())
+      return getComparisonJudgmentContextIds(
+        visibleJudgmentRows(),
+        comparisonProjectQuery.data?.judgmentContextId ?? null,
+      )
     },
     undefined,
     {equals: getIsSameComparisonProjectFilterSelection},
@@ -668,6 +671,36 @@ const CompareProjectJudgmentsPage = () => {
       console.error('Failed to refresh comparison project conflict-resolution data', error)
     })
   }
+  const activeServingContextKey = createMemo(() => {
+    const comparisonProject = comparisonProjectQuery.data
+
+    return comparisonProject
+      ? `${comparisonProject.activeGeneration ?? ''}:${comparisonProject.judgmentContextId ?? ''}`
+      : null
+  })
+  const refreshActiveServingContextQueries = () => {
+    const refreshes = [
+      refetchCurrentJudgmentsPage(),
+      refetchComparisonProjectJudgmentsCount(),
+      refetchComparisonProjectStats(),
+      queryClient.invalidateQueries({queryKey: ['comparison-judgment-contexts']}),
+    ]
+
+    void Promise.all(refreshes).catch((error) => {
+      console.error('Failed to refresh comparison project rows after a serving generation change', error)
+    })
+  }
+  createEffect(
+    on(
+      activeServingContextKey,
+      (servingContextKey, previousServingContextKey) => {
+        if (servingContextKey && previousServingContextKey) {
+          refreshActiveServingContextQueries()
+        }
+      },
+      {defer: true},
+    ),
+  )
   const refetchCommittedImportQueries = async () => {
     await Promise.all(
       getConflictResolutionImportRefreshQueryKeys(comparisonProjectId()).map((queryKey) => {
