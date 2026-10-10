@@ -139,6 +139,7 @@ import {
   getComparisonProjectConflictResolutionProvenance,
   getComparisonProjectConflictResolutionProvenanceMatchesCurrent,
   getComparisonProjectConflictResolutionReviewer,
+  getImportedReviewerDisplayName,
   getTransferReviewerDisplayNames,
   getTransferReviewerUserId,
   getUpsertTransferReviewersSql,
@@ -182,7 +183,7 @@ const comparisonProjectMetadataWorkloadContext: DuckdbWorkloadContext = {
   workloadClass: 'foreground-metadata',
 }
 type ComparisonProjectConflictResolutionPdfUndecidedMode = 'clear' | 'ignore'
-const comparisonJudgmentContextLookupLimit = 200
+const comparisonJudgmentContextLookupLimit = 100
 type ComparisonProjectContentFlags = {
   useTitle: boolean
   useAbstract: boolean
@@ -259,12 +260,18 @@ type ComparisonProjectScope = {
   importRouteIds: string[]
   columns: ComparisonProjectJudgmentsColumn[]
 }
+type ComparisonProjectStatsConflictResolutionProvenanceScope = {
+  applied: boolean
+  reason: 'no-active-context' | null
+  requested: ComparisonProjectStatsConflictResolutionProvenance
+}
 type ComparisonProjectStatsResponse = {
   activeGeneration: number | null
   additionalProjectStats: ComparisonProjectAdditionalStats
   categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]
   comparisons: ComparisonProjectStatsComparison[]
   conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance
+  conflictResolutionProvenanceScope: ComparisonProjectStatsConflictResolutionProvenanceScope
   judgmentContextId: string | null
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus
@@ -280,6 +287,7 @@ type ComparisonProjectConflictResolution = {
   reviewer: ComparisonProjectConflictResolutionReviewer | null
   reviewerDisplayName: string | null
   reviewerUserId: string | null
+  setAt: Date | null
   value: string
 }
 type ComparisonProjectConflictResolutionTargetRow = {articleCategory: string | null; hasConflict: boolean}
@@ -1520,7 +1528,7 @@ const getPdfConflictResolutionImportReviewerId = (instanceId: string) => {
 
 const getOrCreatePdfConflictResolutionImportReviewer = async (params: {displayName?: string | null; tx: AppTx}) => {
   const reviewerId = getPdfConflictResolutionImportReviewerId(crypto.randomUUID())
-  const reviewerName = params.displayName?.trim() || 'Unnamed reviewer'
+  const reviewerName = getImportedReviewerDisplayName(params.displayName) ?? 'Unnamed reviewer'
   const [reviewer] = await params.tx.queryJson<{id: string; name: string}>(`
     INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id, unpaywall_email)
     VALUES (
@@ -4284,6 +4292,7 @@ const getComparisonProjectConflictResolutions = async (
       reviewer: getComparisonProjectConflictResolutionReviewer(row),
       reviewerDisplayName: row.reviewerDisplayName ?? null,
       reviewerUserId: row.reviewerUserId ?? null,
+      setAt: getDateValue(row.setAt),
       value: option.value,
     })
     return resolutionMap
@@ -4453,6 +4462,7 @@ const getSavedComparisonProjectConflictResolution = (params: {
     reviewer: getComparisonProjectConflictResolutionReviewer(provenanceRow),
     reviewerDisplayName: provenanceRow.reviewerDisplayName,
     reviewerUserId: provenanceRow.reviewerUserId,
+    setAt: getDateValue(provenanceRow.setAt),
     value: params.option.value,
   }
 }
@@ -5559,10 +5569,24 @@ const getComparisonProjectJudgmentsCount = async (
   }
 }
 
+const getComparisonProjectStatsConflictResolutionProvenanceScope = (
+  requested: ComparisonProjectStatsConflictResolutionProvenance,
+  judgmentContextId: string | null,
+): ComparisonProjectStatsConflictResolutionProvenanceScope => {
+  return requested === 'current' && judgmentContextId === null
+    ? {applied: false, reason: 'no-active-context', requested}
+    : {applied: true, reason: null, requested}
+}
+
 const getComparisonProjectStatsResponse = async (
   scope: ComparisonProjectScope,
   conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance = 'all',
 ): Promise<ComparisonProjectStatsResponse> => {
+  const conflictResolutionProvenanceScope = getComparisonProjectStatsConflictResolutionProvenanceScope(
+    conflictResolutionProvenance,
+    scope.judgmentContextId,
+  )
+
   if (scope.archived) {
     return {
       activeGeneration: scope.activeGeneration,
@@ -5570,6 +5594,7 @@ const getComparisonProjectStatsResponse = async (
       categoryBreakdowns: [],
       comparisons: [],
       conflictResolutionProvenance,
+      conflictResolutionProvenanceScope,
       judgmentContextId: scope.judgmentContextId,
       isServingReady: scope.isServingReady,
       servingStatus: scope.servingStatus,
@@ -5581,7 +5606,7 @@ const getComparisonProjectStatsResponse = async (
     allowConflictResolution: scope.allowConflictResolution,
     columns: scope.columns,
     comparisonProjectId: scope.id,
-    conflictResolutionProvenance,
+    conflictResolutionProvenance: conflictResolutionProvenanceScope.applied ? conflictResolutionProvenance : 'all',
     currentJudgmentContextId: scope.judgmentContextId,
     generation: scope.activeGeneration,
     isSummaryMode: getIsSummaryMode(scope),
@@ -5597,6 +5622,7 @@ const getComparisonProjectStatsResponse = async (
     categoryBreakdowns: stats.categoryBreakdowns,
     comparisons: stats.comparisons,
     conflictResolutionProvenance,
+    conflictResolutionProvenanceScope,
     judgmentContextId: scope.judgmentContextId,
     isServingReady: scope.isServingReady,
     servingStatus: scope.servingStatus,
@@ -6114,14 +6140,15 @@ export const comparisonProjectsRoutes = new Elysia()
   .post(
     '/api/comparison-projects/judgment-contexts',
     async (context) => {
-      const data = await getComparisonJudgmentContextsByIds(
-        appDatabaseService,
-        context.body.ids.slice(0, comparisonJudgmentContextLookupLimit),
-      )
+      const data = await getComparisonJudgmentContextsByIds(appDatabaseService, context.body.ids)
 
       return {data}
     },
-    {body: t.Object({ids: t.Array(t.String())})},
+    {
+      body: t.Object({
+        ids: t.Array(t.String({pattern: '^[0-9a-f]{64}$'}), {maxItems: comparisonJudgmentContextLookupLimit}),
+      }),
+    },
   )
   .get('/api/comparison-projects/conflict-resolution-import-sources', async () => {
     const data = await getComparisonProjectConflictResolutionImportSources()
