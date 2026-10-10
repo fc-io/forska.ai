@@ -1396,3 +1396,137 @@ test('comparison serving rebuild persists the discovered system prompt variants 
     {generation: '2', systemPromptVariant: 'screening_v1'},
   ])
 })
+
+test('comparison serving rebuild writes the judgment context of each activated generation', () => {
+  type ContextServingRow = {generation: string; judgmentContextId: string}
+  const result = runScript<{
+    afterConfigChange: ContextServingRow[]
+    contextJson: string
+    contextRows: Array<{id: string; modelIds: string[]; promptIds: string[]; systemPromptVariants: string[]}>
+    firstRows: ContextServingRow[]
+    firstStatus: {activeGeneration: number | null; activeJudgmentContextId: string | null}
+    secondRows: ContextServingRow[]
+  }>(`
+    const getContextServingRows = async () => {
+      return database.queryJson(\`
+        SELECT CAST(generation AS VARCHAR) AS generation, judgment_context_id AS judgmentContextId
+        FROM mart.comparison_judgment_context_serving
+        WHERE comparison_project_id = '\${comparisonProjectId}'
+        ORDER BY generation ASC
+      \`)
+    }
+
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+    const firstStatus = await service.getComparisonProjectServingStatus(comparisonProjectId)
+    const firstRows = await getContextServingRows()
+
+    await service.markComparisonProjectServingStale(comparisonProjectId)
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+    const secondRows = await getContextServingRows()
+
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        is_answered,
+        answered_original,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        system_prompt_variant
+      ) VALUES ('judgment-alpha-a-screening', 'article-alpha', 'prompt-a', 'model-a', TRUE, 'no', TRUE, TRUE, FALSE, FALSE, 'screening_v1')
+    \`)
+    await service.markComparisonProjectServingStale(comparisonProjectId)
+    await service.rebuildComparisonProjectServing(comparisonProjectId)
+    const afterConfigChange = await getContextServingRows()
+    const contextRows = await database.queryJson(\`
+      SELECT
+        id,
+        TO_JSON(prompt_ids) AS promptIds,
+        TO_JSON(model_ids) AS modelIds,
+        TO_JSON(system_prompt_variants) AS systemPromptVariants
+      FROM app.comparison_judgment_context
+      ORDER BY created_at ASC, id ASC
+    \`)
+    const [contextJsonRow] = await database.queryJson(\`
+      SELECT CAST(context_json AS VARCHAR) AS contextJson
+      FROM app.comparison_judgment_context
+      WHERE id = '\${firstRows[0].judgmentContextId}'
+    \`)
+
+    console.log(JSON.stringify({
+      afterConfigChange,
+      contextJson: contextJsonRow.contextJson,
+      contextRows: contextRows.map((row) => ({
+        ...row,
+        modelIds: JSON.parse(row.modelIds),
+        promptIds: JSON.parse(row.promptIds),
+        systemPromptVariants: JSON.parse(row.systemPromptVariants),
+      })),
+      firstRows,
+      firstStatus,
+      secondRows,
+    }))
+    await database.close()
+  `)
+  const firstContextId = result.firstRows[0]?.judgmentContextId ?? ''
+  const changedContextId = result.afterConfigChange[0]?.judgmentContextId ?? ''
+
+  expect(firstContextId).toMatch(/^[0-9a-f]{64}$/)
+  expect(result.firstRows).toEqual([{generation: '1', judgmentContextId: firstContextId}])
+  expect(result.firstStatus).toMatchObject({activeGeneration: 1, activeJudgmentContextId: firstContextId})
+  expect(result.secondRows).toEqual([{generation: '2', judgmentContextId: firstContextId}])
+  expect(result.afterConfigChange).toEqual([{generation: '3', judgmentContextId: changedContextId}])
+  expect(changedContextId).not.toBe(firstContextId)
+  expect(JSON.parse(result.contextJson)).toEqual({
+    columns: [
+      {kind: 'human', promptHeading: 'Prompt A', promptId: 'prompt-a'},
+      {
+        criteriaDisposition: null,
+        kind: 'llm',
+        modelId: 'model-a',
+        modelName: 'Model A',
+        promptHeading: 'Prompt A',
+        promptId: 'prompt-a',
+        sourceProjectId: null,
+        systemPromptVariant: 'legacy',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useMetadata: false,
+        useTitle: true,
+      },
+      {
+        criteriaDisposition: null,
+        kind: 'llm',
+        modelId: 'model-b',
+        modelName: 'Model B',
+        promptHeading: 'Prompt A',
+        promptId: 'prompt-a',
+        sourceProjectId: null,
+        systemPromptVariant: 'legacy',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useMetadata: false,
+        useTitle: true,
+      },
+    ],
+    humanJudgmentMode: 'prompt',
+    sourceProjectIds: [],
+    summarySourceProjectId: null,
+    v: 1,
+  })
+  expect(result.contextRows).toEqual([
+    {id: firstContextId, modelIds: ['model-a', 'model-b'], promptIds: ['prompt-a'], systemPromptVariants: ['legacy']},
+    {
+      id: changedContextId,
+      modelIds: ['model-a', 'model-b'],
+      promptIds: ['prompt-a'],
+      systemPromptVariants: ['legacy', 'screening_v1'],
+    },
+  ])
+})

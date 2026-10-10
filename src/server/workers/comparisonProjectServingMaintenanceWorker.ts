@@ -1,4 +1,5 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {backfillNextComparisonJudgmentContext} from '../services/comparisonJudgmentContext.ts'
 import {getComparisonProjectServingRebuildService} from '../services/comparisonProjectServingRebuildService.ts'
 import {
   getDuckdbAppendRuntimeMetrics,
@@ -6,7 +7,10 @@ import {
   getMaintenanceDuckdbWorkloadContext,
 } from '../utils/duckdbService.ts'
 
+type ComparisonJudgmentContextBackfillResult = Awaited<ReturnType<typeof backfillNextComparisonJudgmentContext>>
+
 type ComparisonProjectServingMaintenanceWorkerDependencies = {
+  backfillNextComparisonJudgmentContext: () => Promise<ComparisonJudgmentContextBackfillResult>
   getAppendQueueDepth: () => number
   getForegroundQueueDepth: () => number
   hasReviewServingRebuildWork: () => Promise<boolean>
@@ -20,6 +24,13 @@ type ComparisonProjectServingMaintenanceWorkerResult =
   | {comparisonProjectId: null; reason: 'no-unavailable-project'; status: 'idle'}
   | {comparisonProjectId: null; reason: 'review-serving-work-active'; status: 'idle'}
   | {comparisonProjectId: string; rebuilt: boolean; status: 'processed'}
+  | {
+      comparisonProjectId: string
+      generation: number
+      judgmentContextId: string | null
+      reason: 'judgment-context-backfilled'
+      status: 'backfilled'
+    }
 
 type ReviewServingRebuildWorkProbeRow = {workCount: number | string | bigint}
 
@@ -75,9 +86,37 @@ const hasReviewServingRebuildWork = async () => {
   return Number(row?.workCount ?? 0) > 0
 }
 
+const backfillNextComparisonJudgmentContextOnMaintenanceWorker = () => {
+  const database = getAppDatabaseService()
+
+  return backfillNextComparisonJudgmentContext({
+    queryJson: (statement) => {
+      return database.queryJson(statement, comparisonProjectServingMaintenanceWorkerWorkloadContext)
+    },
+    transaction: (operation) => {
+      return database.transaction(operation, comparisonProjectServingMaintenanceWorkerWorkloadContext)
+    },
+  })
+}
+
+const getComparisonJudgmentContextBackfillWorkerResult = (
+  result: ComparisonJudgmentContextBackfillResult,
+): ComparisonProjectServingMaintenanceWorkerResult => {
+  return result.comparisonProjectId === null || result.generation === null
+    ? {comparisonProjectId: null, reason: 'no-unavailable-project', status: 'idle'}
+    : {
+        comparisonProjectId: result.comparisonProjectId,
+        generation: result.generation,
+        judgmentContextId: result.judgmentContextId,
+        reason: 'judgment-context-backfilled',
+        status: 'backfilled',
+      }
+}
+
 const getDefaultComparisonProjectServingMaintenanceWorkerDependencies =
   (): ComparisonProjectServingMaintenanceWorkerDependencies => {
     return {
+      backfillNextComparisonJudgmentContext: backfillNextComparisonJudgmentContextOnMaintenanceWorker,
       getAppendQueueDepth: () => {
         return getDuckdbAppendRuntimeMetrics().queueDepth
       },
@@ -106,7 +145,7 @@ export const runComparisonProjectServingMaintenanceWorkerOnce = async (
   const result = await workerDependencies.rebuildNextUnavailableComparisonProjectServing()
 
   return result.comparisonProjectId === null
-    ? {comparisonProjectId: null, reason: 'no-unavailable-project', status: 'idle'}
+    ? getComparisonJudgmentContextBackfillWorkerResult(await workerDependencies.backfillNextComparisonJudgmentContext())
     : {comparisonProjectId: result.comparisonProjectId, rebuilt: result.rebuilt, status: 'processed'}
 }
 

@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
+import {writeComparisonJudgmentContextForGeneration} from './comparisonJudgmentContext.ts'
 import {getComparisonProjectServingWorkloadContext} from './comparisonProjectServingWorkloadContext.ts'
 
 type ComparisonProjectServingGenerationRunner = {
@@ -18,6 +19,7 @@ type ComparisonProjectServingGenerationMartCleanupTableName =
   | 'mart.comparison_cell_serving'
   | 'mart.comparison_filter_member'
   | 'mart.comparison_filter_stats'
+  | 'mart.comparison_judgment_context_serving'
   | 'mart.comparison_system_prompt_variant_serving'
 type ComparisonProjectServingGenerationCleanupTableName =
   | ComparisonProjectServingGenerationMartCleanupTableName
@@ -39,6 +41,7 @@ const comparisonProjectServingGenerationCleanupTableNames: ComparisonProjectServ
   'mart.comparison_article_identifier_serving',
   'mart.comparison_article_serving',
   'mart.comparison_system_prompt_variant_serving',
+  'mart.comparison_judgment_context_serving',
 ]
 
 const getDefaultComparisonProjectServingGenerationDependencies = (): ComparisonProjectServingGenerationDependencies => {
@@ -276,8 +279,13 @@ const promoteComparisonProjectServingGeneration = async (
         ${generationClaimCondition}
       RETURNING CAST(active_generation AS INTEGER) AS activeGeneration
     `)
+    const isPromoted = promoted?.activeGeneration === targetGeneration
 
-    return promoted?.activeGeneration === targetGeneration
+    if (isPromoted) {
+      await writeComparisonJudgmentContextForGeneration(runner, {comparisonProjectId, generation: targetGeneration})
+    }
+
+    return isPromoted
   })
 }
 
