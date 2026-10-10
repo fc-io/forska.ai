@@ -11,6 +11,7 @@ import {getIsSameMultiSelectOptionList, MultiSelect} from '../../../../component
 import {
   type ComparisonProjectJudgmentsColumn,
   type ComparisonProjectJudgmentsPage,
+  type ComparisonProjectStatsConflictResolutionProvenance,
   fetchComparisonJudgmentContexts,
   fetchComparisonProjectJudgmentsCount,
   fetchComparisonProjectJudgmentsMetadata,
@@ -259,6 +260,8 @@ const CompareProjectJudgmentsPage = () => {
   const [conflictResolutionProvenanceFilters, setConflictResolutionProvenanceFilters] = createSignal<
     ComparisonProjectConflictResolutionProvenanceFilter[]
   >(initialUrlState.conflictResolutionProvenanceFilters)
+  const [statsConflictResolutionProvenance, setStatsConflictResolutionProvenance] =
+    createSignal<ComparisonProjectStatsConflictResolutionProvenance>('all')
   const [searchText, setSearchText] = createSignal(initialUrlState.searchText)
   const [shouldRefreshCommittedImport, setShouldRefreshCommittedImport] = createSignal(
     getHasConflictResolutionImportCommittedSearchParam(search() as Record<string, unknown>),
@@ -286,17 +289,22 @@ const CompareProjectJudgmentsPage = () => {
       staleTime: 5000,
     }
   })
+  const effectiveStatsConflictResolutionProvenance = () => {
+    return comparisonProjectQuery.data?.allowConflictResolution ? statsConflictResolutionProvenance() : 'all'
+  }
   const comparisonProjectStatsQuery = useQuery(() => {
     return {
       queryKey: [
         'comparison-project-stats',
         comparisonProjectId(),
         comparisonProjectQuery.data?.activeGeneration ?? null,
+        effectiveStatsConflictResolutionProvenance(),
       ],
       queryFn: () => {
-        return fetchComparisonProjectStats(comparisonProjectId())
+        return fetchComparisonProjectStats(comparisonProjectId(), effectiveStatsConflictResolutionProvenance())
       },
       enabled: comparisonProjectId().length > 0,
+      placeholderData: keepPreviousData,
       refetchOnWindowFocus: false,
       staleTime: 5000,
     }
@@ -785,9 +793,13 @@ const CompareProjectJudgmentsPage = () => {
             <div class="space-y-6">
               <ComparisonProjectStatsCard
                 columns={orderedColumns()}
+                conflictResolutionEnabled={comparisonProject().allowConflictResolution}
+                conflictResolutionProvenance={effectiveStatsConflictResolutionProvenance()}
                 error={comparisonProjectStatsQuery.error}
                 isError={comparisonProjectStatsQuery.isError}
                 isLoading={comparisonProjectStatsQuery.isPending}
+                isUpdating={comparisonProjectStatsQuery.isPlaceholderData}
+                onConflictResolutionProvenanceChange={setStatsConflictResolutionProvenance}
                 stats={comparisonProjectStatsQuery.data}
               />
 

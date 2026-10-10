@@ -1,6 +1,7 @@
-import {Show} from 'solid-js'
+import {For, Show} from 'solid-js'
 
 import type {ComparisonProjectJudgmentsMetadata} from '../../../../../services/comparisonProjectsService.ts'
+import {getComparisonJudgmentContextSummaryLines} from '../../../../../utils/comparisonJudgmentContextSummary.ts'
 
 type CompareProjectExportMetadataProps = {comparisonProject: ComparisonProjectJudgmentsMetadata}
 
@@ -67,6 +68,19 @@ export const CompareProjectExportMetadata = (props: CompareProjectExportMetadata
           <p class="mt-2 text-sm text-gray-700">
             {props.comparisonProject.prompts.length} prompts · {props.comparisonProject.models.length} models
           </p>
+          <Show when={props.comparisonProject.judgmentContext}>
+            {(judgmentContext) => {
+              return (
+                <div class="mt-1 space-y-0.5 text-xs text-gray-500">
+                  <For each={getComparisonJudgmentContextSummaryLines(judgmentContext())}>
+                    {(line) => {
+                      return <p>{line}</p>
+                    }}
+                  </For>
+                </div>
+              )
+            }}
+          </Show>
         </div>
         <div>
           <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Human Comparison</p>
