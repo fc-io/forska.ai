@@ -37,6 +37,7 @@ export type ComparisonProjectConflictResolutionTransferSourceRow = {
   provenanceOrigin?: string | null
   provenanceReviewerDisplayName?: string | null
   provenanceSetAt?: Date | string | null
+  comment?: string | null
 }
 
 export type ComparisonProjectConflictResolutionTransferIdentifierV1 = {
@@ -77,6 +78,7 @@ export type ComparisonProjectConflictResolutionTransferProvenanceV2 = {
 
 export type ComparisonProjectConflictResolutionTransferRowV2 = ComparisonProjectConflictResolutionTransferRowV1 & {
   provenance?: ComparisonProjectConflictResolutionTransferProvenanceV2 | null
+  comment?: string | null
 }
 
 export type ComparisonProjectConflictResolutionTransferJudgmentContextV2 = {
@@ -135,6 +137,7 @@ const TransferRow = arktype({
   identifiers: TransferIdentifier.array(),
   resolution: TransferResolution,
   'provenance?': TransferProvenance.or('null'),
+  'comment?': 'string | null',
 })
 const TransferSource = arktype({
   comparisonProjectId: 'string',
@@ -318,6 +321,12 @@ const hasComparisonProjectConflictResolutionTransferProvenance = (
   return Object.prototype.hasOwnProperty.call(row, 'provenanceSetAt')
 }
 
+const hasComparisonProjectConflictResolutionTransferComment = (
+  row: ComparisonProjectConflictResolutionTransferSourceRow,
+) => {
+  return Object.prototype.hasOwnProperty.call(row, 'comment')
+}
+
 const getComparisonProjectConflictResolutionTransferRowBase = (
   row: ComparisonProjectConflictResolutionTransferSourceRow,
 ): ComparisonProjectConflictResolutionTransferRowV2 => {
@@ -332,6 +341,7 @@ const getComparisonProjectConflictResolutionTransferRowBase = (
     ...(hasComparisonProjectConflictResolutionTransferProvenance(row)
       ? {provenance: getComparisonProjectConflictResolutionTransferProvenance(row)}
       : {}),
+    ...(hasComparisonProjectConflictResolutionTransferComment(row) ? {comment: getTrimmedText(row.comment)} : {}),
   }
 }
 

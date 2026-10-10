@@ -1,0 +1,1 @@
+export const comparisonProjectConflictResolutionCommentMaxLength = 4000
