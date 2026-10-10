@@ -1,13 +1,14 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {backfillNextComparisonJudgmentContext} from '../services/comparisonJudgmentContext.ts'
+import {
+  backfillNextComparisonJudgmentContext,
+  type ComparisonJudgmentContextBackfillResult,
+} from '../services/comparisonJudgmentContextBackfill.ts'
 import {getComparisonProjectServingRebuildService} from '../services/comparisonProjectServingRebuildService.ts'
 import {
   getDuckdbAppendRuntimeMetrics,
   getDuckdbQueueRuntimeMetricsSnapshot,
   getMaintenanceDuckdbWorkloadContext,
 } from '../utils/duckdbService.ts'
-
-type ComparisonJudgmentContextBackfillResult = Awaited<ReturnType<typeof backfillNextComparisonJudgmentContext>>
 
 type ComparisonProjectServingMaintenanceWorkerDependencies = {
   backfillNextComparisonJudgmentContext: () => Promise<ComparisonJudgmentContextBackfillResult>
@@ -27,9 +28,18 @@ type ComparisonProjectServingMaintenanceWorkerResult =
   | {
       comparisonProjectId: string
       generation: number
-      judgmentContextId: string | null
+      judgmentContextId: string
       reason: 'judgment-context-backfilled'
       status: 'backfilled'
+    }
+  | {
+      attempts: number
+      comparisonProjectId: string
+      errorMessage: string
+      generation: number
+      nextAttemptAt: Date | null
+      reason: 'judgment-context-backfill-failed'
+      status: 'idle'
     }
 
 type ReviewServingRebuildWorkProbeRow = {workCount: number | string | bigint}
@@ -91,7 +101,10 @@ const backfillNextComparisonJudgmentContextOnMaintenanceWorker = () => {
 
   return backfillNextComparisonJudgmentContext({
     queryJson: (statement) => {
-      return database.queryJson(statement, comparisonProjectServingMaintenanceWorkerWorkloadContext)
+      return database.queryJsonBackground(statement, comparisonProjectServingMaintenanceWorkerWorkloadContext)
+    },
+    run: (statement) => {
+      return database.runBackground(statement, comparisonProjectServingMaintenanceWorkerWorkloadContext)
     },
     transaction: (operation) => {
       return database.transaction(operation, comparisonProjectServingMaintenanceWorkerWorkloadContext)
@@ -99,18 +112,53 @@ const backfillNextComparisonJudgmentContextOnMaintenanceWorker = () => {
   })
 }
 
+const noUnavailableProjectResult: ComparisonProjectServingMaintenanceWorkerResult = {
+  comparisonProjectId: null,
+  reason: 'no-unavailable-project',
+  status: 'idle',
+}
+
+const comparisonJudgmentContextBackfillWorkerResults: {
+  [Status in ComparisonJudgmentContextBackfillResult['status']]: (
+    result: Extract<ComparisonJudgmentContextBackfillResult, {status: Status}>,
+  ) => ComparisonProjectServingMaintenanceWorkerResult
+} = {
+  failed: (result) => {
+    return {
+      attempts: result.attempts,
+      comparisonProjectId: result.comparisonProjectId,
+      errorMessage: result.errorMessage,
+      generation: result.generation,
+      nextAttemptAt: result.nextAttemptAt,
+      reason: 'judgment-context-backfill-failed',
+      status: 'idle',
+    }
+  },
+  idle: () => {
+    return noUnavailableProjectResult
+  },
+  skipped: () => {
+    return noUnavailableProjectResult
+  },
+  written: (result) => {
+    return {
+      comparisonProjectId: result.comparisonProjectId,
+      generation: result.generation,
+      judgmentContextId: result.judgmentContextId,
+      reason: 'judgment-context-backfilled',
+      status: 'backfilled',
+    }
+  },
+}
+
 const getComparisonJudgmentContextBackfillWorkerResult = (
   result: ComparisonJudgmentContextBackfillResult,
 ): ComparisonProjectServingMaintenanceWorkerResult => {
-  return result.comparisonProjectId === null || result.generation === null
-    ? {comparisonProjectId: null, reason: 'no-unavailable-project', status: 'idle'}
-    : {
-        comparisonProjectId: result.comparisonProjectId,
-        generation: result.generation,
-        judgmentContextId: result.judgmentContextId,
-        reason: 'judgment-context-backfilled',
-        status: 'backfilled',
-      }
+  const getWorkerResult = comparisonJudgmentContextBackfillWorkerResults[result.status] as (
+    backfillResult: ComparisonJudgmentContextBackfillResult,
+  ) => ComparisonProjectServingMaintenanceWorkerResult
+
+  return getWorkerResult(result)
 }
 
 const getDefaultComparisonProjectServingMaintenanceWorkerDependencies =

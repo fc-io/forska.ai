@@ -1,6 +1,5 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
-import {writeComparisonJudgmentContextForGeneration} from './comparisonJudgmentContext.ts'
 import {getComparisonProjectServingWorkloadContext} from './comparisonProjectServingWorkloadContext.ts'
 
 type ComparisonProjectServingGenerationRunner = {
@@ -279,13 +278,8 @@ const promoteComparisonProjectServingGeneration = async (
         ${generationClaimCondition}
       RETURNING CAST(active_generation AS INTEGER) AS activeGeneration
     `)
-    const isPromoted = promoted?.activeGeneration === targetGeneration
 
-    if (isPromoted) {
-      await writeComparisonJudgmentContextForGeneration(runner, {comparisonProjectId, generation: targetGeneration})
-    }
-
-    return isPromoted
+    return promoted?.activeGeneration === targetGeneration
   })
 }
 

@@ -8,6 +8,8 @@ type ComparisonProjectServingGenerationConfigRunner = {
 
 type ComparisonProjectServingGenerationConfigParams = {comparisonProjectId: string; generation: number}
 
+type ComparisonProjectServingGenerationConfigOptions = {persistSystemPromptVariantServing?: boolean}
+
 type ComparisonProjectServingGenerationConfigTableKey =
   | 'contentVariant'
   | 'modelConfig'
@@ -17,6 +19,7 @@ type ComparisonProjectServingGenerationConfigTableKey =
   | 'sourceProjectConfig'
   | 'state'
   | 'summaryPromptGroup'
+  | 'systemPromptVariant'
 
 const summaryPromptId = 'summary'
 const comparisonSystemPromptVariantServingTable = 'mart.comparison_system_prompt_variant_serving'
@@ -79,6 +82,7 @@ const comparisonProjectServingGenerationConfigTables: Record<ComparisonProjectSe
     sourceProjectConfig: 'comparison_serving_generation_source_project_config',
     state: 'comparison_serving_generation_config_state',
     summaryPromptGroup: 'comparison_serving_generation_summary_prompt_group_config',
+    systemPromptVariant: 'comparison_serving_generation_system_prompt_variant_config',
   }
 
 const getComparisonProjectServingGenerationSql = (generation: number) => {
@@ -242,6 +246,14 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
       )
     `,
     `
+      CREATE TEMP TABLE IF NOT EXISTS ${comparisonProjectServingGenerationConfigTables.systemPromptVariant} (
+        comparison_project_id VARCHAR NOT NULL,
+        generation BIGINT NOT NULL,
+        system_prompt_variant VARCHAR NOT NULL,
+        use_metadata BOOLEAN NOT NULL
+      )
+    `,
+    `
       CREATE TEMP TABLE IF NOT EXISTS ${comparisonProjectServingGenerationConfigTables.requiredColumn} (
         comparison_project_id VARCHAR NOT NULL,
         generation BIGINT NOT NULL,
@@ -268,6 +280,7 @@ const getClearComparisonProjectServingGenerationConfigStatements = ({
     comparisonProjectServingGenerationConfigTables.summaryPromptGroup,
     comparisonProjectServingGenerationConfigTables.sourceProjectColumnConfig,
     comparisonProjectServingGenerationConfigTables.requiredColumn,
+    comparisonProjectServingGenerationConfigTables.systemPromptVariant,
   ]
 
   return tableNames.map((tableName) => {
@@ -358,7 +371,8 @@ const getContentFlagVariantCteSql = () => {
 const getContentVariantInsertSql = ({
   comparisonProjectId,
   generation,
-}: ComparisonProjectServingGenerationConfigParams) => {
+  systemPromptVariantTable,
+}: ComparisonProjectServingGenerationConfigParams & {systemPromptVariantTable: string}) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
 
@@ -385,7 +399,7 @@ const getContentVariantInsertSql = ({
       SELECT DISTINCT
         system_prompt_variant,
         COALESCE(use_metadata, FALSE) AS use_metadata
-      FROM ${comparisonSystemPromptVariantServingTable}
+      FROM ${systemPromptVariantTable}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
         AND generation = ${generationLiteral}
     )
@@ -412,12 +426,13 @@ const getContentVariantInsertSql = ({
 const getSystemPromptVariantServingInsertSql = ({
   comparisonProjectId,
   generation,
-}: ComparisonProjectServingGenerationConfigParams) => {
+  systemPromptVariantTable,
+}: ComparisonProjectServingGenerationConfigParams & {systemPromptVariantTable: string}) => {
   const comparisonProjectLiteral = getSqlLiteral(comparisonProjectId)
   const generationLiteral = getComparisonProjectServingGenerationSql(generation)
 
   return `
-    INSERT INTO ${comparisonSystemPromptVariantServingTable} (
+    INSERT INTO ${systemPromptVariantTable} (
       comparison_project_id,
       generation,
       system_prompt_variant,
@@ -1022,17 +1037,31 @@ const getMarkComparisonProjectServingGenerationConfigReadySql = ({
   `
 }
 
+const getSystemPromptVariantConfigTable = (
+  hasSystemPromptVariantServing: boolean,
+  options: ComparisonProjectServingGenerationConfigOptions,
+) => {
+  return hasSystemPromptVariantServing || options.persistSystemPromptVariantServing !== false
+    ? comparisonSystemPromptVariantServingTable
+    : comparisonProjectServingGenerationConfigTables.systemPromptVariant
+}
+
 const getMaterializeComparisonProjectServingGenerationConfigStatements = (
   params: ComparisonProjectServingGenerationConfigParams,
   hasSystemPromptVariantServing: boolean,
+  options: ComparisonProjectServingGenerationConfigOptions,
 ) => {
+  const systemPromptVariantTable = getSystemPromptVariantConfigTable(hasSystemPromptVariantServing, options)
+
   return [
     ...getClearComparisonProjectServingGenerationConfigStatements(params),
     getPromptConfigInsertSql(params),
     getSourceProjectConfigInsertSql(params),
     getSummaryPromptGroupInsertSql(params),
-    ...(hasSystemPromptVariantServing ? [] : [getSystemPromptVariantServingInsertSql(params)]),
-    getContentVariantInsertSql(params),
+    ...(hasSystemPromptVariantServing
+      ? []
+      : [getSystemPromptVariantServingInsertSql({...params, systemPromptVariantTable})]),
+    getContentVariantInsertSql({...params, systemPromptVariantTable}),
     getPromptModelConfigInsertSql(params),
     getSummaryModelConfigInsertSql(params),
     getSourceProjectColumnConfigInsertSql(params),
@@ -1073,18 +1102,22 @@ const getComparisonProjectServingGenerationConfigExists = async (
 const materializeComparisonProjectServingGenerationConfig = async (
   params: ComparisonProjectServingGenerationConfigParams,
   runner: ComparisonProjectServingGenerationConfigRunner,
+  options: ComparisonProjectServingGenerationConfigOptions,
 ) => {
   const hasSystemPromptVariantServing = await getSystemPromptVariantServingExists(params, runner)
 
-  return runComparisonProjectServingGenerationConfigStatements(
+  await runComparisonProjectServingGenerationConfigStatements(
     runner,
-    getMaterializeComparisonProjectServingGenerationConfigStatements(params, hasSystemPromptVariantServing),
+    getMaterializeComparisonProjectServingGenerationConfigStatements(params, hasSystemPromptVariantServing, options),
   )
+
+  return true
 }
 
 const ensureComparisonProjectServingGenerationConfig = async (
   params: ComparisonProjectServingGenerationConfigParams,
   runner: ComparisonProjectServingGenerationConfigRunner,
+  options: ComparisonProjectServingGenerationConfigOptions = {},
 ) => {
   await runComparisonProjectServingGenerationConfigStatements(
     runner,
@@ -1093,7 +1126,7 @@ const ensureComparisonProjectServingGenerationConfig = async (
 
   const exists = await getComparisonProjectServingGenerationConfigExists(params, runner)
 
-  return exists ? undefined : materializeComparisonProjectServingGenerationConfig(params, runner)
+  return exists ? false : materializeComparisonProjectServingGenerationConfig(params, runner, options)
 }
 
 export {
@@ -1104,4 +1137,8 @@ export {
   getComparisonProjectSystemPromptVariantSql,
 }
 
-export type {ComparisonProjectServingGenerationConfigParams, ComparisonProjectServingGenerationConfigRunner}
+export type {
+  ComparisonProjectServingGenerationConfigOptions,
+  ComparisonProjectServingGenerationConfigParams,
+  ComparisonProjectServingGenerationConfigRunner,
+}
