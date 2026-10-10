@@ -460,6 +460,10 @@ const AdminCovidenceImport = () => {
   })
 
   const handleModeChange = (nextMode: CovidenceImportMode) => {
+    if (nextMode === mode()) {
+      return
+    }
+
     setMode(nextMode)
     setAnalysis(null)
     setPageError('')
@@ -866,34 +870,37 @@ const AdminCovidenceImport = () => {
               </div>
 
               <div class="grid gap-4 md:grid-cols-2">
-                <For each={requiredRoles()}>
-                  {(fileRole) => {
-                    return (
-                      <label class="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm text-stone-700 shadow-sm">
-                        <div class="mb-2 flex items-center justify-between gap-3">
-                          <span class="font-semibold text-stone-900">{getCovidenceRoleLabel(mode(), fileRole)}</span>
-                          <span class="rounded-full bg-stone-200 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-stone-700">
-                            {fileRole.replace('_', ' ')}
-                          </span>
-                        </div>
-                        <p class="mb-3 text-xs leading-5 text-stone-500">{getCovidenceRoleHint(mode(), fileRole)}</p>
-                        <input
-                          type="file"
-                          accept=".csv,text/csv"
-                          onChange={(event) => {
-                            handleFileChange(fileRole, event)
-                          }}
-                          class="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-amber-900"
-                        />
-                        <Show when={filesByRole[fileRole]}>
-                          <p class="mt-3 text-xs text-stone-600">
-                            {filesByRole[fileRole]?.name} · {(filesByRole[fileRole]?.size ?? 0).toLocaleString()} bytes
-                          </p>
-                        </Show>
-                      </label>
-                    )
-                  }}
-                </For>
+                <Show keyed when={mode()}>
+                  <For each={requiredRoles()}>
+                    {(fileRole) => {
+                      return (
+                        <label class="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm text-stone-700 shadow-sm">
+                          <div class="mb-2 flex items-center justify-between gap-3">
+                            <span class="font-semibold text-stone-900">{getCovidenceRoleLabel(mode(), fileRole)}</span>
+                            <span class="rounded-full bg-stone-200 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-stone-700">
+                              {fileRole.replace('_', ' ')}
+                            </span>
+                          </div>
+                          <p class="mb-3 text-xs leading-5 text-stone-500">{getCovidenceRoleHint(mode(), fileRole)}</p>
+                          <input
+                            type="file"
+                            accept=".csv,text/csv"
+                            onChange={(event) => {
+                              handleFileChange(fileRole, event)
+                            }}
+                            class="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-amber-900"
+                          />
+                          <Show when={filesByRole[fileRole]}>
+                            <p class="mt-3 text-xs text-stone-600">
+                              {filesByRole[fileRole]?.name} · {(filesByRole[fileRole]?.size ?? 0).toLocaleString()}{' '}
+                              bytes
+                            </p>
+                          </Show>
+                        </label>
+                      )
+                    }}
+                  </For>
+                </Show>
               </div>
 
               <div class="mt-6 flex flex-wrap items-center gap-3">
