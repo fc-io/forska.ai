@@ -20,7 +20,10 @@ import {
   getNormalizedComparisonProjectArticleCategoryFilters,
 } from '../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../utils/comparisonProjectColumnOrder.ts'
-import {getNormalizedComparisonProjectConflictResolutionFilters} from '../../utils/comparisonProjectConflictResolutionFilter.ts'
+import {
+  getNormalizedComparisonProjectConflictResolutionFilters,
+  getNormalizedComparisonProjectConflictResolutionProvenanceFilters,
+} from '../../utils/comparisonProjectConflictResolutionFilter.ts'
 import {
   type ComparisonProjectDifferenceColumn,
   type ComparisonProjectDifferenceFilter,
@@ -159,6 +162,7 @@ import {
   type ComparisonProjectAdditionalStats,
   type ComparisonProjectStatsCategoryBreakdown,
   type ComparisonProjectStatsComparison,
+  type ComparisonProjectStatsConflictResolutionProvenance,
   getComparisonProjectStatsWithCategoryBreakdowns,
 } from './comparisonProjectsRoutes/comparisonProjectStats.ts'
 
@@ -178,6 +182,7 @@ const comparisonProjectMetadataWorkloadContext: DuckdbWorkloadContext = {
   workloadClass: 'foreground-metadata',
 }
 type ComparisonProjectConflictResolutionPdfUndecidedMode = 'clear' | 'ignore'
+const comparisonJudgmentContextLookupLimit = 200
 type ComparisonProjectContentFlags = {
   useTitle: boolean
   useAbstract: boolean
@@ -259,6 +264,8 @@ type ComparisonProjectStatsResponse = {
   additionalProjectStats: ComparisonProjectAdditionalStats
   categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]
   comparisons: ComparisonProjectStatsComparison[]
+  conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance
+  judgmentContextId: string | null
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus
   servingUpdatedAt: Date | null
@@ -753,6 +760,7 @@ const getComparisonProjectContentClause = (tableAlias: string, contentVariants: 
 type ComparisonProjectJudgmentFilters = {
   articleCategoryFilters: readonly ComparisonProjectArticleCategoryFilter[]
   conflictResolutionFilters: readonly ComparisonProjectConflictResolutionFilter[]
+  conflictResolutionProvenanceFilters: readonly ComparisonProjectConflictResolutionProvenanceFilter[]
   differenceFilters: readonly ComparisonProjectDifferenceFilter[]
   rowFilters: readonly ComparisonProjectRowFilter[]
   searchText: string
@@ -761,6 +769,7 @@ type ComparisonProjectJudgmentFilters = {
 type ComparisonProjectJudgmentFilterBody = {
   articleCategoryFilter?: string | string[]
   conflictResolutionFilter?: string | string[]
+  conflictResolutionProvenanceFilter?: string | string[]
   differenceFilter?: string | string[]
   rowFilter?: string | string[]
   search?: string
@@ -807,6 +816,9 @@ const getRequestedComparisonProjectJudgmentFilters = (
       scope,
       body.conflictResolutionFilter,
     ),
+    conflictResolutionProvenanceFilters: scope.allowConflictResolution
+      ? getNormalizedComparisonProjectConflictResolutionProvenanceFilters(body.conflictResolutionProvenanceFilter)
+      : [],
     differenceFilters: getRequestedComparisonProjectDifferenceFilters(body),
     rowFilters: getNormalizedComparisonProjectRowFilters(body.rowFilter),
     searchText: getNormalizedComparisonProjectSearchText(body.search),
@@ -4673,6 +4685,8 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
     comparisonProjectId: scope.id,
     articleCategoryFilter: filters.articleCategoryFilters,
     conflictResolutionFilter: filters.conflictResolutionFilters,
+    conflictResolutionProvenanceFilter: filters.conflictResolutionProvenanceFilters,
+    currentJudgmentContextId: scope.judgmentContextId,
     differenceFilter: normalizedDifferenceFilters,
     limit: comparisonProjectJudgmentArticleBatchSize,
     onArticleIds: appendSourceRowsForArticleIds,
@@ -4860,6 +4874,8 @@ const getComparisonProjectExportResponse = (
             comparisonProjectId: scope.id,
             articleCategoryFilter: filters.articleCategoryFilters,
             conflictResolutionFilter: filters.conflictResolutionFilters,
+            conflictResolutionProvenanceFilter: filters.conflictResolutionProvenanceFilters,
+            currentJudgmentContextId: scope.judgmentContextId,
             differenceFilter: normalizedDifferenceFilters,
             limit: comparisonProjectJudgmentArticleBatchSize,
             onRows: async (rows) => {
@@ -4884,6 +4900,24 @@ const getComparisonProjectExportResponse = (
   return new Response(stream, {headers: responseHeaders})
 }
 
+const comparisonProjectConflictResolutionProvenanceFilterLabels = {
+  current: 'Resolved under the current prompts',
+  outdated: 'Resolved under older prompts',
+  unknown: 'Prompts unknown',
+} satisfies Record<ComparisonProjectConflictResolutionProvenanceFilter, string>
+
+const getComparisonProjectConflictResolutionProvenanceFiltersLabel = (
+  filters: readonly ComparisonProjectConflictResolutionProvenanceFilter[],
+) => {
+  return filters.length === 0
+    ? null
+    : `Resolution prompts: ${filters
+        .map((filter) => {
+          return comparisonProjectConflictResolutionProvenanceFilterLabels[filter]
+        })
+        .join(', ')}`
+}
+
 const getComparisonProjectPdfHeaderFilters = (params: {
   filters: ComparisonProjectJudgmentFilters
   scope: ComparisonProjectScope
@@ -4894,12 +4928,22 @@ const getComparisonProjectPdfHeaderFilters = (params: {
     params.scope,
     params.filters.conflictResolutionFilters,
   )
+  const conflictResolutionProvenanceLabel = getComparisonProjectConflictResolutionProvenanceFiltersLabel(
+    params.filters.conflictResolutionProvenanceFilters,
+  )
   const articleCategoryLabel = getComparisonProjectArticleCategoryFiltersLabel(
     getNormalizedComparisonProjectArticleCategoryFilters(params.filters.articleCategoryFilters),
   )
   const searchLabel = params.filters.searchText === '' ? null : `Search: "${params.filters.searchText}"`
 
-  return [rowFilterLabel, differenceFilterLabel, conflictResolutionLabel, articleCategoryLabel, searchLabel]
+  return [
+    rowFilterLabel,
+    differenceFilterLabel,
+    conflictResolutionLabel,
+    conflictResolutionProvenanceLabel,
+    articleCategoryLabel,
+    searchLabel,
+  ]
     .filter((label) => {
       return label !== null
     })
@@ -5333,6 +5377,8 @@ const getComparisonProjectPdfExportResponse = async (
       comparisonProjectId: scope.id,
       articleCategoryFilter: normalizedFilters.articleCategoryFilters,
       conflictResolutionFilter: normalizedFilters.conflictResolutionFilters,
+      conflictResolutionProvenanceFilter: normalizedFilters.conflictResolutionProvenanceFilters,
+      currentJudgmentContextId: scope.judgmentContextId,
       differenceFilter: normalizedFilters.differenceFilters,
       limit: comparisonProjectJudgmentArticleBatchSize,
       onRows: async (rows) => {
@@ -5442,6 +5488,8 @@ const getComparisonProjectJudgmentsPage = async (
     comparisonProjectId: scope.id,
     articleCategoryFilter: filters.articleCategoryFilters,
     conflictResolutionFilter: filters.conflictResolutionFilters,
+    conflictResolutionProvenanceFilter: filters.conflictResolutionProvenanceFilters,
+    currentJudgmentContextId: scope.judgmentContextId,
     cursor,
     differenceFilter: normalizedDifferenceFilters,
     limit,
@@ -5491,6 +5539,8 @@ const getComparisonProjectJudgmentsCount = async (
     comparisonProjectId: scope.id,
     articleCategoryFilter: filters.articleCategoryFilters,
     conflictResolutionFilter: filters.conflictResolutionFilters,
+    conflictResolutionProvenanceFilter: filters.conflictResolutionProvenanceFilters,
+    currentJudgmentContextId: scope.judgmentContextId,
     differenceFilter: normalizedDifferenceFilters,
     limit,
     queryRunner: appDatabaseService,
@@ -5511,6 +5561,7 @@ const getComparisonProjectJudgmentsCount = async (
 
 const getComparisonProjectStatsResponse = async (
   scope: ComparisonProjectScope,
+  conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance = 'all',
 ): Promise<ComparisonProjectStatsResponse> => {
   if (scope.archived) {
     return {
@@ -5518,6 +5569,8 @@ const getComparisonProjectStatsResponse = async (
       additionalProjectStats: {conflictResolutionAnswerComparisons: [], resolvedTruthComparisons: []},
       categoryBreakdowns: [],
       comparisons: [],
+      conflictResolutionProvenance,
+      judgmentContextId: scope.judgmentContextId,
       isServingReady: scope.isServingReady,
       servingStatus: scope.servingStatus,
       servingUpdatedAt: scope.servingUpdatedAt,
@@ -5528,6 +5581,8 @@ const getComparisonProjectStatsResponse = async (
     allowConflictResolution: scope.allowConflictResolution,
     columns: scope.columns,
     comparisonProjectId: scope.id,
+    conflictResolutionProvenance,
+    currentJudgmentContextId: scope.judgmentContextId,
     generation: scope.activeGeneration,
     isSummaryMode: getIsSummaryMode(scope),
     primaryModelId: scope.modelIds?.[0] ?? null,
@@ -5541,6 +5596,8 @@ const getComparisonProjectStatsResponse = async (
     additionalProjectStats: stats.additionalProjectStats,
     categoryBreakdowns: stats.categoryBreakdowns,
     comparisons: stats.comparisons,
+    conflictResolutionProvenance,
+    judgmentContextId: scope.judgmentContextId,
     isServingReady: scope.isServingReady,
     servingStatus: scope.servingStatus,
     servingUpdatedAt: scope.servingUpdatedAt,
@@ -6054,6 +6111,18 @@ export const comparisonProjectsRoutes = new Elysia()
 
     return {data}
   })
+  .post(
+    '/api/comparison-projects/judgment-contexts',
+    async (context) => {
+      const data = await getComparisonJudgmentContextsByIds(
+        appDatabaseService,
+        context.body.ids.slice(0, comparisonJudgmentContextLookupLimit),
+      )
+
+      return {data}
+    },
+    {body: t.Object({ids: t.Array(t.String())})},
+  )
   .get('/api/comparison-projects/conflict-resolution-import-sources', async () => {
     const data = await getComparisonProjectConflictResolutionImportSources()
 
@@ -6184,46 +6253,54 @@ export const comparisonProjectsRoutes = new Elysia()
 
     return {data}
   })
-  .get('/api/comparison-projects/:id/stats', async (context) => {
-    const {params, set} = context
-    const scope = await getComparisonProjectScope(params.id)
+  .get(
+    '/api/comparison-projects/:id/stats',
+    async (context) => {
+      const {params, query, set} = context
+      const scope = await getComparisonProjectScope(params.id)
 
-    if (!scope) {
-      set.status = 404
-      return {data: null, error: 'Comparison project not found'}
-    }
+      if (!scope) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
 
-    const data = await getComparisonProjectStatsResponse(scope)
+      const data = await getComparisonProjectStatsResponse(scope, query.conflictResolutionProvenance ?? 'all')
 
-    return {data}
-  })
+      return {data}
+    },
+    {query: t.Object({conflictResolutionProvenance: t.Optional(t.Union([t.Literal('all'), t.Literal('current')]))})},
+  )
   .get('/api/comparison-projects/:id', async (context) => {
     const {params, set} = context
-    const detail: {data: ComparisonProjectScope; resolutionCount: number} | null = await appDatabaseService.transaction(
-      async (tx) => {
-        const data = await getComparisonProjectScope(params.id, tx)
+    const detail: {
+      data: ComparisonProjectScope
+      judgmentContext: ComparisonJudgmentContextSummary | null
+      resolutionCount: number
+    } | null = await appDatabaseService.transaction(async (tx) => {
+      const data = await getComparisonProjectScope(params.id, tx)
 
-        if (!data) {
-          return null
-        }
+      if (!data) {
+        return null
+      }
 
-        const resolutionCount = await getComparisonProjectResolutionCount(params.id, tx)
+      const resolutionCount = await getComparisonProjectResolutionCount(params.id, tx)
+      const [judgmentContext = null] = data.judgmentContextId
+        ? await getComparisonJudgmentContextsByIds(tx, [data.judgmentContextId])
+        : []
 
-        return {data, resolutionCount}
-      },
-      comparisonProjectMetadataWorkloadContext,
-    )
+      return {data, judgmentContext, resolutionCount}
+    }, comparisonProjectMetadataWorkloadContext)
 
     if (!detail) {
       set.status = 404
       return {data: null, error: 'Comparison project not found'}
     }
 
-    const {data, resolutionCount} = detail
+    const {data, judgmentContext, resolutionCount} = detail
 
     queueUnavailableComparisonProjectServingRebuild(data)
 
-    return {data: {...data, resolutionCount}}
+    return {data: {...data, judgmentContext, resolutionCount}}
   })
   .post(
     '/api/comparison-projects/:id/judgments',
@@ -6255,6 +6332,7 @@ export const comparisonProjectsRoutes = new Elysia()
         rowFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         articleCategoryFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         conflictResolutionFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
+        conflictResolutionProvenanceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         differenceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         showOnlyModelDifferences: t.Optional(t.Boolean()),
       }),
@@ -6288,6 +6366,7 @@ export const comparisonProjectsRoutes = new Elysia()
         rowFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         articleCategoryFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         conflictResolutionFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
+        conflictResolutionProvenanceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         differenceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
       }),
     },
@@ -6362,6 +6441,7 @@ export const comparisonProjectsRoutes = new Elysia()
         rowFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         articleCategoryFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         conflictResolutionFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
+        conflictResolutionProvenanceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         differenceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         search: t.Optional(t.String()),
       }),
@@ -6475,6 +6555,7 @@ export const comparisonProjectsRoutes = new Elysia()
         rowFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         articleCategoryFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         conflictResolutionFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
+        conflictResolutionProvenanceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         format: t.Optional(t.Union([t.Literal('csv'), t.Literal('pdf')])),
         search: t.Optional(t.String()),
         differenceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),

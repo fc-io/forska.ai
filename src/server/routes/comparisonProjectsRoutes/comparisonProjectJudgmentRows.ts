@@ -23,6 +23,10 @@ import {
 import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgmentDisplayAnswer, hasAnyJudgmentAnswer} from '../../utils/judgmentAnswers.ts'
 import {
+  type ComparisonProjectConflictResolutionProvenanceFilter,
+  getComparisonProjectConflictResolutionProvenanceFilterPredicateSql,
+} from './comparisonProjectConflictResolutionProvenance.ts'
+import {
   type ComparisonProjectSearchQuery,
   getComparisonProjectSearchArticleSourceSql,
   getComparisonProjectSearchPredicateSql,
@@ -142,7 +146,12 @@ export type ComparisonProjectDifferenceFilterSelection =
   ComparisonProjectFilterSelection<ComparisonProjectDifferenceFilter>
 export type ComparisonProjectRowFilterSelection = ComparisonProjectFilterSelection<ComparisonProjectRowFilter>
 
-type ComparisonProjectServingJudgmentRowsParams = {
+type ComparisonProjectServingConflictResolutionProvenanceParams = {
+  conflictResolutionProvenanceFilter?: readonly ComparisonProjectConflictResolutionProvenanceFilter[]
+  currentJudgmentContextId?: string | null
+}
+
+type ComparisonProjectServingJudgmentRowsParams = ComparisonProjectServingConflictResolutionProvenanceParams & {
   articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
   comparisonProjectId: string
   conflictResolutionFilter?: ComparisonProjectConflictResolutionFilterSelection
@@ -162,7 +171,7 @@ type ForEachComparisonProjectServingJudgmentArticleIdBatchParams = ComparisonPro
   onArticleIds: (articleIds: string[]) => Promise<void> | void
 }
 
-type ComparisonProjectServingJudgmentCountParams = {
+type ComparisonProjectServingJudgmentCountParams = ComparisonProjectServingConflictResolutionProvenanceParams & {
   articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
   comparisonProjectId: string
   conflictResolutionFilter?: ComparisonProjectConflictResolutionFilterSelection
@@ -438,9 +447,11 @@ const getComparisonProjectServingArticleCategoryFilterPredicateSql = (
 const getComparisonProjectServingRequiresConflictResolution = (
   conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection,
   differenceFilter: ComparisonProjectDifferenceFilterSelection,
+  conflictResolutionProvenanceFilter: readonly ComparisonProjectConflictResolutionProvenanceFilter[] = [],
 ) => {
   return (
     getComparisonProjectFilterSelectionList(conflictResolutionFilter).length > 0
+    || conflictResolutionProvenanceFilter.length > 0
     || getComparisonProjectFilterSelectionList(differenceFilter).some(
       getIsComparisonProjectConflictResolutionDifferenceFilter,
     )
@@ -450,8 +461,13 @@ const getComparisonProjectServingRequiresConflictResolution = (
 const getComparisonProjectServingConflictResolutionJoinSql = (
   conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection,
   differenceFilter: ComparisonProjectDifferenceFilterSelection,
+  conflictResolutionProvenanceFilter: readonly ComparisonProjectConflictResolutionProvenanceFilter[] = [],
 ) => {
-  return getComparisonProjectServingRequiresConflictResolution(conflictResolutionFilter, differenceFilter)
+  return getComparisonProjectServingRequiresConflictResolution(
+    conflictResolutionFilter,
+    differenceFilter,
+    conflictResolutionProvenanceFilter,
+  )
     ? `
     LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution
       ON conflict_resolution.comparison_project_id = article.comparison_project_id
@@ -616,16 +632,27 @@ export const getComparisonProjectScopedArticleBatch = async (params: {
   })
 }
 
-export const getComparisonProjectServingMemberSql = (params: {
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
-  comparisonProjectId: string
-  conflictResolutionFilter?: ComparisonProjectConflictResolutionFilterSelection
-  cursor?: string | null
-  differenceFilter: ComparisonProjectDifferenceFilterSelection
-  limit: number
-  rowFilter: ComparisonProjectRowFilterSelection
-  searchText?: string | null
-}) => {
+const getComparisonProjectServingProvenancePredicateSql = (
+  params: ComparisonProjectServingConflictResolutionProvenanceParams,
+) => {
+  return getComparisonProjectConflictResolutionProvenanceFilterPredicateSql({
+    currentJudgmentContextId: params.currentJudgmentContextId ?? null,
+    filters: params.conflictResolutionProvenanceFilter ?? [],
+  })
+}
+
+export const getComparisonProjectServingMemberSql = (
+  params: ComparisonProjectServingConflictResolutionProvenanceParams & {
+    articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
+    comparisonProjectId: string
+    conflictResolutionFilter?: ComparisonProjectConflictResolutionFilterSelection
+    cursor?: string | null
+    differenceFilter: ComparisonProjectDifferenceFilterSelection
+    limit: number
+    rowFilter: ComparisonProjectRowFilterSelection
+    searchText?: string | null
+  },
+) => {
   const cursor = getComparisonProjectServingPageCursor(params.cursor)
   const limit = getPositiveInteger(params.limit)
   const searchQuery = getComparisonProjectSearchQuery(params.searchText)
@@ -638,6 +665,7 @@ export const getComparisonProjectServingMemberSql = (params: {
   const conflictResolutionJoin = getComparisonProjectServingConflictResolutionJoinSql(
     params.conflictResolutionFilter,
     params.differenceFilter,
+    params.conflictResolutionProvenanceFilter,
   )
   const conflictResolutionFilterPredicate = getComparisonProjectServingConflictResolutionFilterPredicateSql(
     params.conflictResolutionFilter,
@@ -664,6 +692,7 @@ export const getComparisonProjectServingMemberSql = (params: {
       AND ${differenceFilterPredicate}
       AND ${articleCategoryFilterPredicate}
       AND ${conflictResolutionFilterPredicate}
+      AND ${getComparisonProjectServingProvenancePredicateSql(params)}
       AND ${getComparisonProjectServingSearchPredicateSql(searchQuery)}
       ${getComparisonProjectServingCursorWhereSql(cursor)}
     ORDER BY article.row_sort_created_at DESC NULLS LAST, article.row_sort_title ASC, article.row_sort_article_id ASC
@@ -736,14 +765,16 @@ export const getComparisonProjectServingJudgmentCountSql = (params: {
   `
 }
 
-export const getComparisonProjectServingJudgmentFilteredCountSql = (params: {
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
-  comparisonProjectId: string
-  conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection
-  differenceFilter: ComparisonProjectDifferenceFilterSelection
-  rowFilter: ComparisonProjectRowFilterSelection
-  searchText?: string | null
-}) => {
+export const getComparisonProjectServingJudgmentFilteredCountSql = (
+  params: ComparisonProjectServingConflictResolutionProvenanceParams & {
+    articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
+    comparisonProjectId: string
+    conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection
+    differenceFilter: ComparisonProjectDifferenceFilterSelection
+    rowFilter: ComparisonProjectRowFilterSelection
+    searchText?: string | null
+  },
+) => {
   const searchQuery = getComparisonProjectSearchQuery(params.searchText)
   const rowFilterPredicate = getComparisonProjectServingRowFilterPredicateSql(params.rowFilter)
   const differenceFilterPredicate = getComparisonProjectServingDifferenceFilterPredicateSql(params.differenceFilter)
@@ -754,6 +785,7 @@ export const getComparisonProjectServingJudgmentFilteredCountSql = (params: {
   const conflictResolutionJoin = getComparisonProjectServingConflictResolutionJoinSql(
     params.conflictResolutionFilter,
     params.differenceFilter,
+    params.conflictResolutionProvenanceFilter,
   )
   const conflictResolutionFilterPredicate = getComparisonProjectServingConflictResolutionFilterPredicateSql(
     params.conflictResolutionFilter,
@@ -775,6 +807,7 @@ export const getComparisonProjectServingJudgmentFilteredCountSql = (params: {
       AND ${differenceFilterPredicate}
       AND ${articleCategoryFilterPredicate}
       AND ${conflictResolutionFilterPredicate}
+      AND ${getComparisonProjectServingProvenancePredicateSql(params)}
       AND ${getComparisonProjectServingSearchPredicateSql(searchQuery)}
   `
 }
@@ -835,7 +868,11 @@ export const getComparisonProjectServingJudgmentCount = async (
     && differenceFilters.length <= 1
     && articleCategoryFilters.length <= 1
     && getComparisonProjectSearchQuery(params.searchText) === null
-    && !getComparisonProjectServingRequiresConflictResolution(conflictResolutionFilter, params.differenceFilter)
+    && !getComparisonProjectServingRequiresConflictResolution(
+      conflictResolutionFilter,
+      params.differenceFilter,
+      params.conflictResolutionProvenanceFilter,
+    )
   const [row] = await params.queryRunner.queryJson<{totalCount: unknown}>(
     canUsePrecomputedStats
       ? getComparisonProjectServingJudgmentCountSql({

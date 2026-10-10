@@ -6,7 +6,10 @@ import type {
   ProjectPromptCriteriaDisposition,
 } from '../db/schemaTypes.ts'
 import type {ComparisonProjectArticleCategoryFilter} from '../utils/comparisonProjectArticleCategoryFilter.ts'
-import type {ComparisonProjectConflictResolutionFilter} from '../utils/comparisonProjectConflictResolutionFilter.ts'
+import type {
+  ComparisonProjectConflictResolutionFilter,
+  ComparisonProjectConflictResolutionProvenanceFilter,
+} from '../utils/comparisonProjectConflictResolutionFilter.ts'
 import type {
   ComparisonProjectDifferenceColumn,
   ComparisonProjectDifferenceFilter,
@@ -263,11 +266,68 @@ export type ComparisonProjectLinkedSourceProject = {
   humanJudgmentMode: HumanJudgmentMode
 }
 
+export type ComparisonJudgmentContextLlmColumn = {
+  criteriaDisposition: string | null
+  kind: 'llm'
+  modelId: string
+  modelName: string | null
+  promptHeading: string | null
+  promptId: string
+  sourceProjectId: string | null
+  systemPromptVariant: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useMetadata: boolean
+  useTitle: boolean
+}
+
+export type ComparisonJudgmentContextHumanColumn = {kind: 'human'; promptHeading: string | null; promptId: string}
+
+export type ComparisonJudgmentContext = {
+  columns: Array<ComparisonJudgmentContextHumanColumn | ComparisonJudgmentContextLlmColumn>
+  humanJudgmentMode: HumanJudgmentMode
+  sourceProjectIds: string[]
+  summarySourceProjectId: string | null
+  v: 1
+}
+
+export type ComparisonJudgmentContextSummary = {
+  context: ComparisonJudgmentContext
+  createdAt: Date | string | null
+  id: string
+  modelIds: string[]
+  models: Array<{id: string; name: string | null}>
+  promptIds: string[]
+  prompts: Array<{heading: string | null; id: string}>
+  systemPromptVariants: string[]
+}
+
+export type ComparisonProjectConflictResolutionOrigin = 'file-import' | 'pdf-import' | 'project-import' | 'ui'
+
+export type ComparisonProjectConflictResolutionValue = {
+  articleId: string
+  label: string
+  provenance?: {
+    contextId: string | null
+    generation: number | null
+    origin: ComparisonProjectConflictResolutionOrigin | null
+    setAt: Date | string | null
+  } | null
+  provenanceMatchesCurrent?: boolean | null
+  reviewer?: {displayName: string | null; userId: string} | null
+  reviewerDisplayName: string | null
+  reviewerUserId: string | null
+  value: string
+}
+
 export type ComparisonProjectJudgmentsMetadata = {
   id: string
   name: string
   description: string | null
   activeGeneration: number | null
+  judgmentContext: ComparisonJudgmentContextSummary | null
+  judgmentContextId: string | null
   compareWithHumans: boolean
   allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode
@@ -310,13 +370,7 @@ export type ComparisonProjectJudgmentsRow = {
   canonicalArticleId: string
   cells: Record<string, string | null>
   hasConflict: boolean
-  conflictResolution: {
-    articleId: string
-    label: string
-    reviewerDisplayName: string | null
-    reviewerUserId: string | null
-    value: string
-  } | null
+  conflictResolution: ComparisonProjectConflictResolutionValue | null
 }
 
 export type ComparisonProjectJudgmentsPage = {
@@ -419,11 +473,14 @@ export type ComparisonProjectStatsCategoryBreakdown = {
   comparisons: ComparisonProjectStatsComparison[]
   label: string
 }
+export type ComparisonProjectStatsConflictResolutionProvenance = 'all' | 'current'
 export type ComparisonProjectStats = {
   activeGeneration: number | null
   additionalProjectStats: ComparisonProjectAdditionalStats
   categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]
   comparisons: ComparisonProjectStatsComparison[]
+  conflictResolutionProvenance?: ComparisonProjectStatsConflictResolutionProvenance
+  judgmentContextId?: string | null
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus
   servingUpdatedAt: Date | string | null
@@ -431,6 +488,7 @@ export type ComparisonProjectStats = {
 export type ComparisonProjectRowsRequestFilters = {
   articleCategoryFilter?: ComparisonProjectArticleCategoryFilter[]
   conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter[]
+  conflictResolutionProvenanceFilter?: ComparisonProjectConflictResolutionProvenanceFilter[]
   rowFilter?: ComparisonProjectRowFilter[]
   differenceFilter?: ComparisonProjectDifferenceFilter[]
   search?: string
@@ -865,10 +923,12 @@ export const fetchComparisonProjectJudgmentsPage = async (
   conflictResolutionFilters: readonly ComparisonProjectConflictResolutionFilter[],
   searchText: string,
   cursor?: string | null,
+  conflictResolutionProvenanceFilters: readonly ComparisonProjectConflictResolutionProvenanceFilter[] = [],
 ) => {
   const body: ComparisonProjectJudgmentsPageRequest = {
     articleCategoryFilter: [...articleCategoryFilters],
     conflictResolutionFilter: [...conflictResolutionFilters],
+    conflictResolutionProvenanceFilter: [...conflictResolutionProvenanceFilters],
     cursor,
     limit: String(limit),
     rowFilter: [...rowFilters],
@@ -888,10 +948,12 @@ export const fetchComparisonProjectJudgmentsCount = async (
   articleCategoryFilters: readonly ComparisonProjectArticleCategoryFilter[],
   conflictResolutionFilters: readonly ComparisonProjectConflictResolutionFilter[],
   searchText: string,
+  conflictResolutionProvenanceFilters: readonly ComparisonProjectConflictResolutionProvenanceFilter[] = [],
 ) => {
   const body: ComparisonProjectJudgmentsCountRequest = {
     articleCategoryFilter: [...articleCategoryFilters],
     conflictResolutionFilter: [...conflictResolutionFilters],
+    conflictResolutionProvenanceFilter: [...conflictResolutionProvenanceFilters],
     limit: String(limit),
     rowFilter: [...rowFilters],
     differenceFilter: [...differenceFilters],
@@ -902,10 +964,21 @@ export const fetchComparisonProjectJudgmentsCount = async (
   return getResponseData<ComparisonProjectJudgmentsCount>(response, 'Failed to fetch comparison project judgment count')
 }
 
-export const fetchComparisonProjectStats = async (comparisonProjectId: string) => {
-  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).stats.get()
+export const fetchComparisonProjectStats = async (
+  comparisonProjectId: string,
+  conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance = 'all',
+) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).stats.get({
+    query: {conflictResolutionProvenance},
+  })
 
   return getResponseData<ComparisonProjectStats>(response, 'Failed to fetch comparison project stats')
+}
+
+export const fetchComparisonJudgmentContexts = async (ids: readonly string[]) => {
+  const response = await apiClient.api['comparison-projects']['judgment-contexts'].post({ids: [...ids]})
+
+  return getResponseData<ComparisonJudgmentContextSummary[]>(response, 'Failed to fetch comparison judgment contexts')
 }
 
 const comparisonProjectServingRefetchIntervals: Partial<Record<ComparisonProjectServingStatus, number>> = {
@@ -1026,13 +1099,7 @@ export const setComparisonProjectConflictResolution = async (
     input,
   )
 
-  return getResponseData<{
-    articleId: string
-    label: string
-    reviewerDisplayName: string | null
-    reviewerUserId: string | null
-    value: string
-  }>(response, 'Failed to save conflict resolution')
+  return getResponseData<ComparisonProjectConflictResolutionValue>(response, 'Failed to save conflict resolution')
 }
 
 export const resetComparisonProjectConflictResolution = async (

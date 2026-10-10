@@ -147,7 +147,14 @@ export type ComparisonProjectStatsArticleCategoryCountRow = {articleCategory: un
 
 type ComparisonProjectStatsQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
-type ComparisonProjectStatsParams = {
+export type ComparisonProjectStatsConflictResolutionProvenance = 'all' | 'current'
+
+type ComparisonProjectStatsConflictResolutionProvenanceParams = {
+  conflictResolutionProvenance?: ComparisonProjectStatsConflictResolutionProvenance
+  currentJudgmentContextId?: string | null
+}
+
+type ComparisonProjectStatsParams = ComparisonProjectStatsConflictResolutionProvenanceParams & {
   allowConflictResolution?: boolean
   columns: readonly ComparisonProjectStatsColumn[]
   comparisonProjectId: string
@@ -1776,12 +1783,22 @@ export const getComparisonProjectStatsArticleCategoryCountsSql = (params: {
   `
 }
 
-export const getComparisonProjectStatsAggregatesSql = (params: {
-  columnIds: readonly string[]
-  comparisonProjectId: string
-  generation: number
-  groups: readonly ComparisonProjectStatsAggregateGroup[]
-}) => {
+const getComparisonProjectStatsConflictResolutionProvenanceSql = (
+  params: ComparisonProjectStatsConflictResolutionProvenanceParams,
+) => {
+  return params.conflictResolutionProvenance === 'current'
+    ? `AND judgment_context_id = CAST(${getSqlLiteral(params.currentJudgmentContextId ?? null)} AS VARCHAR)`
+    : ''
+}
+
+export const getComparisonProjectStatsAggregatesSql = (
+  params: ComparisonProjectStatsConflictResolutionProvenanceParams & {
+    columnIds: readonly string[]
+    comparisonProjectId: string
+    generation: number
+    groups: readonly ComparisonProjectStatsAggregateGroup[]
+  },
+) => {
   const hasAnswerFilterGroups = getHasComparisonProjectStatsAnswerFilterGroups(params.groups)
 
   return `
@@ -1848,6 +1865,7 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
       WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
         AND answer_value IS NOT NULL
         AND NULLIF(TRIM(answer_value), '') IS NOT NULL
+        ${getComparisonProjectStatsConflictResolutionProvenanceSql(params)}
     ),
     comparison_pair AS (
       SELECT
@@ -2048,12 +2066,14 @@ export const getComparisonProjectStatsAggregatesSql = (params: {
   `
 }
 
-export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
-  columnIds: readonly string[]
-  comparisonProjectId: string
-  generation: number
-  groups: readonly ComparisonProjectStatsResolvedTruthComparisonGroup[]
-}) => {
+export const getComparisonProjectStatsResolvedTruthAggregatesSql = (
+  params: ComparisonProjectStatsConflictResolutionProvenanceParams & {
+    columnIds: readonly string[]
+    comparisonProjectId: string
+    generation: number
+    groups: readonly ComparisonProjectStatsResolvedTruthComparisonGroup[]
+  },
+) => {
   return `
     WITH resolved_truth_group(comparison_id, human_column_id, llm_column_id) AS (
       VALUES
@@ -2127,6 +2147,7 @@ export const getComparisonProjectStatsResolvedTruthAggregatesSql = (params: {
       WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
         AND answer_value IS NOT NULL
         AND NULLIF(TRIM(answer_value), '') IS NOT NULL
+        ${getComparisonProjectStatsConflictResolutionProvenanceSql(params)}
     ),
     normalized_conflict_resolution_decision AS (
       SELECT
@@ -2226,6 +2247,8 @@ export const getComparisonProjectStats = async (params: ComparisonProjectStatsPa
     getComparisonProjectStatsAggregatesSql({
       columnIds,
       comparisonProjectId: params.comparisonProjectId,
+      conflictResolutionProvenance: params.conflictResolutionProvenance,
+      currentJudgmentContextId: params.currentJudgmentContextId,
       generation,
       groups,
     }),
@@ -2263,6 +2286,8 @@ export const getComparisonProjectAdditionalStats = async (
           getComparisonProjectStatsResolvedTruthAggregatesSql({
             columnIds: resolvedTruthColumnIds,
             comparisonProjectId: params.comparisonProjectId,
+            conflictResolutionProvenance: params.conflictResolutionProvenance,
+            currentJudgmentContextId: params.currentJudgmentContextId,
             generation,
             groups: resolvedTruthGroups,
           }),
@@ -2274,6 +2299,8 @@ export const getComparisonProjectAdditionalStats = async (
           getComparisonProjectStatsAggregatesSql({
             columnIds: conflictResolutionAnswerColumnIds,
             comparisonProjectId: params.comparisonProjectId,
+            conflictResolutionProvenance: params.conflictResolutionProvenance,
+            currentJudgmentContextId: params.currentJudgmentContextId,
             generation,
             groups: conflictResolutionAnswerGroups,
           }),
@@ -2321,6 +2348,8 @@ export const getComparisonProjectStatsWithCategoryBreakdowns = async (
           getComparisonProjectStatsAggregatesSql({
             columnIds,
             comparisonProjectId: params.comparisonProjectId,
+            conflictResolutionProvenance: params.conflictResolutionProvenance,
+            currentJudgmentContextId: params.currentJudgmentContextId,
             generation,
             groups,
           }),
@@ -2332,6 +2361,8 @@ export const getComparisonProjectStatsWithCategoryBreakdowns = async (
           getComparisonProjectStatsResolvedTruthAggregatesSql({
             columnIds: resolvedTruthColumnIds,
             comparisonProjectId: params.comparisonProjectId,
+            conflictResolutionProvenance: params.conflictResolutionProvenance,
+            currentJudgmentContextId: params.currentJudgmentContextId,
             generation,
             groups: resolvedTruthGroups,
           }),
@@ -2343,6 +2374,8 @@ export const getComparisonProjectStatsWithCategoryBreakdowns = async (
           getComparisonProjectStatsAggregatesSql({
             columnIds: conflictResolutionAnswerColumnIds,
             comparisonProjectId: params.comparisonProjectId,
+            conflictResolutionProvenance: params.conflictResolutionProvenance,
+            currentJudgmentContextId: params.currentJudgmentContextId,
             generation,
             groups: conflictResolutionAnswerGroups,
           }),
