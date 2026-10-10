@@ -69,6 +69,20 @@ export const startComparisonProjectServingMaintenanceWorkerHeartbeat = (
           },
         )
       }
+
+      if (result.status === 'backfilled') {
+        comparisonProjectServingMaintenanceWorkerLogger.log(
+          `comparison-project-serving-maintenance-worker:judgment-context:${result.comparisonProjectId}:${result.generation}`,
+          '[comparisonProjectServingMaintenanceWorker] backfilled comparison judgment context for the active generation',
+          {
+            comparisonProjectId: result.comparisonProjectId,
+            component: comparisonProjectServingMaintenanceWorkerComponent,
+            event: 'judgmentContextBackfilled',
+            generation: result.generation,
+            judgmentContextId: result.judgmentContextId,
+          },
+        )
+      }
     } catch (error) {
       logComparisonProjectServingMaintenanceWorkerError(error)
     } finally {

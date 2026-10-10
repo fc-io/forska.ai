@@ -199,6 +199,7 @@ type ComparisonProjectScope = {
   name: string
   description: string | null
   activeGeneration: number | null
+  judgmentContextId: string | null
   compareWithHumans: boolean
   allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode
@@ -450,6 +451,7 @@ const getEmptyComparisonProjectServingProgress = (): ComparisonProjectServingPro
 const getArchivedComparisonProjectServingMetadata = () => {
   return {
     activeGeneration: null,
+    judgmentContextId: null,
     isServingReady: false,
     servingProgress: getEmptyComparisonProjectServingProgress(),
     servingStatus: 'missing' as const,
@@ -493,6 +495,7 @@ const getComparisonProjectServingMetadata = (status: ComparisonProjectServingSta
 
   return {
     activeGeneration: status.activeGeneration,
+    judgmentContextId: status.activeGeneration === null ? null : (status.activeJudgmentContextId ?? null),
     isServingReady: servingStatus === 'ready' && status.activeGeneration !== null,
     servingProgress: getComparisonProjectServingProgress(status),
     servingStatus,
@@ -1735,6 +1738,7 @@ const getCreateFromProjectImportScope = async (params: {
   return {
     ...params.createdComparisonProject,
     activeGeneration: null,
+    judgmentContextId: null,
     isServingReady: false,
     servingStatus: 'missing',
     servingProgress: getEmptyComparisonProjectServingProgress(),

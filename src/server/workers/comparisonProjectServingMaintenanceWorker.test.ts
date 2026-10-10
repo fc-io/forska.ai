@@ -83,6 +83,9 @@ test('comparison project serving maintenance worker skips while review serving r
 
 test('comparison project serving maintenance worker stays idle when no comparison project needs rebuild', async () => {
   const result = await runComparisonProjectServingMaintenanceWorkerOnce({
+    backfillNextComparisonJudgmentContext: async () => {
+      return {comparisonProjectId: null, generation: null, judgmentContextId: null}
+    },
     getAppendQueueDepth: () => {
       return 0
     },
@@ -98,4 +101,60 @@ test('comparison project serving maintenance worker stays idle when no compariso
   })
 
   expect(result).toEqual({comparisonProjectId: null, reason: 'no-unavailable-project', status: 'idle'})
+})
+
+test('comparison project serving maintenance worker backfills one missing judgment context when no rebuild is due', async () => {
+  let backfillCalls = 0
+  const result = await runComparisonProjectServingMaintenanceWorkerOnce({
+    backfillNextComparisonJudgmentContext: async () => {
+      backfillCalls += 1
+      return {comparisonProjectId: 'comparison-1', generation: 4, judgmentContextId: 'context-1'}
+    },
+    getAppendQueueDepth: () => {
+      return 0
+    },
+    getForegroundQueueDepth: () => {
+      return 0
+    },
+    hasReviewServingRebuildWork: async () => {
+      return false
+    },
+    rebuildNextUnavailableComparisonProjectServing: async () => {
+      return {comparisonProjectId: null, rebuildResult: null, rebuilt: false}
+    },
+  })
+
+  expect(backfillCalls).toBe(1)
+  expect(result).toEqual({
+    comparisonProjectId: 'comparison-1',
+    generation: 4,
+    judgmentContextId: 'context-1',
+    reason: 'judgment-context-backfilled',
+    status: 'backfilled',
+  })
+})
+
+test('comparison project serving maintenance worker rebuilds before it backfills judgment contexts', async () => {
+  let backfillCalls = 0
+  const result = await runComparisonProjectServingMaintenanceWorkerOnce({
+    backfillNextComparisonJudgmentContext: async () => {
+      backfillCalls += 1
+      return {comparisonProjectId: 'comparison-2', generation: 1, judgmentContextId: 'context-2'}
+    },
+    getAppendQueueDepth: () => {
+      return 0
+    },
+    getForegroundQueueDepth: () => {
+      return 0
+    },
+    hasReviewServingRebuildWork: async () => {
+      return false
+    },
+    rebuildNextUnavailableComparisonProjectServing: async () => {
+      return {comparisonProjectId: 'comparison-1', rebuildResult: null, rebuilt: true} as never
+    },
+  })
+
+  expect(backfillCalls).toBe(0)
+  expect(result).toEqual({comparisonProjectId: 'comparison-1', rebuilt: true, status: 'processed'})
 })

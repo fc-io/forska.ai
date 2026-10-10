@@ -83,6 +83,7 @@ type ComparisonProjectServingProgressTotals = Pick<
 
 type ComparisonProjectServingStatusRow = {
   activeGeneration: number | null
+  activeJudgmentContextId: string | null
   activeSystemPromptVariants: SystemPromptVariant[]
   generationUpdatedAt: Date | null
   servingCompletedAt: Date | null
@@ -105,6 +106,7 @@ type ComparisonProjectServingStatusRow = {
 
 type ComparisonProjectServingStatusRecordRow = {
   activeGeneration: unknown
+  activeJudgmentContextId?: string | null
   activeSystemPromptVariants?: unknown
   generationUpdatedAt: unknown
   servingCompletedAt: unknown
@@ -261,6 +263,7 @@ const getComparisonProjectServingStatusRowValue = (
 ): ComparisonProjectServingStatusRow => {
   return {
     activeGeneration: getComparisonProjectServingGenerationValue(row?.activeGeneration),
+    activeJudgmentContextId: row?.activeJudgmentContextId ?? null,
     activeSystemPromptVariants: getComparisonProjectServingSystemPromptVariantsValue(row?.activeSystemPromptVariants),
     generationUpdatedAt: getDateValue(row?.generationUpdatedAt),
     servingCompletedAt: getDateValue(row?.servingCompletedAt),
@@ -321,6 +324,11 @@ const getComparisonProjectServingNextGenerationSql = () => {
       COALESCE((
         SELECT MAX(generation)
         FROM mart.comparison_system_prompt_variant_serving
+        WHERE comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+      ), 0),
+      COALESCE((
+        SELECT MAX(generation)
+        FROM mart.comparison_judgment_context_serving
         WHERE comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
       ), 0)
     ) + 1
@@ -1097,6 +1105,12 @@ const getComparisonProjectServingStatus = async (
         WHERE served_variant.comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
           AND served_variant.generation = ${comparisonProjectServingGenerationTable}.active_generation
       )) AS activeSystemPromptVariants,
+      (
+        SELECT MAX(served_context.judgment_context_id)
+        FROM mart.comparison_judgment_context_serving served_context
+        WHERE served_context.comparison_project_id = ${comparisonProjectServingGenerationTable}.comparison_project_id
+          AND served_context.generation = ${comparisonProjectServingGenerationTable}.active_generation
+      ) AS activeJudgmentContextId,
       generation_updated_at AS generationUpdatedAt,
       serving_status AS servingStatus,
       CAST(serving_generation AS INTEGER) AS servingGeneration,
