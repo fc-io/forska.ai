@@ -8,7 +8,10 @@ import type {
   ComparisonProjectConflictResolutionTransferArtifact,
   ComparisonProjectConflictResolutionTransferRowV2,
 } from './comparisonProjectConflictResolutionFileTransfer.ts'
-import {getImportedReviewerDisplayName} from './comparisonProjectConflictResolutionProvenance.ts'
+import {
+  getImportedComparisonProjectConflictResolutionComment,
+  getImportedReviewerDisplayName,
+} from './comparisonProjectConflictResolutionProvenance.ts'
 
 export type ComparisonProjectConflictResolutionImportSource = {
   id: string
@@ -58,6 +61,7 @@ export type ComparisonProjectConflictResolutionImportSourceRow = {
   resolutionValue: string
   sourceArticleId: string
   sourceArticleTitle?: string | null
+  sourceComment?: string | null
   sourceComparisonProjectId: string
   sourceComparisonProjectName: string
   sourceExternalArticleId?: string | null
@@ -584,7 +588,8 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
         COALESCE(cr.answer_value, cr.prompt_id, '') AS resolutionValue,
         cr.reviewer_user_id AS sourceReviewerUserId,
         COALESCE(NULLIF(TRIM(cr.reviewer_display_name), ''), NULLIF(TRIM(source_reviewer.name), '')) AS sourceReviewerDisplayName,
-        cr.judgment_context_id AS sourceJudgmentContextId
+        cr.judgment_context_id AS sourceJudgmentContextId,
+        cr.comment AS sourceComment
       FROM ${params.comparisonProjectConflictResolutionTable} cr
       LEFT JOIN app.user_config source_reviewer ON source_reviewer.id = cr.reviewer_user_id
       ${params.sourceComparisonProjectIds.length > 0 ? `WHERE cr.comparison_project_id IN (${getInClause(params.sourceComparisonProjectIds)})` : 'WHERE FALSE'}
@@ -617,6 +622,7 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       source_resolution.sourceReviewerUserId AS sourceReviewerUserId,
       source_resolution.sourceReviewerDisplayName AS sourceReviewerDisplayName,
       source_resolution.sourceJudgmentContextId AS sourceJudgmentContextId,
+      source_resolution.sourceComment AS sourceComment,
       'summary' AS resolutionMode,
       doi_identifier.doiKeys AS doiKeys,
       strong_identifier.identifierKeys AS identifierKeys,
@@ -1065,6 +1071,9 @@ export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferR
       resolutionValue: row.resolution.value,
       sourceArticleId,
       sourceArticleTitle: row.title,
+      ...(row.comment === undefined
+        ? {}
+        : {sourceComment: getImportedComparisonProjectConflictResolutionComment(row.comment)}),
       sourceComparisonProjectId: params.sourceComparisonProjectId,
       sourceComparisonProjectName: params.sourceComparisonProjectName,
       sourceExternalArticleId: row.externalArticleId,

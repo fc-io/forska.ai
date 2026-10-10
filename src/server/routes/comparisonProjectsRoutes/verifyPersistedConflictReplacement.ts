@@ -25,14 +25,22 @@ export const verifyPersistedConflictReplacement = (input: {
     resolve(import.meta.dir, '../../../db/duckdbMigrations/0261_comparisonConflictResolutionProvenance.sql'),
     'utf8',
   )
+  const commentMigration = readFileSync(
+    resolve(import.meta.dir, '../../../db/duckdbMigrations/0262_comparisonConflictResolutionComment.sql'),
+    'utf8',
+  )
   const tableSql = migration.match(/CREATE TABLE app\.comparison_project_conflict_resolution \([\s\S]*?\n\);/)?.[0]
-  const provenanceColumnSql = (
-    provenanceMigration.match(
-      /ALTER TABLE app\.comparison_project_conflict_resolution ADD COLUMN IF NOT EXISTS [^;]+;/g,
-    ) ?? []
-  ).join('\n')
+  const getAddColumnSql = (migrationSql: string) => {
+    return (
+      migrationSql.match(/ALTER TABLE app\.comparison_project_conflict_resolution ADD COLUMN IF NOT EXISTS [^;]+;/g)
+      ?? []
+    ).join('\n')
+  }
+  const provenanceColumnSql = getAddColumnSql(provenanceMigration)
+  const commentColumnSql = getAddColumnSql(commentMigration)
   expect(tableSql).toBeDefined()
   expect(provenanceColumnSql.match(/ADD COLUMN/g)).toHaveLength(5)
+  expect(commentColumnSql.match(/ADD COLUMN/g)).toHaveLength(2)
   const initializerPath = resolve(import.meta.dir, '../../utils/createDuckdbInstance.ts')
   const run = (script: string) => {
     const result = globalThis.Bun.spawnSync(
@@ -52,7 +60,7 @@ export const verifyPersistedConflictReplacement = (input: {
     expect(result.exitCode, result.stderr.toString() || result.stdout.toString()).toBe(0)
     expect(result.stderr.toString()).not.toContain('recover')
     return JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
-      deleted: {articleId: string}[]
+      deleted: {articleId: string; comment?: string | null; commentUpdatedAt?: string | null}[]
       duplicateError: string
       rows: {article_id: string; answer_value: string | null; prompt_id: string | null}[]
       constraints: {constraint_type: string}[]
@@ -67,6 +75,7 @@ export const verifyPersistedConflictReplacement = (input: {
       await connection.run("INSERT INTO app.comparison_project_conflict_resolution(id, comparison_project_id, article_id, answer_value) VALUES ('old-one','comparison-project-1','article-1','maybe'),('other-two','comparison-project-1','article-2','no'); CHECKPOINT")
       await connection.run(${JSON.stringify(noIndexMigration)})
       await connection.run(${JSON.stringify(provenanceColumnSql)})
+      await connection.run(${JSON.stringify(commentColumnSql)})
       await connection.run('CHECKPOINT')
       console.log('{}')
     `)
@@ -81,7 +90,7 @@ export const verifyPersistedConflictReplacement = (input: {
       await connection.run('CHECKPOINT')
       console.log(JSON.stringify({deleted}))
     `)
-    expect(mutation.deleted).toEqual([{articleId: 'article-1'}])
+    expect(mutation.deleted).toEqual([{articleId: 'article-1', comment: null, commentUpdatedAt: null}])
     const result = run(`
       const rows = (await connection.runAndReadAll('SELECT article_id, answer_value, prompt_id FROM app.comparison_project_conflict_resolution ORDER BY article_id')).getRowObjectsJson()
       const constraints = (await connection.runAndReadAll("SELECT constraint_type FROM duckdb_constraints() WHERE schema_name='app' AND table_name='comparison_project_conflict_resolution' AND constraint_type IN ('PRIMARY KEY','UNIQUE') ORDER BY constraint_type")).getRowObjectsJson()

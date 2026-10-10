@@ -155,6 +155,7 @@ type MockDatabaseState = {
     promptId: string | null
     pubmedId?: string | null
     reviewerDisplayName?: string | null
+    comment?: string | null
     reviewerUserId?: string | null
     servingGeneration?: number | null
     setAt?: Date | null
@@ -712,9 +713,9 @@ const getMockConflictResolutionInsertProvenance = (values: string | undefined) =
 const getMockConflictResolutionInsertRows = (statement: string) => {
   return Array.from(
     statement.matchAll(
-      /\(\s*'(?:''|[^'])*'\s*,\s*('(?:''|[^'])*')\s*,\s*('(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*(?:,\s*(NULL|'(?:''|[^'])*'))?((?:\s*,\s*(?:NULL|'(?:''|[^'])*'|-?\d+)){5})?\s*\)/g,
+      /\(\s*'(?:''|[^'])*'\s*,\s*('(?:''|[^'])*')\s*,\s*('(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*(?:,\s*(NULL|'(?:''|[^'])*'))?((?:\s*,\s*(?:NULL|'(?:''|[^'])*'|-?\d+)){5})?(?:\s*,\s*(NULL|'(?:''|[^'])*')\s*,\s*(NULL|TIMESTAMPTZ '[^']*'))?\s*\)/g,
     ),
-  ).map(([, comparisonProjectId, articleId, promptId, answerValue, reviewerUserId, provenanceValues]) => {
+  ).map(([, comparisonProjectId, articleId, promptId, answerValue, reviewerUserId, provenanceValues, comment]) => {
     return {
       answerValue: getSqlNullableStringLiteralValue(answerValue),
       articleId: getSqlNullableStringLiteralValue(articleId) ?? '',
@@ -722,6 +723,7 @@ const getMockConflictResolutionInsertRows = (statement: string) => {
       promptId: getSqlNullableStringLiteralValue(promptId),
       reviewerUserId: getSqlNullableStringLiteralValue(reviewerUserId),
       ...getMockConflictResolutionInsertProvenance(provenanceValues),
+      ...(comment && comment !== 'NULL' ? {comment: getSqlNullableStringLiteralValue(comment)} : {}),
     }
   })
 }
@@ -2108,6 +2110,7 @@ const queryJson = async (
           resolutionValue: row.answerValue ?? row.promptId ?? '',
           sourceArticleId,
           sourceArticleTitle,
+          sourceComment: row.comment ?? null,
           sourceComparisonProjectId,
           sourceComparisonProjectName: sourceComparisonProject?.name ?? 'Import source',
           sourceExternalArticleId,
@@ -3496,6 +3499,7 @@ test('comparison project create-from-project imports selected conflict resolutio
       {
         answerValue: 'yes',
         articleId: 'source-article-1',
+        comment: 'Source reviewer note',
         comparisonProjectId: 'source-comparison-project-1',
         doi: '10.1000/import-match',
         externalArticleId: 'source-ext-1',
@@ -3570,9 +3574,11 @@ test('comparison project create-from-project imports selected conflict resolutio
   expect(insertedResolution).toMatchObject({
     answerValue: 'yes',
     articleId: 'article-1',
+    comment: 'Source reviewer note',
     comparisonProjectId: 'comparison-project-created',
     promptId: null,
   })
+  expect(state.lastConflictResolutionInsertStatement ?? '').toMatch(/'Source reviewer note',\s*TIMESTAMPTZ '/)
   expect(state.createdComparisonProjectIds).toEqual(['comparison-project-created'])
   expect(state.staleServingIds).toEqual(['comparison-project-created'])
   expect(state.rootQueryStatementsDuringTransaction).toEqual([])
@@ -6943,6 +6949,8 @@ test('comparison judgments hydrate conflict resolutions only for returned servin
     {
       conflictResolution: {
         articleId: 'article-1',
+        comment: null,
+        commentUpdatedAt: null,
         label: 'Prompt 2',
         provenance: {contextId: 'context-old', generation: 3, origin: 'ui', setAt: '2026-10-09T08:00:00.000Z'},
         provenanceMatchesCurrent: false,
@@ -7697,7 +7705,9 @@ test('comparison project export streams ordered csv rows with article context an
       modelIds: ['model-1', 'model-2'],
       summarySourceProjectId: null,
     },
-    conflictResolutionRows: [{answerValue: null, articleId: 'article-1', promptId: 'prompt-2'}],
+    conflictResolutionRows: [
+      {answerValue: null, articleId: 'article-1', comment: 'Checked full text, "twice"', promptId: 'prompt-2'},
+    ],
     extraLlmRows: [
       {
         ...getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-1', modelId: 'model-1', promptId: 'prompt-1'}),
@@ -7728,6 +7738,7 @@ test('comparison project export streams ordered csv rows with article context an
       'Abstract/Summary',
       'Date added',
       'Conflict Handling',
+      'Resolution comment',
       'Prompt 1 - LLM - Model 1 - Article Title and Abstract',
       'Prompt 1 - LLM - Model 2 - Article Title and Abstract',
       'Prompt 1 - Human answer',
@@ -7740,6 +7751,7 @@ test('comparison project export streams ordered csv rows with article context an
       'Article 1 summary',
       '2026-03-30T00:00:00.000Z',
       'Prompt 2',
+      '"Checked full text, ""twice"""',
       '是; 也许',
       'yes',
       'yes',
