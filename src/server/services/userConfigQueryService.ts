@@ -44,8 +44,18 @@ const userConfigSelectClause = `
   updated_at AS updatedAt
 `
 
-const localUserConfigWhereClause = "id NOT LIKE 'pdf-import:%'"
-const localUserConfigAliasWhereClause = "uc.id NOT LIKE 'pdf-import:%'"
+const importedReviewerUserConfigIdPrefixes = ['pdf-import:', 'transfer:'] as const
+
+export const getLocalUserConfigWhereClauseSql = (idExpression = 'id') => {
+  return importedReviewerUserConfigIdPrefixes
+    .map((prefix) => {
+      return `${idExpression} NOT LIKE '${prefix}%'`
+    })
+    .join(' AND ')
+}
+
+const localUserConfigWhereClause = getLocalUserConfigWhereClauseSql()
+const localUserConfigAliasWhereClause = getLocalUserConfigWhereClauseSql('uc.id')
 
 const getNullableTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()

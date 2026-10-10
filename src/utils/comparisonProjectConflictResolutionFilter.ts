@@ -1,6 +1,25 @@
-import {getComparisonProjectFilterSelectionValues} from './comparisonProjectFilterSelection.ts'
+import {
+  getComparisonProjectCanonicalFilterSelection,
+  getComparisonProjectFilterSelectionValues,
+} from './comparisonProjectFilterSelection.ts'
 
 export type ComparisonProjectConflictResolutionFilter = string
+
+export const comparisonProjectConflictResolutionProvenanceFilters = ['current', 'outdated', 'unknown'] as const
+
+export type ComparisonProjectConflictResolutionProvenanceFilter =
+  (typeof comparisonProjectConflictResolutionProvenanceFilters)[number]
+
+export type ComparisonProjectConflictResolutionProvenanceFilterOption = {
+  label: string
+  value: ComparisonProjectConflictResolutionProvenanceFilter
+}
+
+const comparisonProjectConflictResolutionProvenanceFilterLabels = {
+  current: 'Current prompts',
+  outdated: 'Older prompts',
+  unknown: 'Prompts unknown',
+} satisfies Record<ComparisonProjectConflictResolutionProvenanceFilter, string>
 
 export type ComparisonProjectConflictResolutionFilterOption = {
   label: string
@@ -73,3 +92,16 @@ export const getComparisonProjectSummaryConflictResolutionOptions = (
       .values(),
   )
 }
+
+export const getNormalizedComparisonProjectConflictResolutionProvenanceFilters = (
+  value: unknown,
+): ComparisonProjectConflictResolutionProvenanceFilter[] => {
+  return getComparisonProjectCanonicalFilterSelection(value, comparisonProjectConflictResolutionProvenanceFilters)
+}
+
+export const getComparisonProjectConflictResolutionProvenanceFilterOptions =
+  (): ComparisonProjectConflictResolutionProvenanceFilterOption[] => {
+    return comparisonProjectConflictResolutionProvenanceFilters.map((value) => {
+      return {label: comparisonProjectConflictResolutionProvenanceFilterLabels[value], value}
+    })
+  }

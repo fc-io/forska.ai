@@ -21,8 +21,18 @@ export const verifyPersistedConflictReplacement = (input: {
     resolve(import.meta.dir, '../../../db/duckdbMigrations/0230_rebuildComparisonConflictResolutionWithoutIndexes.sql'),
     'utf8',
   )
+  const provenanceMigration = readFileSync(
+    resolve(import.meta.dir, '../../../db/duckdbMigrations/0261_comparisonConflictResolutionProvenance.sql'),
+    'utf8',
+  )
   const tableSql = migration.match(/CREATE TABLE app\.comparison_project_conflict_resolution \([\s\S]*?\n\);/)?.[0]
+  const provenanceColumnSql = (
+    provenanceMigration.match(
+      /ALTER TABLE app\.comparison_project_conflict_resolution ADD COLUMN IF NOT EXISTS [^;]+;/g,
+    ) ?? []
+  ).join('\n')
   expect(tableSql).toBeDefined()
+  expect(provenanceColumnSql.match(/ADD COLUMN/g)).toHaveLength(5)
   const initializerPath = resolve(import.meta.dir, '../../utils/createDuckdbInstance.ts')
   const run = (script: string) => {
     const result = globalThis.Bun.spawnSync(
@@ -56,6 +66,7 @@ export const verifyPersistedConflictReplacement = (input: {
       await connection.run("ALTER TABLE app.comparison_project_conflict_resolution ADD COLUMN reviewer_user_id VARCHAR; CREATE INDEX idx_app_comparison_project_conflict_resolution_lookup ON app.comparison_project_conflict_resolution(comparison_project_id, article_id)")
       await connection.run("INSERT INTO app.comparison_project_conflict_resolution(id, comparison_project_id, article_id, answer_value) VALUES ('old-one','comparison-project-1','article-1','maybe'),('other-two','comparison-project-1','article-2','no'); CHECKPOINT")
       await connection.run(${JSON.stringify(noIndexMigration)})
+      await connection.run(${JSON.stringify(provenanceColumnSql)})
       await connection.run('CHECKPOINT')
       console.log('{}')
     `)

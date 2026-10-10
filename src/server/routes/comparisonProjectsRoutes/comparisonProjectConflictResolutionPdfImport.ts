@@ -1,6 +1,6 @@
 import type {HumanJudgmentMode} from '../../../db/schemaTypes.ts'
 import {
-  type ComparisonProjectConflictResolutionTransferArtifactV1,
+  type ComparisonProjectConflictResolutionTransferArtifact,
   type ComparisonProjectConflictResolutionTransferIdentifierV1,
   type ComparisonProjectConflictResolutionTransferRowV1,
   createComparisonProjectConflictResolutionTransferArtifact,
@@ -13,6 +13,7 @@ export type ParsedPdfConflictResolutionImport = {
     exportedAt: string | null
     formatVersion: number | null
     humanJudgmentMode: HumanJudgmentMode | null
+    judgmentContextId?: string | null
   }
   reviewer: {displayName: string | null; instanceId: null}
   rows: Array<{
@@ -331,6 +332,14 @@ const getValidIdentifiers = (metadata: Record<string, unknown> | null) => {
   })
 }
 
+const judgmentContextIdPattern = /^[0-9a-f]{64}$/
+
+const getJudgmentContextIdMetadata = (metadata: Record<string, unknown> | null) => {
+  const judgmentContextId = getMetadataString(metadata, 'judgmentContextId')
+
+  return judgmentContextId && judgmentContextIdPattern.test(judgmentContextId) ? judgmentContextId : null
+}
+
 export const parsePdfConflictResolutionImport = (
   input: Buffer | Uint8Array | ArrayBuffer | string,
 ): ParsedPdfConflictResolutionImport => {
@@ -453,6 +462,7 @@ export const parsePdfConflictResolutionImport = (
       exportedAt: getMetadataString(projectMetadata, 'exportedAt'),
       formatVersion: getMetadataNumber(formatMetadata, 'version'),
       humanJudgmentMode: projectMetadata ? getResolutionMode(projectMetadata) : null,
+      judgmentContextId: getJudgmentContextIdMetadata(projectMetadata),
     },
     reviewer: {displayName: getTrimmedValue(fieldMap.get('forska.reviewer.displayName')), instanceId: null},
     rows,
@@ -469,7 +479,7 @@ export const getComparisonProjectConflictResolutionTransferArtifactFromPdfImport
         sourceComparisonProjectDescription?: string | null
         targetComparisonProjectId?: string
       },
-): ComparisonProjectConflictResolutionTransferArtifactV1 => {
+): ComparisonProjectConflictResolutionTransferArtifact => {
   const parsedImport = 'parsedImport' in params ? params.parsedImport : params
   const targetComparisonProjectId = 'parsedImport' in params ? params.targetComparisonProjectId : undefined
   const sourceComparisonProjectId = parsedImport.source.comparisonProjectId ?? 'pdf-conflict-resolution-import'

@@ -79,8 +79,77 @@ test('rejects invalid conflict resolution transfer artifacts', () => {
     })
   }).toThrow('Unexpected conflict resolution transfer artifact root fields: projectTransferSessionId')
   expect(() => {
-    validateComparisonProjectConflictResolutionTransferArtifact({...getArtifact(), version: 2})
-  }).toThrow('version must be 1')
+    validateComparisonProjectConflictResolutionTransferArtifact({...getArtifact(), version: 3})
+  }).toThrow('version must be 1 or 2')
+  expect(() => {
+    validateComparisonProjectConflictResolutionTransferArtifact({
+      ...getArtifact(),
+      rows: [{...getTransferRow(), provenance: {reviewerDisplayName: 'Dr Source'}}],
+    })
+  }).toThrow('provenance')
+})
+
+test('keeps version 1 artifacts importable next to version 2', () => {
+  const versionOneArtifact = {...getArtifact(), version: 1 as const}
+
+  expect(comparisonProjectConflictResolutionTransferVersion).toBe(2)
+  expect(validateComparisonProjectConflictResolutionTransferArtifact(versionOneArtifact)).toEqual(versionOneArtifact)
+})
+
+test('version 2 artifacts carry per-row provenance and the judgment contexts once at the root', () => {
+  const contextId = '2168ca3cc7e7cb3c3fa173f7aeeff04314ed31e83a9b2b201695446a6461922a'
+  const rows = getComparisonProjectConflictResolutionTransferRows([
+    {
+      sourceResolutionId: 'source-resolution-1',
+      sourceArticleRowId: 'source-article-row-1',
+      externalArticleId: 'external-1',
+      title: 'Article title',
+      resolutionMode: 'summary',
+      resolutionValue: 'yes',
+      resolutionLabel: 'Yes',
+      provenanceContextId: contextId,
+      provenanceOrigin: 'ui',
+      provenanceReviewerDisplayName: ' Dr Source ',
+      provenanceSetAt: new Date('2026-10-09T08:00:00.000Z'),
+    },
+    {
+      sourceResolutionId: 'source-resolution-2',
+      sourceArticleRowId: 'source-article-row-2',
+      externalArticleId: 'external-2',
+      title: 'Legacy row',
+      resolutionMode: 'summary',
+      resolutionValue: 'no',
+      resolutionLabel: 'No',
+      provenanceContextId: null,
+      provenanceOrigin: null,
+      provenanceReviewerDisplayName: null,
+      provenanceSetAt: '2026-09-01T08:00:00.000Z',
+    },
+  ])
+  const artifact = createComparisonProjectConflictResolutionTransferArtifact({
+    exportedAt: new Date('2026-10-10T10:00:00.000Z'),
+    judgmentContexts: [{context: {v: 1}, id: contextId}],
+    rows,
+    source: {
+      comparisonProjectId: 'comparison-project-1',
+      comparisonProjectName: 'Source comparison',
+      comparisonProjectDescription: null,
+    },
+  })
+
+  expect(artifact.version).toBe(2)
+  expect(artifact.judgmentContexts).toEqual([{context: {v: 1}, id: contextId}])
+  expect(
+    artifact.rows.map((row) => {
+      return row.provenance
+    }),
+  ).toEqual([
+    {contextId, origin: 'ui', reviewerDisplayName: 'Dr Source', setAt: '2026-10-09T08:00:00.000Z'},
+    {contextId: null, origin: null, reviewerDisplayName: null, setAt: '2026-09-01T08:00:00.000Z'},
+  ])
+  expect(validateComparisonProjectConflictResolutionTransferArtifact(JSON.parse(JSON.stringify(artifact)))).toEqual(
+    artifact,
+  )
 })
 
 test('shapes joined source rows with all article identifiers', () => {

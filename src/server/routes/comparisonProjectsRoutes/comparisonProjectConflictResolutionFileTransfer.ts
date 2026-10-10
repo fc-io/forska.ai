@@ -3,7 +3,8 @@ import {type as arktype} from 'arktype'
 import type {HumanJudgmentMode} from '../../../db/schemaTypes.ts'
 
 export const comparisonProjectConflictResolutionTransferFormat = 'forska.comparisonProject.conflictResolution.transfer'
-export const comparisonProjectConflictResolutionTransferVersion = 1
+export const comparisonProjectConflictResolutionTransferVersion = 2
+export const comparisonProjectConflictResolutionTransferVersions = [1, 2] as const
 
 export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' | 'doi' | 'pmid'
 export type ComparisonProjectConflictResolutionTransferMatchKind =
@@ -32,6 +33,10 @@ export type ComparisonProjectConflictResolutionTransferSourceRow = {
   resolutionLabel: string
   resolutionMode: HumanJudgmentMode
   resolutionValue: string
+  provenanceContextId?: string | null
+  provenanceOrigin?: string | null
+  provenanceReviewerDisplayName?: string | null
+  provenanceSetAt?: Date | string | null
 }
 
 export type ComparisonProjectConflictResolutionTransferIdentifierV1 = {
@@ -63,6 +68,22 @@ export type ComparisonProjectConflictResolutionTransferRowV1 = {
   resolution: ComparisonProjectConflictResolutionTransferResolutionV1
 }
 
+export type ComparisonProjectConflictResolutionTransferProvenanceV2 = {
+  reviewerDisplayName: string | null
+  contextId: string | null
+  setAt: string | null
+  origin: string | null
+}
+
+export type ComparisonProjectConflictResolutionTransferRowV2 = ComparisonProjectConflictResolutionTransferRowV1 & {
+  provenance?: ComparisonProjectConflictResolutionTransferProvenanceV2 | null
+}
+
+export type ComparisonProjectConflictResolutionTransferJudgmentContextV2 = {
+  id: string
+  context: Record<string, unknown>
+}
+
 export type ComparisonProjectConflictResolutionTransferSourceV1 = {
   comparisonProjectId: string
   comparisonProjectName: string
@@ -76,7 +97,7 @@ export type ComparisonProjectConflictResolutionTransferMatchKey = {
 
 const doiPrefixPattern = /^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i
 const idTitleKeySeparator = '\u001F'
-const transferArtifactRootKeys = ['exportedAt', 'format', 'rows', 'source', 'version']
+const transferArtifactRootKeys = ['exportedAt', 'format', 'judgmentContexts', 'rows', 'source', 'version']
 const transferIdentifierKinds = new Set<ComparisonProjectConflictResolutionTransferIdentifierKind>([
   'arxiv',
   'doi',
@@ -93,6 +114,13 @@ const TransferIdentifier = arktype({
   isPrimary: 'boolean',
 })
 const TransferResolution = arktype({mode: TransferResolutionMode, value: 'string', label: 'string'})
+const TransferProvenance = arktype({
+  reviewerDisplayName: 'string | null',
+  contextId: 'string | null',
+  setAt: 'string | null',
+  origin: 'string | null',
+})
+const TransferJudgmentContext = arktype({id: 'string', context: 'Record<string, unknown>'})
 const TransferRow = arktype({
   sourceResolutionId: 'string | null',
   sourceArticleRowId: 'string | null',
@@ -106,6 +134,7 @@ const TransferRow = arktype({
   'url?': 'string | null',
   identifiers: TransferIdentifier.array(),
   resolution: TransferResolution,
+  'provenance?': TransferProvenance.or('null'),
 })
 const TransferSource = arktype({
   comparisonProjectId: 'string',
@@ -113,16 +142,22 @@ const TransferSource = arktype({
   comparisonProjectDescription: 'string | null',
 })
 
-export const comparisonProjectConflictResolutionTransferArtifactV1 = arktype({
+export const comparisonProjectConflictResolutionTransferArtifactSchema = arktype({
   format: arktype(`"${comparisonProjectConflictResolutionTransferFormat}"`),
-  version: '1',
+  version: '1 | 2',
   exportedAt: 'string',
   source: TransferSource,
   rows: TransferRow.array(),
+  'judgmentContexts?': TransferJudgmentContext.array(),
 })
 
-export type ComparisonProjectConflictResolutionTransferArtifactV1 =
-  typeof comparisonProjectConflictResolutionTransferArtifactV1.infer
+export const comparisonProjectConflictResolutionTransferArtifactV1 =
+  comparisonProjectConflictResolutionTransferArtifactSchema
+
+export type ComparisonProjectConflictResolutionTransferArtifact =
+  typeof comparisonProjectConflictResolutionTransferArtifactSchema.infer
+
+export type ComparisonProjectConflictResolutionTransferArtifactV1 = ComparisonProjectConflictResolutionTransferArtifact
 
 const getTrimmedText = (value: string | null | undefined) => {
   const trimmedValue = value?.trim() ?? ''
@@ -260,9 +295,32 @@ const getUniqueComparisonProjectConflictResolutionTransferIdentifiers = (
   })
 }
 
+const getComparisonProjectConflictResolutionTransferSetAt = (value: Date | string | null | undefined) => {
+  const date = value === null || value === undefined ? null : new Date(value)
+
+  return date && !Number.isNaN(date.getTime()) ? date.toISOString() : null
+}
+
+const getComparisonProjectConflictResolutionTransferProvenance = (
+  row: ComparisonProjectConflictResolutionTransferSourceRow,
+): ComparisonProjectConflictResolutionTransferProvenanceV2 => {
+  return {
+    reviewerDisplayName: getTrimmedText(row.provenanceReviewerDisplayName),
+    contextId: getTrimmedText(row.provenanceContextId),
+    setAt: getComparisonProjectConflictResolutionTransferSetAt(row.provenanceSetAt),
+    origin: getTrimmedText(row.provenanceOrigin),
+  }
+}
+
+const hasComparisonProjectConflictResolutionTransferProvenance = (
+  row: ComparisonProjectConflictResolutionTransferSourceRow,
+) => {
+  return Object.prototype.hasOwnProperty.call(row, 'provenanceSetAt')
+}
+
 const getComparisonProjectConflictResolutionTransferRowBase = (
   row: ComparisonProjectConflictResolutionTransferSourceRow,
-): ComparisonProjectConflictResolutionTransferRowV1 => {
+): ComparisonProjectConflictResolutionTransferRowV2 => {
   return {
     sourceResolutionId: row.sourceResolutionId,
     sourceArticleRowId: row.sourceArticleRowId,
@@ -271,11 +329,14 @@ const getComparisonProjectConflictResolutionTransferRowBase = (
     ...getComparisonProjectConflictResolutionTransferIdentityFields(row),
     identifiers: [],
     resolution: {mode: row.resolutionMode, value: row.resolutionValue.trim(), label: row.resolutionLabel.trim()},
+    ...(hasComparisonProjectConflictResolutionTransferProvenance(row)
+      ? {provenance: getComparisonProjectConflictResolutionTransferProvenance(row)}
+      : {}),
   }
 }
 
 const appendComparisonProjectConflictResolutionTransferIdentifier = (
-  currentRow: ComparisonProjectConflictResolutionTransferRowV1,
+  currentRow: ComparisonProjectConflictResolutionTransferRowV2,
   row: ComparisonProjectConflictResolutionTransferSourceRow,
 ) => {
   const identifier = getComparisonProjectConflictResolutionTransferIdentifier(row)
@@ -293,16 +354,16 @@ const appendComparisonProjectConflictResolutionTransferIdentifier = (
 
 export const getComparisonProjectConflictResolutionTransferRows = (
   rows: readonly ComparisonProjectConflictResolutionTransferSourceRow[],
-): ComparisonProjectConflictResolutionTransferRowV1[] => {
+): ComparisonProjectConflictResolutionTransferRowV2[] => {
   return Array.from(
     rows
-      .reduce<Map<string, ComparisonProjectConflictResolutionTransferRowV1>>((rowMap, row) => {
+      .reduce<Map<string, ComparisonProjectConflictResolutionTransferRowV2>>((rowMap, row) => {
         const currentRow =
           rowMap.get(row.sourceResolutionId) ?? getComparisonProjectConflictResolutionTransferRowBase(row)
 
         rowMap.set(row.sourceResolutionId, appendComparisonProjectConflictResolutionTransferIdentifier(currentRow, row))
         return rowMap
-      }, new Map<string, ComparisonProjectConflictResolutionTransferRowV1>())
+      }, new Map<string, ComparisonProjectConflictResolutionTransferRowV2>())
       .values(),
   )
 }
@@ -356,22 +417,26 @@ const assertNoUnexpectedRootKeys = (artifact: unknown) => {
 
 export const validateComparisonProjectConflictResolutionTransferArtifact = (
   artifact: unknown,
-): ComparisonProjectConflictResolutionTransferArtifactV1 => {
+): ComparisonProjectConflictResolutionTransferArtifact => {
   assertNoUnexpectedRootKeys(artifact)
 
-  return comparisonProjectConflictResolutionTransferArtifactV1.assert(artifact)
+  return comparisonProjectConflictResolutionTransferArtifactSchema.assert(artifact)
 }
 
 export const createComparisonProjectConflictResolutionTransferArtifact = (params: {
   exportedAt?: Date | string
-  rows: readonly ComparisonProjectConflictResolutionTransferRowV1[]
+  judgmentContexts?: readonly ComparisonProjectConflictResolutionTransferJudgmentContextV2[]
+  rows: readonly ComparisonProjectConflictResolutionTransferRowV2[]
   source: ComparisonProjectConflictResolutionTransferSourceV1
-}): ComparisonProjectConflictResolutionTransferArtifactV1 => {
+}): ComparisonProjectConflictResolutionTransferArtifact => {
   return validateComparisonProjectConflictResolutionTransferArtifact({
     format: comparisonProjectConflictResolutionTransferFormat,
     version: comparisonProjectConflictResolutionTransferVersion,
     exportedAt: getExportedAtDate(params.exportedAt ?? new Date()),
     source: params.source,
     rows: [...params.rows],
+    ...(params.judgmentContexts && params.judgmentContexts.length > 0
+      ? {judgmentContexts: [...params.judgmentContexts]}
+      : {}),
   })
 }
