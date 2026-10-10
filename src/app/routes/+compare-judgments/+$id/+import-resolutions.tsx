@@ -33,8 +33,8 @@ import {
   getConflictResolutionImportRefreshQueryKeys,
 } from './compareProjectConflictResolutionImportReturn.ts'
 
-const getComparisonProjectId = (params: Record<string, string>) => {
-  return 'id' in params ? params.id : ''
+const getComparisonProjectId = (params: Record<string, string> | undefined) => {
+  return params !== undefined && 'id' in params ? params.id : ''
 }
 
 const getDroppedJsonFile = (dataTransfer: DataTransfer | null) => {
@@ -100,7 +100,7 @@ export const CompareProjectImportResolutionsPage = () => {
   const params = Route.useParams()
   const queryClient = useQueryClient()
   const comparisonProjectId = () => {
-    return getComparisonProjectId(params() as Record<string, string>)
+    return getComparisonProjectId(params() as Record<string, string> | undefined)
   }
   const [selectedFileName, setSelectedFileName] = createSignal<string | null>(null)
   const [parsedArtifact, setParsedArtifact] = createSignal<ComparisonProjectConflictResolutionTransferArtifact | null>(

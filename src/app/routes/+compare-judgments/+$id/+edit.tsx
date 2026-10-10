@@ -136,7 +136,7 @@ const EditComparisonProjectPage = () => {
   const comparisonProjectId = () => {
     const routeParams = params()
 
-    return 'id' in routeParams ? routeParams.id : ''
+    return routeParams !== undefined && 'id' in routeParams ? routeParams.id : ''
   }
   const comparisonProjectQuery = useQuery(() => {
     return {

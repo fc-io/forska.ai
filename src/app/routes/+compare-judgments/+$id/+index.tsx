@@ -230,7 +230,7 @@ const CompareProjectJudgmentsPage = () => {
   const comparisonProjectId = () => {
     const routeParams = params()
 
-    return 'id' in routeParams ? routeParams.id : ''
+    return routeParams !== undefined && 'id' in routeParams ? routeParams.id : ''
   }
   const [pageLimit, setPageLimit] = createSignal(initialUrlState.pageLimit)
   const [rowFilters, setRowFilters] = createSignal<ComparisonProjectRowFilter[]>(initialUrlState.rowFilters)
