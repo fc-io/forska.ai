@@ -2,6 +2,8 @@ import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+import {SimplePdfDocument} from '../utils/simplePdf.ts'
+import {pdfConflictResolutionNotSetValue} from './comparisonProjectsRoutes/comparisonProjectConflictResolutionPdfImport.ts'
 
 setDefaultTimeout(180_000)
 
@@ -73,8 +75,12 @@ const postJson = (path: string, body: unknown) => {
   )
 }
 
-const postComment = async (articleId: string, comment: string | null) => {
-  const response = await postJson(`/api/comparison-projects/${sourceComparisonProjectId}/conflict-resolution/comment`, {
+const postComment = async (
+  articleId: string,
+  comment: string | null,
+  comparisonProjectId = sourceComparisonProjectId,
+) => {
+  const response = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution/comment`, {
     articleId,
     comment,
   })
@@ -87,8 +93,8 @@ const postComment = async (articleId: string, comment: string | null) => {
   }
 }
 
-const postResolution = async (articleId: string, value: string) => {
-  const response = await postJson(`/api/comparison-projects/${sourceComparisonProjectId}/conflict-resolution`, {
+const postResolution = async (articleId: string, value: string, comparisonProjectId = sourceComparisonProjectId) => {
+  const response = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution`, {
     articleId,
     value,
   })
@@ -382,4 +388,178 @@ test('export version 2 carries the comment and the file import stores it', async
     ['comment-article-1', null, null],
     ['comment-article-2', null, null],
   ])
+})
+
+test('comments keep quotes, SQL comment markers, tabs and newlines, and reject other control characters', async () => {
+  const comment = "Reviewer's note -- see the 'protocol'; ok'--\n\tsecond line"
+  const saved = await postComment('comment-article-1', comment)
+  const [row] = await getResolutionRows(sourceComparisonProjectId)
+
+  expect(saved.status).toBe(200)
+  expect(saved.body.data?.comment).toBe(comment)
+  expect(row?.comment).toBe(comment)
+
+  const withNull = await postComment('comment-article-1', 'before\u0000after')
+  const withBell = await postComment('comment-article-1', 'ring\u0007')
+  const [unchangedRow] = await getResolutionRows(sourceComparisonProjectId)
+
+  expect(withNull.status).toBe(400)
+  expect(withNull.body.error).toContain('control characters')
+  expect(withBell.status).toBe(400)
+  expect(unchangedRow?.comment).toBe(comment)
+})
+
+const getPdfMetadataValue = (value: unknown) => {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url')
+}
+
+const getReviewPdf = (resolutionValue: string) => {
+  const pdf = new SimplePdfDocument()
+
+  pdf.addTextField({
+    fieldName: 'forska.import.format',
+    hidden: true,
+    value: getPdfMetadataValue({format: 'forska.comparisonProject.pdfConflictResolutionImport', version: 1}),
+  })
+  pdf.addTextField({
+    fieldName: 'forska.import.comparisonProject',
+    hidden: true,
+    value: getPdfMetadataValue({
+      allowConflictResolution: true,
+      comparisonProjectId: targetComparisonProjectId,
+      comparisonProjectName: 'Comment B',
+      humanJudgmentMode: 'summary',
+    }),
+  })
+  pdf.addTextField({fieldName: 'forska.reviewer.displayName', value: 'Dr PDF'})
+  pdf.addTextField({
+    fieldName: `comparison.${targetComparisonProjectId}.article.comment-article-1.metadata`,
+    hidden: true,
+    value: getPdfMetadataValue({
+      articleExternalId: 'external-1',
+      articleTitle: 'Comment article one',
+      canonicalArticleId: 'comment-article-1',
+      comparisonProjectId: targetComparisonProjectId,
+      hasConflict: true,
+      identifiers: [],
+    }),
+  })
+  pdf.addRadioRow(`comparison.${targetComparisonProjectId}.article.comment-article-1.resolution`, resolutionValue, [
+    {label: 'Undecided', value: pdfConflictResolutionNotSetValue},
+    {label: 'Yes', value: 'yes'},
+    {label: 'No', value: 'no'},
+    {label: 'Maybe', value: 'maybe'},
+  ])
+
+  return pdf.toBuffer()
+}
+
+const commitPdfImport = (resolutionValue: string, pdfUndecidedMode: 'clear' | 'ignore') => {
+  const formData = new FormData()
+
+  formData.append('file', new File([getReviewPdf(resolutionValue)], 'review.pdf', {type: 'application/pdf'}))
+  formData.append('importMode', 'conflicting-only')
+  formData.append('overwriteMode', 'overwrite-different')
+  formData.append('pdfUndecidedMode', pdfUndecidedMode)
+
+  return getApp().handle(
+    new Request(
+      `http://localhost/api/comparison-projects/${targetComparisonProjectId}/conflict-resolutions/import/pdf/commit`,
+      {body: formData, method: 'POST'},
+    ),
+  )
+}
+
+const setTargetResolution = async (value: string, comment: string) => {
+  await postResolution('comment-article-1', value, targetComparisonProjectId)
+  await postComment('comment-article-1', comment, targetComparisonProjectId)
+
+  return (await getResolutionRows(targetComparisonProjectId)).find((row) => {
+    return row.articleId === 'comment-article-1'
+  })
+}
+
+const getTargetArticleOneRow = async () => {
+  return (await getResolutionRows(targetComparisonProjectId)).find((row) => {
+    return row.articleId === 'comment-article-1'
+  })
+}
+
+const commitFileImport = async (artifact: unknown, overwriteMode: 'overwrite-different' | 'skip-existing') => {
+  const response = await postJson(
+    `/api/comparison-projects/${targetComparisonProjectId}/conflict-resolutions/import/commit`,
+    {artifact, importMode: 'conflicting-only', overwriteMode},
+  )
+
+  expect(response.status).toBe(200)
+}
+
+test('imports replace a target comment only when the source row carries a comment field', async () => {
+  await postResolution('comment-article-1', 'yes')
+  await postComment('comment-article-1', 'Source note')
+  const artifact = (await (
+    await postJson(`/api/comparison-projects/${sourceComparisonProjectId}/conflict-resolutions/export`, {})
+  ).json()) as TransferArtifact
+  const {judgmentContexts: _judgmentContexts, ...artifactWithoutContexts} = artifact
+  const withoutCommentField = {
+    ...artifact,
+    rows: artifact.rows.map(({comment: _comment, ...row}) => {
+      return row
+    }),
+  }
+  const versionOne = {
+    ...artifactWithoutContexts,
+    rows: artifact.rows.map(({comment: _comment, provenance: _provenance, ...row}) => {
+      return row
+    }),
+    version: 1,
+  }
+  const withNullComment = {
+    ...artifact,
+    rows: artifact.rows.map((row) => {
+      return {...row, comment: null}
+    }),
+  }
+
+  const targetBefore = await setTargetResolution('no', 'Target note')
+  await commitFileImport(withoutCommentField, 'overwrite-different')
+  expect(await getTargetArticleOneRow()).toMatchObject({
+    comment: 'Target note',
+    commentUpdatedAt: targetBefore?.commentUpdatedAt,
+    origin: 'file-import',
+  })
+
+  await setTargetResolution('no', 'Target note')
+  await commitFileImport(versionOne, 'overwrite-different')
+  expect(await getTargetArticleOneRow()).toMatchObject({comment: 'Target note', origin: 'file-import'})
+
+  await setTargetResolution('no', 'Target note')
+  await commitFileImport(artifact, 'skip-existing')
+  expect(await getTargetArticleOneRow()).toMatchObject({comment: 'Target note', origin: 'ui'})
+
+  await commitFileImport(artifact, 'overwrite-different')
+  const replacedRow = await getTargetArticleOneRow()
+  expect(replacedRow).toMatchObject({comment: 'Source note', origin: 'file-import'})
+  expect(replacedRow?.commentUpdatedAt).not.toBeNull()
+
+  await setTargetResolution('no', 'Target note')
+  await commitFileImport(withNullComment, 'overwrite-different')
+  expect(await getTargetArticleOneRow()).toMatchObject({comment: null, commentUpdatedAt: null, origin: 'file-import'})
+})
+
+test('PDF imports keep the target comment, and clearing an undecided article removes it with the row', async () => {
+  const targetBefore = await setTargetResolution('no', 'Target note')
+  const importResponse = await commitPdfImport('yes', 'ignore')
+
+  expect(importResponse.status).toBe(200)
+  expect(await getTargetArticleOneRow()).toMatchObject({
+    comment: 'Target note',
+    commentUpdatedAt: targetBefore?.commentUpdatedAt,
+    origin: 'pdf-import',
+  })
+
+  const clearResponse = await commitPdfImport(pdfConflictResolutionNotSetValue, 'clear')
+
+  expect(clearResponse.status).toBe(200)
+  expect(await getTargetArticleOneRow()).toBeUndefined()
 })

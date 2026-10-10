@@ -20,7 +20,10 @@ import {
   getNormalizedComparisonProjectArticleCategoryFilters,
 } from '../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../utils/comparisonProjectColumnOrder.ts'
-import {comparisonProjectConflictResolutionCommentMaxLength} from '../../utils/comparisonProjectConflictResolutionComment.ts'
+import {
+  comparisonProjectConflictResolutionCommentMaxLength,
+  getHasComparisonProjectConflictResolutionCommentControlCharacter,
+} from '../../utils/comparisonProjectConflictResolutionComment.ts'
 import {
   getNormalizedComparisonProjectConflictResolutionFilters,
   getNormalizedComparisonProjectConflictResolutionProvenanceFilters,
@@ -2314,19 +2317,71 @@ const getComparisonProjectConflictResolutionImportProvenanceResolver = (params: 
   }
 }
 
+type ComparisonProjectConflictResolutionDeletedRow = {
+  articleId: string
+  comment?: string | null
+  commentUpdatedAt?: string | null
+}
+
+const getCommentUpdatedAtTime = (row: ComparisonProjectConflictResolutionDeletedRow) => {
+  return getDateValue(row.commentUpdatedAt)?.getTime() ?? Number.NEGATIVE_INFINITY
+}
+
+const getCarriedOverComparisonProjectConflictResolutionComment = (
+  deletedRows: readonly ComparisonProjectConflictResolutionDeletedRow[],
+): ComparisonProjectConflictResolutionWriteComment | null => {
+  const latestCommentedRow = deletedRows.reduce<ComparisonProjectConflictResolutionDeletedRow | null>(
+    (latestRow, row) => {
+      return getCommentUpdatedAtTime(row) > (latestRow ? getCommentUpdatedAtTime(latestRow) : Number.NEGATIVE_INFINITY)
+        ? row
+        : latestRow
+    },
+    null,
+  )
+  const carriedRow = latestCommentedRow ?? deletedRows[0] ?? null
+
+  return carriedRow ? {text: carriedRow.comment ?? null, updatedAt: carriedRow.commentUpdatedAt ?? null} : null
+}
+
+const getCarriedOverComparisonProjectConflictResolutionCommentsByArticleId = (
+  deletedRows: readonly ComparisonProjectConflictResolutionDeletedRow[],
+) => {
+  const deletedRowsByArticleId = deletedRows.reduce<Map<string, ComparisonProjectConflictResolutionDeletedRow[]>>(
+    (rowMap, row) => {
+      return rowMap.set(row.articleId, [...(rowMap.get(row.articleId) ?? []), row])
+    },
+    new Map<string, ComparisonProjectConflictResolutionDeletedRow[]>(),
+  )
+
+  return new Map(
+    Array.from(deletedRowsByArticleId.entries()).map(([articleId, rows]) => {
+      return [articleId, getCarriedOverComparisonProjectConflictResolutionComment(rows)] as const
+    }),
+  )
+}
+
+const getComparisonProjectConflictResolutionImportSourceComment = (
+  sourceComment: string | null,
+  importedAt: Date,
+): ComparisonProjectConflictResolutionWriteComment => {
+  return {text: sourceComment, updatedAt: sourceComment ? importedAt : null}
+}
+
 const getComparisonProjectConflictResolutionImportCommentResolver = (
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
 ) => {
   const sourceRowsById = getComparisonProjectConflictResolutionImportSourceRowsById(sourceRows)
   const importedAt = new Date()
 
-  return (
-    candidate: ComparisonProjectConflictResolutionImportCandidate,
-  ): ComparisonProjectConflictResolutionWriteComment => {
-    const sourceComment =
-      getComparisonProjectConflictResolutionImportCandidateSourceRow(candidate, sourceRowsById)?.sourceComment ?? null
+  return (candidate: ComparisonProjectConflictResolutionImportCandidate) => {
+    const sourceComment = getComparisonProjectConflictResolutionImportCandidateSourceRow(
+      candidate,
+      sourceRowsById,
+    )?.sourceComment
 
-    return {text: sourceComment, updatedAt: sourceComment ? importedAt : null}
+    return sourceComment === undefined
+      ? undefined
+      : getComparisonProjectConflictResolutionImportSourceComment(sourceComment, importedAt)
   }
 }
 
@@ -2352,7 +2407,7 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
   comparisonProjectId: string
   getComment?: (
     candidate: ComparisonProjectConflictResolutionImportCandidate,
-  ) => ComparisonProjectConflictResolutionWriteComment
+  ) => ComparisonProjectConflictResolutionWriteComment | undefined
   getProvenance: (
     candidate: ComparisonProjectConflictResolutionImportCandidate,
   ) => ComparisonProjectConflictResolutionWriteProvenance
@@ -2368,11 +2423,13 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
     }),
   )
 
-  await params.tx.run(`
+  const deletedRows = await params.tx.queryJson<ComparisonProjectConflictResolutionDeletedRow>(`
     DELETE FROM ${comparisonProjectConflictResolutionTable}
     WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
       AND article_id IN (${getQuotedStringList(targetArticleIds).join(', ')})
+    RETURNING article_id AS articleId, comment, comment_updated_at AS commentUpdatedAt
   `)
+  const targetCommentsByArticleId = getCarriedOverComparisonProjectConflictResolutionCommentsByArticleId(deletedRows)
 
   await params.tx.run(`
     INSERT INTO ${comparisonProjectConflictResolutionTable} (${comparisonProjectConflictResolutionInsertColumnsSql})
@@ -2381,7 +2438,7 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
         return getComparisonProjectConflictResolutionInsertValuesSql({
           answerValue: candidate.resolutionValue,
           articleId: candidate.targetArticleId,
-          comment: params.getComment?.(candidate) ?? null,
+          comment: params.getComment?.(candidate) ?? targetCommentsByArticleId.get(candidate.targetArticleId) ?? null,
           comparisonProjectId: params.comparisonProjectId,
           id: crypto.randomUUID(),
           promptId: null,
@@ -4517,32 +4574,6 @@ const getSavedComparisonProjectConflictResolution = (params: {
   }
 }
 
-type ComparisonProjectConflictResolutionDeletedRow = {
-  articleId: string
-  comment?: string | null
-  commentUpdatedAt?: string | null
-}
-
-const getCommentUpdatedAtTime = (row: ComparisonProjectConflictResolutionDeletedRow) => {
-  return getDateValue(row.commentUpdatedAt)?.getTime() ?? Number.NEGATIVE_INFINITY
-}
-
-const getCarriedOverComparisonProjectConflictResolutionComment = (
-  deletedRows: readonly ComparisonProjectConflictResolutionDeletedRow[],
-): ComparisonProjectConflictResolutionWriteComment | null => {
-  const latestCommentedRow = deletedRows.reduce<ComparisonProjectConflictResolutionDeletedRow | null>(
-    (latestRow, row) => {
-      return getCommentUpdatedAtTime(row) > (latestRow ? getCommentUpdatedAtTime(latestRow) : Number.NEGATIVE_INFINITY)
-        ? row
-        : latestRow
-    },
-    null,
-  )
-  const carriedRow = latestCommentedRow ?? deletedRows[0] ?? null
-
-  return carriedRow ? {text: carriedRow.comment ?? null, updatedAt: carriedRow.commentUpdatedAt ?? null} : null
-}
-
 const setComparisonProjectConflictResolution = async (params: {
   articleId: string
   value: string
@@ -4687,6 +4718,10 @@ const getValidatedComparisonProjectConflictResolutionComment = (comment: string 
       400,
       `Conflict resolution comments are limited to ${comparisonProjectConflictResolutionCommentMaxLength} characters`,
     )
+  }
+
+  if (trimmedComment !== null && getHasComparisonProjectConflictResolutionCommentControlCharacter(trimmedComment)) {
+    throw new HttpError(400, 'Conflict resolution comments cannot contain control characters')
   }
 
   return trimmedComment

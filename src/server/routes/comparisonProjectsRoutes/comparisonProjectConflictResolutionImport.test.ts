@@ -579,6 +579,8 @@ test('adapts version 2 transfer row comments into trimmed, capped import source 
       getRow('blank-comment', '   '),
       getRow('null-comment', null),
       getRow('long-comment', `${'x'.repeat(3999)} yz`),
+      getRow('split-emoji', `${'x'.repeat(3999)}\u{1F600}`),
+      getRow('control-characters', 'a\u0000b\u0007c\td\ne'),
       getRow('version-1-row', undefined),
     ] as never,
   })
@@ -592,6 +594,8 @@ test('adapts version 2 transfer row comments into trimmed, capped import source 
     ['blank-comment', null],
     ['null-comment', null],
     ['long-comment', 'x'.repeat(3999)],
+    ['split-emoji', 'x'.repeat(3999)],
+    ['control-characters', 'abc\td\ne'],
     ['version-1-row', undefined],
   ])
 })
