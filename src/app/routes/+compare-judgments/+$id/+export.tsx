@@ -16,6 +16,7 @@ import {
 import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
 import {
   type ComparisonProjectConflictResolutionFilter,
+  type ComparisonProjectConflictResolutionProvenanceFilter,
   getComparisonProjectConflictResolutionFilterOptions,
   getComparisonProjectSummaryConflictResolutionOptions,
 } from '../../../../utils/comparisonProjectConflictResolutionFilter.ts'
@@ -77,6 +78,9 @@ const CompareProjectExportPage = () => {
   const [conflictResolutionFilters, setConflictResolutionFilters] = createSignal<
     ComparisonProjectConflictResolutionFilter[]
   >(initialUrlState.conflictResolutionFilters)
+  const [conflictResolutionProvenanceFilters, setConflictResolutionProvenanceFilters] = createSignal<
+    ComparisonProjectConflictResolutionProvenanceFilter[]
+  >(initialUrlState.conflictResolutionProvenanceFilters)
   const [searchText, setSearchText] = createSignal(initialUrlState.searchText)
   const [searchInitialized, setSearchInitialized] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
@@ -169,6 +173,7 @@ const CompareProjectExportPage = () => {
     return {
       articleCategoryFilters: articleCategoryFilters(),
       conflictResolutionFilters: showConflictResolutionFilter() ? conflictResolutionFilters() : [],
+      conflictResolutionProvenanceFilters: showConflictResolutionFilter() ? conflictResolutionProvenanceFilters() : [],
       differenceFilters: differenceFilters(),
       pageLimit: pageLimit(),
       rowFilters: rowFilters(),
@@ -191,6 +196,8 @@ const CompareProjectExportPage = () => {
         differenceFilters,
         articleCategoryFilters,
         conflictResolutionFilters,
+        conflictResolutionProvenanceFilters,
+        showConflictResolutionFilter,
         searchText,
         searchInitialized,
       ],
@@ -265,6 +272,11 @@ const CompareProjectExportPage = () => {
       return getStableComparisonProjectFilterSelection(previous, values)
     })
   }
+  const updateConflictResolutionProvenanceFilters = (values: ComparisonProjectConflictResolutionProvenanceFilter[]) => {
+    setConflictResolutionProvenanceFilters((previous) => {
+      return getStableComparisonProjectFilterSelection(previous, values)
+    })
+  }
   const handleExport = () => {
     setError(null)
     csvExportMutation.mutate()
@@ -319,6 +331,7 @@ const CompareProjectExportPage = () => {
                 articleCategoryFilters={articleCategoryFilters()}
                 conflictResolutionFilters={conflictResolutionFilters()}
                 conflictResolutionFilterOptions={conflictResolutionFilterOptions()}
+                conflictResolutionProvenanceFilters={conflictResolutionProvenanceFilters()}
                 differenceFilters={differenceFilters()}
                 differenceFilterDisabled={availableDifferenceFilters().length <= 1 && differenceFilters().length === 0}
                 differenceFilterOptions={differenceFilterOptions()}
@@ -329,6 +342,7 @@ const CompareProjectExportPage = () => {
                 showConflictResolutionFilter={showConflictResolutionFilter()}
                 onArticleCategoryFiltersChange={updateArticleCategoryFilters}
                 onConflictResolutionFiltersChange={updateConflictResolutionFilters}
+                onConflictResolutionProvenanceFiltersChange={updateConflictResolutionProvenanceFilters}
                 onDifferenceFiltersChange={updateDifferenceFilters}
                 onExportCsv={handleExport}
                 onExportPdf={handlePdfExport}

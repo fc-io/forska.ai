@@ -5,7 +5,7 @@ import {afterEach, describe, expect, test, vi} from 'vitest'
 
 import {CompareProjectExportFilters} from './compareProjectExportFilters.tsx'
 
-const renderFilters = (showArticleCategoryFilter: boolean) => {
+const renderFilters = (showArticleCategoryFilter: boolean, options: {showConflictResolutionFilter?: boolean} = {}) => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const dispose = render(() => {
@@ -19,6 +19,7 @@ const renderFilters = (showArticleCategoryFilter: boolean) => {
           {label: 'no', value: 'no'},
           {label: 'maybe', value: 'maybe'},
         ]}
+        conflictResolutionProvenanceFilters={['outdated']}
         differenceFilters={[]}
         differenceFilterDisabled={false}
         differenceFilterOptions={[{label: 'Human vs LLM conflict', value: 'human-vs-llm'}]}
@@ -26,9 +27,10 @@ const renderFilters = (showArticleCategoryFilter: boolean) => {
         isExportingPdf={false}
         rowFilterOptions={[{label: 'Rows with more than 1 answered prompt', value: 'multiple-answers'}]}
         showArticleCategoryFilter={showArticleCategoryFilter}
-        showConflictResolutionFilter={true}
+        showConflictResolutionFilter={options.showConflictResolutionFilter ?? true}
         onArticleCategoryFiltersChange={vi.fn()}
         onConflictResolutionFiltersChange={vi.fn()}
+        onConflictResolutionProvenanceFiltersChange={vi.fn()}
         onDifferenceFiltersChange={vi.fn()}
         onExportCsv={vi.fn()}
         onExportPdf={vi.fn()}
@@ -93,15 +95,37 @@ describe('CompareProjectExportFilters', () => {
     const {container, dispose} = renderFilters(true)
 
     try {
-      expect(getTriggerLabels(container).slice(1, 5)).toEqual([
+      expect(getTriggerLabels(container).slice(1, 6)).toEqual([
         'Row filter:',
         'Difference filter:',
         'Conflict resolutions:',
+        'Resolution prompts:',
         'Language:',
       ])
       expect(container.querySelector('[aria-label="Conflict resolutions"]')?.textContent).toContain('Not set')
       expect(container.querySelector('[aria-label="Conflict resolutions"]')?.textContent).toContain('yes')
       expect(container.querySelector('[aria-label="Row filter"]')?.textContent).toContain('All rows')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('shows the resolution prompts selector with its selected chip next to the conflict-resolution selector', () => {
+    const {container, dispose} = renderFilters(false)
+
+    try {
+      expect(container.querySelector('[aria-label="Resolution prompts"]')?.textContent).toContain('Older prompts')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('hides the resolution prompts selector together with the conflict-resolution selector', () => {
+    const {container, dispose} = renderFilters(false, {showConflictResolutionFilter: false})
+
+    try {
+      expect(container.querySelector('[aria-label="Conflict resolutions"]')).toBeNull()
+      expect(container.querySelector('[aria-label="Resolution prompts"]')).toBeNull()
     } finally {
       dispose()
     }

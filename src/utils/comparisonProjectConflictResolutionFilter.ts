@@ -18,7 +18,7 @@ export type ComparisonProjectConflictResolutionProvenanceFilterOption = {
 const comparisonProjectConflictResolutionProvenanceFilterLabels = {
   current: 'Current prompts',
   outdated: 'Older prompts',
-  unknown: 'Prompts unknown',
+  unknown: 'Unknown',
 } satisfies Record<ComparisonProjectConflictResolutionProvenanceFilter, string>
 
 export type ComparisonProjectConflictResolutionFilterOption = {

@@ -20,6 +20,7 @@ test('compare judgments URL state preserves canonical filter params', () => {
   expect(state).toEqual({
     articleCategoryFilters: ['chinese'],
     conflictResolutionFilters: ['maybe'],
+    conflictResolutionProvenanceFilters: [],
     differenceFilters: ['human-vs-llm-true-conflict'],
     pageLimit: 100,
     rowFilters: ['fully-answered'],
@@ -65,6 +66,7 @@ test('compare judgments URL state treats all and invalid values as no filter', (
   expect(state).toEqual({
     articleCategoryFilters: [],
     conflictResolutionFilters: [],
+    conflictResolutionProvenanceFilters: [],
     differenceFilters: [],
     pageLimit: 50,
     rowFilters: [],
@@ -90,6 +92,24 @@ test('compare judgments URL state preserves conflict-resolution filters', () => 
 
   expect(state.conflictResolutionFilters).toEqual(['not-set'])
   expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({conflictResolutionFilter: 'not-set'})
+})
+
+test('compare judgments URL state round-trips resolution prompt filters in canonical order', () => {
+  const state = getInitialCompareProjectJudgmentsUrlState({
+    conflictResolutionFilter: 'yes',
+    conflictResolutionProvenanceFilter: 'unknown,outdated,bogus,unknown',
+  })
+  const searchParams = getCompareProjectJudgmentsSearchParams(state)
+
+  expect(state.conflictResolutionProvenanceFilters).toEqual(['outdated', 'unknown'])
+  expect(searchParams).toEqual({
+    conflictResolutionFilter: 'yes',
+    conflictResolutionProvenanceFilter: 'outdated,unknown',
+  })
+  expect(getInitialCompareProjectJudgmentsUrlState(searchParams)).toEqual(state)
+  expect(getInitialCompareProjectJudgmentsUrlState({conflictResolutionProvenanceFilter: 'all'})).toEqual(
+    getInitialCompareProjectJudgmentsUrlState({}),
+  )
 })
 
 test('compare judgments URL state normalizes legacy fully answered row filter', () => {

@@ -3,9 +3,12 @@ import {format} from 'date-fns'
 import {createMemo, For, Show} from 'solid-js'
 
 import type {
+  ComparisonJudgmentContextSummary,
   ComparisonProjectJudgmentsColumn,
   ComparisonProjectJudgmentsRow,
 } from '../../../services/comparisonProjectsService.ts'
+import type {ComparisonJudgmentContextSummariesById} from '../../../utils/comparisonJudgmentContextSummary.ts'
+import {ComparisonProjectConflictResolutionProvenance} from './comparisonProjectConflictResolutionProvenance.tsx'
 
 export type ComparisonProjectJudgmentsTableColumn = ComparisonProjectJudgmentsColumn & {
   sourceProjectId: string | null
@@ -17,6 +20,8 @@ type ComparisonProjectJudgmentsTableProps = {
   conflictResolutionOptions?: Array<{label: string; value: string}>
   conflictResolutionPendingArticleIds?: string[]
   columns: ComparisonProjectJudgmentsTableColumn[]
+  currentJudgmentContext?: ComparisonJudgmentContextSummary | null
+  judgmentContextsById?: ComparisonJudgmentContextSummariesById
   onConflictResolutionReset?: (articleId: string) => void | Promise<void>
   onConflictResolutionSelect?: (articleId: string, value: string) => void | Promise<void>
   rows: ComparisonProjectJudgmentsRow[]
@@ -74,6 +79,12 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
   }
   const getIsConflictResolutionPending = (articleId: string) => {
     return props.conflictResolutionPendingArticleIds?.includes(articleId) ?? false
+  }
+  const judgmentContextsById = () => {
+    return props.judgmentContextsById ?? {}
+  }
+  const currentJudgmentContext = () => {
+    return props.currentJudgmentContext ?? null
   }
 
   return (
@@ -263,6 +274,11 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                             </Show>
                           </div>
                         </Show>
+                        <ComparisonProjectConflictResolutionProvenance
+                          currentJudgmentContext={currentJudgmentContext()}
+                          judgmentContextsById={judgmentContextsById()}
+                          resolution={row()?.conflictResolution ?? null}
+                        />
                       </Show>
                     </td>
                   </Show>
