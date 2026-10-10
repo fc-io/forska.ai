@@ -372,3 +372,62 @@ test('subproject prompt filters only match source judgments with the source meta
   expect(projectRow?.useMetadata).toBe(true)
   expect(configDelta?.configFieldSet.split(',')).toContain('useMetadata')
 })
+
+test('subproject route rejects a start date after the end date with 400', async () => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'subproject-date-range-connection'
+  const modelId = 'subproject-date-range-model'
+  const sourceProjectId = 'subproject-date-range-source-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId: sourceProjectId})
+
+  const response = await app.handle(
+    new Request('http://localhost/api/subprojects', {
+      body: JSON.stringify({
+        name: 'Reversed range subproject',
+        modelId,
+        dateFrom: '2026-06-01',
+        dateTo: '2026-01-01',
+        promptSelections: [],
+        sourceProjectIds: [sourceProjectId],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(response.status).toBe(400)
+  expect(await response.text()).toContain('date_from must be on or before date_to')
+})
+
+test('subproject route rejects an unparseable date with 400', async () => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'subproject-date-parse-connection'
+  const modelId = 'subproject-date-parse-model'
+  const sourceProjectId = 'subproject-date-parse-source-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId: sourceProjectId})
+
+  const response = await app.handle(
+    new Request('http://localhost/api/subprojects', {
+      body: JSON.stringify({
+        name: 'Bad date subproject',
+        modelId,
+        dateFrom: 'not-a-date',
+        promptSelections: [],
+        sourceProjectIds: [sourceProjectId],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(response.status).toBe(400)
+  expect(await response.text()).toContain('Invalid date value provided')
+})
