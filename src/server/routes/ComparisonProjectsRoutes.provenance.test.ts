@@ -57,9 +57,7 @@ let database: {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
 } | null = null
-let backfillNextComparisonJudgmentContext:
-  | typeof import('../services/comparisonJudgmentContext.ts').backfillNextComparisonJudgmentContext
-  | null = null
+let backfillModule: typeof import('../services/comparisonJudgmentContextBackfill.ts') | null = null
 
 const getApp = () => {
   if (!app) {
@@ -281,13 +279,13 @@ beforeAll(async () => {
       import('../services/appDatabaseService.ts'),
       import('./ComparisonProjectsRoutes.ts'),
       import('../services/comparisonProjectServingRebuildService.ts'),
-      import('../services/comparisonJudgmentContext.ts'),
+      import('../services/comparisonJudgmentContextBackfill.ts'),
     ])
 
   await migrateDuckdb()
   database = getAppDatabaseService()
   app = new Elysia().use(comparisonProjectsRoutes)
-  backfillNextComparisonJudgmentContext = contextModule.backfillNextComparisonJudgmentContext
+  backfillModule = contextModule
   await seedComparisonProjects()
   await rebuildModule
     .getComparisonProjectServingRebuildService()
@@ -590,16 +588,19 @@ test('PDF exports embed the context id and PDF imports record it with the PDF re
 })
 
 test('the maintenance backfill restores a missing context row for an active generation once', async () => {
-  const backfill = backfillNextComparisonJudgmentContext
-
-  if (!backfill) {
+  if (!backfillModule) {
     throw new Error('Backfill not initialized')
   }
 
+  const backfill = backfillModule.backfillNextComparisonJudgmentContext
+  const state = backfillModule.createComparisonJudgmentContextBackfillState()
   const sourceContextId = await getActiveContextId(sourceComparisonProjectId)
   const runner = {
     queryJson: <T>(statement: string) => {
       return getDatabase().queryJson<T>(statement)
+    },
+    run: (statement: string) => {
+      return getDatabase().run(statement)
     },
     transaction: <T>(
       operation: (runner: {
@@ -615,11 +616,12 @@ test('the maintenance backfill restores a missing context row for an active gene
     `DELETE FROM mart.comparison_judgment_context_serving WHERE comparison_project_id = '${sourceComparisonProjectId}'`,
   )
 
-  expect(await backfill(runner)).toEqual({
+  expect(await backfill(runner, {state})).toEqual({
     comparisonProjectId: sourceComparisonProjectId,
     generation: 1,
     judgmentContextId: sourceContextId,
+    status: 'written',
   })
-  expect(await backfill(runner)).toEqual({comparisonProjectId: null, generation: null, judgmentContextId: null})
+  expect(await backfill(runner, {state})).toEqual({comparisonProjectId: null, generation: null, status: 'idle'})
   expect(await getActiveContextId(sourceComparisonProjectId)).toBe(sourceContextId)
 })

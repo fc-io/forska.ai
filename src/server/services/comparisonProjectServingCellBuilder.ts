@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
+import {recordComparisonJudgmentContextForGenerationConfig} from './comparisonJudgmentContextDerivation.ts'
 import {
   comparisonProjectServingGenerationConfigTables,
   ensureComparisonProjectServingGenerationConfig,
@@ -1051,11 +1052,22 @@ const insertPromptModeComparisonProjectHumanCells = async (
   )
 }
 
+const ensureComparisonProjectServingBuildConfig = async (
+  params: ComparisonProjectServingCellBuilderParams,
+  runner: ComparisonProjectServingCellBuilderRunner,
+) => {
+  const materialized = await ensureComparisonProjectServingGenerationConfig(params, runner)
+
+  if (materialized) {
+    await recordComparisonJudgmentContextForGenerationConfig(runner, params)
+  }
+}
+
 const insertPromptModeComparisonProjectCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   runner: ComparisonProjectServingCellBuilderRunner = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
-  await ensureComparisonProjectServingGenerationConfig(params, runner)
+  await ensureComparisonProjectServingBuildConfig(params, runner)
 
   return insertComparisonProjectArticleCellBatches(
     params,
@@ -1104,7 +1116,7 @@ const insertSummaryModeComparisonProjectCells = async (
   params: ComparisonProjectServingCellBuilderParams,
   runner: ComparisonProjectServingCellBuilderRunner = getDefaultComparisonProjectServingCellBuilderDependencies(),
 ) => {
-  await ensureComparisonProjectServingGenerationConfig(params, runner)
+  await ensureComparisonProjectServingBuildConfig(params, runner)
 
   return insertComparisonProjectArticleCellBatches(
     params,

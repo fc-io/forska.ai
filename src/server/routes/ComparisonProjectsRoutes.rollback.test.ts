@@ -8122,7 +8122,7 @@ test('comparison project pdf export shows individual assessments for import-scop
 })
 
 const exportJudgmentContextJson =
-  '{"columns":[{"kind":"human","promptHeading":null,"promptId":"summary"},{"criteriaDisposition":"exclude","kind":"llm","modelId":"model-1","modelName":"gpt-5.5","promptHeading":"Population","promptId":"prompt-a","sourceProjectId":"source-1","systemPromptVariant":"legacy","useAbstract":true,"useFulltext":false,"useFulltextNoImages":false,"useMetadata":true,"useTitle":true}],"humanJudgmentMode":"summary","sourceProjectIds":["source-1"],"summarySourceProjectId":"source-1","v":1}'
+  '{"columns":[{"kind":"human","promptHeading":null,"promptId":"summary"},{"contentKey":"1110m","criteria":[{"criteriaDisposition":"include","promptHeading":"Population","promptId":"prompt-a"}],"kind":"llm","modelId":"model-1","modelName":"gpt-5.5","promptHeading":null,"promptId":"summary","sourceProjectId":"source-1","systemPromptVariant":"legacy","useAbstract":true,"useFulltext":true,"useFulltextNoImages":false,"useMetadata":true,"useTitle":true}],"humanJudgmentMode":"summary","sourceProjectIds":["source-1"],"summarySourceProjectId":"source-1","v":1}'
 
 test('comparison project conflict resolution export returns saved resolutions as compact json', async () => {
   mockDatabaseStateRef.current = {

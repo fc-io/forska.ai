@@ -1485,7 +1485,7 @@ test('comparison serving rebuild writes the judgment context of each activated g
     columns: [
       {kind: 'human', promptHeading: 'Prompt A', promptId: 'prompt-a'},
       {
-        criteriaDisposition: null,
+        contentKey: '1100',
         kind: 'llm',
         modelId: 'model-a',
         modelName: 'Model A',
@@ -1500,7 +1500,7 @@ test('comparison serving rebuild writes the judgment context of each activated g
         useTitle: true,
       },
       {
-        criteriaDisposition: null,
+        contentKey: '1100',
         kind: 'llm',
         modelId: 'model-b',
         modelName: 'Model B',

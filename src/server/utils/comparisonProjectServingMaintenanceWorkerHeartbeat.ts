@@ -70,6 +70,22 @@ export const startComparisonProjectServingMaintenanceWorkerHeartbeat = (
         )
       }
 
+      if (result.status === 'idle' && result.reason === 'judgment-context-backfill-failed') {
+        comparisonProjectServingMaintenanceWorkerWarningLogger.warn(
+          `comparison-project-serving-maintenance-worker:judgment-context-failed:${result.comparisonProjectId}:${result.generation}`,
+          `[comparisonProjectServingMaintenanceWorker] judgment context backfill failed for comparison project ${result.comparisonProjectId} generation ${result.generation}`,
+          {
+            attempts: result.attempts,
+            comparisonProjectId: result.comparisonProjectId,
+            component: comparisonProjectServingMaintenanceWorkerComponent,
+            errorMessage: result.errorMessage,
+            event: 'judgmentContextBackfillFailed',
+            generation: result.generation,
+            nextAttemptAt: result.nextAttemptAt?.toISOString() ?? null,
+          },
+        )
+      }
+
       if (result.status === 'backfilled') {
         comparisonProjectServingMaintenanceWorkerLogger.log(
           `comparison-project-serving-maintenance-worker:judgment-context:${result.comparisonProjectId}:${result.generation}`,
