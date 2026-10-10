@@ -33,7 +33,9 @@ const renderFilters = (showArticleCategoryFilter: boolean) => {
         onExportCsv={vi.fn()}
         onExportPdf={vi.fn()}
         onRowFiltersChange={vi.fn()}
+        onSearchTextChange={vi.fn()}
         rowFilters={[]}
+        searchText="metformin"
       />
     )
   }, container)
@@ -76,11 +78,22 @@ describe('CompareProjectExportFilters', () => {
     }
   })
 
+  test('shows the title search above the selectors with the applied search text', () => {
+    const {container, dispose} = renderFilters(true)
+
+    try {
+      expect(getTriggerLabels(container)[0]).toBe('Search title')
+      expect((container.querySelector('input[type="text"]') as HTMLInputElement).value).toBe('metformin')
+    } finally {
+      dispose()
+    }
+  })
+
   test('shows conflict-resolution selector between difference and language filters', () => {
     const {container, dispose} = renderFilters(true)
 
     try {
-      expect(getTriggerLabels(container).slice(0, 4)).toEqual([
+      expect(getTriggerLabels(container).slice(1, 5)).toEqual([
         'Row filter:',
         'Difference filter:',
         'Conflict resolutions:',

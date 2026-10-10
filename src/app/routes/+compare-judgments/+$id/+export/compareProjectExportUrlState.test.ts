@@ -22,6 +22,7 @@ test('compare export URL state starts from active compare page search params', (
     differenceFilters: ['human-vs-llm'],
     pageLimit: 100,
     rowFilters: ['fully-answered'],
+    searchText: '',
   })
   expect(getCompareProjectExportSearchParams(state)).toEqual({
     articleCategoryFilter: 'non_chinese',
@@ -67,4 +68,21 @@ test('compare export URL state normalizes legacy compare filters to canonical pa
     differenceFilter: ['llm-vs-llm'],
     rowFilter: ['fully-answered'],
   })
+})
+
+test('compare export URL state carries the compare page title search into the export request', () => {
+  const state = getInitialCompareProjectExportUrlState({rowFilter: 'fully-answered', search: '  Metformin   糖尿病 '})
+
+  expect(state.searchText).toBe('Metformin 糖尿病')
+  expect(getCompareProjectExportSearchParams(state)).toEqual({rowFilter: 'fully-answered', search: 'Metformin 糖尿病'})
+  expect(getCompareProjectExportRequestBody(state)).toEqual({
+    articleCategoryFilter: [],
+    conflictResolutionFilter: [],
+    differenceFilter: [],
+    rowFilter: ['fully-answered'],
+    search: 'Metformin 糖尿病',
+  })
+  expect(Object.keys(getCompareProjectExportRequestBody(getInitialCompareProjectExportUrlState({})))).not.toContain(
+    'search',
+  )
 })
