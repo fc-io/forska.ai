@@ -42,8 +42,8 @@ import {
 } from './+export/compareProjectExportUrlState.ts'
 import {CompareProjectResolutionExportSection} from './+export/compareProjectResolutionExportSection.tsx'
 
-const getComparisonProjectId = (params: Record<string, string>) => {
-  return 'id' in params ? params.id : ''
+const getComparisonProjectId = (params: Record<string, string> | undefined) => {
+  return params !== undefined && 'id' in params ? params.id : ''
 }
 
 const getExportFallbackFilename = (comparisonProjectId: string) => {
@@ -64,7 +64,7 @@ const CompareProjectExportPage = () => {
   const navigate = useNavigate()
   const initialUrlState = getInitialCompareProjectExportUrlState(search() as Record<string, unknown>)
   const comparisonProjectId = () => {
-    return getComparisonProjectId(params() as Record<string, string>)
+    return getComparisonProjectId(params() as Record<string, string> | undefined)
   }
   const [pageLimit] = createSignal(initialUrlState.pageLimit)
   const [rowFilters, setRowFilters] = createSignal<ComparisonProjectRowFilter[]>(initialUrlState.rowFilters)
