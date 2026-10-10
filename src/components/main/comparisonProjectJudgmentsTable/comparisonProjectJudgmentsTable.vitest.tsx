@@ -75,6 +75,8 @@ const getResolution = (
 ): NonNullable<ComparisonProjectJudgmentsRow['conflictResolution']> => {
   return {
     articleId,
+    comment: null,
+    commentUpdatedAt: null,
     label: value,
     provenance: null,
     provenanceMatchesCurrent: null,
@@ -121,10 +123,18 @@ const getProvenanceResolution = (
   return {...getResolution('article-chinese-1', 'yes'), ...overrides}
 }
 
+const conflictResolutionOptions = [
+  {label: 'yes', value: 'yes'},
+  {label: 'no', value: 'no'},
+  {label: 'maybe', value: 'maybe'},
+]
+
 const renderTable = (props: {
+  conflictResolutionOptions?: Array<{label: string; value: string}>
   conflictResolutionPendingArticleIds?: string[]
   currentJudgmentContext?: ComparisonJudgmentContextSummary | null
   judgmentContextsById?: ComparisonJudgmentContextSummariesById
+  onConflictResolutionCommentSave?: (articleId: string, comment: string | null) => boolean | Promise<boolean>
   onConflictResolutionReset?: (articleId: string) => void
   onConflictResolutionSelect?: (articleId: string, value: string) => void
   rows?: ComparisonProjectJudgmentsRow[]
@@ -136,15 +146,12 @@ const renderTable = (props: {
       <ComparisonProjectJudgmentsTable
         columns={columns}
         conflictResolutionEnabled={true}
-        conflictResolutionOptions={[
-          {label: 'yes', value: 'yes'},
-          {label: 'no', value: 'no'},
-          {label: 'maybe', value: 'maybe'},
-        ]}
+        conflictResolutionOptions={props.conflictResolutionOptions ?? conflictResolutionOptions}
         conflictResolutionPendingArticleIds={props.conflictResolutionPendingArticleIds}
         currentJudgmentContext={props.currentJudgmentContext}
         judgmentContextsById={props.judgmentContextsById}
         rows={props.rows ?? [getConflictRow()]}
+        onConflictResolutionCommentSave={props.onConflictResolutionCommentSave}
         onConflictResolutionReset={props.onConflictResolutionReset}
         onConflictResolutionSelect={props.onConflictResolutionSelect}
       />
@@ -546,6 +553,339 @@ describe('ComparisonProjectJudgmentsTable', () => {
       expect(cells[2]?.querySelector('p')?.textContent).toBe(
         format(new Date('2026-08-01T12:00:00.000Z'), 'yyyy-MM-dd HH:mm'),
       )
+    } finally {
+      dispose()
+    }
+  })
+})
+
+const waitForUpdates = () => {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
+const getCommentButton = (container: HTMLElement) => {
+  const button = container.querySelector<HTMLButtonElement>('button[aria-label*="comment on the conflict resolution"]')
+
+  if (!button) {
+    throw new Error('Missing resolution comment button')
+  }
+
+  return button
+}
+
+const getCommentTextarea = () => {
+  const textarea = document.querySelector<HTMLTextAreaElement>(
+    'textarea[aria-label="Comment for Chinese conflict article"]',
+  )
+
+  if (!textarea) {
+    throw new Error('Missing resolution comment textarea')
+  }
+
+  return textarea
+}
+
+const getPopoverButton = (label: string) => {
+  const button = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find(
+    (candidate) => {
+      return candidate.textContent?.trim() === label
+    },
+  )
+
+  if (!button) {
+    throw new Error(`Missing ${label} button`)
+  }
+
+  return button
+}
+
+const getIsCommentPopoverOpen = (container: HTMLElement) => {
+  return getCommentButton(container).getAttribute('aria-expanded') === 'true'
+}
+
+const typeComment = (textarea: HTMLTextAreaElement, value: string) => {
+  textarea.value = value
+  textarea.dispatchEvent(new InputEvent('input', {bubbles: true}))
+}
+
+const openCommentPopover = async (container: HTMLElement) => {
+  getCommentButton(container).click()
+  await waitForUpdates()
+
+  return getCommentTextarea()
+}
+
+describe('ComparisonProjectJudgmentsTable resolution comment', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  test('disables the comment icon until the row has a resolution', async () => {
+    const {container, dispose} = renderTable({})
+
+    try {
+      await Promise.resolve()
+      const button = getCommentButton(container)
+
+      expect(button.disabled).toBe(true)
+      expect(button.title).toBe('Set a resolution first')
+      expect(button.dataset.hasComment).toBe('false')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('marks the icon when a comment exists and shows it as the tooltip', async () => {
+    const {container, dispose} = renderTable({
+      rows: [
+        getConflictRow({
+          conflictResolution: getProvenanceResolution({
+            comment: 'Population unclear in abstract',
+            commentUpdatedAt: '2026-10-10T09:30:00.000Z',
+          }),
+        }),
+        getConflictRow({
+          articleTitle: 'Second article',
+          canonicalArticleId: 'article-2',
+          conflictResolution: getProvenanceResolution({articleId: 'article-2'}),
+          id: 'article-2',
+        }),
+      ],
+    })
+
+    try {
+      await Promise.resolve()
+      const [commentedButton, emptyButton] = Array.from(
+        container.querySelectorAll<HTMLButtonElement>('button[aria-label*="comment on the conflict resolution"]'),
+      )
+
+      expect(commentedButton?.disabled).toBe(false)
+      expect(commentedButton?.dataset.hasComment).toBe('true')
+      expect(commentedButton?.title).toBe(
+        `Population unclear in abstract\nComment set ${format(new Date('2026-10-10T09:30:00.000Z'), 'yyyy-MM-dd HH:mm')}`,
+      )
+      expect(commentedButton?.querySelector('svg')?.getAttribute('fill')).toBe('currentColor')
+      expect(emptyButton?.dataset.hasComment).toBe('false')
+      expect(emptyButton?.title).toBe('Add comment')
+      expect(emptyButton?.querySelector('svg')?.getAttribute('fill')).toBe('none')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('opens an editor with the comment and saves the trimmed text', async () => {
+    const onConflictResolutionCommentSave = vi.fn(() => {
+      return true
+    })
+    const {container, dispose} = renderTable({
+      onConflictResolutionCommentSave,
+      rows: [getConflictRow({conflictResolution: getProvenanceResolution({comment: 'First note'})})],
+    })
+
+    try {
+      await Promise.resolve()
+      const textarea = await openCommentPopover(container)
+
+      expect(getIsCommentPopoverOpen(container)).toBe(true)
+      expect(document.activeElement).toBe(textarea)
+      expect(textarea.value).toBe('First note')
+      expect(textarea.maxLength).toBe(4000)
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain('10 / 4000')
+
+      typeComment(textarea, '  Checked the full text\nand the protocol  ')
+      getPopoverButton('Save').click()
+      await waitForUpdates()
+
+      expect(onConflictResolutionCommentSave).toHaveBeenCalledWith(
+        'article-chinese-1',
+        'Checked the full text\nand the protocol',
+      )
+      expect(getIsCommentPopoverOpen(container)).toBe(false)
+    } finally {
+      dispose()
+    }
+  })
+
+  test('saves with Cmd/Ctrl+Enter, keeps plain Enter for new lines and closes on Escape without saving or losing the draft', async () => {
+    const onConflictResolutionCommentSave = vi.fn(() => {
+      return true
+    })
+    const {container, dispose} = renderTable({
+      onConflictResolutionCommentSave,
+      rows: [getConflictRow({conflictResolution: getProvenanceResolution({})})],
+    })
+
+    try {
+      await Promise.resolve()
+      const textarea = await openCommentPopover(container)
+
+      typeComment(textarea, 'Draft')
+      textarea.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter'}))
+      textarea.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Escape'}))
+      await waitForUpdates()
+
+      expect(onConflictResolutionCommentSave).not.toHaveBeenCalled()
+      expect(getIsCommentPopoverOpen(container)).toBe(false)
+      expect(getCommentButton(container).dataset.hasDraft).toBe('true')
+
+      const reopenedTextarea = await openCommentPopover(container)
+
+      expect(reopenedTextarea.value).toBe('Draft')
+      typeComment(reopenedTextarea, 'Shortcut note')
+      reopenedTextarea.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, ctrlKey: true, key: 'Enter'}))
+      await waitForUpdates()
+
+      expect(onConflictResolutionCommentSave).toHaveBeenCalledWith('article-chinese-1', 'Shortcut note')
+      expect(getCommentButton(container).dataset.hasDraft).toBe('false')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('removes the comment with null and keeps the editor open when the save fails', async () => {
+    const onConflictResolutionCommentSave = vi.fn((_articleId: string, comment: string | null) => {
+      return comment === null
+    })
+    const {container, dispose} = renderTable({
+      onConflictResolutionCommentSave,
+      rows: [getConflictRow({conflictResolution: getProvenanceResolution({comment: 'Old note'})})],
+    })
+
+    try {
+      await Promise.resolve()
+      const textarea = await openCommentPopover(container)
+
+      typeComment(textarea, 'Rejected note')
+      getPopoverButton('Save').click()
+      await waitForUpdates()
+
+      expect(getIsCommentPopoverOpen(container)).toBe(true)
+
+      getPopoverButton('Remove').click()
+      await waitForUpdates()
+
+      expect(onConflictResolutionCommentSave).toHaveBeenLastCalledWith('article-chinese-1', null)
+      expect(getIsCommentPopoverOpen(container)).toBe(false)
+    } finally {
+      dispose()
+    }
+  })
+
+  test('disables the editor while the row is pending', async () => {
+    const [pendingArticleIds, setPendingArticleIds] = createSignal<string[]>([])
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const dispose = render(() => {
+      return (
+        <ComparisonProjectJudgmentsTable
+          columns={columns}
+          conflictResolutionEnabled={true}
+          conflictResolutionOptions={conflictResolutionOptions}
+          conflictResolutionPendingArticleIds={pendingArticleIds()}
+          rows={[getConflictRow({conflictResolution: getProvenanceResolution({comment: 'Note'})})]}
+        />
+      )
+    }, container)
+
+    try {
+      await Promise.resolve()
+      const textarea = await openCommentPopover(container)
+
+      setPendingArticleIds(['article-chinese-1'])
+      await Promise.resolve()
+
+      expect(textarea.disabled).toBe(true)
+      expect(getPopoverButton('Save').disabled).toBe(true)
+      expect(getPopoverButton('Remove').disabled).toBe(true)
+      expect(getCommentButton(container).disabled).toBe(true)
+    } finally {
+      dispose()
+    }
+  })
+
+  test('shows the comment icon next to a resolution when no options are available', async () => {
+    const {container, dispose} = renderTable({
+      conflictResolutionOptions: [],
+      rows: [getConflictRow({conflictResolution: getProvenanceResolution({comment: 'Kept note'})})],
+    })
+
+    try {
+      await Promise.resolve()
+      const button = getCommentButton(container)
+
+      expect(container.querySelector('select')).toBeNull()
+      expect(button.disabled).toBe(false)
+      expect(button.title).toBe('Kept note')
+      expect(button.dataset.hasComment).toBe('true')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('keeps an unsaved draft per article after an outside click, marks the icon and discards it on request', async () => {
+    const onConflictResolutionCommentSave = vi.fn(() => {
+      return true
+    })
+    const {container, dispose} = renderTable({
+      onConflictResolutionCommentSave,
+      rows: [getConflictRow({conflictResolution: getProvenanceResolution({comment: 'Saved note'})})],
+    })
+
+    try {
+      await Promise.resolve()
+      const textarea = await openCommentPopover(container)
+
+      typeComment(textarea, 'Saved note, plus the protocol check')
+      document.body.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}))
+      document.body.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}))
+      document.body.click()
+      await waitForUpdates()
+
+      const button = getCommentButton(container)
+
+      expect(getIsCommentPopoverOpen(container)).toBe(false)
+      expect(onConflictResolutionCommentSave).not.toHaveBeenCalled()
+      expect(button.dataset.hasDraft).toBe('true')
+      expect(button.title).toBe('Saved note\nUnsaved draft')
+      expect(button.querySelector('span.rounded-full')).not.toBeNull()
+
+      const reopenedTextarea = await openCommentPopover(container)
+
+      expect(reopenedTextarea.value).toBe('Saved note, plus the protocol check')
+
+      getPopoverButton('Discard').click()
+      await waitForUpdates()
+
+      expect(getIsCommentPopoverOpen(container)).toBe(false)
+      expect(button.dataset.hasDraft).toBe('false')
+      expect(button.title).toBe('Saved note')
+      expect(button.querySelector('span.rounded-full')).toBeNull()
+      expect((await openCommentPopover(container)).value).toBe('Saved note')
+      expect(getPopoverButton('Discard').disabled).toBe(true)
+      expect(onConflictResolutionCommentSave).not.toHaveBeenCalled()
+    } finally {
+      dispose()
+    }
+  })
+
+  test('renders a non-string comment from a misparsed response without crashing', async () => {
+    const {container, dispose} = renderTable({
+      rows: [
+        getConflictRow({
+          conflictResolution: getProvenanceResolution({comment: new Date('2026-10-10T00:00:00.000Z') as never}),
+        }),
+      ],
+    })
+
+    try {
+      await Promise.resolve()
+      const button = getCommentButton(container)
+
+      expect(button.dataset.hasComment).toBe('false')
+      expect(button.title).toBe('Add comment')
+      expect((await openCommentPopover(container)).value).toBe('')
     } finally {
       dispose()
     }

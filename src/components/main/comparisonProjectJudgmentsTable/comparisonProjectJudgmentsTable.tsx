@@ -1,6 +1,6 @@
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
-import {createMemo, For, Show} from 'solid-js'
+import {createMemo, createSignal, For, Show} from 'solid-js'
 
 import type {
   ComparisonJudgmentContextSummary,
@@ -8,6 +8,10 @@ import type {
   ComparisonProjectJudgmentsRow,
 } from '../../../services/comparisonProjectsService.ts'
 import type {ComparisonJudgmentContextSummariesById} from '../../../utils/comparisonJudgmentContextSummary.ts'
+import {
+  ComparisonProjectConflictResolutionComment,
+  type ComparisonProjectConflictResolutionCommentSaveResult,
+} from './comparisonProjectConflictResolutionComment.tsx'
 import {ComparisonProjectConflictResolutionProvenance} from './comparisonProjectConflictResolutionProvenance.tsx'
 
 export type ComparisonProjectJudgmentsTableColumn = ComparisonProjectJudgmentsColumn & {
@@ -22,6 +26,12 @@ type ComparisonProjectJudgmentsTableProps = {
   columns: ComparisonProjectJudgmentsTableColumn[]
   currentJudgmentContext?: ComparisonJudgmentContextSummary | null
   judgmentContextsById?: ComparisonJudgmentContextSummariesById
+  onConflictResolutionCommentSave?: (
+    articleId: string,
+    comment: string | null,
+  ) =>
+    | ComparisonProjectConflictResolutionCommentSaveResult
+    | Promise<ComparisonProjectConflictResolutionCommentSaveResult>
   onConflictResolutionReset?: (articleId: string) => void | Promise<void>
   onConflictResolutionSelect?: (articleId: string, value: string) => void | Promise<void>
   rows: ComparisonProjectJudgmentsRow[]
@@ -60,6 +70,12 @@ const getRowHighlightState = (
   return new Set(answeredValues).size === 1 ? 'match' : 'mismatch'
 }
 
+const getCommentDraftsWithDraft = (drafts: Record<string, string>, articleId: string, draft: string | null) => {
+  const {[articleId]: _previousDraft, ...otherDrafts} = drafts
+
+  return draft === null ? otherDrafts : {...otherDrafts, [articleId]: draft}
+}
+
 const getRowHighlightClasses = (state: 'match' | 'mismatch' | 'neutral') => {
   return state === 'match'
     ? {cell: 'bg-green-50', stickyCell: 'bg-green-50'}
@@ -85,6 +101,15 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
   }
   const currentJudgmentContext = () => {
     return props.currentJudgmentContext ?? null
+  }
+  const [commentDrafts, setCommentDrafts] = createSignal<Record<string, string>>({})
+  const getCommentDraft = (articleId: string) => {
+    return commentDrafts()[articleId] ?? null
+  }
+  const setCommentDraft = (articleId: string, draft: string | null) => {
+    setCommentDrafts((drafts) => {
+      return getCommentDraftsWithDraft(drafts, articleId, draft)
+    })
   }
 
   return (
@@ -154,6 +179,18 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
               const rowHighlightClasses = () => {
                 return getRowHighlightClasses(rowHighlightState())
               }
+              const rowArticleLabel = () => {
+                return row()?.articleTitle?.trim() || 'article'
+              }
+              const rowArticleId = () => {
+                return row()?.canonicalArticleId ?? ''
+              }
+              const saveRowConflictResolutionComment = (comment: string | null) => {
+                return props.onConflictResolutionCommentSave?.(rowArticleId(), comment)
+              }
+              const setRowCommentDraft = (draft: string | null) => {
+                setCommentDraft(rowArticleId(), draft)
+              }
 
               return (
                 <tr class="align-top">
@@ -179,13 +216,21 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                             >
                               {(resolution) => {
                                 return (
-                                  <div class="flex items-start justify-between gap-2">
+                                  <div class="flex items-start gap-2">
                                     <span
-                                      class="min-w-0 whitespace-pre-wrap break-words leading-5 text-gray-800"
+                                      class="min-w-0 flex-1 whitespace-pre-wrap break-words leading-5 text-gray-800"
                                       title={resolution().label}
                                     >
                                       {resolution().label}
                                     </span>
+                                    <ComparisonProjectConflictResolutionComment
+                                      articleTitle={rowArticleLabel()}
+                                      disabled={getIsConflictResolutionPending(rowArticleId())}
+                                      draft={getCommentDraft(rowArticleId())}
+                                      resolution={resolution()}
+                                      onDraftChange={setRowCommentDraft}
+                                      onSave={saveRowConflictResolutionComment}
+                                    />
                                     <button
                                       type="button"
                                       class="inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
@@ -246,6 +291,14 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                 }}
                               </For>
                             </select>
+                            <ComparisonProjectConflictResolutionComment
+                              articleTitle={rowArticleLabel()}
+                              disabled={getIsConflictResolutionPending(rowArticleId())}
+                              draft={getCommentDraft(rowArticleId())}
+                              resolution={row()?.conflictResolution ?? null}
+                              onDraftChange={setRowCommentDraft}
+                              onSave={saveRowConflictResolutionComment}
+                            />
                             <Show when={row().conflictResolution}>
                               <button
                                 type="button"

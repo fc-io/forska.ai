@@ -1,7 +1,11 @@
 import {createHash} from 'node:crypto'
 
+import {
+  comparisonProjectConflictResolutionCommentMaxLength,
+  removeComparisonProjectConflictResolutionCommentControlCharacters,
+} from '../../../utils/comparisonProjectConflictResolutionComment.ts'
 import type {ComparisonProjectConflictResolutionProvenanceFilter} from '../../../utils/comparisonProjectConflictResolutionFilter.ts'
-import {getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 
 export type {ComparisonProjectConflictResolutionProvenanceFilter}
 
@@ -15,6 +19,8 @@ export type ComparisonProjectConflictResolutionWriteProvenance = {
   reviewerUserId: string | null
   servingGeneration: number | null
 }
+
+export type ComparisonProjectConflictResolutionWriteComment = {text: string | null; updatedAt: Date | string | null}
 
 export type ComparisonProjectConflictResolutionReviewer = {displayName: string | null; userId: string}
 
@@ -45,7 +51,9 @@ export const comparisonProjectConflictResolutionInsertColumnsSql = `
   serving_generation,
   reviewer_display_name,
   origin,
-  origin_ref
+  origin_ref,
+  comment,
+  comment_updated_at
 `
 
 const transferReviewerIdPrefix = 'transfer:'
@@ -77,9 +85,20 @@ const getServingGenerationValue = (value: unknown) => {
   return Number.isSafeInteger(generation) && generation > 0 ? generation : null
 }
 
+const getCommentUpdatedAtLiteralValue = (value: Date | string) => {
+  return value instanceof Date ? value.toISOString() : value
+}
+
+const getCommentUpdatedAtSql = (value: Date | string | null) => {
+  const literalValue = value !== null && getDateValue(value) !== null ? getCommentUpdatedAtLiteralValue(value) : null
+
+  return literalValue === null ? 'NULL' : `TIMESTAMPTZ '${escapeSqlString(literalValue)}'`
+}
+
 export const getComparisonProjectConflictResolutionInsertValuesSql = (params: {
   answerValue: string | null
   articleId: string
+  comment?: ComparisonProjectConflictResolutionWriteComment | null
   comparisonProjectId: string
   id: string
   promptId: string | null
@@ -96,8 +115,24 @@ export const getComparisonProjectConflictResolutionInsertValuesSql = (params: {
           ${getSqlLiteral(getServingGenerationValue(params.provenance.servingGeneration))},
           ${getSqlLiteral(getTrimmedText(params.provenance.reviewerDisplayName))},
           ${getSqlLiteral(params.provenance.origin)},
-          ${getSqlLiteral(params.provenance.originRef)}
+          ${getSqlLiteral(params.provenance.originRef)},
+          ${getSqlLiteral(getTrimmedText(params.comment?.text))},
+          ${getCommentUpdatedAtSql(params.comment?.updatedAt ?? null)}
         )`
+}
+
+const getTextWithinUtf16Length = (text: string, maxLength: number) => {
+  const cutText = text.slice(0, maxLength)
+
+  return /[\uD800-\uDBFF]$/.test(cutText) ? cutText.slice(0, -1) : cutText
+}
+
+export const getImportedComparisonProjectConflictResolutionComment = (value: string | null | undefined) => {
+  const comment = getTrimmedText(removeComparisonProjectConflictResolutionCommentControlCharacters(value ?? ''))
+
+  return comment
+    ? getTextWithinUtf16Length(comment, comparisonProjectConflictResolutionCommentMaxLength).trim() || null
+    : null
 }
 
 export const getImportedReviewerDisplayName = (value: string | null | undefined) => {

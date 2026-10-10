@@ -1,15 +1,22 @@
 import type {ComparisonProjectConflictResolutionValue} from '../../../../../services/comparisonProjectsService.ts'
 
+const getStringOrNull = (value: unknown) => {
+  return typeof value === 'string' ? value : null
+}
+
 export const getCompareProjectOptimisticConflictResolution = (params: {
   activeGeneration: number | null
   articleId: string
   judgmentContextId: string | null
   label: string
+  previousConflictResolution: ComparisonProjectConflictResolutionValue | null
   setAt: Date
   value: string
 }): ComparisonProjectConflictResolutionValue => {
   return {
     articleId: params.articleId,
+    comment: getStringOrNull(params.previousConflictResolution?.comment),
+    commentUpdatedAt: params.previousConflictResolution?.commentUpdatedAt ?? null,
     label: params.label,
     provenance: {
       contextId: params.judgmentContextId,
@@ -23,5 +30,17 @@ export const getCompareProjectOptimisticConflictResolution = (params: {
     reviewerUserId: null,
     setAt: params.setAt.toISOString(),
     value: params.value,
+  }
+}
+
+export const getCompareProjectOptimisticConflictResolutionComment = (params: {
+  comment: string | null
+  commentUpdatedAt: Date
+  conflictResolution: ComparisonProjectConflictResolutionValue
+}): ComparisonProjectConflictResolutionValue => {
+  return {
+    ...params.conflictResolution,
+    comment: params.comment,
+    commentUpdatedAt: params.commentUpdatedAt.toISOString(),
   }
 }

@@ -553,6 +553,53 @@ test('adapts version 2 transfer rows with provenance into import source provenan
   ])
 })
 
+test('adapts version 2 transfer row comments into trimmed, capped import source comments', () => {
+  const getRow = (sourceResolutionId: string, comment: unknown) => {
+    return {
+      sourceResolutionId,
+      sourceArticleRowId: `${sourceResolutionId}:article`,
+      externalArticleId: null,
+      title: `Title ${sourceResolutionId}`,
+      identifiers: [],
+      resolution: {mode: 'summary' as const, value: 'yes', label: 'Yes'},
+      ...(comment === undefined ? {} : {comment}),
+    }
+  }
+  const rows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact({
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: 2,
+    exportedAt: '2026-10-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      getRow('with-comment', '  Checked the full text  '),
+      getRow('blank-comment', '   '),
+      getRow('null-comment', null),
+      getRow('long-comment', `${'x'.repeat(3999)} yz`),
+      getRow('split-emoji', `${'x'.repeat(3999)}\u{1F600}`),
+      getRow('control-characters', 'a\u0000b\u0007c\td\ne'),
+      getRow('version-1-row', undefined),
+    ] as never,
+  })
+
+  expect(
+    rows.map((row) => {
+      return [row.sourceResolutionId, row.sourceComment]
+    }),
+  ).toEqual([
+    ['with-comment', 'Checked the full text'],
+    ['blank-comment', null],
+    ['null-comment', null],
+    ['long-comment', 'x'.repeat(3999)],
+    ['split-emoji', 'x'.repeat(3999)],
+    ['control-characters', 'abc\td\ne'],
+    ['version-1-row', undefined],
+  ])
+})
+
 test('adapts transfer rows with null source ids into generated import source ids', () => {
   const rows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact({
     format: comparisonProjectConflictResolutionTransferFormat,

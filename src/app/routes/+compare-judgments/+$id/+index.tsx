@@ -20,6 +20,7 @@ import {
   getComparisonProjectServingRefetchInterval,
   resetComparisonProjectConflictResolution,
   setComparisonProjectConflictResolution,
+  setComparisonProjectConflictResolutionComment,
 } from '../../../../services/comparisonProjectsService'
 import {
   getComparisonJudgmentContextIds,
@@ -69,7 +70,10 @@ import {
   getCompareProjectJudgmentsSearchParams,
   getInitialCompareProjectJudgmentsUrlState,
 } from './+index/compareProjectJudgmentsUrlState.ts'
-import {getCompareProjectOptimisticConflictResolution} from './+index/compareProjectOptimisticConflictResolution.ts'
+import {
+  getCompareProjectOptimisticConflictResolution,
+  getCompareProjectOptimisticConflictResolutionComment,
+} from './+index/compareProjectOptimisticConflictResolution.ts'
 import {CompareProjectResolutionTransferActions} from './+index/compareProjectResolutionTransferActions.tsx'
 import {ComparisonProjectServingProgress} from './+index/comparisonProjectServingProgress.tsx'
 import {ComparisonProjectStatsCard} from './+index/comparisonProjectStatsCard.tsx'
@@ -636,7 +640,11 @@ const CompareProjectJudgmentsPage = () => {
   const shouldDeferCurrentJudgmentsPageRefetch = () => {
     return hasActiveConflictResolutionFilters()
   }
-  const getOptimisticConflictResolution = (articleId: string, value: string) => {
+  const getOptimisticConflictResolution = (
+    articleId: string,
+    value: string,
+    previousConflictResolution: ComparisonProjectJudgmentsPage['data'][number]['conflictResolution'],
+  ) => {
     const option = conflictResolutionOptions().find((candidate) => {
       return candidate.value === value
     })
@@ -646,6 +654,7 @@ const CompareProjectJudgmentsPage = () => {
       articleId,
       judgmentContextId: comparisonProjectQuery.data?.judgmentContextId ?? null,
       label: option?.label ?? value,
+      previousConflictResolution,
       setAt: new Date(),
       value,
     })
@@ -743,7 +752,10 @@ const CompareProjectJudgmentsPage = () => {
       visibleJudgmentRows().find((row) => {
         return row.canonicalArticleId === articleId
       })?.conflictResolution ?? null
-    updateCurrentJudgmentsPageConflictResolution(articleId, getOptimisticConflictResolution(articleId, value))
+    updateCurrentJudgmentsPageConflictResolution(
+      articleId,
+      getOptimisticConflictResolution(articleId, value, previousConflictResolution),
+    )
 
     try {
       const conflictResolution = await setComparisonProjectConflictResolution(comparisonProjectId(), {articleId, value})
@@ -752,6 +764,42 @@ const CompareProjectJudgmentsPage = () => {
     } catch (error) {
       updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save conflict resolution')
+    } finally {
+      setConflictResolutionArticlePending(articleId, false)
+    }
+  }
+  const handleConflictResolutionCommentSave = async (articleId: string, comment: string | null) => {
+    const previousConflictResolution =
+      visibleJudgmentRows().find((row) => {
+        return row.canonicalArticleId === articleId
+      })?.conflictResolution ?? null
+
+    if (!previousConflictResolution) {
+      return false
+    }
+
+    setConflictResolutionArticlePending(articleId, true)
+    setConflictResolutionError(null)
+    updateCurrentJudgmentsPageConflictResolution(
+      articleId,
+      getCompareProjectOptimisticConflictResolutionComment({
+        comment,
+        commentUpdatedAt: new Date(),
+        conflictResolution: previousConflictResolution,
+      }),
+    )
+
+    try {
+      const conflictResolution = await setComparisonProjectConflictResolutionComment(comparisonProjectId(), {
+        articleId,
+        comment,
+      })
+      updateCurrentJudgmentsPageConflictResolution(articleId, conflictResolution)
+      return true
+    } catch (error) {
+      updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
+      setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save resolution comment')
+      return false
     } finally {
       setConflictResolutionArticlePending(articleId, false)
     }
@@ -1066,6 +1114,7 @@ const CompareProjectJudgmentsPage = () => {
                         conflictResolutionOptions={conflictResolutionOptions()}
                         currentJudgmentContext={comparisonProject().judgmentContext}
                         judgmentContextsById={judgmentContextsById()}
+                        onConflictResolutionCommentSave={handleConflictResolutionCommentSave}
                         onConflictResolutionReset={handleConflictResolutionReset}
                         onConflictResolutionSelect={handleConflictResolutionSelect}
                         rows={visibleJudgmentRows()}
