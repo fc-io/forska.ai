@@ -14,6 +14,7 @@ const {
   fetchComparisonProjectJudgmentsCount,
   fetchComparisonProjectJudgmentsPage,
   fetchComparisonProjectStats,
+  setComparisonProjectConflictResolutionComment,
 } = await import('./comparisonProjectsService.ts')
 
 const getJsonResponse = (data: unknown) => {
@@ -94,6 +95,57 @@ test('stats requests send the provenance scope only for the current-prompts scop
   expect(currentCall.url.searchParams.get('conflictResolutionProvenance')).toBe('current')
   expect(allCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/stats')
   expect(allCall.url.searchParams.has('conflictResolutionProvenance')).toBe(false)
+})
+
+test('resolution comment requests post the article and the comment, null to remove it', async () => {
+  const savedResolution = {
+    articleId: 'article-1',
+    comment: 'Checked the full text',
+    commentUpdatedAt: '2026-10-10T12:00:00.000Z',
+    label: 'Yes',
+    provenance: null,
+    provenanceMatchesCurrent: null,
+    reviewer: null,
+    reviewerDisplayName: null,
+    reviewerUserId: null,
+    setAt: '2026-10-10T11:00:00.000Z',
+    value: 'yes',
+  }
+
+  fetchResponse = getJsonResponse(savedResolution)
+  const saved = await setComparisonProjectConflictResolutionComment('comparison-project-1', {
+    articleId: 'article-1',
+    comment: 'Checked the full text',
+  })
+  const saveCall = getFetchCall()
+
+  fetchResponse = getJsonResponse({...savedResolution, comment: null})
+  await setComparisonProjectConflictResolutionComment('comparison-project-1', {articleId: 'article-1', comment: null})
+  const removeCall = getFetchCall()
+
+  expect(saved).toEqual({
+    ...savedResolution,
+    commentUpdatedAt: new Date('2026-10-10T12:00:00.000Z'),
+    setAt: new Date('2026-10-10T11:00:00.000Z'),
+  })
+  expect(saveCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/conflict-resolution/comment')
+  expect(saveCall.body).toEqual({articleId: 'article-1', comment: 'Checked the full text'})
+  expect(removeCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/conflict-resolution/comment')
+  expect(removeCall.body).toEqual({articleId: 'article-1', comment: null})
+})
+
+test('resolution comment requests surface server errors', async () => {
+  fetchResponse = new Response(
+    JSON.stringify({data: null, error: 'Set a conflict resolution before commenting on it'}),
+    {headers: {'Content-Type': 'application/json'}, status: 400},
+  )
+
+  const error = await getThrownError(() => {
+    return setComparisonProjectConflictResolutionComment('comparison-project-1', {articleId: 'article-1', comment: 'x'})
+  })
+
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toContain('Set a conflict resolution before commenting on it')
 })
 
 afterAll(() => {

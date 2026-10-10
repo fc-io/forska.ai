@@ -28,6 +28,7 @@ const mockState = vi.hoisted(() => {
       return Promise.resolve()
     }),
     search: {} as Record<string, unknown>,
+    setComparisonProjectConflictResolutionComment: vi.fn(),
   }
 })
 
@@ -94,6 +95,7 @@ vi.mock('../../../../services/comparisonProjectsService.ts', async (importOrigin
     fetchComparisonProjectJudgmentsMetadata: mockState.fetchComparisonProjectJudgmentsMetadata,
     fetchComparisonProjectJudgmentsPage: mockState.fetchComparisonProjectJudgmentsPage,
     fetchComparisonProjectStats: mockState.fetchComparisonProjectStats,
+    setComparisonProjectConflictResolutionComment: mockState.setComparisonProjectConflictResolutionComment,
   }
 })
 
@@ -203,6 +205,8 @@ const getRow = (articleId: string, contextId: string): ComparisonProjectJudgment
     conflictResolution: {
       articleId,
       label: 'yes',
+      comment: null,
+      commentUpdatedAt: null,
       provenance: {contextId, generation: 1, origin: 'ui', setAt: '2026-10-10T10:00:00.000Z'},
       provenanceMatchesCurrent: contextId === 'context-current',
       reviewer: {displayName: 'Fredrik', userId: 'local-1'},
@@ -392,6 +396,101 @@ describe('Compare project judgments page', () => {
         expect(mockState.fetchComparisonProjectJudgmentsCount.mock.calls.length).toBeGreaterThan(countCallCount)
         expect(mockState.fetchComparisonJudgmentContexts).toHaveBeenLastCalledWith(['context-current', 'context-older'])
       })
+    } finally {
+      dispose()
+      queryClient.clear()
+    }
+  })
+
+  test('saves a resolution comment optimistically, keeps the query key and refetches only the page', async () => {
+    mockState.search = {}
+    const savedResolution = {
+      ...getRow('article-current', 'context-current').conflictResolution,
+      comment: 'Server note',
+      commentUpdatedAt: '2026-10-10T12:00:00.000Z',
+    }
+    const pendingSave: {resolve: (value: typeof savedResolution) => void} = {resolve: () => {}}
+    mockState.setComparisonProjectConflictResolutionComment.mockImplementation(() => {
+      return new Promise((resolve) => {
+        pendingSave.resolve = resolve
+      })
+    })
+    const {container, dispose, queryClient} = await renderComparePage()
+    const getCommentButton = () => {
+      return container.querySelector<HTMLButtonElement>(
+        'button[aria-label$="comment on the conflict resolution for article-current"]',
+      )
+    }
+
+    try {
+      await waitForCondition(() => {
+        expect(getCommentButton()?.disabled).toBe(false)
+        expect(mockState.fetchComparisonProjectJudgmentsCount).toHaveBeenCalled()
+      })
+
+      const pageCallCount = mockState.fetchComparisonProjectJudgmentsPage.mock.calls.length
+      const countCallCount = mockState.fetchComparisonProjectJudgmentsCount.mock.calls.length
+      const pageQueryKeys = queryClient
+        .getQueryCache()
+        .findAll({queryKey: ['comparison-project-judgments-page']})
+        .map((query) => {
+          return query.queryHash
+        })
+
+      getCommentButton()?.click()
+      await tick()
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Comment for article-current"]')
+
+      if (!textarea) {
+        throw new Error('Missing resolution comment textarea')
+      }
+
+      textarea.value = '  Typed note  '
+      textarea.dispatchEvent(new InputEvent('input', {bubbles: true}))
+      textarea.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter', metaKey: true}))
+
+      await waitForCondition(() => {
+        expect(getCommentButton()?.title).toBe('Typed note')
+        expect(getCommentButton()?.disabled).toBe(true)
+      })
+      expect(mockState.setComparisonProjectConflictResolutionComment).toHaveBeenCalledWith('comparison-project-1', {
+        articleId: 'article-current',
+        comment: 'Typed note',
+      })
+
+      mockState.fetchComparisonProjectJudgmentsPage.mockImplementation(async () => {
+        return {
+          activeGeneration: 1,
+          data: [
+            {...getRow('article-current', 'context-current'), conflictResolution: savedResolution},
+            getRow('article-older', 'context-older'),
+          ],
+          isServingReady: true,
+          limit: 50,
+          nextCursor: null,
+          page: 1,
+          servingStatus: 'ready',
+          servingUpdatedAt: null,
+          totalCount: null,
+          totalPages: null,
+        }
+      })
+      pendingSave.resolve(savedResolution)
+
+      await waitForCondition(() => {
+        expect(getCommentButton()?.title).toBe('Server note')
+        expect(getCommentButton()?.disabled).toBe(false)
+        expect(mockState.fetchComparisonProjectJudgmentsPage.mock.calls.length).toBeGreaterThan(pageCallCount)
+      })
+      expect(mockState.fetchComparisonProjectJudgmentsCount.mock.calls.length).toBe(countCallCount)
+      expect(
+        queryClient
+          .getQueryCache()
+          .findAll({queryKey: ['comparison-project-judgments-page']})
+          .map((query) => {
+            return query.queryHash
+          }),
+      ).toEqual(pageQueryKeys)
     } finally {
       dispose()
       queryClient.clear()
