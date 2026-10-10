@@ -11,6 +11,9 @@ import {
   getComparisonJudgmentContextSummaryLines,
 } from './comparisonJudgmentContextSummary.ts'
 
+const otherSettingsLine =
+  'Other settings differ from the current prompts (source projects, human judgment mode or how columns combine these settings)'
+
 const getRow = (id: string, contextId: string | null | undefined): ComparisonProjectJudgmentsRow => {
   return {
     articleCreatedAt: null,
@@ -30,6 +33,7 @@ const getRow = (id: string, contextId: string | null | undefined): ComparisonPro
             reviewer: null,
             reviewerDisplayName: null,
             reviewerUserId: null,
+            setAt: null,
             value: 'yes',
           },
     hasConflict: true,
@@ -41,7 +45,7 @@ const getLlmColumn = (
   overrides: Partial<ComparisonJudgmentContextLlmColumn> = {},
 ): ComparisonJudgmentContextLlmColumn => {
   return {
-    criteriaDisposition: null,
+    contentKey: '1100',
     kind: 'llm',
     modelId: 'model-a',
     modelName: 'gpt-5.5',
@@ -92,16 +96,42 @@ const getSummary = (
   }
 }
 
-test('collects the distinct context ids of a page in sorted order', () => {
-  expect(
-    getComparisonJudgmentContextIds([
-      getRow('a', 'context-b'),
-      getRow('b', null),
-      getRow('c', undefined),
-      getRow('d', 'context-a'),
-      getRow('e', 'context-b'),
-    ]),
-  ).toEqual(['context-a', 'context-b'])
+const getSummaryModeSummary = (
+  id: string,
+  criteria: NonNullable<ComparisonJudgmentContextLlmColumn['criteria']>,
+): ComparisonJudgmentContextSummary => {
+  return getSummary(id, {
+    context: {
+      columns: [getLlmColumn({criteria, promptHeading: null, promptId: 'summary'})],
+      humanJudgmentMode: 'summary',
+      sourceProjectIds: ['project-1'],
+      summarySourceProjectId: 'project-1',
+      v: 1,
+    },
+    modelIds: ['model-a'],
+    models: [{id: 'model-a', name: 'gpt-5.5'}],
+    prompts: [
+      {heading: null, id: 'summary'},
+      ...criteria.map((criterion) => {
+        return {heading: criterion.promptHeading, id: criterion.promptId}
+      }),
+    ],
+  })
+}
+
+test('collects the distinct context ids of a page in sorted order, without the excluded current id', () => {
+  const rows = [
+    getRow('a', 'context-b'),
+    getRow('b', null),
+    getRow('c', undefined),
+    getRow('d', 'context-a'),
+    getRow('e', 'context-b'),
+    getRow('f', 'context-current'),
+  ]
+
+  expect(getComparisonJudgmentContextIds(rows)).toEqual(['context-a', 'context-b', 'context-current'])
+  expect(getComparisonJudgmentContextIds(rows, 'context-current')).toEqual(['context-a', 'context-b'])
+  expect(getComparisonJudgmentContextIds([getRow('a', 'context-current')], 'context-current')).toEqual([])
 })
 
 test('indexes fetched summaries by id and adds the current summary', () => {
@@ -115,7 +145,7 @@ test('indexes fetched summaries by id and adds the current summary', () => {
   expect(getComparisonJudgmentContextSummariesById([])).toEqual({})
 })
 
-test('summarizes models, variants, prompt headings and content without the summary column', () => {
+test('summarizes models, variants, prompt headings and server-decoded content without the summary column', () => {
   expect(getComparisonJudgmentContextSummaryLines(getSummary('context-1'))).toEqual([
     'Models: gpt-5.5, model-b',
     'System prompt variants: legacy',
@@ -124,22 +154,20 @@ test('summarizes models, variants, prompt headings and content without the summa
   ])
 })
 
-test('marks entries that the current context no longer uses', () => {
+test('marks entries the current prompts no longer use', () => {
   const current = getSummary('context-current', {
     models: [{id: 'model-a', name: 'gpt-5.5'}],
     prompts: [{heading: 'Population', id: 'prompt-1-v2'}],
-    systemPromptVariants: ['legacy'],
   })
   const older = getSummary('context-older', {
     models: [{id: 'model-a', name: 'gpt-5.5'}],
     prompts: [{heading: 'Population', id: 'prompt-1'}],
-    systemPromptVariants: [],
   })
 
   expect(getComparisonJudgmentContextSummaryLines(older, current)).toEqual([
     'Models: gpt-5.5',
-    'System prompt variants: none',
-    'Prompts: Population (not current)',
+    'System prompt variants: legacy',
+    'Prompts: Population (no longer used); added since: Population',
     'Content: title + abstract',
   ])
   expect(getComparisonJudgmentContextSummaryLines(current, current)).toEqual([
@@ -150,21 +178,67 @@ test('marks entries that the current context no longer uses', () => {
   ])
 })
 
-test('marks a content-only difference on the content line', () => {
+test('lists entries added since without the generic line when only additions explain the difference', () => {
+  const older = getSummary('context-older', {
+    models: [{id: 'model-a', name: 'gpt-5.5'}],
+    prompts: [{heading: 'Population', id: 'prompt-1'}],
+  })
+  const current = getSummary('context-current', {
+    models: [
+      {id: 'model-a', name: 'gpt-5.5'},
+      {id: 'model-c', name: 'claude'},
+    ],
+    prompts: [
+      {heading: 'Population', id: 'prompt-1'},
+      {heading: 'Intervention', id: 'prompt-3'},
+    ],
+    systemPromptVariants: ['legacy', 'screening_v1'],
+  })
+
+  expect(getComparisonJudgmentContextSummaryLines(older, current)).toEqual([
+    'Models: gpt-5.5; added since: claude',
+    'System prompt variants: legacy; added since: screening_v1',
+    'Prompts: Population; added since: Intervention',
+    'Content: title + abstract',
+  ])
+})
+
+test('compares content in both directions from the server-decoded flags', () => {
   const current = getSummary('context-current')
   const older = getSummary('context-older', {
-    context: {...current.context, columns: [getLlmColumn({useFulltext: true, useMetadata: true})]},
+    context: {...current.context, columns: [getLlmColumn({contentKey: '1111m', useFulltext: true, useMetadata: true})]},
   })
 
   expect(getComparisonJudgmentContextSummaryLines(older, current).at(-1)).toBe(
-    'Content: title + abstract + full text + metadata (not current)',
+    'Content: title + abstract + full text + metadata (no longer used); added since: title + abstract',
   )
 })
 
-test('says other settings differ when no listed entry explains the difference', () => {
+test('compares summary-mode criteria with their dispositions, including an empty criteria list', () => {
+  const current = getSummaryModeSummary('context-current', [
+    {criteriaDisposition: 'include', promptHeading: 'Population', promptId: 'prompt-1'},
+    {criteriaDisposition: 'include', promptHeading: 'Intervention', promptId: 'prompt-3'},
+  ])
+  const older = getSummaryModeSummary('context-older', [
+    {criteriaDisposition: 'exclude', promptHeading: 'Population', promptId: 'prompt-1'},
+  ])
+  const empty = getSummaryModeSummary('context-empty', [])
+
+  expect(getComparisonJudgmentContextSummaryLines(older, current)).toEqual([
+    'Models: gpt-5.5',
+    'System prompt variants: legacy',
+    'Criteria: Population (exclude) (no longer used); added since: Population (include), Intervention (include)',
+    'Content: title + abstract',
+  ])
+  expect(getComparisonJudgmentContextSummaryLines(empty, current)).toContain(
+    'Criteria: none; added since: Population (include), Intervention (include)',
+  )
+})
+
+test('says other settings differ only when neither direction explains the difference', () => {
   const current = getSummary('context-current')
   const older = getSummary('context-older', {
-    context: {...current.context, columns: [getLlmColumn({criteriaDisposition: 'exclude'})]},
+    context: {...current.context, humanJudgmentMode: 'summary', sourceProjectIds: ['project-2']},
   })
 
   expect(getComparisonJudgmentContextSummaryLines(older, current)).toEqual([
@@ -172,6 +246,9 @@ test('says other settings differ when no listed entry explains the difference', 
     'System prompt variants: legacy',
     'Prompts: Population, prompt-2',
     'Content: title + abstract',
-    'Other settings differ from the current prompts (criteria dispositions, source projects or human judgment mode)',
+    otherSettingsLine,
   ])
+  expect(
+    getComparisonJudgmentContextSummaryLines(getSummary('context-older', {systemPromptVariants: []}), current),
+  ).not.toContain(otherSettingsLine)
 })

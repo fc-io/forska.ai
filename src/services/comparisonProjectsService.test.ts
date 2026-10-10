@@ -3,13 +3,30 @@ import {afterAll, afterEach, expect, mock, test} from 'bun:test'
 let fetchResponse = new Response(JSON.stringify({data: {source: {}}}), {status: 200})
 
 const originalFetch = globalThis.fetch
-const fetchMock = mock(async () => {
+const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) => {
   return fetchResponse
 })
 
 globalThis.fetch = fetchMock as unknown as typeof fetch
 
-const {analyzeComparisonProjectConflictResolutionPdfImport} = await import('./comparisonProjectsService.ts')
+const {
+  analyzeComparisonProjectConflictResolutionPdfImport,
+  fetchComparisonProjectJudgmentsCount,
+  fetchComparisonProjectJudgmentsPage,
+  fetchComparisonProjectStats,
+} = await import('./comparisonProjectsService.ts')
+
+const getJsonResponse = (data: unknown) => {
+  return new Response(JSON.stringify({data}), {headers: {'Content-Type': 'application/json'}, status: 200})
+}
+
+const getFetchCall = () => {
+  const [input, init] = fetchMock.mock.calls.at(-1) ?? []
+  const url = input instanceof Request ? input.url : String(input)
+  const body = input instanceof Request ? null : init?.body
+
+  return {body: typeof body === 'string' ? (JSON.parse(body) as Record<string, unknown>) : null, url: new URL(url)}
+}
 
 const getThrownError = async (run: () => Promise<unknown>) => {
   return run().catch((error: unknown) => {
@@ -36,6 +53,47 @@ test('PDF conflict-resolution import surfaces plain-text server errors', async (
   expect(error).toBeInstanceOf(Error)
   expect((error as Error).message).toContain('no fillable form fields')
   expect((error as Error).message).not.toBe('No data returned')
+})
+
+test('judgments page and count requests carry the resolution prompt filter', async () => {
+  fetchResponse = getJsonResponse({data: [], nextCursor: null})
+  await fetchComparisonProjectJudgmentsPage('comparison-project-1', 50, [], [], [], ['yes'], 'metformin', 'cursor-1', [
+    'outdated',
+    'unknown',
+  ])
+  const pageCall = getFetchCall()
+
+  fetchResponse = getJsonResponse({totalCount: 3})
+  await fetchComparisonProjectJudgmentsCount('comparison-project-1', 50, [], [], [], ['yes'], '', ['current'])
+  const countCall = getFetchCall()
+
+  expect(pageCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/judgments')
+  expect(pageCall.body).toMatchObject({
+    conflictResolutionFilter: ['yes'],
+    conflictResolutionProvenanceFilter: ['outdated', 'unknown'],
+    cursor: 'cursor-1',
+    search: 'metformin',
+  })
+  expect(countCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/judgments/count')
+  expect(countCall.body).toMatchObject({
+    conflictResolutionFilter: ['yes'],
+    conflictResolutionProvenanceFilter: ['current'],
+  })
+})
+
+test('stats requests send the provenance scope only for the current-prompts scope', async () => {
+  fetchResponse = getJsonResponse({comparisons: []})
+  await fetchComparisonProjectStats('comparison-project-1', 'current')
+  const currentCall = getFetchCall()
+
+  fetchResponse = getJsonResponse({comparisons: []})
+  await fetchComparisonProjectStats('comparison-project-1')
+  const allCall = getFetchCall()
+
+  expect(currentCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/stats')
+  expect(currentCall.url.searchParams.get('conflictResolutionProvenance')).toBe('current')
+  expect(allCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/stats')
+  expect(allCall.url.searchParams.has('conflictResolutionProvenance')).toBe(false)
 })
 
 afterAll(() => {

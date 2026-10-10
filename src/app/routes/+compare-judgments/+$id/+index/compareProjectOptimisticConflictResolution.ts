@@ -21,6 +21,7 @@ export const getCompareProjectOptimisticConflictResolution = (params: {
     reviewer: null,
     reviewerDisplayName: null,
     reviewerUserId: null,
+    setAt: params.setAt.toISOString(),
     value: params.value,
   }
 }

@@ -39,6 +39,8 @@ const createStats = (
   conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance,
   judgmentContextId: string | null = 'context-current',
 ): ComparisonProjectStats => {
+  const applied = conflictResolutionProvenance === 'all' || judgmentContextId !== null
+
   return {
     activeGeneration: 1,
     additionalProjectStats: {conflictResolutionAnswerComparisons: [], resolvedTruthComparisons: []},
@@ -60,6 +62,11 @@ const createStats = (
       },
     ],
     conflictResolutionProvenance,
+    conflictResolutionProvenanceScope: {
+      applied,
+      reason: applied ? null : 'no-active-context',
+      requested: conflictResolutionProvenance,
+    },
     isServingReady: true,
     judgmentContextId,
     servingStatus: 'ready',
@@ -154,7 +161,7 @@ describe('ComparisonProjectStatsCard', () => {
         'Conflict resolution comparisons below use only resolutions made under the current prompts.',
       )
       expect(container.textContent).toContain('Conflict resolution stats by answer (current prompts only)')
-      expect(container.textContent).not.toContain('not recorded yet')
+      expect(container.textContent).not.toContain('Current prompts are not known')
 
       getToggle(container)?.click()
 
@@ -164,7 +171,7 @@ describe('ComparisonProjectStatsCard', () => {
     }
   })
 
-  test('explains an empty current scope when the active generation has no recorded context', () => {
+  test('keeps the checkbox on and shows all-resolution labels when the server could not apply the current scope', () => {
     const {container, dispose} = renderCard({
       conflictResolutionEnabled: true,
       conflictResolutionProvenance: 'current',
@@ -172,7 +179,14 @@ describe('ComparisonProjectStatsCard', () => {
     })
 
     try {
-      expect(container.textContent).toContain('The current prompts are not recorded yet')
+      expect(getToggle(container)?.checked).toBe(true)
+      expect(container.textContent).toContain(
+        'Current prompts are not known for this generation yet; showing all resolutions',
+      )
+      expect(container.textContent).toContain('Conflict resolution (no fallback)')
+      expect(container.textContent).not.toContain('under the current prompts (no fallback)')
+      expect(container.textContent).not.toContain('Conflict resolution comparisons below use only')
+      expect(container.textContent).not.toContain('(current prompts only)')
     } finally {
       dispose()
     }

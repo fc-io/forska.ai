@@ -31,6 +31,7 @@ test('appends retained conflict-resolution edits that no longer match the server
       reviewer: {displayName: 'Reviewer', userId: 'reviewer-1'},
       reviewerDisplayName: 'Reviewer',
       reviewerUserId: 'reviewer-1',
+      setAt: null,
       value: 'no',
     }),
   }
@@ -52,6 +53,7 @@ test('does not duplicate retained edits still present in the server-filtered row
       reviewer: null,
       reviewerDisplayName: null,
       reviewerUserId: null,
+      setAt: null,
       value: 'yes',
     }),
   ]
@@ -64,6 +66,7 @@ test('does not duplicate retained edits still present in the server-filtered row
       reviewer: {displayName: 'Reviewer', userId: 'reviewer-1'},
       reviewerDisplayName: 'Reviewer',
       reviewerUserId: 'reviewer-1',
+      setAt: null,
       value: 'no',
     }),
   }
