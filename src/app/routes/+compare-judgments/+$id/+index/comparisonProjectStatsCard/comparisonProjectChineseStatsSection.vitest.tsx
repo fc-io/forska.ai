@@ -60,7 +60,9 @@ const createStats = (
     additionalProjectStats: emptyAdditionalStats,
     categoryBreakdowns,
     comparisons,
+    conflictResolutionProvenance: 'all',
     isServingReady: true,
+    judgmentContextId: null,
     servingStatus: 'ready',
     servingUpdatedAt: null,
   }

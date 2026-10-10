@@ -57,6 +57,7 @@ import {
   getCompareProjectJudgmentsSearchParams,
   getInitialCompareProjectJudgmentsUrlState,
 } from './+index/compareProjectJudgmentsUrlState.ts'
+import {getCompareProjectOptimisticConflictResolution} from './+index/compareProjectOptimisticConflictResolution.ts'
 import {CompareProjectResolutionTransferActions} from './+index/compareProjectResolutionTransferActions.tsx'
 import {ComparisonProjectServingProgress} from './+index/comparisonProjectServingProgress.tsx'
 import {ComparisonProjectStatsCard} from './+index/comparisonProjectStatsCard.tsx'
@@ -570,22 +571,19 @@ const CompareProjectJudgmentsPage = () => {
   const shouldDeferCurrentJudgmentsPageRefetch = () => {
     return showConflictResolutionFilter() && conflictResolutionFilters().length > 0
   }
-  const getOptimisticConflictResolution = (
-    articleId: string,
-    value: string,
-    previousConflictResolution: ComparisonProjectJudgmentsPage['data'][number]['conflictResolution'],
-  ): ComparisonProjectJudgmentsPage['data'][number]['conflictResolution'] => {
+  const getOptimisticConflictResolution = (articleId: string, value: string) => {
     const option = conflictResolutionOptions().find((candidate) => {
       return candidate.value === value
     })
 
-    return {
+    return getCompareProjectOptimisticConflictResolution({
+      activeGeneration: comparisonProjectQuery.data?.activeGeneration ?? null,
       articleId,
+      judgmentContextId: comparisonProjectQuery.data?.judgmentContextId ?? null,
       label: option?.label ?? value,
-      reviewerDisplayName: previousConflictResolution?.reviewerDisplayName ?? null,
-      reviewerUserId: previousConflictResolution?.reviewerUserId ?? null,
+      setAt: new Date(),
       value,
-    }
+    })
   }
   const refetchComparisonProjectStats = async () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-stats', comparisonProjectId()]})
@@ -650,10 +648,7 @@ const CompareProjectJudgmentsPage = () => {
       visibleJudgmentRows().find((row) => {
         return row.canonicalArticleId === articleId
       })?.conflictResolution ?? null
-    updateCurrentJudgmentsPageConflictResolution(
-      articleId,
-      getOptimisticConflictResolution(articleId, value, previousConflictResolution),
-    )
+    updateCurrentJudgmentsPageConflictResolution(articleId, getOptimisticConflictResolution(articleId, value))
 
     try {
       const conflictResolution = await setComparisonProjectConflictResolution(comparisonProjectId(), {articleId, value})

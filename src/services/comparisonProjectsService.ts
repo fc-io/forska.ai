@@ -305,17 +305,21 @@ export type ComparisonJudgmentContextSummary = {
 
 export type ComparisonProjectConflictResolutionOrigin = 'file-import' | 'pdf-import' | 'project-import' | 'ui'
 
+export type ComparisonProjectConflictResolutionProvenance = {
+  contextId: string | null
+  generation: number | null
+  origin: ComparisonProjectConflictResolutionOrigin | null
+  setAt: Date | string | null
+}
+
+export type ComparisonProjectConflictResolutionReviewer = {displayName: string | null; userId: string}
+
 export type ComparisonProjectConflictResolutionValue = {
   articleId: string
   label: string
-  provenance?: {
-    contextId: string | null
-    generation: number | null
-    origin: ComparisonProjectConflictResolutionOrigin | null
-    setAt: Date | string | null
-  } | null
-  provenanceMatchesCurrent?: boolean | null
-  reviewer?: {displayName: string | null; userId: string} | null
+  provenance: ComparisonProjectConflictResolutionProvenance | null
+  provenanceMatchesCurrent: boolean | null
+  reviewer: ComparisonProjectConflictResolutionReviewer | null
   reviewerDisplayName: string | null
   reviewerUserId: string | null
   value: string
@@ -479,8 +483,8 @@ export type ComparisonProjectStats = {
   additionalProjectStats: ComparisonProjectAdditionalStats
   categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]
   comparisons: ComparisonProjectStatsComparison[]
-  conflictResolutionProvenance?: ComparisonProjectStatsConflictResolutionProvenance
-  judgmentContextId?: string | null
+  conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance
+  judgmentContextId: string | null
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus
   servingUpdatedAt: Date | string | null
@@ -531,7 +535,14 @@ export type ComparisonProjectConflictResolutionTransferRow = {
   medrxivId?: string | null
   url?: string | null
   identifiers: ComparisonProjectConflictResolutionTransferIdentifier[]
+  provenance?: ComparisonProjectConflictResolutionTransferProvenance | null
   resolution: ComparisonProjectConflictResolutionTransferResolution
+}
+export type ComparisonProjectConflictResolutionTransferProvenance = {
+  contextId: string | null
+  origin: string | null
+  reviewerDisplayName: string | null
+  setAt: string | null
 }
 export type ComparisonProjectConflictResolutionTransferSource = {
   comparisonProjectId: string
@@ -540,8 +551,9 @@ export type ComparisonProjectConflictResolutionTransferSource = {
 }
 export type ComparisonProjectConflictResolutionTransferArtifact = {
   format: 'forska.comparisonProject.conflictResolution.transfer'
-  version: 1
+  version: 1 | 2
   exportedAt: string
+  judgmentContexts?: Array<{context: Record<string, unknown>; id: string}>
   source: ComparisonProjectConflictResolutionTransferSource
   rows: ComparisonProjectConflictResolutionTransferRow[]
 }
