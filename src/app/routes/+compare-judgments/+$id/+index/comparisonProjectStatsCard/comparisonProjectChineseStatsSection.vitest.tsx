@@ -61,6 +61,7 @@ const createStats = (
     categoryBreakdowns,
     comparisons,
     conflictResolutionProvenance: 'all',
+    conflictResolutionProvenanceScope: {applied: true, reason: null, requested: 'all'},
     isServingReady: true,
     judgmentContextId: null,
     servingStatus: 'ready',

@@ -273,9 +273,8 @@ export type ComparisonJudgmentContextCriterion = {
 }
 
 export type ComparisonJudgmentContextLlmColumn = {
-  contentKey?: string
+  contentKey: string
   criteria?: ComparisonJudgmentContextCriterion[]
-  criteriaDisposition?: string | null
   kind: 'llm'
   modelId: string
   modelName: string | null
@@ -330,7 +329,7 @@ export type ComparisonProjectConflictResolutionValue = {
   reviewer: ComparisonProjectConflictResolutionReviewer | null
   reviewerDisplayName: string | null
   reviewerUserId: string | null
-  setAt?: Date | string | null
+  setAt: Date | string | null
   value: string
 }
 
@@ -498,7 +497,7 @@ export type ComparisonProjectStats = {
   categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]
   comparisons: ComparisonProjectStatsComparison[]
   conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance
-  conflictResolutionProvenanceScope?: ComparisonProjectStatsConflictResolutionProvenanceScope
+  conflictResolutionProvenanceScope: ComparisonProjectStatsConflictResolutionProvenanceScope
   judgmentContextId: string | null
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus
@@ -991,12 +990,18 @@ export const fetchComparisonProjectJudgmentsCount = async (
   return getResponseData<ComparisonProjectJudgmentsCount>(response, 'Failed to fetch comparison project judgment count')
 }
 
+const getComparisonProjectStatsQuery = (
+  conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance,
+): {conflictResolutionProvenance?: ComparisonProjectStatsConflictResolutionProvenance} => {
+  return conflictResolutionProvenance === 'current' ? {conflictResolutionProvenance} : {}
+}
+
 export const fetchComparisonProjectStats = async (
   comparisonProjectId: string,
   conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance = 'all',
 ) => {
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).stats.get({
-    query: {conflictResolutionProvenance},
+    query: getComparisonProjectStatsQuery(conflictResolutionProvenance),
   })
 
   return getResponseData<ComparisonProjectStats>(response, 'Failed to fetch comparison project stats')

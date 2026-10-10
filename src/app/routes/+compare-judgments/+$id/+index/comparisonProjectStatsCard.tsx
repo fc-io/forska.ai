@@ -12,6 +12,7 @@ import {
   ComparisonProjectStatsProvenanceToggle,
   getComparisonProjectStatsConflictResolutionLabel,
   getComparisonProjectStatsConflictResolutionScope,
+  getIsComparisonProjectStatsCurrentScopeNotApplied,
 } from './comparisonProjectStatsCard/comparisonProjectStatsProvenanceScope.tsx'
 
 type ComparisonProjectStatsCardProps = {
@@ -215,6 +216,10 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
         <Show when={props.conflictResolutionEnabled}>
           <ComparisonProjectStatsProvenanceToggle
             checked={props.conflictResolutionProvenance === 'current'}
+            isNotApplied={
+              props.conflictResolutionProvenance === 'current'
+              && getIsComparisonProjectStatsCurrentScopeNotApplied(props.stats)
+            }
             onChange={(value) => {
               props.onConflictResolutionProvenanceChange?.(value)
             }}

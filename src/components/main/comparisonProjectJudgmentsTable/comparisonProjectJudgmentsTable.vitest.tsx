@@ -81,6 +81,7 @@ const getResolution = (
     reviewer: {displayName: 'Reviewer', userId: 'reviewer-1'},
     reviewerDisplayName: 'Reviewer',
     reviewerUserId: 'reviewer-1',
+    setAt: null,
     value,
   }
 }
@@ -400,6 +401,7 @@ describe('ComparisonProjectJudgmentsTable', () => {
             provenanceMatchesCurrent: false,
             reviewer: {displayName: 'Anna Berg', userId: 'local-1'},
             reviewerDisplayName: 'Anna Berg',
+            setAt,
           }),
         }),
       ],
@@ -411,14 +413,14 @@ describe('ComparisonProjectJudgmentsTable', () => {
       const provenance = container.querySelector('td:nth-child(2) [title]:not(button)')
 
       expect(cellText).toContain(`Anna Berg · ${format(new Date(setAt), 'yyyy-MM-dd HH:mm')}`)
+      expect(cellText).not.toContain('before tracking')
       expect(cellText).toContain('Older prompts')
       expect(provenance?.getAttribute('title')).toBe(
         [
           'Resolved under older prompts',
-          'Models: gpt-5 (not current)',
-          'System prompt variants: legacy (not current)',
-          'Prompts: Population (not current)',
-          'Content: none',
+          'Models: gpt-5 (no longer used); added since: gpt-5.5',
+          'System prompt variants: legacy (no longer used); added since: screening_v1',
+          'Prompts: Population (no longer used); added since: Population',
         ].join('\n'),
       )
       expect(container.querySelector<HTMLSelectElement>('select')?.value).toBe('yes')
@@ -441,6 +443,7 @@ describe('ComparisonProjectJudgmentsTable', () => {
               setAt: '2026-10-10T10:00:00.000Z',
             },
             provenanceMatchesCurrent,
+            setAt: '2026-10-10T10:00:00.000Z',
           }),
         }),
       ],
@@ -457,6 +460,37 @@ describe('ComparisonProjectJudgmentsTable', () => {
     }
   })
 
+  test('marks a pre-tracking reviewer and shows the stored set time for rows without provenance', async () => {
+    const setAt = '2026-09-01T09:30:00.000Z'
+    const {container, dispose} = renderTable({
+      currentJudgmentContext: currentContext,
+      rows: [
+        getConflictRow({
+          conflictResolution: getProvenanceResolution({
+            provenance: null,
+            provenanceMatchesCurrent: null,
+            reviewer: {displayName: 'Fredrik', userId: 'local-1'},
+            reviewerDisplayName: 'Fredrik',
+            setAt,
+          }),
+        }),
+      ],
+    })
+
+    try {
+      await Promise.resolve()
+      const line = container.querySelector('td:nth-child(2) p')
+      const provenance = container.querySelector('td:nth-child(2) [title]:not(button)')
+
+      expect(line?.textContent).toBe(`Fredrik (before tracking) · ${format(new Date(setAt), 'yyyy-MM-dd HH:mm')}`)
+      expect(line?.querySelector('span')?.textContent).toBe('(before tracking)')
+      expect(provenance?.getAttribute('title')).toContain('Resolved before prompt tracking')
+      expect(container.querySelector('td:nth-child(2)')?.textContent).not.toContain('Older prompts')
+    } finally {
+      dispose()
+    }
+  })
+
   test('labels imported resolutions with their import time and renders old rows without provenance', async () => {
     const {container, dispose} = renderTable({
       rows: [
@@ -468,6 +502,7 @@ describe('ComparisonProjectJudgmentsTable', () => {
             reviewer: null,
             reviewerDisplayName: null,
             reviewerUserId: null,
+            setAt: '2026-10-10T10:00:00.000Z',
           }),
           id: 'article-imported',
         }),
@@ -480,6 +515,17 @@ describe('ComparisonProjectJudgmentsTable', () => {
             reviewerUserId: null,
           }),
           id: 'article-old',
+        }),
+        getConflictRow({
+          articleTitle: 'Old timed article',
+          canonicalArticleId: 'article-old-timed',
+          conflictResolution: getProvenanceResolution({
+            reviewer: null,
+            reviewerDisplayName: null,
+            reviewerUserId: null,
+            setAt: '2026-08-01T12:00:00.000Z',
+          }),
+          id: 'article-old-timed',
         }),
       ],
     })
@@ -497,6 +543,9 @@ describe('ComparisonProjectJudgmentsTable', () => {
       expect(cells[1]?.querySelector('p')).toBeNull()
       expect(cells[1]?.querySelectorAll('select')).toHaveLength(1)
       expect(cells[1]?.querySelector('button[title="Reset conflict resolution"]')).not.toBeNull()
+      expect(cells[2]?.querySelector('p')?.textContent).toBe(
+        format(new Date('2026-08-01T12:00:00.000Z'), 'yyyy-MM-dd HH:mm'),
+      )
     } finally {
       dispose()
     }

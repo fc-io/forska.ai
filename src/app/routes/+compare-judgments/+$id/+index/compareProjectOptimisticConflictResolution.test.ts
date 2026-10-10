@@ -22,6 +22,7 @@ test('optimistic conflict resolution assumes a UI save under the active judgment
     reviewer: null,
     reviewerDisplayName: null,
     reviewerUserId: null,
+    setAt: '2026-10-10T12:34:56.000Z',
     value: 'yes',
   })
 })
