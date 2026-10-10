@@ -1,6 +1,9 @@
 import {createHash} from 'node:crypto'
 
-import {comparisonProjectConflictResolutionCommentMaxLength} from '../../../utils/comparisonProjectConflictResolutionComment.ts'
+import {
+  comparisonProjectConflictResolutionCommentMaxLength,
+  removeComparisonProjectConflictResolutionCommentControlCharacters,
+} from '../../../utils/comparisonProjectConflictResolutionComment.ts'
 import type {ComparisonProjectConflictResolutionProvenanceFilter} from '../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import {escapeSqlString, getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 
@@ -118,8 +121,18 @@ export const getComparisonProjectConflictResolutionInsertValuesSql = (params: {
         )`
 }
 
+const getTextWithinUtf16Length = (text: string, maxLength: number) => {
+  const cutText = text.slice(0, maxLength)
+
+  return /[\uD800-\uDBFF]$/.test(cutText) ? cutText.slice(0, -1) : cutText
+}
+
 export const getImportedComparisonProjectConflictResolutionComment = (value: string | null | undefined) => {
-  return getTrimmedText(value)?.slice(0, comparisonProjectConflictResolutionCommentMaxLength).trim() || null
+  const comment = getTrimmedText(removeComparisonProjectConflictResolutionCommentControlCharacters(value ?? ''))
+
+  return comment
+    ? getTextWithinUtf16Length(comment, comparisonProjectConflictResolutionCommentMaxLength).trim() || null
+    : null
 }
 
 export const getImportedReviewerDisplayName = (value: string | null | undefined) => {
