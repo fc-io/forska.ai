@@ -8,6 +8,7 @@ import type {
   ComparisonProjectConflictResolutionTransferArtifact,
   ComparisonProjectConflictResolutionTransferRowV2,
 } from './comparisonProjectConflictResolutionFileTransfer.ts'
+import {getImportedReviewerDisplayName} from './comparisonProjectConflictResolutionProvenance.ts'
 
 export type ComparisonProjectConflictResolutionImportSource = {
   id: string
@@ -1036,7 +1037,7 @@ const getComparisonProjectConflictResolutionImportTransferRowProvenance = (
   return row.provenance
     ? {
         judgmentContextId: getComparisonProjectConflictResolutionImportContextId(row.provenance.contextId),
-        reviewerDisplayName: row.provenance.reviewerDisplayName?.trim() || null,
+        reviewerDisplayName: getImportedReviewerDisplayName(row.provenance.reviewerDisplayName),
         reviewerUserId: null,
       }
     : null

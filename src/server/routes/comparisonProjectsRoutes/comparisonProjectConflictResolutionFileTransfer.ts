@@ -415,12 +415,33 @@ const assertNoUnexpectedRootKeys = (artifact: unknown) => {
   }
 }
 
+export const comparisonProjectConflictResolutionTransferJudgmentContextMaxBytes = 64 * 1024
+
+const assertJudgmentContextsWithinSizeLimit = (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
+  const oversizedContext = (artifact.judgmentContexts ?? []).find((entry) => {
+    return (
+      Buffer.byteLength(JSON.stringify(entry.context), 'utf8')
+      > comparisonProjectConflictResolutionTransferJudgmentContextMaxBytes
+    )
+  })
+
+  if (oversizedContext) {
+    throw new Error(
+      `Conflict resolution transfer judgment context ${oversizedContext.id.slice(0, 64)} exceeds ${comparisonProjectConflictResolutionTransferJudgmentContextMaxBytes} bytes`,
+    )
+  }
+
+  return artifact
+}
+
 export const validateComparisonProjectConflictResolutionTransferArtifact = (
   artifact: unknown,
 ): ComparisonProjectConflictResolutionTransferArtifact => {
   assertNoUnexpectedRootKeys(artifact)
 
-  return comparisonProjectConflictResolutionTransferArtifactSchema.assert(artifact)
+  return assertJudgmentContextsWithinSizeLimit(
+    comparisonProjectConflictResolutionTransferArtifactSchema.assert(artifact),
+  )
 }
 
 export const createComparisonProjectConflictResolutionTransferArtifact = (params: {

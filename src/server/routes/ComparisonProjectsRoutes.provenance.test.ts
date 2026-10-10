@@ -309,7 +309,15 @@ test('activation writes one content-addressed context shared by identically conf
     }
   }>(`/api/comparison-projects/${sourceComparisonProjectId}`)
   const lookupResponse = await postJson('/api/comparison-projects/judgment-contexts', {
-    ids: [sourceContextId, 'f'.repeat(64), 'not-a-context-id'],
+    ids: [sourceContextId, 'f'.repeat(64)],
+  })
+  const malformedLookupResponse = await postJson('/api/comparison-projects/judgment-contexts', {
+    ids: [sourceContextId, 'not-a-context-id'],
+  })
+  const oversizedLookupResponse = await postJson('/api/comparison-projects/judgment-contexts', {
+    ids: Array.from({length: 101}, (_value, index) => {
+      return index.toString(16).padStart(64, '0')
+    }),
   })
   const lookup = (await lookupResponse.json()) as {data: Array<{id: string}>}
 
@@ -332,6 +340,8 @@ test('activation writes one content-addressed context shared by identically conf
       return summary.id
     }),
   ).toEqual([sourceContextId])
+  expect(malformedLookupResponse.status).toBe(422)
+  expect(oversizedLookupResponse.status).toBe(422)
 })
 
 test('UI saves record the reviewer snapshot, serving generation, context and origin', async () => {

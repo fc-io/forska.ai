@@ -1783,12 +1783,48 @@ export const getComparisonProjectStatsArticleCategoryCountsSql = (params: {
   `
 }
 
+const comparisonProjectStatsConflictResolutionKindsSql =
+  "'llm-vs-conflict-resolution', 'llm-vs-conflict-resolution-no-fallback', 'human-vs-conflict-resolution'"
+
+const getComparisonProjectStatsCurrentJudgmentContextId = (
+  params: ComparisonProjectStatsConflictResolutionProvenanceParams,
+) => {
+  return params.conflictResolutionProvenance === 'current' ? (params.currentJudgmentContextId ?? null) : null
+}
+
 const getComparisonProjectStatsConflictResolutionProvenanceSql = (
   params: ComparisonProjectStatsConflictResolutionProvenanceParams,
 ) => {
-  return params.conflictResolutionProvenance === 'current'
-    ? `AND judgment_context_id = CAST(${getSqlLiteral(params.currentJudgmentContextId ?? null)} AS VARCHAR)`
-    : ''
+  const currentJudgmentContextId = getComparisonProjectStatsCurrentJudgmentContextId(params)
+
+  return currentJudgmentContextId === null ? '' : `AND judgment_context_id = ${getSqlLiteral(currentJudgmentContextId)}`
+}
+
+const getComparisonProjectStatsNonCurrentResolutionCteSql = (
+  params: ComparisonProjectStatsConflictResolutionProvenanceParams & {comparisonProjectId: string},
+) => {
+  const currentJudgmentContextId = getComparisonProjectStatsCurrentJudgmentContextId(params)
+
+  return currentJudgmentContextId === null
+    ? ''
+    : `
+    non_current_conflict_resolution_article AS (
+      SELECT DISTINCT article_id
+      FROM ${comparisonProjectConflictResolutionTable}
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+        AND answer_value IS NOT NULL
+        AND NULLIF(TRIM(answer_value), '') IS NOT NULL
+        AND (judgment_context_id IS NULL OR judgment_context_id <> ${getSqlLiteral(currentJudgmentContextId)})
+    ),`
+}
+
+const getComparisonProjectStatsNonCurrentResolutionPairFilterSql = (
+  params: ComparisonProjectStatsConflictResolutionProvenanceParams,
+) => {
+  return getComparisonProjectStatsCurrentJudgmentContextId(params) === null
+    ? ''
+    : `WHERE comparison_group.comparison_kind NOT IN (${comparisonProjectStatsConflictResolutionKindsSql})
+        OR left_cell.article_id NOT IN (SELECT article_id FROM non_current_conflict_resolution_article)`
 }
 
 export const getComparisonProjectStatsAggregatesSql = (
@@ -1866,7 +1902,7 @@ export const getComparisonProjectStatsAggregatesSql = (
         AND answer_value IS NOT NULL
         AND NULLIF(TRIM(answer_value), '') IS NOT NULL
         ${getComparisonProjectStatsConflictResolutionProvenanceSql(params)}
-    ),
+    ),${getComparisonProjectStatsNonCurrentResolutionCteSql(params)}
     comparison_pair AS (
       SELECT
         comparison_group.comparison_id,
@@ -1888,6 +1924,7 @@ export const getComparisonProjectStatsAggregatesSql = (
         AND filter_cell.answer_value = comparison_group.filter_answer_value`
           : ''
       }
+      ${getComparisonProjectStatsNonCurrentResolutionPairFilterSql(params)}
     ),
     pair_answer_value AS (
       SELECT

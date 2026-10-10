@@ -266,8 +266,16 @@ export type ComparisonProjectLinkedSourceProject = {
   humanJudgmentMode: HumanJudgmentMode
 }
 
-export type ComparisonJudgmentContextLlmColumn = {
+export type ComparisonJudgmentContextCriterion = {
   criteriaDisposition: string | null
+  promptHeading: string | null
+  promptId: string
+}
+
+export type ComparisonJudgmentContextLlmColumn = {
+  contentKey?: string
+  criteria?: ComparisonJudgmentContextCriterion[]
+  criteriaDisposition?: string | null
   kind: 'llm'
   modelId: string
   modelName: string | null
@@ -322,6 +330,7 @@ export type ComparisonProjectConflictResolutionValue = {
   reviewer: ComparisonProjectConflictResolutionReviewer | null
   reviewerDisplayName: string | null
   reviewerUserId: string | null
+  setAt?: Date | string | null
   value: string
 }
 
@@ -478,12 +487,18 @@ export type ComparisonProjectStatsCategoryBreakdown = {
   label: string
 }
 export type ComparisonProjectStatsConflictResolutionProvenance = 'all' | 'current'
+export type ComparisonProjectStatsConflictResolutionProvenanceScope = {
+  applied: boolean
+  reason: 'no-active-context' | null
+  requested: ComparisonProjectStatsConflictResolutionProvenance
+}
 export type ComparisonProjectStats = {
   activeGeneration: number | null
   additionalProjectStats: ComparisonProjectAdditionalStats
   categoryBreakdowns: ComparisonProjectStatsCategoryBreakdown[]
   comparisons: ComparisonProjectStatsComparison[]
   conflictResolutionProvenance: ComparisonProjectStatsConflictResolutionProvenance
+  conflictResolutionProvenanceScope?: ComparisonProjectStatsConflictResolutionProvenanceScope
   judgmentContextId: string | null
   isServingReady: boolean
   servingStatus: ComparisonProjectServingStatus

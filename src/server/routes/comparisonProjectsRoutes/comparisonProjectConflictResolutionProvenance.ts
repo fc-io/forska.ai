@@ -49,6 +49,7 @@ export const comparisonProjectConflictResolutionInsertColumnsSql = `
 `
 
 const transferReviewerIdPrefix = 'transfer:'
+export const importedReviewerDisplayNameMaxLength = 200
 const comparisonProjectConflictResolutionOrigins = new Set<string>([
   'file-import',
   'pdf-import',
@@ -97,6 +98,10 @@ export const getComparisonProjectConflictResolutionInsertValuesSql = (params: {
           ${getSqlLiteral(params.provenance.origin)},
           ${getSqlLiteral(params.provenance.originRef)}
         )`
+}
+
+export const getImportedReviewerDisplayName = (value: string | null | undefined) => {
+  return getTrimmedText(value)?.slice(0, importedReviewerDisplayNameMaxLength).trim() || null
 }
 
 export const getComparisonProjectConflictResolutionOriginRef = (params: {
