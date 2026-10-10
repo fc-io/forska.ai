@@ -114,17 +114,16 @@ Until the row exists, saves record a NULL context (provenance unknown).
 - Version 1 transfer artifacts and PDFs without the context id import as before, with NULL context.
 - No new secondary indexes; the save path is still DELETE + INSERT with no extra read.
 
-## Client follow-ups
+## Client
 
-The server contract is in `src/services/comparisonProjectsService.ts` (`ComparisonProjectConflictResolutionValue`, `ComparisonJudgmentContextSummary`, `fetchComparisonJudgmentContexts`, the optional `conflictResolutionProvenanceFilters` argument of the page/count fetchers, `fetchComparisonProjectStats(id, 'current')`) and `src/utils/comparisonProjectConflictResolutionFilter.ts` (`comparisonProjectConflictResolutionProvenanceFilters`, options, normalizer). The new resolution fields are optional in the client type until the optimistic update in `+compare-judgments/+$id/+index.tsx` fills them.
+The client contract lives in `src/services/comparisonProjectsService.ts` (`ComparisonProjectConflictResolutionValue`, `ComparisonJudgmentContextSummary`, `fetchComparisonJudgmentContexts`, the `conflictResolutionProvenanceFilters` argument of the page/count fetchers, `fetchComparisonProjectStats(id, 'current')`) and `src/utils/comparisonProjectConflictResolutionFilter.ts` (`comparisonProjectConflictResolutionProvenanceFilters`, options, normalizer).
 
-- Show reviewer name and set time under the resolution select.
-- Badge "resolved under older prompts" when `provenanceMatchesCurrent === false`; tooltip with models, variants and prompt headings from one `fetchComparisonJudgmentContexts` call per page for its distinct context ids.
-- Provenance filter control next to the conflict resolution filter, kept in the URL like the other filters.
-- Stats toggle for current-context resolutions.
-- Optimistic save: use the save response, which now returns the full resolution.
-- Fix round 1 additions, optional in the client type until the client uses them:
-  - the top-level `setAt` on every resolution, for showing the set time on pre-feature rows too;
-  - `conflictResolutionProvenanceScope` on stats: when `applied` is false (`reason: 'no-active-context'`), show that the current-prompts toggle had no effect;
-  - `contentKey` and `criteria` on context columns (`criteriaDisposition` is no longer on columns).
-- `outdated` also covers rows imported from another comparison project with a different context, so the label should not only say "older prompts".
+What the compare page does with it:
+
+- The resolution cell shows the reviewer name and the set time (`setAt`) under the select; rows with a reviewer but no provenance show the name with a "(before tracking)" marker, since old file imports may name the importer. Imported rows show "imported <time>".
+- An "Older prompts" badge appears when `provenanceMatchesCurrent === false`, nothing for `true` or `null`. The tooltip lists models, system prompt variants, prompt headings, criteria and content settings, marking entries the current context no longer uses and entries added since. Context summaries come from one `fetchComparisonJudgmentContexts` call per page for the page's distinct context ids, minus the active context, which the project detail already carries. The badge label covers imports from another comparison project with a different context as well.
+- The "Resolution prompts" filter (Current prompts / Older prompts / Unknown) sits next to the conflict resolution filter, is kept in the URL, and flows into the page and count queries, CSV/PDF export and resolution export.
+- The optimistic save uses the save response, which returns the full resolution.
+- When the active generation or active context id changes, the page, count, stats and context-lookup queries are invalidated so badges and filter results refresh after a rebuild.
+- Project Stats has the checkbox "Only resolutions made under the current prompts". When the response says `conflictResolutionProvenanceScope.applied === false`, a note explains that current prompts are not known for this generation yet and all resolutions are shown.
+- The export page details card shows the active context summary.
