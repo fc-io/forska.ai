@@ -4,14 +4,25 @@ import type {
   ComparisonProjectJudgmentsColumn,
   ComparisonProjectStats,
   ComparisonProjectStatsComparison,
+  ComparisonProjectStatsConflictResolutionProvenance,
 } from '../../../../../services/comparisonProjectsService.ts'
 import {ComparisonProjectAdditionalStatsSection} from './comparisonProjectStatsCard/comparisonProjectAdditionalStatsSection.tsx'
+import {
+  ComparisonProjectStatsProvenanceScopeNote,
+  ComparisonProjectStatsProvenanceToggle,
+  getComparisonProjectStatsConflictResolutionLabel,
+  getComparisonProjectStatsConflictResolutionScope,
+} from './comparisonProjectStatsCard/comparisonProjectStatsProvenanceScope.tsx'
 
 type ComparisonProjectStatsCardProps = {
   columns: ComparisonProjectJudgmentsColumn[]
+  conflictResolutionEnabled?: boolean
+  conflictResolutionProvenance?: ComparisonProjectStatsConflictResolutionProvenance
   error: unknown
   isError: boolean
   isLoading: boolean
+  isUpdating?: boolean
+  onConflictResolutionProvenanceChange?: (value: ComparisonProjectStatsConflictResolutionProvenance) => void
   stats: ComparisonProjectStats | undefined
 }
 
@@ -127,12 +138,6 @@ const getComparisonProjectStatsPromptLabel = (column: ComparisonProjectStatsLabe
   return column.promptId === summaryPromptId ? null : getColumnLabelPart(column.promptLabel)
 }
 
-const getComparisonProjectStatsConflictResolutionLabel = (comparison: ComparisonProjectStatsComparison) => {
-  return comparison.kind === 'llm-vs-conflict-resolution'
-    ? 'Conflict resolution (fallback to human answer if no resolution provided)'
-    : 'Conflict resolution (no fallback)'
-}
-
 const getIsComparisonProjectStatsConflictResolutionComparison = (comparison: ComparisonProjectStatsComparison) => {
   return (
     comparison.kind === 'llm-vs-conflict-resolution'
@@ -166,6 +171,7 @@ const ComparisonProjectStatsLabelSide = (props: {column: ComparisonProjectStatsL
 const ComparisonProjectStatsComparisonLabel = (props: {
   columns: ComparisonProjectJudgmentsColumn[]
   comparison: ComparisonProjectStatsComparison
+  conflictResolutionScope: ComparisonProjectStatsConflictResolutionProvenance
 }) => {
   return (
     <Show
@@ -181,7 +187,9 @@ const ComparisonProjectStatsComparisonLabel = (props: {
               when={getIsComparisonProjectStatsConflictResolutionComparison(props.comparison)}
               fallback={<ComparisonProjectStatsLabelSide column={labelColumns()[1]} />}
             >
-              <span>{getComparisonProjectStatsConflictResolutionLabel(props.comparison)}</span>
+              <span>
+                {getComparisonProjectStatsConflictResolutionLabel(props.comparison, props.conflictResolutionScope)}
+              </span>
             </Show>
           </span>
         )
@@ -204,7 +212,19 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
             the LLM/Human overlap denominator, using saved resolutions when present and Human otherwise.
           </p>
         </div>
+        <Show when={props.conflictResolutionEnabled}>
+          <ComparisonProjectStatsProvenanceToggle
+            checked={props.conflictResolutionProvenance === 'current'}
+            onChange={(value) => {
+              props.onConflictResolutionProvenanceChange?.(value)
+            }}
+          />
+        </Show>
       </div>
+
+      <Show when={!props.isLoading && !props.isError}>
+        <ComparisonProjectStatsProvenanceScopeNote stats={props.stats} />
+      </Show>
 
       <Show when={props.isLoading}>
         <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
@@ -225,7 +245,7 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
       </Show>
 
       <Show when={!props.isLoading && !props.isError && (props.stats?.comparisons.length ?? 0) > 0}>
-        <div class="mt-4 overflow-x-auto">
+        <div class={`mt-4 overflow-x-auto transition-opacity ${props.isUpdating ? 'opacity-60' : ''}`}>
           <table class="min-w-full divide-y divide-gray-200 text-xs">
             <thead>
               <tr>
@@ -264,7 +284,11 @@ export const ComparisonProjectStatsCard = (props: ComparisonProjectStatsCardProp
                   return (
                     <tr>
                       <td class="max-w-[32rem] px-2 py-1.5 text-gray-900">
-                        <ComparisonProjectStatsComparisonLabel columns={props.columns} comparison={comparison} />
+                        <ComparisonProjectStatsComparisonLabel
+                          columns={props.columns}
+                          comparison={comparison}
+                          conflictResolutionScope={getComparisonProjectStatsConflictResolutionScope(props.stats)}
+                        />
                       </td>
                       <td class="max-w-[18rem] px-2 py-1.5 text-gray-600">{comparison.columnInfo ?? 'N/A'}</td>
                       <td class="px-2 py-1.5 text-right tabular-nums text-gray-700">

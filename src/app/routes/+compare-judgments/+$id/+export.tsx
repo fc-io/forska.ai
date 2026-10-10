@@ -105,6 +105,7 @@ const CompareProjectExportPage = () => {
         'comparison-project-stats',
         comparisonProjectId(),
         comparisonProjectQuery.data?.activeGeneration ?? null,
+        'all',
       ],
       queryFn: () => {
         return fetchComparisonProjectStats(comparisonProjectId())
