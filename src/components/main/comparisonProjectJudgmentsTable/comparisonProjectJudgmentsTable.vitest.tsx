@@ -1,10 +1,15 @@
 // @vitest-environment happy-dom
 
+import {format} from 'date-fns'
 import {createSignal, untrack} from 'solid-js'
 import {render} from 'solid-js/web'
 import {afterEach, describe, expect, test, vi} from 'vitest'
 
-import type {ComparisonProjectJudgmentsRow} from '../../../services/comparisonProjectsService.ts'
+import type {
+  ComparisonJudgmentContextSummary,
+  ComparisonProjectJudgmentsRow,
+} from '../../../services/comparisonProjectsService.ts'
+import type {ComparisonJudgmentContextSummariesById} from '../../../utils/comparisonJudgmentContextSummary.ts'
 import {
   ComparisonProjectJudgmentsTable,
   type ComparisonProjectJudgmentsTableColumn,
@@ -80,8 +85,45 @@ const getResolution = (
   }
 }
 
+const getContextSummary = (
+  id: string,
+  overrides: Partial<ComparisonJudgmentContextSummary> = {},
+): ComparisonJudgmentContextSummary => {
+  return {
+    context: {columns: [], humanJudgmentMode: 'summary', sourceProjectIds: [], summarySourceProjectId: null, v: 1},
+    createdAt: null,
+    id,
+    modelIds: ['model-current'],
+    models: [{id: 'model-current', name: 'gpt-5.5'}],
+    promptIds: ['prompt-population-v2'],
+    prompts: [
+      {heading: 'Population', id: 'prompt-population-v2'},
+      {heading: null, id: 'summary'},
+    ],
+    systemPromptVariants: ['screening_v1'],
+    ...overrides,
+  }
+}
+
+const currentContext = getContextSummary('context-current')
+const olderContext = getContextSummary('context-older', {
+  modelIds: ['model-old'],
+  models: [{id: 'model-old', name: 'gpt-5'}],
+  promptIds: ['prompt-population-v1'],
+  prompts: [{heading: 'Population', id: 'prompt-population-v1'}],
+  systemPromptVariants: ['legacy'],
+})
+
+const getProvenanceResolution = (
+  overrides: Partial<NonNullable<ComparisonProjectJudgmentsRow['conflictResolution']>>,
+): NonNullable<ComparisonProjectJudgmentsRow['conflictResolution']> => {
+  return {...getResolution('article-chinese-1', 'yes'), ...overrides}
+}
+
 const renderTable = (props: {
   conflictResolutionPendingArticleIds?: string[]
+  currentJudgmentContext?: ComparisonJudgmentContextSummary | null
+  judgmentContextsById?: ComparisonJudgmentContextSummariesById
   onConflictResolutionReset?: (articleId: string) => void
   onConflictResolutionSelect?: (articleId: string, value: string) => void
   rows?: ComparisonProjectJudgmentsRow[]
@@ -99,6 +141,8 @@ const renderTable = (props: {
           {label: 'maybe', value: 'maybe'},
         ]}
         conflictResolutionPendingArticleIds={props.conflictResolutionPendingArticleIds}
+        currentJudgmentContext={props.currentJudgmentContext}
+        judgmentContextsById={props.judgmentContextsById}
         rows={props.rows ?? [getConflictRow()]}
         onConflictResolutionReset={props.onConflictResolutionReset}
         onConflictResolutionSelect={props.onConflictResolutionSelect}
@@ -340,6 +384,119 @@ describe('ComparisonProjectJudgmentsTable', () => {
       expect(selects).toHaveLength(2)
       expect(selects[0]?.disabled).toBe(false)
       expect(selects[1]?.disabled).toBe(true)
+    } finally {
+      dispose()
+    }
+  })
+  test('shows the reviewer, set time and an older prompts badge with the context in its tooltip', async () => {
+    const setAt = '2026-10-09T08:15:00.000Z'
+    const {container, dispose} = renderTable({
+      currentJudgmentContext: currentContext,
+      judgmentContextsById: {'context-current': currentContext, 'context-older': olderContext},
+      rows: [
+        getConflictRow({
+          conflictResolution: getProvenanceResolution({
+            provenance: {contextId: 'context-older', generation: 3, origin: 'ui', setAt},
+            provenanceMatchesCurrent: false,
+            reviewer: {displayName: 'Anna Berg', userId: 'local-1'},
+            reviewerDisplayName: 'Anna Berg',
+          }),
+        }),
+      ],
+    })
+
+    try {
+      await Promise.resolve()
+      const cellText = container.querySelector('td:nth-child(2)')?.textContent ?? ''
+      const provenance = container.querySelector('td:nth-child(2) [title]:not(button)')
+
+      expect(cellText).toContain(`Anna Berg · ${format(new Date(setAt), 'yyyy-MM-dd HH:mm')}`)
+      expect(cellText).toContain('Older prompts')
+      expect(provenance?.getAttribute('title')).toBe(
+        [
+          'Resolved under older prompts',
+          'Models: gpt-5 (not current)',
+          'System prompt variants: legacy (not current)',
+          'Prompts: Population (not current)',
+          'Content: none',
+        ].join('\n'),
+      )
+      expect(container.querySelector<HTMLSelectElement>('select')?.value).toBe('yes')
+    } finally {
+      dispose()
+    }
+  })
+
+  test.each([true, null])('shows no older prompts badge when the match is %s', async (provenanceMatchesCurrent) => {
+    const {container, dispose} = renderTable({
+      currentJudgmentContext: currentContext,
+      judgmentContextsById: {'context-current': currentContext},
+      rows: [
+        getConflictRow({
+          conflictResolution: getProvenanceResolution({
+            provenance: {
+              contextId: provenanceMatchesCurrent ? 'context-current' : null,
+              generation: 4,
+              origin: 'ui',
+              setAt: '2026-10-10T10:00:00.000Z',
+            },
+            provenanceMatchesCurrent,
+          }),
+        }),
+      ],
+    })
+
+    try {
+      await Promise.resolve()
+      const cellText = container.querySelector('td:nth-child(2)')?.textContent ?? ''
+
+      expect(cellText).toContain(`Reviewer · ${format(new Date('2026-10-10T10:00:00.000Z'), 'yyyy-MM-dd HH:mm')}`)
+      expect(cellText).not.toContain('Older prompts')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('labels imported resolutions with their import time and renders old rows without provenance', async () => {
+    const {container, dispose} = renderTable({
+      rows: [
+        getConflictRow({
+          articleTitle: 'Imported article',
+          canonicalArticleId: 'article-imported',
+          conflictResolution: getProvenanceResolution({
+            provenance: {contextId: null, generation: null, origin: 'file-import', setAt: '2026-10-10T10:00:00.000Z'},
+            reviewer: null,
+            reviewerDisplayName: null,
+            reviewerUserId: null,
+          }),
+          id: 'article-imported',
+        }),
+        getConflictRow({
+          articleTitle: 'Old article',
+          canonicalArticleId: 'article-old',
+          conflictResolution: getProvenanceResolution({
+            reviewer: null,
+            reviewerDisplayName: null,
+            reviewerUserId: null,
+          }),
+          id: 'article-old',
+        }),
+      ],
+    })
+
+    try {
+      await Promise.resolve()
+      const cells = Array.from(container.querySelectorAll('tbody tr')).map((row) => {
+        return row.querySelector('td:nth-child(2)')
+      })
+
+      expect(cells[0]?.textContent).toContain(
+        `imported ${format(new Date('2026-10-10T10:00:00.000Z'), 'yyyy-MM-dd HH:mm')}`,
+      )
+      expect(cells[0]?.textContent).not.toContain('Older prompts')
+      expect(cells[1]?.querySelector('p')).toBeNull()
+      expect(cells[1]?.querySelectorAll('select')).toHaveLength(1)
+      expect(cells[1]?.querySelector('button[title="Reset conflict resolution"]')).not.toBeNull()
     } finally {
       dispose()
     }

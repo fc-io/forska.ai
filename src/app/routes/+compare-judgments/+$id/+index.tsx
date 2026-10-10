@@ -11,6 +11,7 @@ import {getIsSameMultiSelectOptionList, MultiSelect} from '../../../../component
 import {
   type ComparisonProjectJudgmentsColumn,
   type ComparisonProjectJudgmentsPage,
+  fetchComparisonJudgmentContexts,
   fetchComparisonProjectJudgmentsCount,
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectJudgmentsPage,
@@ -20,6 +21,10 @@ import {
   setComparisonProjectConflictResolution,
 } from '../../../../services/comparisonProjectsService'
 import {
+  getComparisonJudgmentContextIds,
+  getComparisonJudgmentContextSummariesById,
+} from '../../../../utils/comparisonJudgmentContextSummary.ts'
+import {
   type ComparisonProjectArticleCategory,
   getComparisonProjectArticleCategoryFilterOptions,
   getHasComparisonProjectChineseArticles,
@@ -28,9 +33,12 @@ import {
 import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
 import {
   type ComparisonProjectConflictResolutionFilter,
+  type ComparisonProjectConflictResolutionProvenanceFilter,
   getComparisonProjectConflictResolutionFilterOptions,
+  getComparisonProjectConflictResolutionProvenanceFilterOptions,
   getComparisonProjectSummaryConflictResolutionOptions,
   getNormalizedComparisonProjectConflictResolutionFilters,
+  getNormalizedComparisonProjectConflictResolutionProvenanceFilters,
 } from '../../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import {
   type ComparisonProjectDifferenceFilter,
@@ -39,7 +47,10 @@ import {
   getComparisonProjectDifferenceFilterSelection,
   getSelectableComparisonProjectDifferenceFilters,
 } from '../../../../utils/comparisonProjectDifferenceFilter.ts'
-import {getStableComparisonProjectFilterSelection} from '../../../../utils/comparisonProjectFilterSelection.ts'
+import {
+  getIsSameComparisonProjectFilterSelection,
+  getStableComparisonProjectFilterSelection,
+} from '../../../../utils/comparisonProjectFilterSelection.ts'
 import {
   getComparisonProjectJudgmentRowsWithRetainedEdits,
   type RetainedComparisonProjectJudgmentRows,
@@ -67,6 +78,7 @@ import {
 } from './compareProjectConflictResolutionImportReturn.ts'
 
 const articleCategoryFilterOptions = getComparisonProjectArticleCategoryFilterOptions()
+const conflictResolutionProvenanceFilterOptions = getComparisonProjectConflictResolutionProvenanceFilterOptions()
 
 const getLoadedRangeLabel = (rowCount: number, totalCount: number) => {
   if (totalCount === 0) {
@@ -244,6 +256,9 @@ const CompareProjectJudgmentsPage = () => {
   const [conflictResolutionFilters, setConflictResolutionFilters] = createSignal<
     ComparisonProjectConflictResolutionFilter[]
   >(initialUrlState.conflictResolutionFilters)
+  const [conflictResolutionProvenanceFilters, setConflictResolutionProvenanceFilters] = createSignal<
+    ComparisonProjectConflictResolutionProvenanceFilter[]
+  >(initialUrlState.conflictResolutionProvenanceFilters)
   const [searchText, setSearchText] = createSignal(initialUrlState.searchText)
   const [shouldRefreshCommittedImport, setShouldRefreshCommittedImport] = createSignal(
     getHasConflictResolutionImportCommittedSearchParam(search() as Record<string, unknown>),
@@ -323,6 +338,7 @@ const CompareProjectJudgmentsPage = () => {
       differenceFilters(),
       articleCategoryFilters(),
       conflictResolutionFilters(),
+      conflictResolutionProvenanceFilters(),
       searchText(),
     ] as const
   }
@@ -335,6 +351,7 @@ const CompareProjectJudgmentsPage = () => {
       differenceFilters(),
       articleCategoryFilters(),
       conflictResolutionFilters(),
+      conflictResolutionProvenanceFilters(),
       searchText(),
     ] as const
   }
@@ -359,6 +376,7 @@ const CompareProjectJudgmentsPage = () => {
           conflictResolutionFilters(),
           searchText(),
           typeof pageParam === 'string' ? pageParam : null,
+          conflictResolutionProvenanceFilters(),
         )
       },
       enabled: canFetchJudgmentsPage(),
@@ -383,6 +401,7 @@ const CompareProjectJudgmentsPage = () => {
           articleCategoryFilters(),
           conflictResolutionFilters(),
           searchText(),
+          conflictResolutionProvenanceFilters(),
         )
       },
       enabled: canFetchJudgmentsPage() && judgmentsPageQuery.isSuccess,
@@ -462,6 +481,7 @@ const CompareProjectJudgmentsPage = () => {
       rowFilters: rowFilters(),
       differenceFilters: differenceFilters(),
       conflictResolutionFilters: showConflictResolutionFilter() ? conflictResolutionFilters() : [],
+      conflictResolutionProvenanceFilters: showConflictResolutionFilter() ? conflictResolutionProvenanceFilters() : [],
       articleCategoryFilters: articleCategoryFilters(),
       searchText: searchText(),
     })
@@ -475,6 +495,8 @@ const CompareProjectJudgmentsPage = () => {
         differenceFilters,
         articleCategoryFilters,
         conflictResolutionFilters,
+        conflictResolutionProvenanceFilters,
+        showConflictResolutionFilter,
         searchText,
         searchInitialized,
       ],
@@ -515,6 +537,7 @@ const CompareProjectJudgmentsPage = () => {
         differenceFilters,
         articleCategoryFilters,
         conflictResolutionFilters,
+        conflictResolutionProvenanceFilters,
         searchText,
       ],
       () => {
@@ -523,12 +546,43 @@ const CompareProjectJudgmentsPage = () => {
       {defer: true},
     ),
   )
+  const judgmentContextIds = createMemo(
+    () => {
+      return getComparisonJudgmentContextIds(visibleJudgmentRows())
+    },
+    undefined,
+    {equals: getIsSameComparisonProjectFilterSelection},
+  )
+  const judgmentContextsQuery = useQuery(() => {
+    return {
+      queryKey: ['comparison-judgment-contexts', judgmentContextIds()],
+      queryFn: () => {
+        return fetchComparisonJudgmentContexts(judgmentContextIds())
+      },
+      enabled: Boolean(comparisonProjectQuery.data?.allowConflictResolution) && judgmentContextIds().length > 0,
+      placeholderData: keepPreviousData,
+      refetchOnWindowFocus: false,
+      staleTime: Number.POSITIVE_INFINITY,
+    }
+  })
+  const judgmentContextsById = createMemo(() => {
+    return getComparisonJudgmentContextSummariesById(
+      judgmentContextsQuery.isSuccess ? (judgmentContextsQuery.data ?? []) : [],
+      comparisonProjectQuery.data?.judgmentContext ?? null,
+    )
+  })
+  const hasActiveConflictResolutionFilters = () => {
+    return (
+      showConflictResolutionFilter()
+      && (conflictResolutionFilters().length > 0 || conflictResolutionProvenanceFilters().length > 0)
+    )
+  }
   const hasRowFilters = createMemo(() => {
     return (
       rowFilters().length > 0
       || differenceFilters().length > 0
       || articleCategoryFilters().length > 0
-      || (showConflictResolutionFilter() && conflictResolutionFilters().length > 0)
+      || hasActiveConflictResolutionFilters()
     )
   })
   const updateCurrentJudgmentsPageConflictResolution = (
@@ -540,7 +594,7 @@ const CompareProjectJudgmentsPage = () => {
     })
     const updatedRow = currentRow ? {...currentRow, conflictResolution} : null
 
-    if (updatedRow && showConflictResolutionFilter() && conflictResolutionFilters().length > 0) {
+    if (updatedRow && hasActiveConflictResolutionFilters()) {
       setRetainedConflictResolutionRowsByArticleId((currentRows) => {
         return {...currentRows, [articleId]: updatedRow}
       })
@@ -569,7 +623,7 @@ const CompareProjectJudgmentsPage = () => {
     await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-page', comparisonProjectId()]})
   }
   const shouldDeferCurrentJudgmentsPageRefetch = () => {
-    return showConflictResolutionFilter() && conflictResolutionFilters().length > 0
+    return hasActiveConflictResolutionFilters()
   }
   const getOptimisticConflictResolution = (articleId: string, value: string) => {
     const option = conflictResolutionOptions().find((candidate) => {
@@ -859,6 +913,23 @@ const CompareProjectJudgmentsPage = () => {
                           }}
                         />
                       </div>
+                      <div class="flex flex-col gap-2">
+                        <label class="font-medium text-sm truncate">Resolution prompts:</label>
+                        <MultiSelect
+                          ariaLabel="Resolution prompts"
+                          options={conflictResolutionProvenanceFilterOptions}
+                          placeholder="All"
+                          values={conflictResolutionProvenanceFilters()}
+                          onChange={(values) => {
+                            setConflictResolutionProvenanceFilters((previous) => {
+                              return getStableComparisonProjectFilterSelection(
+                                previous,
+                                getNormalizedComparisonProjectConflictResolutionProvenanceFilters(values),
+                              )
+                            })
+                          }}
+                        />
+                      </div>
                     </Show>
                     <Show when={hasChineseArticles()}>
                       <div class="flex flex-col gap-2">
@@ -948,6 +1019,8 @@ const CompareProjectJudgmentsPage = () => {
                         conflictResolutionEnabled={comparisonProject().allowConflictResolution}
                         conflictResolutionPendingArticleIds={conflictResolutionPendingArticleIdList()}
                         conflictResolutionOptions={conflictResolutionOptions()}
+                        currentJudgmentContext={comparisonProject().judgmentContext}
+                        judgmentContextsById={judgmentContextsById()}
                         onConflictResolutionReset={handleConflictResolutionReset}
                         onConflictResolutionSelect={handleConflictResolutionSelect}
                         rows={visibleJudgmentRows()}

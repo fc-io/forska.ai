@@ -10,7 +10,10 @@ import {
 import {
   type ComparisonProjectConflictResolutionFilter,
   type ComparisonProjectConflictResolutionFilterOption,
+  type ComparisonProjectConflictResolutionProvenanceFilter,
+  getComparisonProjectConflictResolutionProvenanceFilterOptions,
   getNormalizedComparisonProjectConflictResolutionFilters,
+  getNormalizedComparisonProjectConflictResolutionProvenanceFilters,
 } from '../../../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import {
   type ComparisonProjectDifferenceFilter,
@@ -26,11 +29,13 @@ import {compareProjectJudgmentsSearchPlaceholder} from '../+index/compareProject
 type CompareProjectExportDifferenceFilterOption = {label: string; value: ComparisonProjectDifferenceFilter}
 
 const articleCategoryFilterOptions = getComparisonProjectArticleCategoryFilterOptions()
+const conflictResolutionProvenanceFilterOptions = getComparisonProjectConflictResolutionProvenanceFilterOptions()
 
 type CompareProjectExportFiltersProps = {
   articleCategoryFilters: readonly ComparisonProjectArticleCategory[]
   conflictResolutionFilters: readonly ComparisonProjectConflictResolutionFilter[]
   conflictResolutionFilterOptions: ComparisonProjectConflictResolutionFilterOption[]
+  conflictResolutionProvenanceFilters: readonly ComparisonProjectConflictResolutionProvenanceFilter[]
   differenceFilters: readonly ComparisonProjectDifferenceFilter[]
   differenceFilterDisabled: boolean
   differenceFilterOptions: CompareProjectExportDifferenceFilterOption[]
@@ -41,6 +46,7 @@ type CompareProjectExportFiltersProps = {
   showConflictResolutionFilter: boolean
   onArticleCategoryFiltersChange: (values: ComparisonProjectArticleCategory[]) => void
   onConflictResolutionFiltersChange: (values: ComparisonProjectConflictResolutionFilter[]) => void
+  onConflictResolutionProvenanceFiltersChange: (values: ComparisonProjectConflictResolutionProvenanceFilter[]) => void
   onDifferenceFiltersChange: (values: ComparisonProjectDifferenceFilter[]) => void
   onExportCsv: () => void
   onExportPdf: () => void
@@ -107,6 +113,20 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
                 onChange={(values) => {
                   props.onConflictResolutionFiltersChange(
                     getNormalizedComparisonProjectConflictResolutionFilters(values),
+                  )
+                }}
+              />
+            </div>
+            <div class="flex flex-col gap-2">
+              <label class="font-medium text-sm truncate">Resolution prompts:</label>
+              <MultiSelect
+                ariaLabel="Resolution prompts"
+                options={conflictResolutionProvenanceFilterOptions}
+                placeholder="All"
+                values={props.conflictResolutionProvenanceFilters}
+                onChange={(values) => {
+                  props.onConflictResolutionProvenanceFiltersChange(
+                    getNormalizedComparisonProjectConflictResolutionProvenanceFilters(values),
                   )
                 }}
               />

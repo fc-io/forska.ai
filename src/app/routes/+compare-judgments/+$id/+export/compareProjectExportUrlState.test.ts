@@ -10,6 +10,7 @@ test('compare export URL state starts from active compare page search params', (
   const state = getInitialCompareProjectExportUrlState({
     articleCategoryFilter: 'non_chinese',
     conflictResolutionFilter: 'maybe',
+    conflictResolutionProvenanceFilter: 'outdated',
     differenceFilter: 'human-vs-llm',
     limit: '100',
     page: '4',
@@ -19,6 +20,7 @@ test('compare export URL state starts from active compare page search params', (
   expect(state).toEqual({
     articleCategoryFilters: ['non_chinese'],
     conflictResolutionFilters: ['maybe'],
+    conflictResolutionProvenanceFilters: ['outdated'],
     differenceFilters: ['human-vs-llm'],
     pageLimit: 100,
     rowFilters: ['fully-answered'],
@@ -27,6 +29,7 @@ test('compare export URL state starts from active compare page search params', (
   expect(getCompareProjectExportSearchParams(state)).toEqual({
     articleCategoryFilter: 'non_chinese',
     conflictResolutionFilter: 'maybe',
+    conflictResolutionProvenanceFilter: 'outdated',
     differenceFilter: 'human-vs-llm',
     limit: '100',
     rowFilter: 'fully-answered',
@@ -36,6 +39,7 @@ test('compare export URL state starts from active compare page search params', (
 test('compare export request body sends filter selections as arrays', () => {
   const state = getInitialCompareProjectExportUrlState({
     conflictResolutionFilter: 'yes,not-set',
+    conflictResolutionProvenanceFilter: 'unknown,current',
     differenceFilter: 'llm-vs-llm',
     limit: '25',
     page: '2',
@@ -45,6 +49,7 @@ test('compare export request body sends filter selections as arrays', () => {
   expect(getCompareProjectExportRequestBody(state)).toEqual({
     articleCategoryFilter: [],
     conflictResolutionFilter: ['yes', 'not-set'],
+    conflictResolutionProvenanceFilter: ['current', 'unknown'],
     differenceFilter: ['llm-vs-llm'],
     rowFilter: [],
   })
@@ -65,6 +70,7 @@ test('compare export URL state normalizes legacy compare filters to canonical pa
   expect(getCompareProjectExportRequestBody(state)).toEqual({
     articleCategoryFilter: [],
     conflictResolutionFilter: [],
+    conflictResolutionProvenanceFilter: [],
     differenceFilter: ['llm-vs-llm'],
     rowFilter: ['fully-answered'],
   })
@@ -78,6 +84,7 @@ test('compare export URL state carries the compare page title search into the ex
   expect(getCompareProjectExportRequestBody(state)).toEqual({
     articleCategoryFilter: [],
     conflictResolutionFilter: [],
+    conflictResolutionProvenanceFilter: [],
     differenceFilter: [],
     rowFilter: ['fully-answered'],
     search: 'Metformin 糖尿病',

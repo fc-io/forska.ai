@@ -4,7 +4,9 @@ import {
 } from '../../../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {
   type ComparisonProjectConflictResolutionFilter,
+  type ComparisonProjectConflictResolutionProvenanceFilter,
   getNormalizedComparisonProjectConflictResolutionFilters,
+  getNormalizedComparisonProjectConflictResolutionProvenanceFilters,
 } from '../../../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import {
   type ComparisonProjectDifferenceFilter,
@@ -22,6 +24,7 @@ export const compareProjectJudgmentsPageLimitOptions = [25, 50, 100]
 export type CompareProjectJudgmentsUrlState = {
   articleCategoryFilters: ComparisonProjectArticleCategory[]
   conflictResolutionFilters: ComparisonProjectConflictResolutionFilter[]
+  conflictResolutionProvenanceFilters: ComparisonProjectConflictResolutionProvenanceFilter[]
   pageLimit: number
   rowFilters: ComparisonProjectRowFilter[]
   differenceFilters: ComparisonProjectDifferenceFilter[]
@@ -42,6 +45,7 @@ export const getDefaultCompareProjectJudgmentsUrlState = (): CompareProjectJudgm
   return {
     articleCategoryFilters: [],
     conflictResolutionFilters: [],
+    conflictResolutionProvenanceFilters: [],
     pageLimit: 50,
     rowFilters: [],
     differenceFilters: [],
@@ -103,6 +107,9 @@ export const getInitialCompareProjectJudgmentsUrlState = (
     differenceFilters: getDifferenceFilterSearchParamValues(search),
     articleCategoryFilters: getNormalizedComparisonProjectArticleCategoryFilters(search.articleCategoryFilter),
     conflictResolutionFilters: getNormalizedComparisonProjectConflictResolutionFilters(search.conflictResolutionFilter),
+    conflictResolutionProvenanceFilters: getNormalizedComparisonProjectConflictResolutionProvenanceFilters(
+      search.conflictResolutionProvenanceFilter,
+    ),
     searchText: getNormalizedComparisonProjectSearchText(search.search),
   }
 }
@@ -132,6 +139,12 @@ export const getCompareProjectJudgmentsSearchParams = (
   if (state.conflictResolutionFilters.length > 0) {
     searchParams.conflictResolutionFilter = getComparisonProjectFilterSelectionSearchParam(
       state.conflictResolutionFilters,
+    )
+  }
+
+  if (state.conflictResolutionProvenanceFilters.length > 0) {
+    searchParams.conflictResolutionProvenanceFilter = getComparisonProjectFilterSelectionSearchParam(
+      state.conflictResolutionProvenanceFilters,
     )
   }
 
