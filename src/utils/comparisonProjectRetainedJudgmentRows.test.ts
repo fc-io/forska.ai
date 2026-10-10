@@ -26,6 +26,9 @@ test('appends retained conflict-resolution edits that no longer match the server
     'article-2': getRow('article-2', {
       articleId: 'article-2',
       label: 'no',
+      provenance: null,
+      provenanceMatchesCurrent: null,
+      reviewer: {displayName: 'Reviewer', userId: 'reviewer-1'},
       reviewerDisplayName: 'Reviewer',
       reviewerUserId: 'reviewer-1',
       value: 'no',
@@ -44,6 +47,9 @@ test('does not duplicate retained edits still present in the server-filtered row
     getRow('article-1', {
       articleId: 'article-1',
       label: 'yes',
+      provenance: null,
+      provenanceMatchesCurrent: null,
+      reviewer: null,
       reviewerDisplayName: null,
       reviewerUserId: null,
       value: 'yes',
@@ -53,6 +59,9 @@ test('does not duplicate retained edits still present in the server-filtered row
     'article-1': getRow('article-1', {
       articleId: 'article-1',
       label: 'no',
+      provenance: null,
+      provenanceMatchesCurrent: null,
+      reviewer: {displayName: 'Reviewer', userId: 'reviewer-1'},
       reviewerDisplayName: 'Reviewer',
       reviewerUserId: 'reviewer-1',
       value: 'no',
