@@ -323,6 +323,8 @@ export type ComparisonProjectConflictResolutionReviewer = {displayName: string |
 
 export type ComparisonProjectConflictResolutionValue = {
   articleId: string
+  comment: string | null
+  commentUpdatedAt: Date | string | null
   label: string
   provenance: ComparisonProjectConflictResolutionProvenance | null
   provenanceMatchesCurrent: boolean | null
@@ -1132,6 +1134,17 @@ export const setComparisonProjectConflictResolution = async (
   )
 
   return getResponseData<ComparisonProjectConflictResolutionValue>(response, 'Failed to save conflict resolution')
+}
+
+export const setComparisonProjectConflictResolutionComment = async (
+  comparisonProjectId: string,
+  input: {articleId: string; comment: string | null},
+) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})[
+    'conflict-resolution'
+  ].comment.post(input)
+
+  return getResponseData<ComparisonProjectConflictResolutionValue>(response, 'Failed to save resolution comment')
 }
 
 export const resetComparisonProjectConflictResolution = async (

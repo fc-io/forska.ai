@@ -8,6 +8,10 @@ import type {
   ComparisonProjectJudgmentsRow,
 } from '../../../services/comparisonProjectsService.ts'
 import type {ComparisonJudgmentContextSummariesById} from '../../../utils/comparisonJudgmentContextSummary.ts'
+import {
+  ComparisonProjectConflictResolutionComment,
+  type ComparisonProjectConflictResolutionCommentSaveResult,
+} from './comparisonProjectConflictResolutionComment.tsx'
 import {ComparisonProjectConflictResolutionProvenance} from './comparisonProjectConflictResolutionProvenance.tsx'
 
 export type ComparisonProjectJudgmentsTableColumn = ComparisonProjectJudgmentsColumn & {
@@ -22,6 +26,12 @@ type ComparisonProjectJudgmentsTableProps = {
   columns: ComparisonProjectJudgmentsTableColumn[]
   currentJudgmentContext?: ComparisonJudgmentContextSummary | null
   judgmentContextsById?: ComparisonJudgmentContextSummariesById
+  onConflictResolutionCommentSave?: (
+    articleId: string,
+    comment: string | null,
+  ) =>
+    | ComparisonProjectConflictResolutionCommentSaveResult
+    | Promise<ComparisonProjectConflictResolutionCommentSaveResult>
   onConflictResolutionReset?: (articleId: string) => void | Promise<void>
   onConflictResolutionSelect?: (articleId: string, value: string) => void | Promise<void>
   rows: ComparisonProjectJudgmentsRow[]
@@ -154,6 +164,12 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
               const rowHighlightClasses = () => {
                 return getRowHighlightClasses(rowHighlightState())
               }
+              const rowArticleLabel = () => {
+                return row()?.articleTitle?.trim() || 'article'
+              }
+              const saveRowConflictResolutionComment = (comment: string | null) => {
+                return props.onConflictResolutionCommentSave?.(row()?.canonicalArticleId ?? '', comment)
+              }
 
               return (
                 <tr class="align-top">
@@ -179,13 +195,19 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                             >
                               {(resolution) => {
                                 return (
-                                  <div class="flex items-start justify-between gap-2">
+                                  <div class="flex items-start gap-2">
                                     <span
-                                      class="min-w-0 whitespace-pre-wrap break-words leading-5 text-gray-800"
+                                      class="min-w-0 flex-1 whitespace-pre-wrap break-words leading-5 text-gray-800"
                                       title={resolution().label}
                                     >
                                       {resolution().label}
                                     </span>
+                                    <ComparisonProjectConflictResolutionComment
+                                      articleTitle={rowArticleLabel()}
+                                      disabled={getIsConflictResolutionPending(row()?.canonicalArticleId ?? '')}
+                                      resolution={resolution()}
+                                      onSave={saveRowConflictResolutionComment}
+                                    />
                                     <button
                                       type="button"
                                       class="inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
@@ -246,6 +268,12 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                 }}
                               </For>
                             </select>
+                            <ComparisonProjectConflictResolutionComment
+                              articleTitle={rowArticleLabel()}
+                              disabled={getIsConflictResolutionPending(row()?.canonicalArticleId ?? '')}
+                              resolution={row()?.conflictResolution ?? null}
+                              onSave={saveRowConflictResolutionComment}
+                            />
                             <Show when={row().conflictResolution}>
                               <button
                                 type="button"
