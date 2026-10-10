@@ -6,6 +6,10 @@ import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
 import {ensureSelectableModelId} from '../../../services/ensureSelectableModelId.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
+import {
+  getPromptAnswerTypesWithoutProject,
+  getSubprojectDateRangeError,
+} from './createSubproject/createSubprojectSelection.ts'
 
 type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
 
@@ -139,17 +143,14 @@ const CreateSubproject = () => {
     setSelectedProjects((current) => {
       const has = current.includes(projectId)
       if (has) {
-        // Remove project and its prompt selections
-        const newAnswerTypes = {...promptAnswerTypes()}
-        const project = sourcesQuery.data?.find((p) => {
-          return p.id === projectId
-        })
-        if (project) {
-          for (const prompt of project.prompts) {
-            delete newAnswerTypes[prompt.id]
-          }
-        }
-        setPromptAnswerTypes(newAnswerTypes)
+        setPromptAnswerTypes(
+          getPromptAnswerTypesWithoutProject({
+            projectId,
+            promptAnswerTypes: promptAnswerTypes(),
+            selectedProjectIds: current,
+            sources: sourcesQuery.data,
+          }),
+        )
         return current.filter((v) => {
           return v !== projectId
         })
@@ -222,6 +223,12 @@ const CreateSubproject = () => {
 
     if (!hasSelectedProjects()) {
       setError('Please select at least one source project')
+      return
+    }
+
+    const dateRangeError = getSubprojectDateRangeError(dateFrom(), dateTo())
+    if (dateRangeError) {
+      setError(dateRangeError)
       return
     }
 
