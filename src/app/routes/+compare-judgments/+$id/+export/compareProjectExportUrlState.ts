@@ -13,6 +13,7 @@ export type CompareProjectExportRequestBody = {
   conflictResolutionFilter: ComparisonProjectConflictResolutionFilter[]
   differenceFilter: ComparisonProjectDifferenceFilter[]
   rowFilter: ComparisonProjectRowFilter[]
+  search?: string
 }
 
 export const getInitialCompareProjectExportUrlState = (
@@ -33,5 +34,6 @@ export const getCompareProjectExportRequestBody = (
     conflictResolutionFilter: state.conflictResolutionFilters,
     differenceFilter: state.differenceFilters,
     rowFilter: state.rowFilters,
+    ...(state.searchText === '' ? {} : {search: state.searchText}),
   }
 }

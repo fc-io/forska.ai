@@ -20,6 +20,8 @@ import {
   type ComparisonProjectRowFilter,
   getNormalizedComparisonProjectRowFilters,
 } from '../../../../../utils/comparisonProjectRowFilter.ts'
+import {comparisonProjectSearchTextMaxLength} from '../../../../../utils/comparisonProjectSearchText.ts'
+import {compareProjectJudgmentsSearchPlaceholder} from '../+index/compareProjectJudgmentsSearchForm.tsx'
 
 type CompareProjectExportDifferenceFilterOption = {label: string; value: ComparisonProjectDifferenceFilter}
 
@@ -43,7 +45,9 @@ type CompareProjectExportFiltersProps = {
   onExportCsv: () => void
   onExportPdf: () => void
   onRowFiltersChange: (values: ComparisonProjectRowFilter[]) => void
+  onSearchTextChange: (value: string) => void
   rowFilters: readonly ComparisonProjectRowFilter[]
+  searchText: string
 }
 
 export const CompareProjectExportFilters = (props: CompareProjectExportFiltersProps) => {
@@ -53,6 +57,19 @@ export const CompareProjectExportFilters = (props: CompareProjectExportFiltersPr
         <h2 class="text-lg font-semibold">Export Filters</h2>
       </div>
       <div class="space-y-4">
+        <label class="flex flex-col text-sm font-medium gap-1 w-full max-w-xl">
+          <span>Search title</span>
+          <input
+            type="text"
+            value={props.searchText}
+            maxLength={comparisonProjectSearchTextMaxLength}
+            onInput={(event) => {
+              props.onSearchTextChange(event.currentTarget.value)
+            }}
+            placeholder={compareProjectJudgmentsSearchPlaceholder}
+            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+          />
+        </label>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div class="flex flex-col gap-2">
             <label class="font-medium text-sm truncate">Row filter:</label>

@@ -15,6 +15,7 @@ import {
   type ComparisonProjectRowFilter,
   getNormalizedComparisonProjectRowFilters,
 } from '../../../../../utils/comparisonProjectRowFilter.ts'
+import {getNormalizedComparisonProjectSearchText} from '../../../../../utils/comparisonProjectSearchText.ts'
 
 export const compareProjectJudgmentsPageLimitOptions = [25, 50, 100]
 
@@ -24,6 +25,7 @@ export type CompareProjectJudgmentsUrlState = {
   pageLimit: number
   rowFilters: ComparisonProjectRowFilter[]
   differenceFilters: ComparisonProjectDifferenceFilter[]
+  searchText: string
 }
 
 type CompareProjectJudgmentsDifferenceFilterMetadataState = {
@@ -43,6 +45,7 @@ export const getDefaultCompareProjectJudgmentsUrlState = (): CompareProjectJudgm
     pageLimit: 50,
     rowFilters: [],
     differenceFilters: [],
+    searchText: '',
   }
 }
 
@@ -100,6 +103,7 @@ export const getInitialCompareProjectJudgmentsUrlState = (
     differenceFilters: getDifferenceFilterSearchParamValues(search),
     articleCategoryFilters: getNormalizedComparisonProjectArticleCategoryFilters(search.articleCategoryFilter),
     conflictResolutionFilters: getNormalizedComparisonProjectConflictResolutionFilters(search.conflictResolutionFilter),
+    searchText: getNormalizedComparisonProjectSearchText(search.search),
   }
 }
 
@@ -129,6 +133,10 @@ export const getCompareProjectJudgmentsSearchParams = (
     searchParams.conflictResolutionFilter = getComparisonProjectFilterSelectionSearchParam(
       state.conflictResolutionFilters,
     )
+  }
+
+  if (state.searchText !== '') {
+    searchParams.search = state.searchText
   }
 
   return searchParams

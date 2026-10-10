@@ -31,6 +31,7 @@ import {
   getComparisonProjectRowFilterLabel,
   getSelectableComparisonProjectRowFilters,
 } from '../../../../utils/comparisonProjectRowFilter.ts'
+import {getNormalizedComparisonProjectSearchText} from '../../../../utils/comparisonProjectSearchText.ts'
 import {downloadFileFromPost} from '../../../utils/downloadCsv.ts'
 import {CompareProjectExportFilters} from './+export/compareProjectExportFilters.tsx'
 import {CompareProjectExportMetadata} from './+export/compareProjectExportMetadata.tsx'
@@ -76,6 +77,7 @@ const CompareProjectExportPage = () => {
   const [conflictResolutionFilters, setConflictResolutionFilters] = createSignal<
     ComparisonProjectConflictResolutionFilter[]
   >(initialUrlState.conflictResolutionFilters)
+  const [searchText, setSearchText] = createSignal(initialUrlState.searchText)
   const [searchInitialized, setSearchInitialized] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -170,6 +172,7 @@ const CompareProjectExportPage = () => {
       differenceFilters: differenceFilters(),
       pageLimit: pageLimit(),
       rowFilters: rowFilters(),
+      searchText: getNormalizedComparisonProjectSearchText(searchText()),
     }
   })
   createEffect(() => {
@@ -182,7 +185,15 @@ const CompareProjectExportPage = () => {
 
   createEffect(
     on(
-      [pageLimit, rowFilters, differenceFilters, articleCategoryFilters, conflictResolutionFilters, searchInitialized],
+      [
+        pageLimit,
+        rowFilters,
+        differenceFilters,
+        articleCategoryFilters,
+        conflictResolutionFilters,
+        searchText,
+        searchInitialized,
+      ],
       () => {
         if (!searchInitialized()) {
           return
@@ -322,7 +333,9 @@ const CompareProjectExportPage = () => {
                 onExportCsv={handleExport}
                 onExportPdf={handlePdfExport}
                 onRowFiltersChange={updateRowFilters}
+                onSearchTextChange={setSearchText}
                 rowFilters={rowFilters()}
+                searchText={searchText()}
               />
               <CompareProjectResolutionExportSection
                 allowConflictResolution={comparisonProject().allowConflictResolution}

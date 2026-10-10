@@ -433,6 +433,7 @@ export type ComparisonProjectRowsRequestFilters = {
   conflictResolutionFilter?: ComparisonProjectConflictResolutionFilter[]
   rowFilter?: ComparisonProjectRowFilter[]
   differenceFilter?: ComparisonProjectDifferenceFilter[]
+  search?: string
 }
 export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequestFilters & {
   cursor?: string | null
@@ -862,6 +863,7 @@ export const fetchComparisonProjectJudgmentsPage = async (
   differenceFilters: readonly ComparisonProjectDifferenceFilter[],
   articleCategoryFilters: readonly ComparisonProjectArticleCategoryFilter[],
   conflictResolutionFilters: readonly ComparisonProjectConflictResolutionFilter[],
+  searchText: string,
   cursor?: string | null,
 ) => {
   const body: ComparisonProjectJudgmentsPageRequest = {
@@ -871,6 +873,7 @@ export const fetchComparisonProjectJudgmentsPage = async (
     limit: String(limit),
     rowFilter: [...rowFilters],
     differenceFilter: [...differenceFilters],
+    search: searchText === '' ? undefined : searchText,
   }
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post(body)
 
@@ -884,6 +887,7 @@ export const fetchComparisonProjectJudgmentsCount = async (
   differenceFilters: readonly ComparisonProjectDifferenceFilter[],
   articleCategoryFilters: readonly ComparisonProjectArticleCategoryFilter[],
   conflictResolutionFilters: readonly ComparisonProjectConflictResolutionFilter[],
+  searchText: string,
 ) => {
   const body: ComparisonProjectJudgmentsCountRequest = {
     articleCategoryFilter: [...articleCategoryFilters],
@@ -891,6 +895,7 @@ export const fetchComparisonProjectJudgmentsCount = async (
     limit: String(limit),
     rowFilter: [...rowFilters],
     differenceFilter: [...differenceFilters],
+    search: searchText === '' ? undefined : searchText,
   }
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.count.post(body)
 

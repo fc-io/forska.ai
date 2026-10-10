@@ -50,6 +50,7 @@ import {
   getNormalizedComparisonProjectRowFilters,
   getSelectableComparisonProjectRowFilters,
 } from '../../../../utils/comparisonProjectRowFilter.ts'
+import {CompareProjectJudgmentsSearchForm} from './+index/compareProjectJudgmentsSearchForm.tsx'
 import {
   compareProjectJudgmentsPageLimitOptions,
   getCanFetchCompareProjectJudgmentsPage,
@@ -78,6 +79,16 @@ const getLoadedRangeLabel = (rowCount: number, totalCount: number) => {
 
 const getPendingCountRangeLabel = (rowCount: number) => {
   return rowCount === 0 ? 'Counting results' : `Showing 1-${rowCount.toLocaleString()} of`
+}
+
+const getEmptyRowsMessage = (params: {hasRowFilters: boolean; searchText: string}) => {
+  return params.searchText !== '' && params.hasRowFilters
+    ? 'No rows match the search and the selected filters.'
+    : params.searchText !== ''
+      ? `No rows match the search "${params.searchText}".`
+      : params.hasRowFilters
+        ? 'No rows match the selected filters.'
+        : 'No matching article judgments found.'
 }
 
 const getConflictResolutionPromptLabel = (prompt: {
@@ -232,6 +243,7 @@ const CompareProjectJudgmentsPage = () => {
   const [conflictResolutionFilters, setConflictResolutionFilters] = createSignal<
     ComparisonProjectConflictResolutionFilter[]
   >(initialUrlState.conflictResolutionFilters)
+  const [searchText, setSearchText] = createSignal(initialUrlState.searchText)
   const [shouldRefreshCommittedImport, setShouldRefreshCommittedImport] = createSignal(
     getHasConflictResolutionImportCommittedSearchParam(search() as Record<string, unknown>),
   )
@@ -310,6 +322,7 @@ const CompareProjectJudgmentsPage = () => {
       differenceFilters(),
       articleCategoryFilters(),
       conflictResolutionFilters(),
+      searchText(),
     ] as const
   }
   const getCurrentJudgmentsCountQueryKey = () => {
@@ -321,6 +334,7 @@ const CompareProjectJudgmentsPage = () => {
       differenceFilters(),
       articleCategoryFilters(),
       conflictResolutionFilters(),
+      searchText(),
     ] as const
   }
   const canFetchJudgmentsPage = createMemo(() => {
@@ -342,6 +356,7 @@ const CompareProjectJudgmentsPage = () => {
           differenceFilters(),
           articleCategoryFilters(),
           conflictResolutionFilters(),
+          searchText(),
           typeof pageParam === 'string' ? pageParam : null,
         )
       },
@@ -366,6 +381,7 @@ const CompareProjectJudgmentsPage = () => {
           differenceFilters(),
           articleCategoryFilters(),
           conflictResolutionFilters(),
+          searchText(),
         )
       },
       enabled: canFetchJudgmentsPage() && judgmentsPageQuery.isSuccess,
@@ -446,12 +462,21 @@ const CompareProjectJudgmentsPage = () => {
       differenceFilters: differenceFilters(),
       conflictResolutionFilters: showConflictResolutionFilter() ? conflictResolutionFilters() : [],
       articleCategoryFilters: articleCategoryFilters(),
+      searchText: searchText(),
     })
   })
 
   createEffect(
     on(
-      [pageLimit, rowFilters, differenceFilters, articleCategoryFilters, conflictResolutionFilters, searchInitialized],
+      [
+        pageLimit,
+        rowFilters,
+        differenceFilters,
+        articleCategoryFilters,
+        conflictResolutionFilters,
+        searchText,
+        searchInitialized,
+      ],
       () => {
         if (!searchInitialized()) {
           return
@@ -489,6 +514,7 @@ const CompareProjectJudgmentsPage = () => {
         differenceFilters,
         articleCategoryFilters,
         conflictResolutionFilters,
+        searchText,
       ],
       () => {
         setRetainedConflictResolutionRowsByArticleId({})
@@ -780,6 +806,9 @@ const CompareProjectJudgmentsPage = () => {
                       </select>
                     </label>
                   </div>
+                  <div class="mt-4 border-b pb-4">
+                    <CompareProjectJudgmentsSearchForm appliedSearchText={searchText()} onSubmit={setSearchText} />
+                  </div>
                   <div class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     <div class="flex flex-col gap-2">
                       <label class="font-medium text-sm truncate">Row filter:</label>
@@ -963,7 +992,7 @@ const CompareProjectJudgmentsPage = () => {
                   }
                 >
                   <div class="rounded-lg bg-white p-8 text-center text-gray-500 shadow">
-                    {hasRowFilters() ? 'No rows match the selected filters.' : 'No matching article judgments found.'}
+                    {getEmptyRowsMessage({hasRowFilters: hasRowFilters(), searchText: searchText()})}
                   </div>
                 </Show>
               </div>

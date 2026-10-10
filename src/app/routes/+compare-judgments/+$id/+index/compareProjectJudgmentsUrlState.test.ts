@@ -23,6 +23,7 @@ test('compare judgments URL state preserves canonical filter params', () => {
     differenceFilters: ['human-vs-llm-true-conflict'],
     pageLimit: 100,
     rowFilters: ['fully-answered'],
+    searchText: '',
   })
   expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({
     articleCategoryFilter: 'chinese',
@@ -67,8 +68,21 @@ test('compare judgments URL state treats all and invalid values as no filter', (
     differenceFilters: [],
     pageLimit: 50,
     rowFilters: [],
+    searchText: '',
   })
   expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({})
+})
+
+test('compare judgments URL state trims, collapses and caps the title search', () => {
+  const state = getInitialCompareProjectJudgmentsUrlState({search: '  Metformin   diabetes\n糖尿病 '})
+  const longState = getInitialCompareProjectJudgmentsUrlState({search: 'x'.repeat(250)})
+
+  expect(state.searchText).toBe('Metformin diabetes 糖尿病')
+  expect(getCompareProjectJudgmentsSearchParams(state)).toEqual({search: 'Metformin diabetes 糖尿病'})
+  expect(longState.searchText).toBe('x'.repeat(200))
+  expect(getInitialCompareProjectJudgmentsUrlState({search: '   '}).searchText).toBe('')
+  expect(getInitialCompareProjectJudgmentsUrlState({search: ['first', 'second']}).searchText).toBe('first')
+  expect(getInitialCompareProjectJudgmentsUrlState({search: 42}).searchText).toBe('')
 })
 
 test('compare judgments URL state preserves conflict-resolution filters', () => {
