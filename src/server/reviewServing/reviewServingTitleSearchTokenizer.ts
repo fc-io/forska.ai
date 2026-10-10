@@ -34,27 +34,40 @@ export const getNormalizedReviewServingTitleSearchText = (value: string) => {
   return getContextFreeLowercase(value.normalize('NFD').replace(combiningMarkPattern, '').normalize('NFC'))
 }
 
-const getCjkSegmentTokens = (segment: string) => {
+export const getReviewServingTitleSearchCjkBigrams = (segment: string) => {
   const characters = Array.from(segment)
-  const bigrams = characters.slice(0, -1).map((character, index) => {
+
+  return characters.slice(0, -1).map((character, index) => {
     return `${character}${characters[index + 1] ?? ''}`
   })
-
-  return [...characters, ...bigrams]
 }
 
-export const getReviewServingTitleSearchTokens = (title: string | null) => {
-  const segments = getNormalizedReviewServingTitleSearchText(title ?? '')
+const getCjkSegmentTokens = (segment: string) => {
+  return [...Array.from(segment), ...getReviewServingTitleSearchCjkBigrams(segment)]
+}
+
+export const getIsReviewServingTitleSearchCjkSegment = (segment: string) => {
+  return cjkSegmentPattern.test(segment)
+}
+
+/**
+ * Normalized letter/digit segments of a title or query. CJK runs are their
+ * own segments; everything else is split on non-letter/digit characters.
+ */
+export const getReviewServingTitleSearchSegments = (text: string | null) => {
+  return getNormalizedReviewServingTitleSearchText(text ?? '')
     .replace(cjkRunPattern, ' $& ')
     .split(segmentSeparatorPattern)
     .filter((segment) => {
       return segment.length > 0
     })
+}
 
+export const getReviewServingTitleSearchTokens = (title: string | null) => {
   return [
     ...new Set(
-      segments.flatMap((segment) => {
-        return cjkSegmentPattern.test(segment) ? getCjkSegmentTokens(segment) : [segment]
+      getReviewServingTitleSearchSegments(title).flatMap((segment) => {
+        return getIsReviewServingTitleSearchCjkSegment(segment) ? getCjkSegmentTokens(segment) : [segment]
       }),
     ),
   ]
