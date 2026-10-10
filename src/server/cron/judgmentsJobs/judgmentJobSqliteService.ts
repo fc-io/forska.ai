@@ -1250,11 +1250,10 @@ const ensureOutboxClaimSchema = (database: Database) => {
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_judgment_outbox_claim
       ON judgment_outbox(exported_at, export_claimed_at, outbox_seq);
-    CREATE INDEX IF NOT EXISTS idx_judgment_outbox_legacy_repair
+    DROP INDEX IF EXISTS idx_judgment_outbox_legacy_repair;
+    CREATE INDEX IF NOT EXISTS idx_judgment_outbox_legacy_repair_v2
       ON judgment_outbox(outbox_seq)
-      WHERE request_attempts_json IS NULL
-         OR TRIM(request_attempts_json) IN ('', '[]', 'null')
-         OR TRIM(request_attempts_json) NOT LIKE '[%';
+      WHERE ${getLegacyRepairCandidateWhereSql('judgment_outbox')};
   `)
 }
 
@@ -1420,11 +1419,10 @@ const ensureCompletionAckSchema = (database: Database) => {
 
   addMissingCompletionAckColumns(database, missingColumns)
   database.exec(`
-    CREATE INDEX IF NOT EXISTS idx_completion_ack_legacy_repair
+    DROP INDEX IF EXISTS idx_completion_ack_legacy_repair;
+    CREATE INDEX IF NOT EXISTS idx_completion_ack_legacy_repair_v2
       ON completion_ack(completed_at, claim_id)
-      WHERE request_attempts_json IS NULL
-         OR TRIM(request_attempts_json) IN ('', '[]', 'null')
-         OR TRIM(request_attempts_json) NOT LIKE '[%';
+      WHERE ${getLegacyRepairCandidateWhereSql('completion_ack')};
     CREATE INDEX IF NOT EXISTS idx_completion_ack_queue_prompt_id
       ON completion_ack(queue_prompt_id);
   `)
@@ -2612,10 +2610,18 @@ const getLegacyProviderKey = (modelProvider: string | null): string => {
   return modelProvider && modelProvider.trim().length > 0 ? `legacy:${modelProvider}` : 'legacy:unknown'
 }
 
+// Legacy evidence is anything the repair must rewrite before the row counts as exact: empty or
+// malformed JSON, and arrays whose entries carry no requestAttemptId. The partial repair indexes
+// use the same predicate, so the repair scans stay index-backed on large stores.
 const getLegacyRepairCandidateWhereSql = (alias: string): string => {
   const column = `${alias}.request_attempts_json`
 
-  return `(${column} IS NULL OR TRIM(${column}) IN ('', '[]', 'null') OR TRIM(${column}) NOT LIKE '[%')`
+  return `(
+    ${column} IS NULL
+    OR TRIM(${column}) IN ('', '[]', 'null')
+    OR TRIM(${column}) NOT LIKE '[%'
+    OR ${column} NOT LIKE '%"requestAttemptId"%'
+  )`
 }
 
 const getLegacyOutboxRepairRows = (database: Database): LegacyOutboxRepairRow[] => {
@@ -3123,8 +3129,10 @@ const releaseOwnedJobLease = async (jobId: string) => {
   await releaseJudgmentJobLease(currentLease)
 }
 
-const getClaimableOutboxRows = (database: Database, limit: number, exactRequestAttemptsOnly = false) => {
-  const rows = database
+const claimableOutboxExactScanMaxPages = 8
+
+const getClaimableOutboxRowPage = (database: Database, limit: number, afterOutboxSeq: number) => {
+  return database
     .query(
       `
         SELECT
@@ -3163,17 +3171,59 @@ const getClaimableOutboxRows = (database: Database, limit: number, exactRequestA
         FROM judgment_outbox
         WHERE exported_at IS NULL
           AND export_claim_id IS NULL
+          AND outbox_seq > ?
         ORDER BY outbox_seq ASC
         LIMIT ?
       `,
     )
-    .all(limit) as OutboxRow[]
+    .all(afterOutboxSeq, limit) as OutboxRow[]
+}
 
-  return exactRequestAttemptsOnly
-    ? rows.filter((row) => {
-        return getRequestAttemptRepairState(row.requestAttemptsJson).kind === 'exact'
+const isExactRequestAttemptOutboxRow = (row: OutboxRow) => {
+  return getRequestAttemptRepairState(row.requestAttemptsJson).kind === 'exact'
+}
+
+// Non-exact rows (quarantined or still pending legacy repair) stay unexported at the head of the
+// outbox. Paging past them keeps them from eating the claim window, which otherwise shrinks to
+// nothing once their count reaches the batch size and the import idles while exact rows wait.
+const getExactClaimableOutboxRows = ({
+  afterOutboxSeq,
+  database,
+  limit,
+  pagesLeft,
+  rows,
+}: {
+  afterOutboxSeq: number
+  database: Database
+  limit: number
+  pagesLeft: number
+  rows: OutboxRow[]
+}): OutboxRow[] => {
+  const page = getClaimableOutboxRowPage(database, limit, afterOutboxSeq)
+  const nextRows = [...rows, ...page.filter(isExactRequestAttemptOutboxRow)].slice(0, limit)
+  const lastRow = page[page.length - 1]
+
+  return !lastRow || page.length < limit || nextRows.length >= limit || pagesLeft <= 1
+    ? nextRows
+    : getExactClaimableOutboxRows({
+        afterOutboxSeq: lastRow.outboxSeq,
+        database,
+        limit,
+        pagesLeft: pagesLeft - 1,
+        rows: nextRows,
       })
-    : rows
+}
+
+const getClaimableOutboxRows = (database: Database, limit: number, exactRequestAttemptsOnly = false) => {
+  return exactRequestAttemptsOnly
+    ? getExactClaimableOutboxRows({
+        afterOutboxSeq: 0,
+        database,
+        limit,
+        pagesLeft: claimableOutboxExactScanMaxPages,
+        rows: [],
+      })
+    : getClaimableOutboxRowPage(database, limit, 0)
 }
 
 const getClaimedOutboxRows = (database: Database, claimId: string) => {
