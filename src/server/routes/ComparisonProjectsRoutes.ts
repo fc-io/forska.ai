@@ -34,6 +34,7 @@ import {
   getComparisonProjectRowFiltersLabel,
   getNormalizedComparisonProjectRowFilters,
 } from '../../utils/comparisonProjectRowFilter.ts'
+import {getNormalizedComparisonProjectSearchText} from '../../utils/comparisonProjectSearchText.ts'
 import {legacyLocalUserId, localUserDefaults} from '../../utils/localUser.ts'
 import {
   appendProviderModelThinkingBadgeLabel,
@@ -719,6 +720,7 @@ type ComparisonProjectJudgmentFilters = {
   conflictResolutionFilters: readonly ComparisonProjectConflictResolutionFilter[]
   differenceFilters: readonly ComparisonProjectDifferenceFilter[]
   rowFilters: readonly ComparisonProjectRowFilter[]
+  searchText: string
 }
 
 type ComparisonProjectJudgmentFilterBody = {
@@ -726,6 +728,7 @@ type ComparisonProjectJudgmentFilterBody = {
   conflictResolutionFilter?: string | string[]
   differenceFilter?: string | string[]
   rowFilter?: string | string[]
+  search?: string
   showOnlyModelDifferences?: boolean
 }
 
@@ -771,6 +774,7 @@ const getRequestedComparisonProjectJudgmentFilters = (
     ),
     differenceFilters: getRequestedComparisonProjectDifferenceFilters(body),
     rowFilters: getNormalizedComparisonProjectRowFilters(body.rowFilter),
+    searchText: getNormalizedComparisonProjectSearchText(body.search),
   }
 }
 
@@ -4463,6 +4467,7 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
     onArticleIds: appendSourceRowsForArticleIds,
     queryRunner: appDatabaseService,
     rowFilter: filters.rowFilters,
+    searchText: filters.searchText,
   })
 
   return sourceRows
@@ -4636,6 +4641,7 @@ const getComparisonProjectExportResponse = (
             },
             queryRunner: appDatabaseService,
             rowFilter: filters.rowFilters,
+            searchText: filters.searchText,
           })
         }
 
@@ -4662,8 +4668,13 @@ const getComparisonProjectPdfHeaderFilters = (params: {
   const articleCategoryLabel = getComparisonProjectArticleCategoryFiltersLabel(
     getNormalizedComparisonProjectArticleCategoryFilters(params.filters.articleCategoryFilters),
   )
+  const searchLabel = params.filters.searchText === '' ? null : `Search: "${params.filters.searchText}"`
 
-  return [rowFilterLabel, differenceFilterLabel, conflictResolutionLabel, articleCategoryLabel].join(' | ')
+  return [rowFilterLabel, differenceFilterLabel, conflictResolutionLabel, articleCategoryLabel, searchLabel]
+    .filter((label) => {
+      return label !== null
+    })
+    .join(' | ')
 }
 
 const getComparisonProjectPdfResolutionOptions = (scope: ComparisonProjectScope) => {
@@ -5129,6 +5140,7 @@ const getComparisonProjectPdfExportResponse = async (
       },
       queryRunner: appDatabaseService,
       rowFilter: normalizedFilters.rowFilters,
+      searchText: normalizedFilters.searchText,
     })
   }
 
@@ -5205,6 +5217,7 @@ const getComparisonProjectJudgmentsPage = async (
     limit,
     queryRunner: appDatabaseService,
     rowFilter: filters.rowFilters,
+    searchText: filters.searchText,
   })
   const rowsWithConflictResolutions = await getComparisonProjectRowsWithConflictResolutions(scope, pageResult.rows)
 
@@ -5252,6 +5265,7 @@ const getComparisonProjectJudgmentsCount = async (
     limit,
     queryRunner: appDatabaseService,
     rowFilter: filters.rowFilters,
+    searchText: filters.searchText,
   })
 
   return {
@@ -6007,6 +6021,7 @@ export const comparisonProjectsRoutes = new Elysia()
         page: t.Optional(t.Union([t.String(), t.Number()])),
         limit: t.Union([t.String(), t.Number()]),
         cursor: t.Optional(t.Nullable(t.String())),
+        search: t.Optional(t.String()),
         rowFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         articleCategoryFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         conflictResolutionFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
@@ -6039,6 +6054,7 @@ export const comparisonProjectsRoutes = new Elysia()
     {
       body: t.Object({
         limit: t.Union([t.String(), t.Number()]),
+        search: t.Optional(t.String()),
         rowFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         articleCategoryFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         conflictResolutionFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
@@ -6117,6 +6133,7 @@ export const comparisonProjectsRoutes = new Elysia()
         articleCategoryFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         conflictResolutionFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         differenceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
+        search: t.Optional(t.String()),
       }),
     },
   )
@@ -6229,6 +6246,7 @@ export const comparisonProjectsRoutes = new Elysia()
         articleCategoryFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         conflictResolutionFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
         format: t.Optional(t.Union([t.Literal('csv'), t.Literal('pdf')])),
+        search: t.Optional(t.String()),
         differenceFilter: t.Optional(comparisonProjectFilterSelectionBodySchema),
       }),
     },

@@ -22,6 +22,12 @@ import {
 } from '../../../utils/comparisonProjectRowFilter.ts'
 import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgmentDisplayAnswer, hasAnyJudgmentAnswer} from '../../utils/judgmentAnswers.ts'
+import {
+  type ComparisonProjectSearchQuery,
+  getComparisonProjectSearchArticleSourceSql,
+  getComparisonProjectSearchPredicateSql,
+  getComparisonProjectSearchQuery,
+} from './comparisonProjectJudgmentSearch.ts'
 
 export type ComparisonProjectScopedArticle = {
   id: string
@@ -145,6 +151,7 @@ type ComparisonProjectServingJudgmentRowsParams = {
   limit: number
   queryRunner: ComparisonProjectScopedArticleQueryRunner
   rowFilter: ComparisonProjectRowFilterSelection
+  searchText?: string | null
 }
 
 type ForEachComparisonProjectServingJudgmentRowBatchParams = ComparisonProjectServingJudgmentRowsParams & {
@@ -163,6 +170,7 @@ type ComparisonProjectServingJudgmentCountParams = {
   limit: number
   queryRunner: ComparisonProjectScopedArticleQueryRunner
   rowFilter: ComparisonProjectRowFilterSelection
+  searchText?: string | null
 }
 
 export type ComparisonProjectServingJudgmentRowsPage = {nextCursor: string | null; rows: ComparisonProjectJudgmentRow[]}
@@ -451,6 +459,27 @@ const getComparisonProjectServingConflictResolutionJoinSql = (
     : ''
 }
 
+const comparisonProjectServingArticleTable = 'mart.comparison_article_serving'
+const comparisonProjectServingActiveGenerationSql = '(SELECT generation FROM active_generation)'
+
+const getComparisonProjectServingArticleSourceSql = (
+  searchQuery: ComparisonProjectSearchQuery | null,
+  comparisonProjectId: string,
+) => {
+  return searchQuery === null
+    ? comparisonProjectServingArticleTable
+    : getComparisonProjectSearchArticleSourceSql({
+        articleTable: comparisonProjectServingArticleTable,
+        comparisonProjectIdSql: getSqlLiteral(comparisonProjectId),
+        generationSql: comparisonProjectServingActiveGenerationSql,
+        query: searchQuery,
+      })
+}
+
+const getComparisonProjectServingSearchPredicateSql = (searchQuery: ComparisonProjectSearchQuery | null) => {
+  return searchQuery === null ? 'TRUE' : getComparisonProjectSearchPredicateSql(searchQuery, 'article')
+}
+
 const getComparisonProjectServingConflictResolutionAnswerPredicateSql = (answerValues: readonly string[]) => {
   return answerValues.length === 0
     ? null
@@ -595,9 +624,11 @@ export const getComparisonProjectServingMemberSql = (params: {
   differenceFilter: ComparisonProjectDifferenceFilterSelection
   limit: number
   rowFilter: ComparisonProjectRowFilterSelection
+  searchText?: string | null
 }) => {
   const cursor = getComparisonProjectServingPageCursor(params.cursor)
   const limit = getPositiveInteger(params.limit)
+  const searchQuery = getComparisonProjectSearchQuery(params.searchText)
   const rowFilterPredicate = getComparisonProjectServingRowFilterPredicateSql(params.rowFilter)
   const differenceFilterPredicate = getComparisonProjectServingDifferenceFilterPredicateSql(params.differenceFilter)
   const articleCategoryFilterPredicate = getComparisonProjectServingArticleCategoryFilterPredicateSql(
@@ -625,7 +656,7 @@ export const getComparisonProjectServingMemberSql = (params: {
       article.row_sort_created_at AS rowSortCreatedAt,
       article.row_sort_title AS rowSortTitle,
       article.row_sort_article_id AS rowSortArticleId
-    FROM mart.comparison_article_serving article
+    FROM ${getComparisonProjectServingArticleSourceSql(searchQuery, params.comparisonProjectId)} article
     INNER JOIN active_generation active ON active.generation = article.generation
     ${conflictResolutionJoin}
     WHERE article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
@@ -633,6 +664,7 @@ export const getComparisonProjectServingMemberSql = (params: {
       AND ${differenceFilterPredicate}
       AND ${articleCategoryFilterPredicate}
       AND ${conflictResolutionFilterPredicate}
+      AND ${getComparisonProjectServingSearchPredicateSql(searchQuery)}
       ${getComparisonProjectServingCursorWhereSql(cursor)}
     ORDER BY article.row_sort_created_at DESC NULLS LAST, article.row_sort_title ASC, article.row_sort_article_id ASC
     LIMIT ${limit + 1}
@@ -710,7 +742,9 @@ export const getComparisonProjectServingJudgmentFilteredCountSql = (params: {
   conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection
   differenceFilter: ComparisonProjectDifferenceFilterSelection
   rowFilter: ComparisonProjectRowFilterSelection
+  searchText?: string | null
 }) => {
+  const searchQuery = getComparisonProjectSearchQuery(params.searchText)
   const rowFilterPredicate = getComparisonProjectServingRowFilterPredicateSql(params.rowFilter)
   const differenceFilterPredicate = getComparisonProjectServingDifferenceFilterPredicateSql(params.differenceFilter)
   const articleCategoryFilterPredicate = getComparisonProjectServingArticleCategoryFilterPredicateSql(
@@ -733,7 +767,7 @@ export const getComparisonProjectServingJudgmentFilteredCountSql = (params: {
         AND active_generation > 0
     )
     SELECT COUNT(*) AS totalCount
-    FROM mart.comparison_article_serving article
+    FROM ${getComparisonProjectServingArticleSourceSql(searchQuery, params.comparisonProjectId)} article
     INNER JOIN active_generation active ON active.generation = article.generation
     ${conflictResolutionJoin}
     WHERE article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
@@ -741,6 +775,7 @@ export const getComparisonProjectServingJudgmentFilteredCountSql = (params: {
       AND ${differenceFilterPredicate}
       AND ${articleCategoryFilterPredicate}
       AND ${conflictResolutionFilterPredicate}
+      AND ${getComparisonProjectServingSearchPredicateSql(searchQuery)}
   `
 }
 
@@ -799,6 +834,7 @@ export const getComparisonProjectServingJudgmentCount = async (
     rowFilters.length <= 1
     && differenceFilters.length <= 1
     && articleCategoryFilters.length <= 1
+    && getComparisonProjectSearchQuery(params.searchText) === null
     && !getComparisonProjectServingRequiresConflictResolution(conflictResolutionFilter, params.differenceFilter)
   const [row] = await params.queryRunner.queryJson<{totalCount: unknown}>(
     canUsePrecomputedStats
