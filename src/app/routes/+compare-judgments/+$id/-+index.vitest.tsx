@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import {QueryClient, QueryClientProvider} from '@tanstack/solid-query'
+import {format} from 'date-fns'
 import type {Component, JSX, ParentProps} from 'solid-js'
 import {lazy, splitProps} from 'solid-js'
 import {Dynamic, render} from 'solid-js/web'
@@ -272,6 +273,43 @@ const renderComparePage = async () => {
   return {container, dispose, queryClient}
 }
 
+const getCommentButton = (container: HTMLElement) => {
+  return container.querySelector<HTMLButtonElement>(
+    'button[aria-label$="comment on the conflict resolution for article-current"]',
+  )
+}
+
+const getCommentTextarea = () => {
+  return document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Comment for article-current"]')
+}
+
+const getPageQueryHashes = (queryClient: QueryClient) => {
+  return queryClient
+    .getQueryCache()
+    .findAll({queryKey: ['comparison-project-judgments-page']})
+    .map((query) => {
+      return query.queryHash
+    })
+}
+
+const getPageQueryKeyForTest = () => {
+  return ['comparison-project-judgments-page', 'comparison-project-1', 50, [], [], [], [], [], '']
+}
+
+const typeCommentAndSave = async (container: HTMLElement, comment: string) => {
+  getCommentButton(container)?.click()
+  await tick()
+  const textarea = getCommentTextarea()
+
+  if (!textarea) {
+    throw new Error('Missing resolution comment textarea')
+  }
+
+  textarea.value = comment
+  textarea.dispatchEvent(new InputEvent('input', {bubbles: true}))
+  textarea.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter', metaKey: true}))
+}
+
 describe('Compare project judgments page', () => {
   beforeEach(() => {
     mockState.search = {conflictResolutionFilter: 'yes', conflictResolutionProvenanceFilter: 'outdated'}
@@ -402,7 +440,7 @@ describe('Compare project judgments page', () => {
     }
   })
 
-  test('saves a resolution comment optimistically, keeps the query key and refetches only the page', async () => {
+  test('saves a resolution comment optimistically and replaces the row from the response without refetching', async () => {
     mockState.search = {}
     const savedResolution = {
       ...getRow('article-current', 'context-current').conflictResolution,
@@ -416,81 +454,79 @@ describe('Compare project judgments page', () => {
       })
     })
     const {container, dispose, queryClient} = await renderComparePage()
-    const getCommentButton = () => {
-      return container.querySelector<HTMLButtonElement>(
-        'button[aria-label$="comment on the conflict resolution for article-current"]',
-      )
-    }
 
     try {
       await waitForCondition(() => {
-        expect(getCommentButton()?.disabled).toBe(false)
+        expect(getCommentButton(container)?.disabled).toBe(false)
         expect(mockState.fetchComparisonProjectJudgmentsCount).toHaveBeenCalled()
       })
 
       const pageCallCount = mockState.fetchComparisonProjectJudgmentsPage.mock.calls.length
       const countCallCount = mockState.fetchComparisonProjectJudgmentsCount.mock.calls.length
-      const pageQueryKeys = queryClient
-        .getQueryCache()
-        .findAll({queryKey: ['comparison-project-judgments-page']})
-        .map((query) => {
-          return query.queryHash
-        })
+      const pageQueryKeys = getPageQueryHashes(queryClient)
 
-      getCommentButton()?.click()
-      await tick()
-      const textarea = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Comment for article-current"]')
-
-      if (!textarea) {
-        throw new Error('Missing resolution comment textarea')
-      }
-
-      textarea.value = '  Typed note  '
-      textarea.dispatchEvent(new InputEvent('input', {bubbles: true}))
-      textarea.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Enter', metaKey: true}))
+      await typeCommentAndSave(container, '  Typed note  ')
 
       await waitForCondition(() => {
-        expect(getCommentButton()?.title).toBe('Typed note')
-        expect(getCommentButton()?.disabled).toBe(true)
+        expect(getCommentButton(container)?.title).toMatch(/^Typed note\nComment set /)
+        expect(getCommentButton(container)?.disabled).toBe(true)
       })
       expect(mockState.setComparisonProjectConflictResolutionComment).toHaveBeenCalledWith('comparison-project-1', {
         articleId: 'article-current',
         comment: 'Typed note',
       })
 
-      mockState.fetchComparisonProjectJudgmentsPage.mockImplementation(async () => {
-        return {
-          activeGeneration: 1,
-          data: [
-            {...getRow('article-current', 'context-current'), conflictResolution: savedResolution},
-            getRow('article-older', 'context-older'),
-          ],
-          isServingReady: true,
-          limit: 50,
-          nextCursor: null,
-          page: 1,
-          servingStatus: 'ready',
-          servingUpdatedAt: null,
-          totalCount: null,
-          totalPages: null,
-        }
-      })
       pendingSave.resolve(savedResolution)
 
       await waitForCondition(() => {
-        expect(getCommentButton()?.title).toBe('Server note')
-        expect(getCommentButton()?.disabled).toBe(false)
-        expect(mockState.fetchComparisonProjectJudgmentsPage.mock.calls.length).toBeGreaterThan(pageCallCount)
+        expect(getCommentButton(container)?.title).toBe(
+          `Server note\nComment set ${format(new Date('2026-10-10T12:00:00.000Z'), 'yyyy-MM-dd HH:mm')}`,
+        )
+        expect(getCommentButton(container)?.disabled).toBe(false)
       })
+      await tick()
+      expect(mockState.fetchComparisonProjectJudgmentsPage.mock.calls.length).toBe(pageCallCount)
       expect(mockState.fetchComparisonProjectJudgmentsCount.mock.calls.length).toBe(countCallCount)
+      expect(getPageQueryHashes(queryClient)).toEqual(pageQueryKeys)
+      expect(getCommentButton(container)?.dataset.hasDraft).toBe('false')
+    } finally {
+      dispose()
+      queryClient.clear()
+    }
+  })
+
+  test('rolls a failed comment save back, shows the error and keeps the draft in the open editor', async () => {
+    mockState.search = {}
+    mockState.setComparisonProjectConflictResolutionComment.mockImplementation(async () => {
+      throw new Error('Conflict resolution comments cannot contain control characters')
+    })
+    const {container, dispose, queryClient} = await renderComparePage()
+
+    try {
+      await waitForCondition(() => {
+        expect(getCommentButton(container)?.disabled).toBe(false)
+      })
+
+      await typeCommentAndSave(container, 'Rejected note')
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Conflict resolution comments cannot contain control characters')
+        expect(getCommentButton(container)?.disabled).toBe(false)
+        expect(getCommentButton(container)?.title).toBe('Add comment\nUnsaved draft')
+      })
+      await tick()
+      expect(getCommentButton(container)?.title).toBe('Add comment\nUnsaved draft')
+      expect(getCommentButton(container)?.dataset.hasComment).toBe('false')
+      expect(getCommentButton(container)?.dataset.hasDraft).toBe('true')
+      expect(getCommentButton(container)?.getAttribute('aria-expanded')).toBe('true')
+      expect(getCommentTextarea()?.value).toBe('Rejected note')
       expect(
         queryClient
-          .getQueryCache()
-          .findAll({queryKey: ['comparison-project-judgments-page']})
-          .map((query) => {
-            return query.queryHash
-          }),
-      ).toEqual(pageQueryKeys)
+          .getQueryData<{pages: Array<{data: ComparisonProjectJudgmentsRow[]}>}>(getPageQueryKeyForTest())
+          ?.pages[0]?.data.find((row) => {
+            return row.canonicalArticleId === 'article-current'
+          })?.conflictResolution?.comment,
+      ).toBeNull()
     } finally {
       dispose()
       queryClient.clear()

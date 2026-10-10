@@ -124,31 +124,42 @@ Two nullable columns on `app.comparison_project_conflict_resolution`, no index, 
 
 | column | meaning |
 | --- | --- |
-| `comment` | trimmed text, at most 4000 characters (`comparisonProjectConflictResolutionCommentMaxLength` in `src/utils/comparisonProjectConflictResolutionComment.ts`), NULL when there is none |
+| `comment` | trimmed text, at most 4000 UTF-16 code units (an emoji counts 2; `comparisonProjectConflictResolutionCommentMaxLength` in `src/utils/comparisonProjectConflictResolutionComment.ts`), no control characters other than tab, newline and carriage return, NULL when there is none |
 | `comment_updated_at` | when the comment was last set or removed on this resolution; NULL when it was never touched |
 
-The comment belongs to the resolution row:
+The comment belongs to the article's resolution, not to a reviewer. No comment author is tracked: the reviewer and `setAt` shown in the cell are those of the resolution, and the comment's own time is `comment_updated_at` (shown as "Comment set …" in the icon tooltip).
 
-- Re-selecting a value for the same article (the DELETE + INSERT save) carries `comment` and `comment_updated_at` over to the new row. The DELETE returns them and the INSERT writes them, so there is still no extra read. When duplicate rows exist, the one with the latest `comment_updated_at` wins.
+- Re-selecting a value for the same article (the DELETE + INSERT save) carries `comment` and `comment_updated_at` over to the new row unconditionally, also when the previous resolution was made by another reviewer or imported. The DELETE returns them and the INSERT writes them, so there is still no extra read. When duplicate rows exist, the one with the latest `comment_updated_at` wins.
 - Reset deletes the row and with it the comment. The client asks for no extra confirmation.
 - A comment cannot exist without a resolution.
 - A comment does not change `updated_at`, so `setAt` and provenance stay those of the resolution itself.
 
 ### API
 
-- `POST /api/comparison-projects/:id/conflict-resolution/comment` with `{articleId: string, comment: string | null}`. The comment is trimmed and an empty one is stored as NULL (that is how it is removed). More than 4000 characters is a 400. An article without a resolution (or whose stored value is no longer a valid option) is a 400 and nothing is written. Otherwise one in-place `UPDATE` sets `comment` and `comment_updated_at = current_timestamp`, and the response is the full `ComparisonProjectConflictResolution`, read in the same transaction with the listing query.
+- `POST /api/comparison-projects/:id/conflict-resolution/comment` with `{articleId: string, comment: string | null}`. The comment is trimmed and an empty one is stored as NULL (that is how it is removed). More than 4000 code units, or a control character other than tab, newline and carriage return, is a 400. An article without a resolution (or whose stored value is no longer a valid option) is a 400 and nothing is written. Otherwise one in-place `UPDATE` sets `comment` and `comment_updated_at = current_timestamp`, and the response is the full `ComparisonProjectConflictResolution`, read in the same transaction with the listing query.
 - `ComparisonProjectConflictResolution` (listing rows, save response, comment response) has `comment: string | null` and `commentUpdatedAt: Date | null`.
+- Client parsing: the app's Eden client (`src/services/apiClient.ts`) parses successful JSON responses with `parseApiJsonResponse` (`src/services/utils/parseApiJsonResponse.ts`) instead of Eden's default date reviver. It revives only full ISO-8601 timestamps with a time zone (what `JSON.stringify(Date)` produces), and never values under free-text keys (keys ending in `comment`, `description`, `label`, `name`, `note`, `text` or `title`). A comment such as `2026-10-10` or `10/10/2026`, or a project named like a date, therefore stays a string. Error responses still go through Eden's default handling.
 
 ### Export and import
 
-- Resolution export artifact version 2: each row carries an optional `comment: string | null`. Version 1 files and v2 files without the field import with no comment.
-- File import (`/conflict-resolutions/import/commit`) and create-from-project imports store the source comment, trimmed and cut to 4000 characters. `comment_updated_at` is the import time when a comment is stored, otherwise NULL. An imported row replaces the target row, so with `overwrite-different` the target's own comment is replaced by the source comment (or removed when the source has none). Skipped rows (`same-value`, `skip-existing`) keep the target's comment.
+- Resolution export artifact version 2: each row carries `comment: string | null`. Version 1 files and v2 files exported before this feature have no `comment` field.
+- An import replaces or removes a target comment only when the source row actually carries a comment field:
+  - File import of a v2 row with `comment` (also `null`) and create-from-project imports: the imported row gets the source comment (trimmed, control characters removed, cut to 4000 code units without splitting a surrogate pair). `comment_updated_at` is the import time when a comment is stored, otherwise NULL. With `overwrite-different` this replaces the target's comment, or removes it when the source comment is `null`.
+  - v1 files, v2 files without the `comment` field and PDF imports: the target keeps its comment and `comment_updated_at` when the import replaces the resolution value (the import's DELETE returns them, like the UI save).
+  - Skipped rows (`same-value`, `skip-existing`) keep the target row and its comment untouched; a `same-value` row never imports a comment.
+  - PDF "clear undecided" deletes the row, so the comment goes with it, like reset.
+  - When several source rows collapse onto one target article, the first source row's comment is used. The source `comment_updated_at` is not exported.
 - Judgment CSV export: a `Resolution comment` column right after `Conflict Handling` (the resolution label), with the comment as is (CSV quoting keeps commas, quotes and line breaks).
-- PDF export and PDF import: unchanged. The PDF carries no comment, and a PDF import writes rows without one.
+- PDF export: unchanged, the PDF carries no comment.
 
 ### UI
 
-On the compare page the resolution cell has a speech-bubble icon next to the reset button, also in the read-only branch shown when options are unavailable. It is filled and blue when a comment exists, and its tooltip shows the comment, else `Add comment`. Without a resolution it is disabled with the tooltip `Set a resolution first`. Clicking it opens a popover (`src/components/ui/popover.tsx`, Kobalte) with a textarea (focused, 4000 character limit with a counter), `Save` and `Remove`. Esc or an outside click closes without saving, Enter adds a new line, Cmd/Ctrl+Enter saves. A pending row disables the icon and the editor. A failed save keeps the editor open with the draft and shows the page error. The page updates the row optimistically, replaces it with the response and invalidates the page query without changing any query key. Re-selecting a value keeps the comment in the optimistic row, like the server carry-over. Component: `comparisonProjectJudgmentsTable/comparisonProjectConflictResolutionComment.tsx`.
+On the compare page the resolution cell has a speech-bubble icon next to the reset button, also in the read-only branch shown when options are unavailable. It is filled and blue when a comment exists. Its tooltip shows the comment and "Comment set <time>", else `Add comment`. Without a resolution it is disabled with the tooltip `Set a resolution first`. Clicking it opens a popover (`src/components/ui/popover.tsx`, Kobalte) with a textarea (focused, 4000 character limit with a counter), `Discard`, `Remove` and `Save`. Enter adds a new line, Cmd/Ctrl+Enter saves (not while an IME composes).
+
+- Unsaved text is kept per article while the table is mounted: Esc or an outside click closes the editor and keeps the draft, reopening shows it, and the icon gets an amber dot plus "Unsaved draft" in its tooltip until the text is saved or `Discard` drops it. Saving text equal to the saved comment just closes.
+- A pending row disables the icon and the editor. A failed save rolls the optimistic row back, shows the page error and keeps the editor open with the draft.
+- The page updates the row optimistically and replaces it with the response; it does not refetch any query and changes no query key. Re-selecting a value keeps the comment in the optimistic row, like the server carry-over.
+- Component: `comparisonProjectJudgmentsTable/comparisonProjectConflictResolutionComment.tsx`; tooltip and label text in `comparisonProjectConflictResolutionComment/comparisonProjectConflictResolutionCommentText.ts`.
 
 ## Client
 
