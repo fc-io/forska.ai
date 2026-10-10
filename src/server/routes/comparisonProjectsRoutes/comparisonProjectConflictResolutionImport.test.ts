@@ -25,6 +25,7 @@ import {
   getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact,
   getComparisonProjectConflictResolutionImportSourceRowsSql,
+  getComparisonProjectConflictResolutionImportSourceRowValue,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
   getComparisonProjectConflictResolutionImportTitleKey,
@@ -161,6 +162,37 @@ test('import source row query starts from selected conflict-resolution rows', ()
   expect(sql).toContain('strong_identifier.identifierKeys AS identifierKeys')
   expect(sql).toContain('source_article.pubmed_id AS pubmedId')
   expect(sql).toContain('source_article.arxiv_id AS arxivId')
+  expect(sql).toContain('cr.reviewer_user_id AS sourceReviewerUserId')
+  expect(sql).toContain('cr.judgment_context_id AS sourceJudgmentContextId')
+  expect(sql).toContain('LEFT JOIN app.user_config source_reviewer ON source_reviewer.id = cr.reviewer_user_id')
+})
+
+test('import source query rows carry the source reviewer and judgment context as provenance', () => {
+  expect(
+    getComparisonProjectConflictResolutionImportSourceRowValue({
+      resolutionValue: 'yes',
+      sourceArticleId: 'article-1',
+      sourceComparisonProjectId: 'source-1',
+      sourceComparisonProjectName: 'Source',
+      sourceJudgmentContextId: 'context-1',
+      sourceResolutionId: 'resolution-1',
+      sourceReviewerDisplayName: 'Dr Source',
+      sourceReviewerUserId: 'local-source',
+      sourceRowId: 'resolution-1',
+    }),
+  ).toEqual({
+    resolutionValue: 'yes',
+    sourceArticleId: 'article-1',
+    sourceComparisonProjectId: 'source-1',
+    sourceComparisonProjectName: 'Source',
+    sourceProvenance: {
+      judgmentContextId: 'context-1',
+      reviewerDisplayName: 'Dr Source',
+      reviewerUserId: 'local-source',
+    },
+    sourceResolutionId: 'resolution-1',
+    sourceRowId: 'resolution-1',
+  })
 })
 
 test('target article queries are constrained by selected normalized matching keys and scope', () => {
@@ -474,6 +506,53 @@ test('adapts exported transfer rows into import planner source rows', () => {
   ])
 })
 
+test('adapts version 2 transfer rows with provenance into import source provenance', () => {
+  const contextId = '2168ca3cc7e7cb3c3fa173f7aeeff04314ed31e83a9b2b201695446a6461922a'
+  const getRow = (sourceResolutionId: string, provenance: unknown) => {
+    return {
+      sourceResolutionId,
+      sourceArticleRowId: `${sourceResolutionId}:article`,
+      externalArticleId: null,
+      title: `Title ${sourceResolutionId}`,
+      identifiers: [],
+      resolution: {mode: 'summary' as const, value: 'yes', label: 'Yes'},
+      ...(provenance === undefined ? {} : {provenance}),
+    }
+  }
+  const rows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact({
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: 2,
+    exportedAt: '2026-10-10T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      getRow('with-provenance', {
+        contextId,
+        origin: 'ui',
+        reviewerDisplayName: '  Dr Source  ',
+        setAt: '2026-10-09T08:00:00.000Z',
+      }),
+      getRow('malformed-context', {contextId: 'not-a-hash', origin: null, reviewerDisplayName: '', setAt: null}),
+      getRow('null-provenance', null),
+      getRow('version-1-row', undefined),
+    ] as never,
+  })
+
+  expect(
+    rows.map((row) => {
+      return [row.sourceResolutionId, row.sourceProvenance]
+    }),
+  ).toEqual([
+    ['with-provenance', {judgmentContextId: contextId, reviewerDisplayName: 'Dr Source', reviewerUserId: null}],
+    ['malformed-context', {judgmentContextId: null, reviewerDisplayName: null, reviewerUserId: null}],
+    ['null-provenance', undefined],
+    ['version-1-row', undefined],
+  ])
+})
+
 test('adapts transfer rows with null source ids into generated import source ids', () => {
   const rows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact({
     format: comparisonProjectConflictResolutionTransferFormat,
@@ -601,7 +680,7 @@ test('analyzes transfer artifact rows with stable importable and skipped details
     exportedAt: '2026-06-10T10:00:00.000Z',
     format: comparisonProjectConflictResolutionTransferFormat,
     rowCount: 5,
-    version: 1,
+    version: 2,
   })
   expect(result.summary).toEqual({
     deduped: 0,

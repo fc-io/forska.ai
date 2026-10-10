@@ -35,6 +35,7 @@ const userConfigQueryServiceModulePath = new URL('../services/userConfigQuerySer
 type MockServingStatus = {
   activeContentDimensions?: Array<{systemPromptVariant: string; useMetadata: boolean}>
   activeGeneration: number | null
+  activeJudgmentContextId?: string | null
   activeSystemPromptVariants?: string[]
   generationUpdatedAt: Date | null
   servingCompletedAt: Date | null
@@ -147,15 +148,21 @@ type MockDatabaseState = {
     doi?: string | null
     externalArticleId?: string | null
     id?: string
+    judgmentContextId?: string | null
     medrxivId?: string | null
+    origin?: string | null
+    originRef?: string | null
     promptId: string | null
     pubmedId?: string | null
     reviewerDisplayName?: string | null
     reviewerUserId?: string | null
+    servingGeneration?: number | null
+    setAt?: Date | null
     title?: string | null
     url?: string | null
   }>
   extraLlmRows: MockLlmJudgmentRow[]
+  judgmentContextRows?: Array<{contextJson: string; createdAt: Date; id: string}>
   failMaintenanceCheckpoint?: boolean
   failPromptInsert: boolean
   failServingCleanup: boolean
@@ -535,6 +542,10 @@ const getMockConflictResolutionExportRows = (statement: string, state: MockDatab
         externalArticleId: row.externalArticleId ?? row.articleId,
         medrxivId: row.medrxivId ?? null,
         promptId: row.promptId,
+        provenanceContextId: row.judgmentContextId ?? null,
+        provenanceOrigin: row.origin ?? null,
+        provenanceReviewerDisplayName: row.reviewerDisplayName ?? null,
+        provenanceSetAt: row.setAt ?? new Date('2026-09-01T00:00:00.000Z'),
         pubmedId: row.pubmedId ?? null,
         sourceArticleRowId: row.articleId,
         sourceResolutionId: row.id ?? `${comparisonProjectId}:${row.articleId}`,
@@ -679,18 +690,38 @@ const getSqlNullableStringLiteralValue = (value: string | undefined) => {
   return value && value !== 'NULL' ? value.slice(1, -1).replaceAll("''", "'") : null
 }
 
+const getMockConflictResolutionInsertProvenance = (values: string | undefined) => {
+  const [judgmentContextId, servingGeneration, reviewerDisplayName, origin, originRef] = Array.from(
+    (values ?? '').matchAll(/(NULL|'(?:''|[^'])*'|-?\d+)/g),
+  ).map(([value]) => {
+    return value
+  })
+
+  return values
+    ? {
+        judgmentContextId: getSqlNullableStringLiteralValue(judgmentContextId),
+        origin: getSqlNullableStringLiteralValue(origin),
+        originRef: getSqlNullableStringLiteralValue(originRef),
+        reviewerDisplayName: getSqlNullableStringLiteralValue(reviewerDisplayName),
+        servingGeneration:
+          servingGeneration && servingGeneration !== 'NULL' ? Number.parseInt(servingGeneration, 10) : null,
+      }
+    : {}
+}
+
 const getMockConflictResolutionInsertRows = (statement: string) => {
   return Array.from(
     statement.matchAll(
-      /\(\s*'(?:''|[^'])*'\s*,\s*('(?:''|[^'])*')\s*,\s*('(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*(?:,\s*(NULL|'(?:''|[^'])*'))?\s*\)/g,
+      /\(\s*'(?:''|[^'])*'\s*,\s*('(?:''|[^'])*')\s*,\s*('(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*(?:,\s*(NULL|'(?:''|[^'])*'))?((?:\s*,\s*(?:NULL|'(?:''|[^'])*'|-?\d+)){5})?\s*\)/g,
     ),
-  ).map(([, comparisonProjectId, articleId, promptId, answerValue, reviewerUserId]) => {
+  ).map(([, comparisonProjectId, articleId, promptId, answerValue, reviewerUserId, provenanceValues]) => {
     return {
       answerValue: getSqlNullableStringLiteralValue(answerValue),
       articleId: getSqlNullableStringLiteralValue(articleId) ?? '',
       comparisonProjectId: getSqlNullableStringLiteralValue(comparisonProjectId) ?? '',
       promptId: getSqlNullableStringLiteralValue(promptId),
       reviewerUserId: getSqlNullableStringLiteralValue(reviewerUserId),
+      ...getMockConflictResolutionInsertProvenance(provenanceValues),
     }
   })
 }
@@ -1910,6 +1941,12 @@ const queryJson = async (
       })
   }
 
+  if (statement.includes('FROM app.comparison_judgment_context')) {
+    return (getMockDatabaseState().judgmentContextRows ?? []).filter((row) => {
+      return statement.includes(`'${row.id}'`)
+    })
+  }
+
   if (statement.includes('FROM mart.comparison_system_prompt_variant_serving')) {
     const servingStatus = getMockDatabaseState().servingStatus
 
@@ -2074,7 +2111,10 @@ const queryJson = async (
           sourceComparisonProjectId,
           sourceComparisonProjectName: sourceComparisonProject?.name ?? 'Import source',
           sourceExternalArticleId,
+          sourceJudgmentContextId: row.judgmentContextId ?? null,
           sourceResolutionId,
+          sourceReviewerDisplayName: row.reviewerDisplayName ?? null,
+          sourceReviewerUserId: row.reviewerUserId ?? null,
           sourceRowId: sourceResolutionId,
           title: sourceArticleTitle,
         }
@@ -3753,7 +3793,7 @@ test('comparison project conflict resolution import analyze returns row details 
     exportedAt: '2026-06-10T10:00:00.000Z',
     format: comparisonProjectConflictResolutionTransferFormat,
     rowCount: 5,
-    version: 1,
+    version: comparisonProjectConflictResolutionTransferVersion,
   })
   expect(body.data.summary).toEqual({
     deduped: 0,
@@ -4411,8 +4451,13 @@ test('comparison project conflict resolution import commit writes safe rows and 
     answerValue: 'yes',
     articleId: 'article-2',
     comparisonProjectId: 'comparison-project-1',
+    judgmentContextId: null,
+    origin: 'file-import',
+    originRef: 'source-comparison-project-file:source-resolution-importable',
     promptId: null,
-    reviewerUserId: 'test-reviewer',
+    reviewerDisplayName: null,
+    reviewerUserId: null,
+    servingGeneration: null,
   })
   expect(
     state.conflictResolutionRows.filter((row) => {
@@ -4517,8 +4562,13 @@ test('comparison project conflict resolution import commit can include non-confl
     answerValue: 'yes',
     articleId: 'article-2',
     comparisonProjectId: 'comparison-project-1',
+    judgmentContextId: null,
+    origin: 'file-import',
+    originRef: 'source-comparison-project-file:source-resolution-non-conflicting',
     promptId: null,
-    reviewerUserId: 'test-reviewer',
+    reviewerDisplayName: null,
+    reviewerUserId: null,
+    servingGeneration: null,
   })
 })
 
@@ -4770,6 +4820,8 @@ test('comparison project create-from-project dedupes duplicate conflict resoluti
   expect(state.staleServingIds).toEqual(['comparison-project-created'])
 })
 
+const sourceProjectOriginRefMatcher = expect.stringMatching(/^source-comparison-project-1:/) as string
+
 test('comparison project create-from-project can import non-conflicting matched resolutions', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
@@ -4793,7 +4845,10 @@ test('comparison project create-from-project can import non-conflicting matched 
         doi: '10.1000/import-solo',
         externalArticleId: 'source-ext-2',
         id: 'source-resolution-non-conflicting',
+        judgmentContextId: 'source-context-1',
         promptId: null,
+        reviewerDisplayName: 'Dr Source',
+        reviewerUserId: 'local-source-reviewer',
         title: 'Article 2',
       },
     ],
@@ -4856,8 +4911,13 @@ test('comparison project create-from-project can import non-conflicting matched 
       answerValue: 'yes',
       articleId: 'article-2',
       comparisonProjectId: 'comparison-project-created',
+      judgmentContextId: 'source-context-1',
+      origin: 'project-import',
+      originRef: 'source-comparison-project-1:source-resolution-non-conflicting',
       promptId: null,
-      reviewerUserId: 'test-reviewer',
+      reviewerDisplayName: 'Dr Source',
+      reviewerUserId: 'local-source-reviewer',
+      servingGeneration: null,
     },
   ])
 })
@@ -5000,8 +5060,13 @@ test('comparison project create-from-project skips conflicting import warnings w
       answerValue: 'yes',
       articleId: 'article-1',
       comparisonProjectId: 'comparison-project-created',
+      judgmentContextId: null,
+      origin: 'project-import',
+      originRef: sourceProjectOriginRefMatcher,
       promptId: null,
-      reviewerUserId: 'test-reviewer',
+      reviewerDisplayName: null,
+      reviewerUserId: null,
+      servingGeneration: null,
     },
   ])
   expect(state.transactionCalls).toBe(1)
@@ -5212,8 +5277,13 @@ test('comparison project create-from-project returns warning summary counts whil
       answerValue: 'yes',
       articleId: 'article-1',
       comparisonProjectId: 'comparison-project-created',
+      judgmentContextId: null,
+      origin: 'project-import',
+      originRef: sourceProjectOriginRefMatcher,
       promptId: null,
-      reviewerUserId: 'test-reviewer',
+      reviewerDisplayName: null,
+      reviewerUserId: null,
+      servingGeneration: null,
     },
   ])
   expect(state.transactionCalls).toBe(1)
@@ -6811,12 +6881,31 @@ test('comparison judgments hydrate conflict resolutions only for returned servin
       modelIds: ['model-1', 'model-2'],
       summarySourceProjectId: null,
     },
-    conflictResolutionRows: [{answerValue: null, articleId: 'article-1', promptId: 'prompt-2'}],
+    conflictResolutionRows: [
+      {
+        answerValue: null,
+        articleId: 'article-1',
+        judgmentContextId: 'context-old',
+        origin: 'ui',
+        promptId: 'prompt-2',
+        reviewerDisplayName: 'Dr UI',
+        reviewerUserId: 'local-reviewer',
+        servingGeneration: 3,
+        setAt: new Date('2026-10-09T08:00:00.000Z'),
+      },
+    ],
     failPromptInsert: false,
     promptLinks: [
       {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
       {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
     ],
+    servingStatus: getMockServingStatus({
+      activeGeneration: 1,
+      activeJudgmentContextId: 'context-current',
+      generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingCompletedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingStatus: 'ready',
+    }),
   }
 
   const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
@@ -6852,8 +6941,11 @@ test('comparison judgments hydrate conflict resolutions only for returned servin
       conflictResolution: {
         articleId: 'article-1',
         label: 'Prompt 2',
-        reviewerDisplayName: null,
-        reviewerUserId: null,
+        provenance: {contextId: 'context-old', generation: 3, origin: 'ui', setAt: '2026-10-09T08:00:00.000Z'},
+        provenanceMatchesCurrent: false,
+        reviewer: {displayName: 'Dr UI', userId: 'local-reviewer'},
+        reviewerDisplayName: 'Dr UI',
+        reviewerUserId: 'local-reviewer',
         value: 'prompt-2',
       },
       id: 'article-1',
@@ -6970,7 +7062,13 @@ test('comparison conflict resolution save replaces rows without DuckDB ON CONFLI
   const insertStatement = state.lastConflictResolutionInsertStatement ?? ''
 
   expect(response.status).toBe(200)
-  expect(body.data).toEqual({articleId: 'article-1', label: 'Prompt 2', value: 'prompt-2'})
+  expect(body.data).toMatchObject({
+    articleId: 'article-1',
+    label: 'Prompt 2',
+    provenance: {contextId: null, generation: null, origin: 'ui'},
+    provenanceMatchesCurrent: null,
+    value: 'prompt-2',
+  })
   expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE')
   expect(state.transactionCalls).toBe(1)
@@ -6991,6 +7089,13 @@ test('comparison conflict resolution save replaces rows without DuckDB ON CONFLI
 test('summary comparison conflict resolution API can change maybe to yes', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseStateWithReadyServing(),
+    servingStatus: getMockServingStatus({
+      activeGeneration: 1,
+      activeJudgmentContextId: 'context-current',
+      generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingCompletedAt: new Date('2026-04-03T00:00:00.000Z'),
+      servingStatus: 'ready',
+    }),
     comparisonProject: {
       allowConflictResolution: true,
       compareWithHumans: true,
@@ -7036,7 +7141,28 @@ test('summary comparison conflict resolution API can change maybe to yes', async
   const insertStatement = state.lastConflictResolutionInsertStatement ?? ''
 
   expect(response.status).toBe(200)
-  expect(body.data).toEqual({articleId: 'article-1', label: 'yes', value: 'yes'})
+  expect(body.data).toMatchObject({
+    articleId: 'article-1',
+    label: 'yes',
+    provenance: {contextId: 'context-current', generation: 1, origin: 'ui'},
+    provenanceMatchesCurrent: true,
+    reviewer: {displayName: 'Test User', userId: 'test-reviewer'},
+    value: 'yes',
+  })
+  expect(getMockConflictResolutionInsertRows(insertStatement)).toEqual([
+    {
+      answerValue: 'yes',
+      articleId: 'article-1',
+      comparisonProjectId: 'comparison-project-1',
+      judgmentContextId: 'context-current',
+      origin: 'ui',
+      originRef: null,
+      promptId: null,
+      reviewerDisplayName: 'Test reviewer',
+      reviewerUserId: 'test-reviewer',
+      servingGeneration: 1,
+    },
+  ])
   expect(insertStatement).not.toContain('ON CONFLICT')
   expect(insertStatement).not.toContain('DO UPDATE')
   expect(insertStatement).toContain("'yes'")
@@ -7108,7 +7234,7 @@ test('comparison conflict resolution save logs owner-side diagnostics for Chines
   })
 
   expect(response.status).toBe(200)
-  expect(body.data).toEqual({articleId: 'article-1', label: 'yes', value: 'yes'})
+  expect(body.data).toMatchObject({articleId: 'article-1', label: 'yes', value: 'yes'})
   expect(completedLog).toBeDefined()
   expect(completedLog?.[1]).toMatchObject({
     activeGeneration: 1,
@@ -7993,6 +8119,9 @@ test('comparison project pdf export shows individual assessments for import-scop
   ).toBe(true)
 })
 
+const exportJudgmentContextJson =
+  '{"columns":[{"kind":"human","promptHeading":null,"promptId":"summary"},{"criteriaDisposition":"exclude","kind":"llm","modelId":"model-1","modelName":"gpt-5.5","promptHeading":"Population","promptId":"prompt-a","sourceProjectId":"source-1","systemPromptVariant":"legacy","useAbstract":true,"useFulltext":false,"useFulltextNoImages":false,"useMetadata":true,"useTitle":true}],"humanJudgmentMode":"summary","sourceProjectIds":["source-1"],"summarySourceProjectId":"source-1","v":1}'
+
 test('comparison project conflict resolution export returns saved resolutions as compact json', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseStateWithReadyServing(),
@@ -8013,9 +8142,13 @@ test('comparison project conflict resolution export returns saved resolutions as
         doi: '10.1000/export-primary',
         externalArticleId: 'external-1',
         id: 'resolution-1',
+        judgmentContextId: '2168ca3cc7e7cb3c3fa173f7aeeff04314ed31e83a9b2b201695446a6461922a',
         medrxivId: '10.1101/2024.02.02.654321',
+        origin: 'ui',
         promptId: null,
         pubmedId: '12345',
+        reviewerDisplayName: 'Dr Export',
+        setAt: new Date('2026-10-09T08:00:00.000Z'),
         title: 'Export Article 1',
         url: 'https://example.test/article-1',
       },
@@ -8026,6 +8159,13 @@ test('comparison project conflict resolution export returns saved resolutions as
         id: 'resolution-2',
         promptId: null,
         title: 'Export Article 2',
+      },
+    ],
+    judgmentContextRows: [
+      {
+        contextJson: exportJudgmentContextJson,
+        createdAt: new Date('2026-10-01T00:00:00.000Z'),
+        id: '2168ca3cc7e7cb3c3fa173f7aeeff04314ed31e83a9b2b201695446a6461922a',
       },
     ],
     failPromptInsert: false,
@@ -8055,6 +8195,7 @@ test('comparison project conflict resolution export returns saved resolutions as
       title: string | null
       url?: string | null
     }>
+    judgmentContexts?: Array<{context: unknown; id: string}>
     source: {comparisonProjectId: string; comparisonProjectName: string}
     version: number
   }
@@ -8070,7 +8211,13 @@ test('comparison project conflict resolution export returns saved resolutions as
     'attachment; filename="conflict-resolutions-comparison-project-1.json"',
   )
   expect(artifact.format).toBe('forska.comparisonProject.conflictResolution.transfer')
-  expect(artifact.version).toBe(1)
+  expect(artifact.version).toBe(2)
+  expect(artifact.judgmentContexts).toEqual([
+    {
+      context: JSON.parse(exportJudgmentContextJson) as unknown,
+      id: '2168ca3cc7e7cb3c3fa173f7aeeff04314ed31e83a9b2b201695446a6461922a',
+    },
+  ])
   expect(typeof artifact.exportedAt).toBe('string')
   expect(artifact.source).toMatchObject({
     comparisonProjectId: 'comparison-project-1',
@@ -8105,9 +8252,16 @@ test('comparison project conflict resolution export returns saved resolutions as
         },
       ],
       resolution: {mode: 'summary', value: 'yes', label: 'yes'},
+      provenance: {
+        reviewerDisplayName: 'Dr Export',
+        contextId: '2168ca3cc7e7cb3c3fa173f7aeeff04314ed31e83a9b2b201695446a6461922a',
+        setAt: '2026-10-09T08:00:00.000Z',
+        origin: 'ui',
+      },
     },
   ])
   expect(exportStatement).toContain('FROM app.comparison_project_conflict_resolution cr')
+  expect(exportStatement).toContain('cr.judgment_context_id AS provenanceContextId')
   expect(exportStatement).toContain('INNER JOIN mart.comparison_article_serving a')
   expect(exportStatement).toContain('LEFT JOIN mart.comparison_article_identifier_serving ai')
   expect(exportStatement).toContain('AND cr.article_id IN')

@@ -91,6 +91,8 @@ const getStoredBackgroundMaintenanceDuckdbMemoryLimitFromDb = async (
       statement: `
       SELECT maintenance_worker_duckdb_memory_limit AS value
       FROM app.user_config
+      WHERE id NOT LIKE 'pdf-import:%'
+        AND id NOT LIKE 'transfer:%'
       LIMIT 1
     `,
       workloadContext,

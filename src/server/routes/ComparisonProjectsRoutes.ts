@@ -35,7 +35,6 @@ import {
   getNormalizedComparisonProjectRowFilters,
 } from '../../utils/comparisonProjectRowFilter.ts'
 import {getNormalizedComparisonProjectSearchText} from '../../utils/comparisonProjectSearchText.ts'
-import {legacyLocalUserId, localUserDefaults} from '../../utils/localUser.ts'
 import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
@@ -44,6 +43,14 @@ import {getProviderModelMetadataOptions} from '../providers/providerModelMetadat
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
+import {
+  type ComparisonJudgmentContextSummary,
+  getComparisonJudgmentContextId,
+  getComparisonJudgmentContextsByIds,
+  getValidatedComparisonJudgmentContext,
+  isComparisonJudgmentContextId,
+  upsertComparisonJudgmentContext,
+} from '../services/comparisonJudgmentContext.ts'
 import {comparisonSystemPromptVariantServingTable} from '../services/comparisonProjectServingGenerationConfig.ts'
 import {getComparisonProjectServingGenerationService} from '../services/comparisonProjectServingGenerationService.ts'
 import {
@@ -71,6 +78,8 @@ import {getRuntimeBuildInfo} from '../utils/runtimeBuildInfo.ts'
 import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
 import {SimplePdfDocument} from '../utils/simplePdf.ts'
 import {
+  type ComparisonProjectConflictResolutionTransferArtifact,
+  type ComparisonProjectConflictResolutionTransferJudgmentContextV2,
   type ComparisonProjectConflictResolutionTransferSourceRow,
   createComparisonProjectConflictResolutionTransferArtifact,
   getComparisonProjectConflictResolutionTransferFilename,
@@ -83,6 +92,7 @@ import {
   type ComparisonProjectConflictResolutionImportOverwriteMode,
   type ComparisonProjectConflictResolutionImportSourceQueryRow,
   type ComparisonProjectConflictResolutionImportSourceRow,
+  type ComparisonProjectConflictResolutionImportSourceRowQueryRow,
   type ComparisonProjectConflictResolutionImportSummary,
   type ComparisonProjectConflictResolutionImportTargetArticle,
   type ComparisonProjectConflictResolutionImportTargetArticleQueryRow,
@@ -100,6 +110,7 @@ import {
   getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql,
   getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact,
   getComparisonProjectConflictResolutionImportSourceRowsSql,
+  getComparisonProjectConflictResolutionImportSourceRowValue,
   getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
   getComparisonProjectConflictResolutionImportTitleKey,
@@ -112,6 +123,23 @@ import {
   parsePdfConflictResolutionImport,
   pdfConflictResolutionNotSetValue,
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionPdfImport.ts'
+import {
+  comparisonProjectConflictResolutionInsertColumnsSql,
+  type ComparisonProjectConflictResolutionOrigin,
+  type ComparisonProjectConflictResolutionProvenance,
+  type ComparisonProjectConflictResolutionProvenanceFilter,
+  type ComparisonProjectConflictResolutionProvenanceRow,
+  type ComparisonProjectConflictResolutionReviewer,
+  type ComparisonProjectConflictResolutionWriteProvenance,
+  getComparisonProjectConflictResolutionInsertValuesSql,
+  getComparisonProjectConflictResolutionOriginRef,
+  getComparisonProjectConflictResolutionProvenance,
+  getComparisonProjectConflictResolutionProvenanceMatchesCurrent,
+  getComparisonProjectConflictResolutionReviewer,
+  getTransferReviewerDisplayNames,
+  getTransferReviewerUserId,
+  getUpsertTransferReviewersSql,
+} from './comparisonProjectsRoutes/comparisonProjectConflictResolutionProvenance.ts'
 import {
   type ComparisonProjectConflictResolutionFilter,
   type ComparisonProjectJudgmentHumanRow,
@@ -240,6 +268,9 @@ type ComparisonProjectHumanRow = ComparisonProjectJudgmentHumanRow
 type ComparisonProjectConflictResolution = {
   articleId: string
   label: string
+  provenance: ComparisonProjectConflictResolutionProvenance | null
+  provenanceMatchesCurrent: boolean | null
+  reviewer: ComparisonProjectConflictResolutionReviewer | null
   reviewerDisplayName: string | null
   reviewerUserId: string | null
   value: string
@@ -587,6 +618,7 @@ type ComparisonProjectConflictResolutionSavedRow = {
   replacedExistingResolution: boolean
   reviewerDisplayName: string | null
   reviewerUserId: string | null
+  setAt?: unknown
 }
 
 const checkpointComparisonProjectMutation = async (diagnostic?: ConflictResolutionSaveBaseDiagnostic) => {
@@ -1822,7 +1854,7 @@ const getConflictResolutionImportSourceRows = async (
   db: AppQueryRunner,
   sourceComparisonProjectIds: string[],
 ): Promise<ComparisonProjectConflictResolutionImportSourceRow[]> => {
-  return db.queryJson<ComparisonProjectConflictResolutionImportSourceRow>(
+  const rows = await db.queryJson<ComparisonProjectConflictResolutionImportSourceRowQueryRow>(
     getComparisonProjectConflictResolutionImportSourceRowsSql({
       articleIdentifierTable,
       articleTable,
@@ -1831,6 +1863,8 @@ const getConflictResolutionImportSourceRows = async (
       sourceComparisonProjectIds,
     }),
   )
+
+  return rows.map(getComparisonProjectConflictResolutionImportSourceRowValue)
 }
 
 const getConflictResolutionImportIdentifierKeys = (
@@ -2192,74 +2226,97 @@ const getEmptyConflictResolutionImportSummary = (): ComparisonProjectConflictRes
   }
 }
 
-const getOrCreateComparisonProjectConflictResolutionReviewer = async (tx: AppTx) => {
-  const [existing] = await tx.queryJson<{id: string; name: string}>(`
-    SELECT id, name
-    FROM app.user_config
-    WHERE id NOT LIKE 'pdf-import:%'
-    ORDER BY created_at ASC, id ASC
-    LIMIT 1
-  `)
+type ComparisonProjectConflictResolutionImportCandidate = ReturnType<
+  typeof getComparisonProjectConflictResolutionImportPlan
+>['candidates'][number]
 
-  if (existing) {
-    const shouldRepair = existing.id === legacyLocalUserId || !existing.name.trim()
-    if (!shouldRepair) {
-      return existing
+const getComparisonProjectConflictResolutionImportSourceRowsById = (
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
+) => {
+  return sourceRows.reduce<Map<string, ComparisonProjectConflictResolutionImportSourceRow>>((rowMap, sourceRow) => {
+    return rowMap.has(sourceRow.sourceRowId) ? rowMap : rowMap.set(sourceRow.sourceRowId, sourceRow)
+  }, new Map<string, ComparisonProjectConflictResolutionImportSourceRow>())
+}
+
+const getComparisonProjectConflictResolutionImportCandidateSourceRow = (
+  candidate: ComparisonProjectConflictResolutionImportCandidate,
+  sourceRowsById: ReadonlyMap<string, ComparisonProjectConflictResolutionImportSourceRow>,
+) => {
+  const [firstSourceRow] = candidate.sourceRows
+
+  return firstSourceRow ? (sourceRowsById.get(firstSourceRow.sourceRowId) ?? null) : null
+}
+
+const getComparisonProjectConflictResolutionImportOriginRef = (
+  sourceRow: ComparisonProjectConflictResolutionImportSourceRow | null,
+) => {
+  return sourceRow
+    ? getComparisonProjectConflictResolutionOriginRef({
+        sourceComparisonProjectId: sourceRow.sourceComparisonProjectId,
+        sourceResolutionId: sourceRow.sourceResolutionId,
+      })
+    : null
+}
+
+const getComparisonProjectConflictResolutionImportProvenanceResolver = (params: {
+  judgmentContextId?: (sourceRow: ComparisonProjectConflictResolutionImportSourceRow | null) => string | null
+  origin: ComparisonProjectConflictResolutionOrigin
+  reviewer: (sourceRow: ComparisonProjectConflictResolutionImportSourceRow | null) => {
+    displayName: string | null
+    userId: string | null
+  }
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+}) => {
+  const sourceRowsById = getComparisonProjectConflictResolutionImportSourceRowsById(params.sourceRows)
+
+  return (
+    candidate: ComparisonProjectConflictResolutionImportCandidate,
+  ): ComparisonProjectConflictResolutionWriteProvenance => {
+    const sourceRow = getComparisonProjectConflictResolutionImportCandidateSourceRow(candidate, sourceRowsById)
+    const reviewer = params.reviewer(sourceRow)
+
+    return {
+      judgmentContextId: params.judgmentContextId
+        ? params.judgmentContextId(sourceRow)
+        : (sourceRow?.sourceProvenance?.judgmentContextId ?? null),
+      origin: params.origin,
+      originRef: getComparisonProjectConflictResolutionImportOriginRef(sourceRow),
+      reviewerDisplayName: reviewer.displayName,
+      reviewerUserId: reviewer.userId,
+      servingGeneration: null,
     }
-
-    const [repaired] = await tx.queryJson<{id: string; name: string}>(`
-      UPDATE app.user_config
-      SET id = CASE
-            WHEN id = ${getSqlLiteral(legacyLocalUserId)} THEN ${getSqlLiteral(localUserDefaults.id)}
-            ELSE id
-          END,
-          name = CASE
-            WHEN NULLIF(TRIM(name), '') IS NULL THEN ${getSqlLiteral(localUserDefaults.name)}
-            ELSE name
-          END,
-          email = CASE
-            WHEN id = ${getSqlLiteral(legacyLocalUserId)} THEN ${getSqlLiteral(localUserDefaults.email)}
-            ELSE email
-          END,
-          updated_at = current_timestamp
-      WHERE id = ${getSqlLiteral(existing.id)}
-      RETURNING id, name
-    `)
-
-    return repaired ?? existing
   }
+}
 
-  const [created] = await tx.queryJson<{id: string; name: string}>(`
-    INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id, unpaywall_email)
-    VALUES (
-      ${getSqlLiteral(localUserDefaults.id)},
-      ${getSqlLiteral(localUserDefaults.name)},
-      ${getSqlLiteral(localUserDefaults.email)},
-      ${getSqlLiteral(localUserDefaults.role)},
-      ${getSqlLiteral(localUserDefaults.fullTextConversionModelId)},
-      ${getSqlLiteral(localUserDefaults.unpaywallEmail)}
-    )
-    RETURNING id, name
-  `)
-
-  if (!created) {
-    throw new Error('Failed to create local reviewer')
+const getComparisonProjectConflictResolutionSourceReviewer = (
+  sourceRow: ComparisonProjectConflictResolutionImportSourceRow | null,
+) => {
+  return {
+    displayName: sourceRow?.sourceProvenance?.reviewerDisplayName ?? null,
+    userId: sourceRow?.sourceProvenance?.reviewerUserId ?? null,
   }
+}
 
-  return created
+const getComparisonProjectConflictResolutionTransferReviewer = (
+  sourceRow: ComparisonProjectConflictResolutionImportSourceRow | null,
+) => {
+  const displayName = sourceRow?.sourceProvenance?.reviewerDisplayName?.trim() || null
+
+  return {displayName, userId: displayName ? getTransferReviewerUserId(displayName) : null}
 }
 
 const insertComparisonProjectConflictResolutionImportCandidates = async (params: {
   candidates: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>['candidates']
   comparisonProjectId: string
-  reviewer?: {id: string; name: string} | null
+  getProvenance: (
+    candidate: ComparisonProjectConflictResolutionImportCandidate,
+  ) => ComparisonProjectConflictResolutionWriteProvenance
   tx: AppTx
 }) => {
   if (params.candidates.length === 0) {
     return 0
   }
 
-  const reviewer = params.reviewer ?? (await getOrCreateComparisonProjectConflictResolutionReviewer(params.tx))
   const targetArticleIds = getUniqueStringValues(
     params.candidates.map((candidate) => {
       return candidate.targetArticleId
@@ -2273,24 +2330,17 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
   `)
 
   await params.tx.run(`
-    INSERT INTO ${comparisonProjectConflictResolutionTable} (
-      id,
-      comparison_project_id,
-      article_id,
-      prompt_id,
-      answer_value,
-      reviewer_user_id
-    )
+    INSERT INTO ${comparisonProjectConflictResolutionTable} (${comparisonProjectConflictResolutionInsertColumnsSql})
     VALUES ${params.candidates
       .map((candidate) => {
-        return `(
-          ${getSqlLiteral(crypto.randomUUID())},
-          ${getSqlLiteral(params.comparisonProjectId)},
-          ${getSqlLiteral(candidate.targetArticleId)},
-          NULL,
-          ${getSqlLiteral(candidate.resolutionValue)},
-          ${getSqlLiteral(reviewer.id)}
-        )`
+        return getComparisonProjectConflictResolutionInsertValuesSql({
+          answerValue: candidate.resolutionValue,
+          articleId: candidate.targetArticleId,
+          comparisonProjectId: params.comparisonProjectId,
+          id: crypto.randomUUID(),
+          promptId: null,
+          provenance: params.getProvenance(candidate),
+        })
       })
       .join(',\n')}
   `)
@@ -2386,6 +2436,11 @@ const importComparisonProjectConflictResolutions = async (params: {
   const importedCount = await insertComparisonProjectConflictResolutionImportCandidates({
     candidates: plan.candidates,
     comparisonProjectId: params.comparisonProjectId,
+    getProvenance: getComparisonProjectConflictResolutionImportProvenanceResolver({
+      origin: 'project-import',
+      reviewer: getComparisonProjectConflictResolutionSourceReviewer,
+      sourceRows,
+    }),
     tx: params.tx,
   })
 
@@ -2717,15 +2772,100 @@ const getConflictResolutionArtifactImportAnalysis = async (params: {
     targetSummaryOptionValues,
   })
 
-  return {analyzeResult, plan}
+  return {analyzeResult, artifact, plan, sourceRows}
+}
+
+const getComparisonProjectConflictResolutionImportCandidateSourceRows = (params: {
+  candidates: readonly ComparisonProjectConflictResolutionImportCandidate[]
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+}) => {
+  const sourceRowsById = getComparisonProjectConflictResolutionImportSourceRowsById(params.sourceRows)
+
+  return params.candidates
+    .map((candidate) => {
+      return getComparisonProjectConflictResolutionImportCandidateSourceRow(candidate, sourceRowsById)
+    })
+    .filter((sourceRow): sourceRow is ComparisonProjectConflictResolutionImportSourceRow => {
+      return sourceRow !== null
+    })
+}
+
+const upsertComparisonProjectConflictResolutionTransferReviewers = async (params: {
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+  tx: AppTx
+}) => {
+  const displayNames = getTransferReviewerDisplayNames(
+    params.sourceRows.map((sourceRow) => {
+      return sourceRow.sourceProvenance?.reviewerDisplayName
+    }),
+  )
+
+  if (displayNames.length > 0) {
+    await params.tx.run(getUpsertTransferReviewersSql(displayNames))
+  }
+}
+
+const getComparisonProjectConflictResolutionTransferJudgmentContexts = (
+  artifact: ComparisonProjectConflictResolutionTransferArtifact,
+) => {
+  return (artifact.judgmentContexts ?? [])
+    .map((entry) => {
+      const context = getValidatedComparisonJudgmentContext(entry.context)
+
+      return context && getComparisonJudgmentContextId(context) === entry.id ? context : null
+    })
+    .filter((context): context is NonNullable<typeof context> => {
+      return context !== null
+    })
+}
+
+const upsertComparisonProjectConflictResolutionTransferJudgmentContexts = async (params: {
+  artifact: ComparisonProjectConflictResolutionTransferArtifact
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+  tx: AppTx
+}) => {
+  const usedContextIds = new Set(
+    params.sourceRows.map((sourceRow) => {
+      return sourceRow.sourceProvenance?.judgmentContextId ?? ''
+    }),
+  )
+  const contexts = getComparisonProjectConflictResolutionTransferJudgmentContexts(params.artifact).filter((context) => {
+    return usedContextIds.has(getComparisonJudgmentContextId(context))
+  })
+
+  await contexts.reduce<Promise<unknown>>((promise, context) => {
+    return promise.then(() => {
+      return upsertComparisonJudgmentContext(params.tx, context)
+    })
+  }, Promise.resolve())
 }
 
 const commitComparisonProjectConflictResolutionImport = async (scope: ComparisonProjectScope, body: unknown) => {
   return appDatabaseService.transaction(async (tx) => {
-    const {analyzeResult, plan} = await getConflictResolutionArtifactImportAnalysis({body, scope, tx})
+    const {analyzeResult, artifact, plan, sourceRows} = await getConflictResolutionArtifactImportAnalysis({
+      body,
+      scope,
+      tx,
+    })
+    const candidateSourceRows = getComparisonProjectConflictResolutionImportCandidateSourceRows({
+      candidates: plan.candidates,
+      sourceRows,
+    })
+
+    await upsertComparisonProjectConflictResolutionTransferReviewers({sourceRows: candidateSourceRows, tx})
+    await upsertComparisonProjectConflictResolutionTransferJudgmentContexts({
+      artifact,
+      sourceRows: candidateSourceRows,
+      tx,
+    })
     const inserted = await insertComparisonProjectConflictResolutionImportCandidates({
       candidates: plan.candidates,
       comparisonProjectId: scope.id,
+      getProvenance: getComparisonProjectConflictResolutionImportProvenanceResolver({
+        origin: 'file-import',
+        reviewer: getComparisonProjectConflictResolutionTransferReviewer,
+        sourceRows,
+      }),
       tx,
     })
 
@@ -2740,7 +2880,7 @@ const commitComparisonProjectConflictResolutionPdfImport = async (
   return appDatabaseService.transaction(async (tx) => {
     const {artifact, importMode, overwriteMode, parsedImport, pdfUndecidedMode, pdfWarnings, reviewer} =
       await getComparisonProjectConflictResolutionPdfImportRequest(scope, body)
-    const {analyzeResult, plan} = await getConflictResolutionArtifactImportAnalysis({
+    const {analyzeResult, plan, sourceRows} = await getConflictResolutionArtifactImportAnalysis({
       body: {artifact, importMode, overwriteMode},
       scope,
       tx,
@@ -2759,10 +2899,22 @@ const commitComparisonProjectConflictResolutionPdfImport = async (
       plan.candidates.length === 0
         ? null
         : await getOrCreatePdfConflictResolutionImportReviewer({displayName: reviewer.displayName, tx})
+    const pdfJudgmentContextId = isComparisonJudgmentContextId(parsedImport.source.judgmentContextId)
+      ? parsedImport.source.judgmentContextId
+      : null
     const inserted = await insertComparisonProjectConflictResolutionImportCandidates({
       candidates: plan.candidates,
       comparisonProjectId: scope.id,
-      reviewer: importedReviewer,
+      getProvenance: getComparisonProjectConflictResolutionImportProvenanceResolver({
+        judgmentContextId: () => {
+          return pdfJudgmentContextId
+        },
+        origin: 'pdf-import',
+        reviewer: () => {
+          return {displayName: importedReviewer?.name ?? null, userId: importedReviewer?.id ?? null}
+        },
+        sourceRows,
+      }),
       tx,
     })
     const cleared =
@@ -4078,23 +4230,27 @@ const getComparisonProjectConflictResolutions = async (
   }
 
   const optionByValue = getComparisonProjectConflictResolutionOptionByValue(scope)
-  const resolutionRows = await appDatabaseService.queryJson<{
-    answerValue: string | null
-    articleId: string
-    promptId: string | null
-    reviewerDisplayName: string | null
-    reviewerUserId: string | null
-  }>(`
+  const resolutionRows = await appDatabaseService.queryJson<
+    ComparisonProjectConflictResolutionProvenanceRow & {
+      answerValue: string | null
+      articleId: string
+      promptId: string | null
+    }
+  >(`
     SELECT
-      article_id AS articleId,
-      prompt_id AS promptId,
-      answer_value AS answerValue,
-      reviewer_user_id AS reviewerUserId,
-      NULLIF(TRIM(reviewer.name), '') AS reviewerDisplayName
-    FROM ${comparisonProjectConflictResolutionTable}
-    LEFT JOIN app.user_config reviewer ON reviewer.id = reviewer_user_id
-    WHERE comparison_project_id = ${getSqlLiteral(scope.id)}
-      AND article_id IN (${getInClause(articleIds)})
+      cr.article_id AS articleId,
+      cr.prompt_id AS promptId,
+      cr.answer_value AS answerValue,
+      cr.reviewer_user_id AS reviewerUserId,
+      COALESCE(NULLIF(TRIM(cr.reviewer_display_name), ''), NULLIF(TRIM(reviewer.name), '')) AS reviewerDisplayName,
+      cr.judgment_context_id AS judgmentContextId,
+      cr.serving_generation AS servingGeneration,
+      cr.origin AS origin,
+      cr.updated_at AS setAt
+    FROM ${comparisonProjectConflictResolutionTable} cr
+    LEFT JOIN app.user_config reviewer ON reviewer.id = cr.reviewer_user_id
+    WHERE cr.comparison_project_id = ${getSqlLiteral(scope.id)}
+      AND cr.article_id IN (${getInClause(articleIds)})
   `)
 
   return resolutionRows.reduce<Map<string, ComparisonProjectConflictResolution>>((resolutionMap, row) => {
@@ -4108,8 +4264,14 @@ const getComparisonProjectConflictResolutions = async (
     resolutionMap.set(row.articleId, {
       articleId: row.articleId,
       label: option.label,
-      reviewerDisplayName: row.reviewerDisplayName,
-      reviewerUserId: row.reviewerUserId,
+      provenance: getComparisonProjectConflictResolutionProvenance(row),
+      provenanceMatchesCurrent: getComparisonProjectConflictResolutionProvenanceMatchesCurrent(
+        row.judgmentContextId,
+        scope.judgmentContextId,
+      ),
+      reviewer: getComparisonProjectConflictResolutionReviewer(row),
+      reviewerDisplayName: row.reviewerDisplayName ?? null,
+      reviewerUserId: row.reviewerUserId ?? null,
       value: option.value,
     })
     return resolutionMap
@@ -4238,6 +4400,51 @@ const getValidatedComparisonProjectConflictResolutionOption = (scope: Comparison
   return option
 }
 
+const getComparisonProjectConflictResolutionUiProvenance = (
+  scope: Pick<ComparisonProjectScope, 'activeGeneration' | 'judgmentContextId'>,
+  reviewer: {id: string; name: string},
+): ComparisonProjectConflictResolutionWriteProvenance => {
+  return {
+    judgmentContextId: scope.judgmentContextId,
+    origin: 'ui',
+    originRef: null,
+    reviewerDisplayName: reviewer.name,
+    reviewerUserId: reviewer.id,
+    servingGeneration: scope.activeGeneration,
+  }
+}
+
+const getSavedComparisonProjectConflictResolution = (params: {
+  option: ComparisonProjectConflictResolutionOption
+  resolutionRow: ComparisonProjectConflictResolutionSavedRow
+  reviewer: {id: string; name: string}
+  scope: Pick<ComparisonProjectScope, 'activeGeneration' | 'judgmentContextId'>
+}): ComparisonProjectConflictResolution => {
+  const provenance = getComparisonProjectConflictResolutionUiProvenance(params.scope, params.reviewer)
+  const provenanceRow = {
+    judgmentContextId: provenance.judgmentContextId,
+    origin: provenance.origin,
+    reviewerDisplayName: params.resolutionRow.reviewerDisplayName ?? provenance.reviewerDisplayName,
+    reviewerUserId: params.resolutionRow.reviewerUserId ?? provenance.reviewerUserId,
+    servingGeneration: provenance.servingGeneration,
+    setAt: params.resolutionRow.setAt ?? new Date(),
+  }
+
+  return {
+    articleId: params.resolutionRow.articleId,
+    label: params.option.label,
+    provenance: getComparisonProjectConflictResolutionProvenance(provenanceRow),
+    provenanceMatchesCurrent: getComparisonProjectConflictResolutionProvenanceMatchesCurrent(
+      provenance.judgmentContextId,
+      params.scope.judgmentContextId,
+    ),
+    reviewer: getComparisonProjectConflictResolutionReviewer(provenanceRow),
+    reviewerDisplayName: provenanceRow.reviewerDisplayName,
+    reviewerUserId: provenanceRow.reviewerUserId,
+    value: params.option.value,
+  }
+}
+
 const setComparisonProjectConflictResolution = async (params: {
   articleId: string
   value: string
@@ -4291,27 +4498,22 @@ const setComparisonProjectConflictResolution = async (params: {
           articleId: string
           reviewerDisplayName: string | null
           reviewerUserId: string | null
+          setAt?: unknown
         }>(`
-          INSERT INTO ${comparisonProjectConflictResolutionTable} (
-            id,
-            comparison_project_id,
-            article_id,
-            prompt_id,
-            answer_value,
-            reviewer_user_id
-          )
-          VALUES (
-            ${getSqlLiteral(crypto.randomUUID())},
-            ${getSqlLiteral(params.scope.id)},
-            ${getSqlLiteral(params.articleId)},
-            ${getSqlLiteral(isSummaryMode ? null : option.value)},
-            ${getSqlLiteral(isSummaryMode ? option.value : null)},
-            ${getSqlLiteral(reviewer.id)}
-          )
+          INSERT INTO ${comparisonProjectConflictResolutionTable} (${comparisonProjectConflictResolutionInsertColumnsSql})
+          VALUES ${getComparisonProjectConflictResolutionInsertValuesSql({
+            answerValue: isSummaryMode ? option.value : null,
+            articleId: params.articleId,
+            comparisonProjectId: params.scope.id,
+            id: crypto.randomUUID(),
+            promptId: isSummaryMode ? null : option.value,
+            provenance: getComparisonProjectConflictResolutionUiProvenance(params.scope, reviewer),
+          })}
           RETURNING
             article_id AS articleId,
             reviewer_user_id AS reviewerUserId,
-            ${getSqlLiteral(reviewer.name)} AS reviewerDisplayName
+            reviewer_display_name AS reviewerDisplayName,
+            updated_at AS setAt
         `)
 
         if (!insertedRow) {
@@ -4343,7 +4545,7 @@ const setComparisonProjectConflictResolution = async (params: {
       runtime: getConflictResolutionSaveRuntimeDiagnostic(),
     })
 
-    return {articleId: resolutionRow.articleId, label: option.label, value: option.value}
+    return getSavedComparisonProjectConflictResolution({option, resolutionRow, reviewer, scope: params.scope})
   } catch (error) {
     console.error('[comparison-projects] conflict-resolution save failed', {
       ...baseDiagnostic,
@@ -4434,8 +4636,13 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
       ai.source AS identifierSource,
       ai.is_primary AS identifierIsPrimary,
       cr.prompt_id AS promptId,
-      cr.answer_value AS answerValue
+      cr.answer_value AS answerValue,
+      COALESCE(NULLIF(TRIM(cr.reviewer_display_name), ''), NULLIF(TRIM(reviewer.name), '')) AS provenanceReviewerDisplayName,
+      cr.judgment_context_id AS provenanceContextId,
+      cr.updated_at AS provenanceSetAt,
+      cr.origin AS provenanceOrigin
     FROM ${comparisonProjectConflictResolutionTable} cr
+    LEFT JOIN app.user_config reviewer ON reviewer.id = cr.reviewer_user_id
     INNER JOIN mart.comparison_article_serving a
       ON a.comparison_project_id = ${comparisonProjectLiteral}
      AND a.generation = ${activeGenerationLiteral}
@@ -4477,6 +4684,23 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
   return sourceRows
 }
 
+const getComparisonProjectConflictResolutionExportJudgmentContexts = async (
+  sourceRows: readonly ComparisonProjectConflictResolutionTransferSourceRow[],
+): Promise<ComparisonProjectConflictResolutionTransferJudgmentContextV2[]> => {
+  const summaries = await getComparisonJudgmentContextsByIds(
+    appDatabaseService,
+    getUniqueStringValues(
+      sourceRows.map((sourceRow) => {
+        return sourceRow.provenanceContextId ?? ''
+      }),
+    ),
+  )
+
+  return summaries.map((summary) => {
+    return {context: summary.context, id: summary.id}
+  })
+}
+
 const getComparisonProjectConflictResolutionExportResponse = async (
   scope: ComparisonProjectScope,
   filters: ComparisonProjectJudgmentFilters,
@@ -4485,6 +4709,7 @@ const getComparisonProjectConflictResolutionExportResponse = async (
   const sourceRows = await getComparisonProjectConflictResolutionExportSourceRows(scope, filters)
   const artifact = createComparisonProjectConflictResolutionTransferArtifact({
     exportedAt,
+    judgmentContexts: await getComparisonProjectConflictResolutionExportJudgmentContexts(sourceRows),
     source: {
       comparisonProjectId: scope.id,
       comparisonProjectName: scope.name,
@@ -4754,6 +4979,7 @@ const addComparisonProjectPdfFrontPage = (params: {
     exportedAt,
     filters: exportFilters,
     humanJudgmentMode: scope.humanJudgmentMode,
+    judgmentContextId: scope.judgmentContextId,
     totalCount,
   })
 

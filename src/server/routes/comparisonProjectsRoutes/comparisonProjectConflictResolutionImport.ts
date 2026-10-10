@@ -5,8 +5,8 @@ import {
 } from '../../../utils/articleIdentifierNormalization.ts'
 import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import type {
-  ComparisonProjectConflictResolutionTransferArtifactV1,
-  ComparisonProjectConflictResolutionTransferRowV1,
+  ComparisonProjectConflictResolutionTransferArtifact,
+  ComparisonProjectConflictResolutionTransferRowV2,
 } from './comparisonProjectConflictResolutionFileTransfer.ts'
 
 export type ComparisonProjectConflictResolutionImportSource = {
@@ -39,6 +39,12 @@ export type ComparisonProjectConflictResolutionImportIdentifier = {
   normalizedValue: string
 }
 
+export type ComparisonProjectConflictResolutionImportSourceProvenance = {
+  judgmentContextId: string | null
+  reviewerDisplayName: string | null
+  reviewerUserId: string | null
+}
+
 export type ComparisonProjectConflictResolutionImportSourceRow = {
   arxivId?: string | null
   doi?: string | null
@@ -54,6 +60,7 @@ export type ComparisonProjectConflictResolutionImportSourceRow = {
   sourceComparisonProjectId: string
   sourceComparisonProjectName: string
   sourceExternalArticleId?: string | null
+  sourceProvenance?: ComparisonProjectConflictResolutionImportSourceProvenance | null
   sourceResolutionId: string
   sourceRowId: string
   title?: string | null
@@ -536,6 +543,29 @@ export const getComparisonProjectConflictResolutionImportSourcesSql = (params: {
   `
 }
 
+export type ComparisonProjectConflictResolutionImportSourceRowQueryRow =
+  ComparisonProjectConflictResolutionImportSourceRow & {
+    sourceJudgmentContextId?: string | null
+    sourceReviewerDisplayName?: string | null
+    sourceReviewerUserId?: string | null
+  }
+
+export const getComparisonProjectConflictResolutionImportSourceRowValue = ({
+  sourceJudgmentContextId,
+  sourceReviewerDisplayName,
+  sourceReviewerUserId,
+  ...row
+}: ComparisonProjectConflictResolutionImportSourceRowQueryRow): ComparisonProjectConflictResolutionImportSourceRow => {
+  return {
+    ...row,
+    sourceProvenance: {
+      judgmentContextId: sourceJudgmentContextId ?? null,
+      reviewerDisplayName: sourceReviewerDisplayName ?? null,
+      reviewerUserId: sourceReviewerUserId ?? null,
+    },
+  }
+}
+
 export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params: {
   articleIdentifierTable: string
   articleTable: string
@@ -550,8 +580,12 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
         cr.id AS sourceResolutionId,
         cr.id AS sourceRowId,
         cr.article_id AS sourceArticleId,
-        COALESCE(cr.answer_value, cr.prompt_id, '') AS resolutionValue
+        COALESCE(cr.answer_value, cr.prompt_id, '') AS resolutionValue,
+        cr.reviewer_user_id AS sourceReviewerUserId,
+        COALESCE(NULLIF(TRIM(cr.reviewer_display_name), ''), NULLIF(TRIM(source_reviewer.name), '')) AS sourceReviewerDisplayName,
+        cr.judgment_context_id AS sourceJudgmentContextId
       FROM ${params.comparisonProjectConflictResolutionTable} cr
+      LEFT JOIN app.user_config source_reviewer ON source_reviewer.id = cr.reviewer_user_id
       ${params.sourceComparisonProjectIds.length > 0 ? `WHERE cr.comparison_project_id IN (${getInClause(params.sourceComparisonProjectIds)})` : 'WHERE FALSE'}
     ),
     doi_identifier AS (
@@ -579,6 +613,9 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       source_article.article_id AS sourceExternalArticleId,
       source_article.article_title AS sourceArticleTitle,
       source_resolution.resolutionValue AS resolutionValue,
+      source_resolution.sourceReviewerUserId AS sourceReviewerUserId,
+      source_resolution.sourceReviewerDisplayName AS sourceReviewerDisplayName,
+      source_resolution.sourceJudgmentContextId AS sourceJudgmentContextId,
       'summary' AS resolutionMode,
       doi_identifier.doiKeys AS doiKeys,
       strong_identifier.identifierKeys AS identifierKeys,
@@ -985,8 +1022,28 @@ export const getComparisonProjectConflictResolutionImportSourceValue = (
   }
 }
 
+const comparisonProjectConflictResolutionImportContextIdPattern = /^[0-9a-f]{64}$/
+
+const getComparisonProjectConflictResolutionImportContextId = (value: string | null | undefined) => {
+  const contextId = value?.trim() ?? ''
+
+  return comparisonProjectConflictResolutionImportContextIdPattern.test(contextId) ? contextId : null
+}
+
+const getComparisonProjectConflictResolutionImportTransferRowProvenance = (
+  row: ComparisonProjectConflictResolutionTransferRowV2,
+): ComparisonProjectConflictResolutionImportSourceProvenance | null => {
+  return row.provenance
+    ? {
+        judgmentContextId: getComparisonProjectConflictResolutionImportContextId(row.provenance.contextId),
+        reviewerDisplayName: row.provenance.reviewerDisplayName?.trim() || null,
+        reviewerUserId: null,
+      }
+    : null
+}
+
 export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferRows = (params: {
-  rows: readonly ComparisonProjectConflictResolutionTransferRowV1[]
+  rows: readonly ComparisonProjectConflictResolutionTransferRowV2[]
   sourceComparisonProjectId: string
   sourceComparisonProjectName: string
 }): ComparisonProjectConflictResolutionImportSourceRow[] => {
@@ -1010,6 +1067,9 @@ export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferR
       sourceComparisonProjectId: params.sourceComparisonProjectId,
       sourceComparisonProjectName: params.sourceComparisonProjectName,
       sourceExternalArticleId: row.externalArticleId,
+      ...(row.provenance
+        ? {sourceProvenance: getComparisonProjectConflictResolutionImportTransferRowProvenance(row)}
+        : {}),
       sourceResolutionId,
       sourceRowId: sourceResolutionId,
       title: row.title,
@@ -1018,7 +1078,7 @@ export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferR
 }
 
 export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact = (
-  artifact: ComparisonProjectConflictResolutionTransferArtifactV1,
+  artifact: ComparisonProjectConflictResolutionTransferArtifact,
 ): ComparisonProjectConflictResolutionImportSourceRow[] => {
   return getComparisonProjectConflictResolutionImportSourceRowsFromTransferRows({
     rows: artifact.rows,
@@ -2414,7 +2474,7 @@ export const getComparisonProjectConflictResolutionImportPlan = (
 }
 
 const getAnalyzeSource = (
-  artifact: ComparisonProjectConflictResolutionTransferArtifactV1,
+  artifact: ComparisonProjectConflictResolutionTransferArtifact,
 ): ComparisonProjectConflictResolutionImportAnalyzeSource => {
   return {
     comparisonProjectId: artifact.source.comparisonProjectId,
@@ -2601,7 +2661,7 @@ const getAnalyzeSummary = (params: {
 }
 
 export const getComparisonProjectConflictResolutionImportAnalyzeResult = (params: {
-  artifact: ComparisonProjectConflictResolutionTransferArtifactV1
+  artifact: ComparisonProjectConflictResolutionTransferArtifact
   importMode?: ComparisonProjectConflictResolutionImportMode
   overwriteMode?: ComparisonProjectConflictResolutionImportOverwriteMode
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]

@@ -228,7 +228,7 @@ test('background server stack async config reads maintenance-worker DuckDB memor
       maintenance_worker_duckdb_memory_limit VARCHAR
     );
     INSERT INTO app.user_config (id, maintenance_worker_duckdb_memory_limit)
-    VALUES ('local-user', '14');
+    VALUES ('pdf-import:reviewer', '2'), ('transfer:reviewer', '3'), ('local-user', '14');
   `)
   connection.closeSync()
   duckdbInstance.closeSync()

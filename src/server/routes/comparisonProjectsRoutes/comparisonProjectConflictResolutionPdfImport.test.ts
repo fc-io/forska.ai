@@ -11,7 +11,9 @@ const getMetadataValue = (value: unknown) => {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url')
 }
 
-const createFilledImportPdf = () => {
+const judgmentContextId = '2168ca3cc7e7cb3c3fa173f7aeeff04314ed31e83a9b2b201695446a6461922a'
+
+const createFilledImportPdf = (projectMetadata: Record<string, unknown> = {}) => {
   const pdf = new SimplePdfDocument()
 
   pdf.addTextField({
@@ -32,6 +34,7 @@ const createFilledImportPdf = () => {
       comparisonProjectName: 'Source comparison',
       exportedAt: '2026-09-04T10:00:00.000Z',
       humanJudgmentMode: 'summary',
+      ...projectMetadata,
     }),
   })
   pdf.addTextField({fieldName: 'forska.reviewer.displayName', value: 'Dr Reviewer'})
@@ -70,6 +73,20 @@ const createFilledImportPdf = () => {
 }
 
 describe('comparison project conflict-resolution PDF import', () => {
+  test('reads the exported judgment context id from the project metadata and ignores malformed ids', () => {
+    expect(parsePdfConflictResolutionImport(createFilledImportPdf({judgmentContextId})).source.judgmentContextId).toBe(
+      judgmentContextId,
+    )
+    expect(
+      parsePdfConflictResolutionImport(createFilledImportPdf({judgmentContextId: 'not-a-context-id'})).source
+        .judgmentContextId,
+    ).toBeNull()
+    expect(
+      parsePdfConflictResolutionImport(createFilledImportPdf({judgmentContextId: judgmentContextId.toUpperCase()}))
+        .source.judgmentContextId,
+    ).toBeNull()
+  })
+
   test('parses reviewer name and filled conflict-resolution radio fields', () => {
     const parsedImport = parsePdfConflictResolutionImport(createFilledImportPdf())
 
@@ -79,6 +96,7 @@ describe('comparison project conflict-resolution PDF import', () => {
       exportedAt: '2026-09-04T10:00:00.000Z',
       formatVersion: 1,
       humanJudgmentMode: 'summary',
+      judgmentContextId: null,
     })
     expect(parsedImport.reviewer).toEqual({displayName: 'Dr Reviewer', instanceId: null})
     expect(parsedImport.rows).toEqual([
@@ -222,7 +240,7 @@ endobj`
 
     expect(artifact).toMatchObject({
       format: 'forska.comparisonProject.conflictResolution.transfer',
-      version: 1,
+      version: 2,
       exportedAt: '2026-09-04T10:00:00.000Z',
       source: {
         comparisonProjectId: 'comparison-project-1',
