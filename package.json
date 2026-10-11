@@ -18,6 +18,7 @@
     "bench:project-transfer": "bun scripts/benchmarkProjectTransfer.ts",
     "bench:review-serving-release-gate": "bun test src/server/reviewServing/reviewServingBenchmark.test.ts && bun run bench:review-serving-smoke",
     "bench:review-serving-smoke": "bun scripts/benchmarkReviewServingSmoke.ts",
+    "codex:thread-start-probe": "bun scripts/codexThreadStartProbe.ts",
     "preview": "bunx --bun vite preview",
     "test": "bun scripts/runPackageTests.ts",
     "test:bun": "bun scripts/runBunTests.ts",
