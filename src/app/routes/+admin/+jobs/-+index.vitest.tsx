@@ -261,3 +261,37 @@ describe('judgment jobs list provider health banner', () => {
     }
   })
 })
+
+describe('judgment jobs list stop condition hint', () => {
+  test('shows the stop reason or the active stop conditions under the job status', async () => {
+    mockState.jobs = [
+      {
+        ...buildJob({id: 'job-stopped', projectName: 'Stopped project', status: 'paused'}),
+        stopAfterArticles: 2000,
+        stopReason: 'article_cap',
+      },
+      {
+        ...buildJob({id: 'job-limited', projectName: 'Limited project'}),
+        stopAfterTotalTokens: 5000000,
+        stopWhenHumanAnsweredDone: true,
+      },
+      buildJob({id: 'job-plain', projectName: 'Plain project'}),
+    ]
+    const {cleanup, container} = await renderJobsPage()
+    const getRowText = (projectName: string) => {
+      return (
+        Array.from(container.querySelectorAll('tbody tr')).find((row) => {
+          return row.textContent?.includes(projectName)
+        })?.textContent ?? ''
+      )
+    }
+
+    try {
+      expect(getRowText('Stopped project')).toContain('stop: 2,000 articles reached')
+      expect(getRowText('Limited project')).toContain('stop: human-answered · ≤ 5,000,000 tokens')
+      expect(getRowText('Plain project')).not.toContain('stop:')
+    } finally {
+      cleanup()
+    }
+  })
+})

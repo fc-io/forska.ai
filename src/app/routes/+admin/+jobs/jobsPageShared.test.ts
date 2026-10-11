@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 
 import {
   buildJobsProviderHealthBanner,
+  formatJudgmentJobStopReason,
   formatNumber,
   formatProviderFailureMeta,
   formatProviderRecoveryNote,
@@ -14,6 +15,8 @@ import {
   getHealthBadgeColor,
   getJobProviderHealth,
   getJobRiskScore,
+  getJudgmentJobListStopHint,
+  getJudgmentJobStopConditionChips,
   getJudgmentsJobsRefetchInterval,
   getObservedAggregateTelemetryDescription,
   getObservedAggregateTelemetryLabel,
@@ -364,4 +367,84 @@ test('provider health banner stays amber when only non-blocking provider failure
 
   expect(banner?.tone).toBe('amber')
   expect(banner?.groups[0]?.label).toBe('Timeouts')
+})
+
+const stopConditionsOff = {
+  stopAfterArticles: null,
+  stopAfterTotalTokens: null,
+  stopAt: null,
+  stopWhenHumanAnsweredDone: false,
+}
+
+test('stop condition chips list the active conditions in menu order', () => {
+  const now = new Date(2026, 9, 11, 12, 0, 0)
+
+  expect(getJudgmentJobStopConditionChips(stopConditionsOff, now)).toEqual([])
+  expect(
+    getJudgmentJobStopConditionChips(
+      {
+        stopAfterArticles: 2000,
+        stopAfterTotalTokens: 5_000_000,
+        stopAt: new Date(2026, 9, 11, 18, 0, 0),
+        stopWhenHumanAnsweredDone: true,
+      },
+      now,
+    ),
+  ).toEqual(['≤ 2,000 articles', 'human-answered', '≤ 5,000,000 tokens', 'until 18:00'])
+  expect(getJudgmentJobStopConditionChips({...stopConditionsOff, stopAt: new Date(2026, 9, 12, 7, 0, 0)}, now)).toEqual(
+    ['until Oct 12 07:00'],
+  )
+})
+
+test('stop reasons describe the condition that paused the job', () => {
+  const now = new Date(2026, 9, 11, 12, 0, 0)
+
+  expect(
+    formatJudgmentJobStopReason({
+      conditions: {...stopConditionsOff, stopAfterArticles: 2000},
+      now,
+      reason: 'article_cap',
+      stopReasonAt: null,
+    }),
+  ).toBe('2,000 articles reached')
+  expect(
+    formatJudgmentJobStopReason({conditions: stopConditionsOff, now, reason: 'article_cap', stopReasonAt: null}),
+  ).toBe('article cap reached')
+  expect(
+    formatJudgmentJobStopReason({
+      conditions: {...stopConditionsOff, stopAfterTotalTokens: 1_000_000},
+      now,
+      reason: 'token_budget',
+      stopReasonAt: null,
+    }),
+  ).toBe('1,000,000 tokens reached')
+  expect(
+    formatJudgmentJobStopReason({
+      conditions: stopConditionsOff,
+      now,
+      reason: 'deadline',
+      stopReasonAt: new Date(2026, 9, 11, 9, 30, 0),
+    }),
+  ).toBe('deadline 09:30 reached')
+  expect(
+    formatJudgmentJobStopReason({
+      conditions: stopConditionsOff,
+      now,
+      reason: 'human_answered_done',
+      stopReasonAt: null,
+    }),
+  ).toBe('human-answered articles done')
+})
+
+test('the jobs list stop hint prefers the stop reason over the active conditions', () => {
+  const now = new Date(2026, 9, 11, 12, 0, 0)
+
+  expect(getJudgmentJobListStopHint({}, now)).toBeNull()
+  expect(getJudgmentJobListStopHint({stopWhenHumanAnsweredDone: true}, now)).toBe('stop: human-answered')
+  expect(
+    getJudgmentJobListStopHint({stopAfterArticles: 2000, stopReason: 'article_cap', stopReasonAt: null}, now),
+  ).toBe('stop: 2,000 articles reached')
+  expect(getJudgmentJobListStopHint({stopAfterArticles: 2000, stopReason: 'unknown'}, now)).toBe(
+    'stop: ≤ 2,000 articles',
+  )
 })

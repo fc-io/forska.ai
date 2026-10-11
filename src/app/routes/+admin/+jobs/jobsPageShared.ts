@@ -1,4 +1,4 @@
-import {formatDate} from 'date-fns'
+import {formatDate, isSameDay} from 'date-fns'
 
 import {
   fetchJudgmentsJobs,
@@ -7,6 +7,12 @@ import {
   type JudgmentJobProviderTelemetryHistoryRange,
   type JudgmentJobTelemetrySource,
 } from '../../../../services/judgmentsJobsService'
+import {
+  getJudgmentJobStopConditions,
+  isJudgmentJobStopReason,
+  type JudgmentJobStopConditions,
+  type JudgmentJobStopReason,
+} from '../../../../utils/judgmentJobStopConditions.ts'
 
 export type JobHealthBadge =
   | 'Healthy'
@@ -627,4 +633,89 @@ export const getAllocationStateLabel = (
   return provider?.allocationCompleteCurrent
     ? `Allocation current (${formatTelemetryEnumValue(provider.allocationInputState)})`
     : `Allocation incomplete (${formatTelemetryEnumValue(provider?.allocationInputState)})`
+}
+
+const formatStopTime = (stopAt: Date, now: Date): string => {
+  return formatDate(stopAt, isSameDay(stopAt, now) ? 'HH:mm' : 'MMM d HH:mm')
+}
+
+export const getJudgmentJobStopConditionChips = (conditions: JudgmentJobStopConditions, now = new Date()): string[] => {
+  const chips = [
+    conditions.stopAfterArticles === null ? null : `≤ ${formatNumber(conditions.stopAfterArticles)} articles`,
+    conditions.stopWhenHumanAnsweredDone ? 'human-answered' : null,
+    conditions.stopAfterTotalTokens === null ? null : `≤ ${formatNumber(conditions.stopAfterTotalTokens)} tokens`,
+    conditions.stopAt === null ? null : `until ${formatStopTime(conditions.stopAt, now)}`,
+  ]
+
+  return chips.filter((chip): chip is string => {
+    return chip !== null
+  })
+}
+
+export const formatJudgmentJobStopReason = ({
+  conditions,
+  now = new Date(),
+  reason,
+  stopReasonAt,
+}: {
+  conditions: JudgmentJobStopConditions
+  now?: Date
+  reason: JudgmentJobStopReason
+  stopReasonAt: Date | null
+}): string => {
+  const descriptions: Record<JudgmentJobStopReason, () => string> = {
+    article_cap: () => {
+      return conditions.stopAfterArticles === null
+        ? 'article cap reached'
+        : `${formatNumber(conditions.stopAfterArticles)} articles reached`
+    },
+    deadline: () => {
+      return `deadline ${formatStopTime(conditions.stopAt ?? stopReasonAt ?? now, now)} reached`
+    },
+    human_answered_done: () => {
+      return 'human-answered articles done'
+    },
+    token_budget: () => {
+      return conditions.stopAfterTotalTokens === null
+        ? 'token budget reached'
+        : `${formatNumber(conditions.stopAfterTotalTokens)} tokens reached`
+    },
+  }
+
+  return descriptions[reason]()
+}
+
+export const getJudgmentJobStopHint = ({
+  conditions,
+  now = new Date(),
+  stopReason,
+  stopReasonAt,
+}: {
+  conditions: JudgmentJobStopConditions
+  now?: Date
+  stopReason: JudgmentJobStopReason | null
+  stopReasonAt: Date | null
+}): string | null => {
+  const chips = getJudgmentJobStopConditionChips(conditions, now)
+
+  return stopReason !== null
+    ? `stop: ${formatJudgmentJobStopReason({conditions, now, reason: stopReason, stopReasonAt})}`
+    : chips.length > 0
+      ? `stop: ${chips.join(' · ')}`
+      : null
+}
+
+export const getJudgmentJobListStopHint = (
+  job: Parameters<typeof getJudgmentJobStopConditions>[0] & {stopReason?: unknown; stopReasonAt?: unknown},
+  now = new Date(),
+): string | null => {
+  const stopReasonAt =
+    job.stopReasonAt instanceof Date || typeof job.stopReasonAt === 'string' ? new Date(job.stopReasonAt) : null
+
+  return getJudgmentJobStopHint({
+    conditions: getJudgmentJobStopConditions(job),
+    now,
+    stopReason: isJudgmentJobStopReason(job.stopReason) ? job.stopReason : null,
+    stopReasonAt,
+  })
 }

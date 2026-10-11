@@ -412,6 +412,18 @@ export const updateJudgmentsJobStatus = async (
   return handleApiResponse(response, 'Failed to update job status')
 }
 
+export type JudgmentsJobStopConditionsPatch = {
+  stopAfterArticles?: number | null
+  stopAfterTotalTokens?: number | null
+  stopAt?: string | null
+  stopWhenHumanAnsweredDone?: boolean
+}
+
+export const updateJudgmentsJobStopConditions = async (jobId: string, patch: JudgmentsJobStopConditionsPatch) => {
+  const response = await apiClient.api.judgmentsjobs({id: jobId}).patch(patch)
+  return handleApiResponse(response, 'Failed to save the stop condition')
+}
+
 export const pauseJudgmentsJob = (jobId: string) => {
   return updateJudgmentsJobStatus(jobId, 'paused')
 }

@@ -20,6 +20,12 @@ import {fetchProjectWithPrompts} from '../../../../../services/projectsService'
 import {handleApiResponse} from '../../../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../../../utils/getSglangRuntimeModelNotice.ts'
 import {
+  getJudgmentJobResumeBlockedMessage,
+  getJudgmentJobResumeBlockingStopReason,
+  getJudgmentJobStopConditions,
+  isJudgmentJobStopReason,
+} from '../../../../../utils/judgmentJobStopConditions.ts'
+import {
   fetchProviderConnections,
   formatProviderMaxInflightRequests,
 } from '../../../+admin/+models/providerConnectionsClient.ts'
@@ -34,6 +40,8 @@ import {
   isRecentProviderRecovery,
   type JudgmentJobProviderHealth,
 } from '../jobsPageShared'
+import {JobRunControl} from './jobRunControl.tsx'
+import {JobStopReasonBanner} from './jobStopReasonBanner.tsx'
 import {JobTelemetryPanel} from './jobTelemetryPanel.tsx'
 import {JobTelemetryHistoryChart} from './jobTelemetryPanel/jobTelemetryHistoryChart.tsx'
 
@@ -274,6 +282,13 @@ type JobData = {
   judgingRuntime?: {enabled?: boolean; reason?: string | null}
   providerHealth?: JudgmentJobProviderHealth | null
   error?: string[]
+  admittedArticleCount?: number | null
+  stopAfterArticles?: number | null
+  stopAfterTotalTokens?: number | null
+  stopAt?: string | null
+  stopReason?: string | null
+  stopReasonAt?: string | null
+  stopWhenHumanAnsweredDone?: boolean
 }
 
 type JobRepairAction =
@@ -654,8 +669,58 @@ export const AdminJudgmentJobDetail = () => {
                 storageState: data()?.storageState,
               })
             }
+            const stopConditions = () => {
+              return getJudgmentJobStopConditions(data() ?? {})
+            }
+            const stopReason = () => {
+              const reason = data()?.stopReason
+              return isJudgmentJobStopReason(reason) ? reason : null
+            }
+            const stopReasonAt = () => {
+              const value = data()?.stopReasonAt
+              return value ? new Date(value) : null
+            }
+            const stopConditionResumeHint = () => {
+              const status = data()?.status
+              const blockingReason =
+                status === 'paused' || status === 'failed'
+                  ? getJudgmentJobResumeBlockingStopReason({
+                      conditions: stopConditions(),
+                      now: new Date(),
+                      progress: {
+                        admittedArticleCount: data()?.admittedArticleCount ?? null,
+                        totalTokens: data()?.totalTokenUsage?.totalTokens ?? null,
+                      },
+                    })
+                  : null
+              return blockingReason ? `${getJudgmentJobResumeBlockedMessage(blockingReason)}.` : null
+            }
+            const stopConditionNotice = () => {
+              return stopReason() === null ? stopConditionResumeHint() : null
+            }
             const isResumeBlocked = () => {
-              return Boolean(resumeBlockedReason())
+              return Boolean(resumeBlockedReason()) || Boolean(stopConditionResumeHint())
+            }
+            const runControlStatus = (): 'paused' | 'running' => {
+              return data()?.status === 'running' ? 'running' : 'paused'
+            }
+            const runControlLabel = () => {
+              const labels = {
+                paused: isStarting() ? 'Starting...' : 'Start Job',
+                running: isPausing() ? 'Pausing...' : 'Pause Job',
+              }
+              return labels[runControlStatus()]
+            }
+            const isRunControlDisabled = () => {
+              return runControlStatus() === 'running'
+                ? isPausing()
+                : isStarting() || isStartingClean() || isPausing() || isResumeBlocked()
+            }
+            const runControlAction = () => {
+              const jobId = data()?.id
+
+              if (!jobId) return
+              return runControlStatus() === 'running' ? void handlePauseJob(jobId) : void handleStartJob(jobId)
             }
             const isOfflineRepairOnly = () => {
               return storagePolicy()?.repairMode === 'offline_repair_required'
@@ -817,33 +882,21 @@ export const AdminJudgmentJobDetail = () => {
 
                     <div class="min-w-0 xl:w-96 xl:flex-none">
                       <div class="flex flex-wrap gap-3 xl:justify-end">
-                        <Show when={data()?.status === 'running'}>
-                          <button
-                            class="rounded-md bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={isPausing()}
-                            onClick={() => {
-                              const jobId = data()?.id
-                              if (jobId) {
-                                return void handlePauseJob(jobId)
-                              }
+                        <Show when={data()?.status === 'running' || data()?.status === 'paused'}>
+                          <JobRunControl
+                            admittedArticleCount={data()?.admittedArticleCount ?? null}
+                            conditions={stopConditions()}
+                            isMainDisabled={isRunControlDisabled()}
+                            jobId={data()?.id ?? ''}
+                            mainLabel={runControlLabel()}
+                            resumeBlockedHint={stopConditionResumeHint()}
+                            status={runControlStatus()}
+                            totalTokens={data()?.totalTokenUsage?.totalTokens ?? 0}
+                            onMainAction={runControlAction}
+                            onStopConditionsSaved={() => {
+                              return job.refetch()
                             }}
-                          >
-                            {isPausing() ? 'Pausing...' : 'Pause Job'}
-                          </button>
-                        </Show>
-                        <Show when={data()?.status === 'paused'}>
-                          <button
-                            class="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={isStarting() || isStartingClean() || isPausing() || isResumeBlocked()}
-                            onClick={() => {
-                              const jobId = data()?.id
-                              if (jobId) {
-                                return void handleStartJob(jobId)
-                              }
-                            }}
-                          >
-                            {isStarting() ? 'Starting...' : 'Start Job'}
-                          </button>
+                          />
                         </Show>
                         <Show when={data()?.status === 'failed'}>
                           <button
@@ -887,16 +940,30 @@ export const AdminJudgmentJobDetail = () => {
 
                   <Show
                     when={
-                      activeProviderHealth()
+                      stopReason()
+                      || activeProviderHealth()
                       || recentProviderRecovery()
                       || runtimeModelNotice()
                       || judgingRuntimeWarning()
                       || actionError()
                       || actionNotice()
                       || resumeBlockedReason()
+                      || stopConditionNotice()
                     }
                   >
                     <div class="mt-4 min-w-0 space-y-3 border-t border-gray-200 pt-4">
+                      <Show when={stopReason()}>
+                        {(reason) => {
+                          return (
+                            <JobStopReasonBanner
+                              conditions={stopConditions()}
+                              resumeBlockedHint={stopConditionResumeHint()}
+                              stopReason={reason()}
+                              stopReasonAt={stopReasonAt()}
+                            />
+                          )
+                        }}
+                      </Show>
                       <Show when={activeProviderHealth()}>
                         {(providerHealth) => {
                           return <ProviderHealthFailureBanner health={providerHealth()} />
@@ -935,7 +1002,7 @@ export const AdminJudgmentJobDetail = () => {
                           )
                         }}
                       </Show>
-                      <Show when={resumeBlockedReason()}>
+                      <Show when={resumeBlockedReason() ?? stopConditionNotice()}>
                         {(message) => {
                           return (
                             <div class="break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 [overflow-wrap:anywhere]">
