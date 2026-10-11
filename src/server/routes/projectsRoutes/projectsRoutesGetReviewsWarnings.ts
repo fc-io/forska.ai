@@ -21,6 +21,10 @@ import {capActiveReviewServingRebuildRequestPriorityForProject} from '../../revi
 import {requestReviewServingV4Rebuild} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {getApiReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
+import {
+  getProjectScopeMartArticleCountSql,
+  getProjectScopeTableArticleSql,
+} from '../../services/projectScopeArticleCount.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {getActiveDuckdbExclusiveWorkSnapshot} from '../../utils/duckdbExclusiveWork.ts'
 import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
@@ -81,12 +85,7 @@ const getReviewWarningsWorkloadContext = (projectId: string, operation: string):
 
 const getReviewWarningsScopeState = async (projectId: string) => {
   const [martScope] = await getApiReadOnlyAppDatabaseService().queryJson<{totalArticleCount: number}>(
-    `
-    SELECT CAST(COUNT(DISTINCT scope.article_id) AS INTEGER) AS totalArticleCount
-    FROM mart.project_scope_article scope
-    WHERE scope.project_id = '${escapeSqlString(projectId)}'
-      AND (scope.in_curated_scope OR scope.in_route_scope)
-  `,
+    getProjectScopeMartArticleCountSql(projectId),
     getReviewWarningsWorkloadContext(projectId, 'scopeMartState'),
   )
   const martScopeArticleCount = Number(martScope?.totalArticleCount ?? 0)
@@ -121,22 +120,7 @@ const getReviewWarningsScopeState = async (projectId: string) => {
         AND NOT project_prompt.archived
         AND COALESCE(prompt.archived, FALSE) = FALSE
     ), scoped_article AS (
-      SELECT pa.article_id AS articleId
-      FROM app.project_article pa
-      INNER JOIN app.project p ON p.id = pa.project_id
-      INNER JOIN app.article a ON a.id = pa.article_id
-      WHERE pa.project_id = '${escapeSqlString(projectId)}'
-        AND (p.date_from IS NULL OR a.article_created_at >= p.date_from)
-        AND (p.date_to IS NULL OR a.article_created_at <= p.date_to)
-      UNION ALL
-      SELECT air.article_id AS articleId
-      FROM app.project_import_route pir
-      INNER JOIN app.project p ON p.id = pir.project_id
-      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-      INNER JOIN app.article a ON a.id = air.article_id
-      WHERE pir.project_id = '${escapeSqlString(projectId)}'
-        AND (p.date_from IS NULL OR a.article_created_at >= p.date_from)
-        AND (p.date_to IS NULL OR a.article_created_at <= p.date_to)
+      ${getProjectScopeTableArticleSql(projectId)}
     )
     SELECT
       CAST((SELECT enabledPromptCount FROM enabled_prompt) AS INTEGER) AS enabledPromptCount,
