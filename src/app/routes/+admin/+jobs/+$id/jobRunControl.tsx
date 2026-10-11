@@ -9,7 +9,6 @@ import {JobStopConditionMenu} from './jobRunControl/jobStopConditionMenu.tsx'
 type JobRunControlStatus = 'paused' | 'running'
 
 type JobRunControlProps = {
-  admittedArticleCount: number | null
   conditions: JudgmentJobStopConditions
   isMainDisabled: boolean
   jobId: string
@@ -18,7 +17,6 @@ type JobRunControlProps = {
   onStopConditionsSaved: () => Promise<unknown>
   resumeBlockedHint: string | null
   status: JobRunControlStatus
-  totalTokens: number
 }
 
 const runControlToneClasses: Record<JobRunControlStatus, {chevron: string; main: string}> = {
@@ -36,7 +34,6 @@ const menuActionLabels: Record<JobRunControlStatus, string> = {paused: 'Resume',
 
 export const JobRunControl = (props: JobRunControlProps) => {
   const [local] = splitProps(props, [
-    'admittedArticleCount',
     'conditions',
     'isMainDisabled',
     'jobId',
@@ -45,7 +42,6 @@ export const JobRunControl = (props: JobRunControlProps) => {
     'onStopConditionsSaved',
     'resumeBlockedHint',
     'status',
-    'totalTokens',
   ])
   const [isMenuOpen, setIsMenuOpen] = createSignal(false)
   const tone = () => {
@@ -92,28 +88,16 @@ export const JobRunControl = (props: JobRunControlProps) => {
             </svg>
           </PopoverTrigger>
           <PopoverContent aria-label="Pause options" class="w-80 p-1.5">
-            <button
-              type="button"
-              class="w-full rounded px-2 py-1.5 text-left text-sm font-medium text-gray-900 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={local.isMainDisabled}
-              onClick={() => {
+            <JobStopConditionMenu
+              conditions={local.conditions}
+              isMainDisabled={local.isMainDisabled}
+              jobId={local.jobId}
+              mainActionLabel={menuActionLabels[local.status]}
+              resumeHint={resumeHint()}
+              onMainAction={() => {
                 setIsMenuOpen(false)
                 local.onMainAction()
               }}
-            >
-              {menuActionLabels[local.status]}
-            </button>
-            <Show when={resumeHint()}>
-              {(hint) => {
-                return <p class="px-2 pb-1 text-xs text-amber-800">{hint()}</p>
-              }}
-            </Show>
-            <div role="separator" class="my-1 h-px bg-gray-200" />
-            <JobStopConditionMenu
-              admittedArticleCount={local.admittedArticleCount}
-              conditions={local.conditions}
-              jobId={local.jobId}
-              totalTokens={local.totalTokens}
               onSaved={local.onStopConditionsSaved}
             />
           </PopoverContent>

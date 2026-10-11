@@ -884,14 +884,12 @@ export const AdminJudgmentJobDetail = () => {
                       <div class="flex flex-wrap gap-3 xl:justify-end">
                         <Show when={data()?.status === 'running' || data()?.status === 'paused'}>
                           <JobRunControl
-                            admittedArticleCount={data()?.admittedArticleCount ?? null}
                             conditions={stopConditions()}
                             isMainDisabled={isRunControlDisabled()}
                             jobId={data()?.id ?? ''}
                             mainLabel={runControlLabel()}
                             resumeBlockedHint={stopConditionResumeHint()}
                             status={runControlStatus()}
-                            totalTokens={data()?.totalTokenUsage?.totalTokens ?? 0}
                             onMainAction={runControlAction}
                             onStopConditionsSaved={() => {
                               return job.refetch()

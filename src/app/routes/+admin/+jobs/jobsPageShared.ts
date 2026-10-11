@@ -635,7 +635,7 @@ export const getAllocationStateLabel = (
     : `Allocation incomplete (${formatTelemetryEnumValue(provider?.allocationInputState)})`
 }
 
-const formatStopTime = (stopAt: Date, now: Date): string => {
+export const formatJudgmentJobStopTime = (stopAt: Date, now: Date): string => {
   return formatDate(stopAt, isSameDay(stopAt, now) ? 'HH:mm' : 'MMM d HH:mm')
 }
 
@@ -644,7 +644,7 @@ export const getJudgmentJobStopConditionChips = (conditions: JudgmentJobStopCond
     conditions.stopAfterArticles === null ? null : `≤ ${formatNumber(conditions.stopAfterArticles)} articles`,
     conditions.stopWhenHumanAnsweredDone ? 'human-answered' : null,
     conditions.stopAfterTotalTokens === null ? null : `≤ ${formatNumber(conditions.stopAfterTotalTokens)} tokens`,
-    conditions.stopAt === null ? null : `until ${formatStopTime(conditions.stopAt, now)}`,
+    conditions.stopAt === null ? null : `until ${formatJudgmentJobStopTime(conditions.stopAt, now)}`,
   ]
 
   return chips.filter((chip): chip is string => {
@@ -670,7 +670,7 @@ export const formatJudgmentJobStopReason = ({
         : `${formatNumber(conditions.stopAfterArticles)} articles reached`
     },
     deadline: () => {
-      return `deadline ${formatStopTime(conditions.stopAt ?? stopReasonAt ?? now, now)} reached`
+      return `deadline ${formatJudgmentJobStopTime(conditions.stopAt ?? stopReasonAt ?? now, now)} reached`
     },
     human_answered_done: () => {
       return 'human-answered articles done'
