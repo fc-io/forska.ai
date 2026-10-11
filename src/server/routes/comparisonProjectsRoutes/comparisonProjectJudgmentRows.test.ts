@@ -274,8 +274,9 @@ test('serving member sql can filter summary conflict-resolution rows', () => {
   })
 
   expect(notSetSql).toContain('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
-  expect(notSetSql).toContain('article.has_conflict AND conflict_resolution.article_id IS NULL')
-  expect(yesSql).toContain("article.has_conflict AND conflict_resolution.answer_value = 'yes'")
+  expect(notSetSql).toContain('(article.has_conflict AND conflict_resolution.article_id IS NULL)')
+  expect(yesSql).toContain("AND conflict_resolution.answer_value = 'yes'")
+  expect(yesSql).not.toContain('has_conflict')
 })
 
 test('serving member sql compares conflict resolutions against llm and human answers', () => {
@@ -302,7 +303,8 @@ test('serving member sql compares conflict resolutions against llm and human ans
   })
 
   expect(llmSql).toContain('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
-  expect(llmSql).toContain("article.has_conflict AND NULLIF(TRIM(conflict_resolution.answer_value), '') IS NOT NULL")
+  expect(llmSql).toContain("(NULLIF(TRIM(conflict_resolution.answer_value), '') IS NOT NULL")
+  expect(llmSql).not.toContain('has_conflict')
   expect(llmSql).toContain("article.has_llm_answered_yes AND LOWER(TRIM(conflict_resolution.answer_value)) <> 'yes'")
   expect(llmSql).toContain("article.has_llm_answered_no AND LOWER(TRIM(conflict_resolution.answer_value)) <> 'no'")
   expect(llmSql).not.toContain('has_human_answered')
@@ -328,10 +330,12 @@ test('serving member sql ORs multi-value row, difference, language and resolutio
 
   expect(sql).toContain('(article.has_llm_answered_yes OR article.has_llm_answered_maybe)')
   expect(sql).toContain("article.article_category IN ('chinese', 'non_chinese')")
-  expect(sql).toContain('(article.passes_difference_filter_human_vs_llm OR (article.has_conflict')
+  expect(sql).toContain(
+    "(article.passes_difference_filter_human_vs_llm OR (NULLIF(TRIM(conflict_resolution.answer_value), '') IS NOT NULL",
+  )
   expect(sql).toContain('LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution')
   expect(sql).toContain(
-    "article.has_conflict AND (conflict_resolution.article_id IS NULL OR conflict_resolution.answer_value IN ('yes', 'maybe'))",
+    "((article.has_conflict AND conflict_resolution.article_id IS NULL) OR conflict_resolution.answer_value IN ('yes', 'maybe'))",
   )
 })
 
@@ -920,6 +924,182 @@ test('serving keyset cursor keeps microsecond timestamps so same-batch articles 
   const decodedCursor = getDecodedServingCursor(firstPage.nextCursor) as {createdAt: string}
 
   expect(decodedCursor.createdAt).toContain('.123456')
+
+  connection.closeSync()
+})
+
+const createConflictResolutionServingFixture = async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+  const queryRunner = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+  }
+
+  await connection.run('CREATE SCHEMA app')
+  await connection.run('CREATE SCHEMA mart')
+  await connection.run(
+    'CREATE TABLE app.comparison_project_serving_generation (comparison_project_id VARCHAR, active_generation BIGINT)',
+  )
+  await connection.run(`
+    CREATE TABLE app.comparison_project_conflict_resolution (
+      comparison_project_id VARCHAR,
+      article_id VARCHAR,
+      answer_value VARCHAR,
+      judgment_context_id VARCHAR
+    )
+  `)
+  await connection.run(`
+    CREATE TABLE mart.comparison_article_serving (
+      comparison_project_id VARCHAR,
+      generation BIGINT,
+      article_id VARCHAR,
+      article_external_id VARCHAR,
+      article_title VARCHAR,
+      article_summary VARCHAR,
+      article_created_at TIMESTAMPTZ,
+      article_category VARCHAR,
+      has_conflict BOOLEAN,
+      has_human_answered_yes BOOLEAN,
+      has_human_answered_no BOOLEAN,
+      has_human_answered_maybe BOOLEAN,
+      has_llm_answered_yes BOOLEAN,
+      has_llm_answered_no BOOLEAN,
+      has_llm_answered_maybe BOOLEAN,
+      row_sort_created_at TIMESTAMPTZ,
+      row_sort_title VARCHAR,
+      row_sort_article_id VARCHAR,
+      passes_row_filter_all BOOLEAN,
+      passes_difference_filter_all BOOLEAN
+    )
+  `)
+  await connection.run(`
+    CREATE TABLE mart.comparison_cell_serving (
+      comparison_project_id VARCHAR,
+      generation BIGINT,
+      article_id VARCHAR,
+      column_id VARCHAR,
+      column_order INTEGER,
+      display_answer VARCHAR
+    )
+  `)
+  await connection.run("INSERT INTO app.comparison_project_serving_generation VALUES ('comparison-project-1', 1)")
+  await connection.run(`
+    INSERT INTO mart.comparison_article_serving
+    SELECT
+      'comparison-project-1',
+      1,
+      article_id,
+      article_id,
+      article_id,
+      NULL,
+      created_at,
+      'non_chinese',
+      has_conflict,
+      human_answer = 'yes',
+      human_answer = 'no',
+      human_answer = 'maybe',
+      llm_answer = 'yes',
+      llm_answer = 'no',
+      llm_answer = 'maybe',
+      created_at,
+      article_id,
+      article_id,
+      TRUE,
+      TRUE
+    FROM (
+      VALUES
+        ('conflict-resolved', TIMESTAMPTZ '2026-04-04 00:00:00+00', TRUE, 'no', 'yes'),
+        ('agreed-resolved', TIMESTAMPTZ '2026-04-03 00:00:00+00', FALSE, 'no', 'no'),
+        ('conflict-unresolved', TIMESTAMPTZ '2026-04-02 00:00:00+00', TRUE, 'no', 'yes'),
+        ('agreed-unresolved', TIMESTAMPTZ '2026-04-01 00:00:00+00', FALSE, 'yes', 'yes')
+    ) AS seeded(article_id, created_at, has_conflict, human_answer, llm_answer)
+  `)
+  await connection.run(`
+    INSERT INTO app.comparison_project_conflict_resolution
+    VALUES
+      ('comparison-project-1', 'conflict-resolved', 'yes', 'context-current'),
+      ('comparison-project-1', 'agreed-resolved', 'yes', 'context-older')
+  `)
+
+  return {connection, queryRunner}
+}
+
+test('serving conflict-resolution filters match stored resolutions on rows without a current conflict', async () => {
+  const {connection, queryRunner} = await createConflictResolutionServingFixture()
+  const filterCases = [
+    {conflictResolutionFilter: ['yes'], expectedArticleIds: ['conflict-resolved', 'agreed-resolved']},
+    {conflictResolutionFilter: ['no'], expectedArticleIds: []},
+    {conflictResolutionFilter: ['not-set'], expectedArticleIds: ['conflict-unresolved']},
+    {
+      conflictResolutionFilter: ['not-set', 'yes'],
+      expectedArticleIds: ['conflict-resolved', 'agreed-resolved', 'conflict-unresolved'],
+    },
+    {
+      conflictResolutionFilter: [],
+      expectedArticleIds: ['conflict-resolved', 'agreed-resolved', 'conflict-unresolved', 'agreed-unresolved'],
+    },
+    {
+      conflictResolutionFilter: [],
+      conflictResolutionProvenanceFilter: ['outdated' as const],
+      currentJudgmentContextId: 'context-current',
+      expectedArticleIds: ['agreed-resolved'],
+    },
+    {
+      conflictResolutionFilter: [],
+      differenceFilter: ['resolution-vs-llm' as const],
+      expectedArticleIds: ['agreed-resolved'],
+    },
+    {
+      conflictResolutionFilter: [],
+      differenceFilter: ['resolution-vs-llm-true-conflict' as const],
+      expectedArticleIds: ['agreed-resolved'],
+    },
+    {
+      conflictResolutionFilter: [],
+      differenceFilter: ['resolution-vs-human' as const],
+      expectedArticleIds: ['conflict-resolved', 'agreed-resolved'],
+    },
+  ]
+  const results = await filterCases.reduce<Promise<Array<{articleIds: string[]; count: number}>>>(
+    async (promise, filterCase) => {
+      const previousResults = await promise
+      const params = {
+        comparisonProjectId: 'comparison-project-1',
+        conflictResolutionFilter: filterCase.conflictResolutionFilter,
+        conflictResolutionProvenanceFilter: filterCase.conflictResolutionProvenanceFilter,
+        currentJudgmentContextId: filterCase.currentJudgmentContextId,
+        differenceFilter: filterCase.differenceFilter ?? [],
+        limit: 25,
+        queryRunner,
+        rowFilter: [],
+      }
+      const page = await getComparisonProjectServingJudgmentRowsPage({...params, cursor: null})
+      const [countRow] = await queryRunner.queryJson<{totalCount: unknown}>(
+        getComparisonProjectServingJudgmentFilteredCountSql(params),
+      )
+
+      return [
+        ...previousResults,
+        {
+          articleIds: page.rows.map((row) => {
+            return row.id
+          }),
+          count: Number(countRow?.totalCount ?? 0),
+        },
+      ]
+    },
+    Promise.resolve([]),
+  )
+
+  expect(results).toEqual(
+    filterCases.map((filterCase) => {
+      return {articleIds: filterCase.expectedArticleIds, count: filterCase.expectedArticleIds.length}
+    }),
+  )
 
   connection.closeSync()
 })

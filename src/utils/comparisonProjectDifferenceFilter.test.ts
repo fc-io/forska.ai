@@ -119,17 +119,22 @@ test('conflict-resolution difference matching compares the resolution against ea
   expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm')).toBe(true)
 })
 
-test('conflict-resolution difference matching ignores rows without a conflict', () => {
+test('conflict-resolution difference matching uses a stored resolution on rows without a current conflict', () => {
   const columns = [
     {id: 'llm:model-1:summary', kind: 'llm', promptId: 'summary'},
     {id: 'human:summary', kind: 'human', promptId: 'summary'},
   ] as const
   const cells = {'human:summary': 'yes', 'llm:model-1:summary': 'yes'}
 
-  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm', 'no')).toBe(false)
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm', 'no')).toBe(true)
   expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-human-true-conflict', 'no')).toBe(
-    false,
+    true,
   )
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm', 'yes')).toBe(false)
+  expect(
+    getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-human-true-conflict', 'maybe'),
+  ).toBe(false)
+  expect(getComparisonProjectHasDifferenceFilterMatch(cells, columns, 'resolution-vs-llm', null)).toBe(false)
 })
 
 test('selectable difference filters keep the current selection renderable and omit all', () => {

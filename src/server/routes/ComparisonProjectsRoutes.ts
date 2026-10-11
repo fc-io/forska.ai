@@ -4385,13 +4385,9 @@ const getComparisonProjectConflictResolutions = async (
   scope: ComparisonProjectScope,
   rows: ComparisonProjectJudgmentRow[],
 ) => {
-  const articleIds = rows
-    .filter((row) => {
-      return row.hasConflict
-    })
-    .map((row) => {
-      return row.canonicalArticleId
-    })
+  const articleIds = rows.map((row) => {
+    return row.canonicalArticleId
+  })
 
   if (!scope.allowConflictResolution || articleIds.length === 0) {
     return new Map<string, ComparisonProjectConflictResolution>()
@@ -4411,10 +4407,7 @@ const getComparisonProjectRowsWithConflictResolutions = async (
   const conflictResolutions = await getComparisonProjectConflictResolutions(scope, rows)
 
   return rows.map((row) => {
-    return {
-      ...row,
-      conflictResolution: row.hasConflict ? (conflictResolutions.get(row.canonicalArticleId) ?? null) : null,
-    }
+    return {...row, conflictResolution: conflictResolutions.get(row.canonicalArticleId) ?? null}
   })
 }
 
@@ -4472,6 +4465,68 @@ const getConflictResolutionSaveErrorDiagnostic = (error: unknown) => {
   return {message: String(error), name: typeof error}
 }
 
+const getHasStoredComparisonProjectConflictResolution = async (comparisonProjectId: string, articleId: string) => {
+  const rows = await appDatabaseService.queryJson<{articleId: string}>(
+    `
+    SELECT article_id AS articleId
+    FROM ${comparisonProjectConflictResolutionTable}
+    WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+      AND article_id = ${getSqlLiteral(articleId)}
+    LIMIT 1
+  `,
+    getMaintenanceDuckdbWorkloadContext('comparisonProjectConflictResolution.targetValidation'),
+  )
+
+  return rows.length > 0
+}
+
+const getEditableComparisonProjectConflictResolutionTargetRow = async (params: {
+  articleId: string
+  scope: ComparisonProjectScope
+  targetRow: ComparisonProjectConflictResolutionTargetRow | null
+}): Promise<ComparisonProjectConflictResolutionTargetRow> => {
+  const isEditable =
+    params.targetRow !== null
+    && (params.targetRow.hasConflict
+      || (await getHasStoredComparisonProjectConflictResolution(params.scope.id, params.articleId)))
+
+  if (!params.targetRow || !isEditable) {
+    throw new HttpError(400, 'Conflict resolution is only available for conflicting articles')
+  }
+
+  return params.targetRow
+}
+
+const getComparisonProjectConflictResolutionServingTargetRow = async (
+  scope: ComparisonProjectScope,
+  articleId: string,
+) => {
+  const [servingRow] = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionTargetRow>(
+    `
+    SELECT
+      article_category AS articleCategory,
+      has_conflict AS hasConflict
+    FROM mart.comparison_article_serving
+    WHERE comparison_project_id = ${getSqlLiteral(scope.id)}
+      AND generation = ${getSqlLiteral(scope.activeGeneration)}
+      AND article_id = ${getSqlLiteral(articleId)}
+    LIMIT 1
+  `,
+    getMaintenanceDuckdbWorkloadContext('comparisonProjectConflictResolution.targetValidation'),
+  )
+
+  return servingRow ?? null
+}
+
+const getComparisonProjectConflictResolutionScopedTargetRow = async (
+  scope: ComparisonProjectScope,
+  articleId: string,
+) => {
+  const [row] = await getComparisonProjectRowsForArticles(scope, [articleId])
+
+  return row ? {articleCategory: null, hasConflict: row.hasConflict} : null
+}
+
 const getComparisonProjectConflictResolutionTargetRow = async (
   scope: ComparisonProjectScope,
   articleId: string,
@@ -4480,35 +4535,12 @@ const getComparisonProjectConflictResolutionTargetRow = async (
     throw new HttpError(400, 'Conflict resolution is not enabled for this comparison project')
   }
 
-  if (scope.activeGeneration !== null) {
-    const [servingRow] = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionTargetRow>(
-      `
-      SELECT
-        article_category AS articleCategory,
-        has_conflict AS hasConflict
-      FROM mart.comparison_article_serving
-      WHERE comparison_project_id = ${getSqlLiteral(scope.id)}
-        AND generation = ${getSqlLiteral(scope.activeGeneration)}
-        AND article_id = ${getSqlLiteral(articleId)}
-      LIMIT 1
-    `,
-      getMaintenanceDuckdbWorkloadContext('comparisonProjectConflictResolution.targetValidation'),
-    )
+  const targetRow =
+    scope.activeGeneration === null
+      ? await getComparisonProjectConflictResolutionScopedTargetRow(scope, articleId)
+      : await getComparisonProjectConflictResolutionServingTargetRow(scope, articleId)
 
-    if (!servingRow?.hasConflict) {
-      throw new HttpError(400, 'Conflict resolution is only available for conflicting articles')
-    }
-
-    return servingRow
-  }
-
-  const [row] = await getComparisonProjectRowsForArticles(scope, [articleId])
-
-  if (!row?.hasConflict) {
-    throw new HttpError(400, 'Conflict resolution is only available for conflicting articles')
-  }
-
-  return {articleCategory: null, hasConflict: row.hasConflict}
+  return getEditableComparisonProjectConflictResolutionTargetRow({articleId, scope, targetRow})
 }
 
 const getValidatedComparisonProjectConflictResolutionOption = (scope: ComparisonProjectScope, value: string) => {
@@ -5304,13 +5336,17 @@ const addComparisonProjectPdfConflictResolution = (
   scope: ComparisonProjectScope,
   row: ComparisonProjectExportRow,
 ) => {
-  if (!scope.allowConflictResolution || !row.hasConflict) {
+  if (!scope.allowConflictResolution || (!row.hasConflict && !row.conflictResolution)) {
     return
   }
 
   pdf.addPanel({title: 'Conflict resolution'}, () => {
     pdf.addInlineText(
-      [{text: 'Current resolution: '}, {font: 'bold', text: row.conflictResolution?.label ?? 'Not set'}],
+      [
+        {text: 'Current resolution: '},
+        {font: 'bold', text: row.conflictResolution?.label ?? 'Not set'},
+        ...(row.hasConflict ? [] : [{text: ' (no current conflict)'}]),
+      ],
       {fontSize: 10, gapAfter: 6},
     )
     pdf.addText(getIsSummaryMode(scope) ? 'Include this study?' : 'Choose resolution', {fontSize: 10, gapAfter: 4})

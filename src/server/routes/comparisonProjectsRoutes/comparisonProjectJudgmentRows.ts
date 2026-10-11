@@ -201,7 +201,7 @@ const comparisonProjectServingRowFilterPredicates = {
 
 const comparisonProjectServingConflictResolutionAnswerSql = 'LOWER(TRIM(conflict_resolution.answer_value))'
 const comparisonProjectServingHasConflictResolutionSql =
-  "article.has_conflict AND NULLIF(TRIM(conflict_resolution.answer_value), '') IS NOT NULL"
+  "NULLIF(TRIM(conflict_resolution.answer_value), '') IS NOT NULL"
 
 const getComparisonProjectServingConflictResolutionDifferenceSql = (
   kind: ComparisonProjectDifferenceColumn['kind'],
@@ -519,11 +519,13 @@ const getComparisonProjectServingConflictResolutionFilterPredicateSql = (
     }),
   )
   const predicates = [
-    conflictResolutionFilters.includes('not-set') ? 'conflict_resolution.article_id IS NULL' : null,
+    conflictResolutionFilters.includes('not-set')
+      ? '(article.has_conflict AND conflict_resolution.article_id IS NULL)'
+      : null,
     answerPredicate,
   ].filter(isDefined)
 
-  return `article.has_conflict AND ${getComparisonProjectServingOrPredicateSql(predicates, 'TRUE')}`
+  return getComparisonProjectServingOrPredicateSql(predicates, 'TRUE')
 }
 
 const getRowsByArticleId = <T extends {articleId: string}>(rows: readonly T[]) => {
