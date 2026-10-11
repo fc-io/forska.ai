@@ -237,9 +237,12 @@ const createSharedCodexInvoker = () => {
   }
 
   const client = createCodexAppServerClient({
-    codexHome: '/forska-tests/judge-codex-concurrency-home',
-    prepareCodexHome: async () => {
-      return {archivedSessionFiles: 0, databaseFiles: 0, emptyDirectories: 0, sessionFiles: 0}
+    codexRoleDir: '/forska-tests/codex-home/judge-codex-concurrency',
+    prepareCodexHome: async (roleDir) => {
+      return `${roleDir}/spawn`
+    },
+    removeCodexHome: async () => {
+      return undefined
     },
     spawnProcess,
   })
