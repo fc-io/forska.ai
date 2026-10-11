@@ -389,7 +389,7 @@ const humanAnsweredJoinByMode: Record<JudgmentJobHumanAnsweredMode, (projectId: 
   summary: getHumanAnsweredSummaryArticleJoin,
 }
 
-const getHumanAnsweredPairJoin = (projectId: string, humanAnsweredMode: JudgmentJobHumanAnsweredMode | null) => {
+export const getHumanAnsweredPairJoin = (projectId: string, humanAnsweredMode: JudgmentJobHumanAnsweredMode | null) => {
   return humanAnsweredMode === null ? '' : humanAnsweredJoinByMode[humanAnsweredMode](projectId)
 }
 

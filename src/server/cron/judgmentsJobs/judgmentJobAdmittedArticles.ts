@@ -68,6 +68,20 @@ export const resetJudgmentJobJudgedArticleCountCacheForTests = (): void => {
   judgedArticleCountCache.clear()
 }
 
+export const getJudgmentJobCurrentAdmittedArticleCount = async ({
+  db,
+  jobId,
+}: {
+  db: JudgmentJobStopQueryRunner
+  jobId: string
+}): Promise<number> => {
+  const localState = canCurrentServerOwnDuckdb()
+    ? await getJudgmentJobSqliteService().getAdmittedArticleState(jobId)
+    : {backfilled: false, count: 0}
+
+  return localState.backfilled ? localState.count : getJudgmentJobJudgedArticleCount({db, jobId})
+}
+
 export const getJudgmentJobAdmittedArticleCount = async ({
   db,
   jobId,
@@ -77,16 +91,7 @@ export const getJudgmentJobAdmittedArticleCount = async ({
   jobId: string
   stopAfterArticles: number | null
 }): Promise<number | null> => {
-  const localState =
-    stopAfterArticles !== null && canCurrentServerOwnDuckdb()
-      ? await getJudgmentJobSqliteService().getAdmittedArticleState(jobId)
-      : {backfilled: false, count: 0}
-
-  return stopAfterArticles === null
-    ? null
-    : localState.backfilled
-      ? localState.count
-      : getJudgmentJobJudgedArticleCount({db, jobId})
+  return stopAfterArticles === null ? null : getJudgmentJobCurrentAdmittedArticleCount({db, jobId})
 }
 
 export const getJudgmentJobTotalTokens = async ({
