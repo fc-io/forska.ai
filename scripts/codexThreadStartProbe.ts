@@ -1,8 +1,14 @@
 import {spawn, spawnSync} from 'node:child_process'
+import {existsSync} from 'node:fs'
 import path from 'node:path'
 import {parseArgs} from 'node:util'
 
-import {getDefaultCodexAppServerHomeDir, prepareCodexAppServerHome} from '../src/server/utils/codexAppServerHome.ts'
+import {
+  getDefaultCodexAppServerRoleDir,
+  prepareCodexAppServerSpawnHome,
+  removeCodexAppServerSpawnHome,
+  sweepCodexAppServerRoleDir,
+} from '../src/server/utils/codexAppServerHome.ts'
 import {
   codexAppServerInitializeParams,
   getCodexAppServerLaunchArgs,
@@ -26,7 +32,7 @@ const threadStartTimeoutMs = 120_000
 const {values} = parseArgs({
   options: {
     concurrency: {default: '35', type: 'string'},
-    home: {type: 'string'},
+    'role-dir': {type: 'string'},
     'max-p90-ms': {default: '2000', type: 'string'},
     model: {default: 'gpt-6-astra', type: 'string'},
   },
@@ -35,7 +41,7 @@ const {values} = parseArgs({
 
 const concurrency = Math.max(1, Number.parseInt(values.concurrency, 10))
 const maxP90Ms = Number.parseInt(values['max-p90-ms'], 10)
-const codexHome = values.home ? path.resolve(values.home) : getDefaultCodexAppServerHomeDir('probe')
+const roleDir = values['role-dir'] ? path.resolve(values['role-dir']) : getDefaultCodexAppServerRoleDir('probe')
 const codexBin = getCodexBinPath()
 const cwd = getCodexSafeCwd()
 
@@ -80,10 +86,11 @@ const getProcessNameCounts = (rows: ProcessRow[]) => {
   }, {})
 }
 
-const pruned = await prepareCodexAppServerHome({appServerStopped: true, codexHome})
+const swept = await sweepCodexAppServerRoleDir({roleDir})
+const codexHome = await prepareCodexAppServerSpawnHome({roleDir})
 log(`bin=${codexBin} CODEX_HOME=${codexHome} cwd=${cwd} model=${values.model} concurrency=${concurrency}`)
 log(
-  `pruned ${pruned.sessionFiles} session files, ${pruned.archivedSessionFiles} archived, ${pruned.emptyDirectories} dirs, ${pruned.databaseFiles} sqlite files`,
+  `swept ${roleDir}: removed ${swept?.removedSpawnHomes ?? 0} spawn homes and ${swept?.removedOtherEntries ?? 0} other entries, kept ${swept?.keptSpawnHomes ?? 0}`,
 )
 
 const child = spawn(codexBin, getCodexAppServerLaunchArgs(), getCodexAppServerSpawnOptions(codexHome))
@@ -159,7 +166,7 @@ const request = async (method: string, params: unknown, timeoutMs: number): Prom
   })
 }
 
-const stopChild = async () => {
+const stopChildProcess = async () => {
   if (child.exitCode !== null || child.signalCode !== null) return
 
   const exited = new Promise((resolve) => {
@@ -171,6 +178,12 @@ const stopChild = async () => {
   }, 10_000)
   await exited
   clearTimeout(timeout)
+}
+
+const stopChild = async () => {
+  await stopChildProcess()
+  await removeCodexAppServerSpawnHome(codexHome)
+  log(`deleted spawn home: ${existsSync(codexHome) ? 'no' : 'yes'}`)
 }
 
 const initialize = await request('initialize', codexAppServerInitializeParams, initializeTimeoutMs)
@@ -232,6 +245,7 @@ const problems = [
   failures.length > 0 ? `${failures.length} thread/start requests failed` : null,
   p90 > maxP90Ms ? `p90 ${p90.toFixed(0)} ms exceeds ${maxP90Ms} ms` : null,
   nodeChildren.length > 0 ? `${nodeChildren.length} node child processes` : null,
+  existsSync(codexHome) ? `spawn home ${codexHome} was not deleted` : null,
 ].filter((problem): problem is string => {
   return problem !== null
 })
