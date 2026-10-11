@@ -708,6 +708,35 @@ describe('ComparisonProjectJudgmentsTable resolution comment', () => {
     }
   })
 
+  test('focuses the editor without scrolling the page while the popover is still unpositioned', async () => {
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
+    const {container, dispose} = renderTable({
+      rows: [getConflictRow({conflictResolution: getProvenanceResolution({comment: 'First note'})})],
+    })
+
+    try {
+      await Promise.resolve()
+      const textarea = await openCommentPopover(container)
+      const textareaFocusCalls = focusSpy.mock.contexts
+        .map((element, index) => {
+          return {args: focusSpy.mock.calls[index], element}
+        })
+        .filter(({element}) => {
+          return element === textarea
+        })
+
+      expect(document.activeElement).toBe(textarea)
+      expect(textarea.hasAttribute('autofocus')).toBe(false)
+      expect(textareaFocusCalls.length).toBeGreaterThan(0)
+      for (const {args} of textareaFocusCalls) {
+        expect(args).toEqual([{preventScroll: true}])
+      }
+    } finally {
+      focusSpy.mockRestore()
+      dispose()
+    }
+  })
+
   test('saves with Cmd/Ctrl+Enter, keeps plain Enter for new lines and closes on Escape without saving or losing the draft', async () => {
     const onConflictResolutionCommentSave = vi.fn(() => {
       return true

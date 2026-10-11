@@ -117,14 +117,15 @@ export const ComparisonProjectConflictResolutionComment = (props: ComparisonProj
         class="space-y-2"
         aria-label={`Comment on the conflict resolution for ${local.articleTitle}`}
         onOpenAutoFocus={(event) => {
+          // The popover mounts at the page's top-left corner and is positioned next to the trigger a tick
+          // later, so a scrolling focus (or the native autofocus attribute) jumps the page to the top.
           event.preventDefault()
-          textareaRef?.focus()
+          textareaRef?.focus({preventScroll: true})
           textareaRef?.setSelectionRange(editorText().length, editorText().length)
         }}
       >
         <textarea
           ref={textareaRef}
-          autofocus
           rows={4}
           maxlength={comparisonProjectConflictResolutionCommentMaxLength}
           value={editorText()}
