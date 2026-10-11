@@ -206,7 +206,10 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                   </td>
                   <Show when={props.conflictResolutionEnabled}>
                     <td class={`w-[13rem] min-w-[13rem] max-w-[13rem] px-2 py-2 text-xs ${rowHighlightClasses().cell}`}>
-                      <Show when={row().hasConflict} fallback={<span class="text-gray-400">No conflict</span>}>
+                      <Show
+                        when={row()?.hasConflict || row()?.conflictResolution}
+                        fallback={<span class="text-gray-400">No conflict</span>}
+                      >
                         <Show
                           when={conflictResolutionOptions().length > 0}
                           fallback={
@@ -326,6 +329,9 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                               </button>
                             </Show>
                           </div>
+                        </Show>
+                        <Show when={!row()?.hasConflict}>
+                          <p class="mt-1 text-[11px] text-gray-400">No current conflict</p>
                         </Show>
                         <ComparisonProjectConflictResolutionProvenance
                           currentJudgmentContext={currentJudgmentContext()}

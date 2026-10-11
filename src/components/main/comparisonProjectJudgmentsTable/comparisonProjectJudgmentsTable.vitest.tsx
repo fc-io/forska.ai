@@ -218,6 +218,94 @@ describe('ComparisonProjectJudgmentsTable', () => {
     }
   })
 
+  test('shows a stored resolution on a row without a current conflict and lets it be changed or reset', async () => {
+    const onConflictResolutionReset = vi.fn()
+    const onConflictResolutionSelect = vi.fn()
+    const {container, dispose} = renderTable({
+      rows: [
+        getConflictRow({
+          cells: {'llm:model-1:prompt-1': 'no', 'llm:model-2:prompt-1': 'no'},
+          conflictResolution: getResolution('article-chinese-1', 'yes'),
+          hasConflict: false,
+        }),
+      ],
+      onConflictResolutionReset,
+      onConflictResolutionSelect,
+    })
+
+    try {
+      await Promise.resolve()
+      const select = container.querySelector<HTMLSelectElement>(
+        'select[aria-label="Conflict resolution for Chinese conflict article"]',
+      )
+      const resetButton = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Reset conflict resolution for Chinese conflict article"]',
+      )
+
+      expect(select?.value).toBe('yes')
+      expect(container.textContent).toContain('No current conflict')
+      expect(container.textContent).not.toContain('No conflict')
+
+      if (!select || !resetButton) {
+        throw new Error('Missing conflict resolution controls')
+      }
+
+      select.value = 'no'
+      select.dispatchEvent(new Event('change', {bubbles: true}))
+      resetButton.click()
+
+      expect(onConflictResolutionSelect).toHaveBeenCalledWith('article-chinese-1', 'no')
+      expect(onConflictResolutionReset).toHaveBeenCalledWith('article-chinese-1')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('shows a stored resolution without a current conflict when no options are available', async () => {
+    const {container, dispose} = renderTable({
+      conflictResolutionOptions: [],
+      rows: [getConflictRow({conflictResolution: getResolution('article-chinese-1', 'yes'), hasConflict: false})],
+    })
+
+    try {
+      await Promise.resolve()
+
+      expect(container.querySelector('span[title="yes"]')?.textContent).toBe('yes')
+      expect(container.textContent).toContain('No current conflict')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('offers no resolution control on rows with neither a conflict nor a stored resolution', async () => {
+    const {container, dispose} = renderTable({rows: [getConflictRow({hasConflict: false})]})
+
+    try {
+      await Promise.resolve()
+
+      expect(container.querySelector('select')).toBeNull()
+      expect(container.textContent).toContain('No conflict')
+      expect(container.textContent).not.toContain('No current conflict')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('shows no hint that the conflict is gone on rows with a current conflict', async () => {
+    const {container, dispose} = renderTable({
+      rows: [getConflictRow({conflictResolution: getResolution('article-chinese-1', 'yes')})],
+    })
+
+    try {
+      await Promise.resolve()
+
+      expect(container.querySelector('select')).not.toBeNull()
+      expect(container.textContent).not.toContain('No current conflict')
+    } finally {
+      dispose()
+    }
+  })
+
   test.each([null, 'maybe'])('keeps the select mounted after an optimistic update from %s', async (initialValue) => {
     const container = document.createElement('div')
     document.body.appendChild(container)
