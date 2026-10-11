@@ -58,6 +58,7 @@ import {
   type JudgmentJobMutationState,
   updateJudgmentJobStatus,
 } from '../cron/judgmentsJobs/judgmentJobStatusMutation.ts'
+import {getJudgmentJobStopConditionDefaults} from '../cron/judgmentsJobs/judgmentJobStopConditionDefaults.ts'
 import {
   getJudgmentJobStopConditionAssignments,
   type JudgmentJobStopConditionUpdate,
@@ -3253,6 +3254,22 @@ export const judgmentsJobsRoutes = new Elysia()
       return fetchJudgmentExecutionSnapshot(params.executionSnapshotId, query)
     },
     {params: t.Object({executionSnapshotId: t.String()}), query: judgmentSnapshotQuerySchema},
+  )
+  .get(
+    '/api/judgmentsjobs/:id/stop-condition-defaults',
+    async ({params, request}) => {
+      return runJudgmentJobsRead({
+        operation: async () => {
+          const db = getJudgmentJobsReadDatabase()
+          const {job} = await getJobContext({db, jobId: params.id})
+          const defaults = await getJudgmentJobStopConditionDefaults({db, jobId: job.id, projectId: job.projectId})
+
+          return {data: {...defaults, serverNow: new Date().toISOString()}, error: null}
+        },
+        request,
+      })
+    },
+    {params: t.Object({id: t.String()})},
   )
   .get(
     '/api/judgmentsjobs/:id',

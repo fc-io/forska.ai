@@ -309,6 +309,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['POST', '/api/judgmentsjobs'],
     ['GET', '/api/judgmentsjobs'],
     ['GET', '/api/judgmentsjobs/:id'],
+    ['GET', '/api/judgmentsjobs/:id/stop-condition-defaults'],
     ['GET', '/api/judgmentsjobs-total-token-usage'],
     ['PATCH', '/api/judgmentsjobs/:id'],
     ['DELETE', '/api/judgmentsjobs/:id'],
