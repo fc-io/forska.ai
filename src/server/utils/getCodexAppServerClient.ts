@@ -3,6 +3,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import {
+  type CodexAppServerHomePruneCounts,
+  getCodexUserHomeDir,
+  getDefaultCodexAppServerHomeDir,
+  prepareCodexAppServerHome,
+  runWithCodexAppServerHomeLock,
+  trackCodexAppServerExit,
+  waitForCodexAppServerExits,
+} from './codexAppServerHome.ts'
 import {readLocalAppSettings} from './localAppSettings.ts'
 import {writeRuntimeLogEvent} from './runtimeLogger.ts'
 
@@ -31,11 +40,22 @@ type CodexAppServerProcess = {
   stdout: {on: (event: 'data', listener: (data: Buffer) => void) => unknown}
 }
 
+type CodexAppServerSpawnOptions = {
+  cwd: string
+  env: Record<string, string | undefined>
+  stdio: ['pipe', 'pipe', 'pipe']
+}
+
 export type SpawnCodexAppServer = (
   command: string,
   args: string[],
-  options: {stdio: ['pipe', 'pipe', 'pipe']},
+  options: CodexAppServerSpawnOptions,
 ) => CodexAppServerProcess
+
+export type PrepareCodexAppServerHome = (input: {
+  appServerStopped: boolean
+  codexHome: string
+}) => Promise<CodexAppServerHomePruneCounts>
 
 const CODEx_DEFAULT_TIMEOUT_MS = 30_000
 const CODEX_INITIALIZE_TIMEOUT_MS = 180_000
@@ -43,6 +63,8 @@ const CODEX_THREAD_READ_TIMEOUT_MS = 60_000
 const CODEX_THREAD_READ_MAX_ATTEMPTS = 3
 const CODEX_THREAD_READ_RETRY_DELAY_MS = 250
 const CODEX_MAX_TURNS_BEFORE_RECYCLE = 25
+const CODEX_PREVIOUS_APP_SERVER_EXIT_TIMEOUT_MS = 3_000
+const CODEX_SLOW_THREAD_START_MS = 5_000
 
 const MAX_DEBUG_OUTPUT_CHARS = 8_000
 
@@ -70,7 +92,7 @@ export const getCodexBinPath = (): string => {
   return fs.existsSync(brewAppleSilicon) ? brewAppleSilicon : fs.existsSync(brewIntel) ? brewIntel : 'codex'
 }
 
-const getCodexSafeCwd = (): string => {
+export const getCodexSafeCwd = (): string => {
   const dir = path.join(os.tmpdir(), 'forska-codex')
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, {recursive: true})
   return dir
@@ -190,48 +212,39 @@ const getString = (value: unknown): string | null => {
   return typeof value === 'string' ? value : null
 }
 
-const getCodexHomeDir = (): string => {
-  const codexHome = process.env.CODEX_HOME
-  return codexHome ? codexHome : path.join(os.homedir(), '.codex')
+export const getCodexAppServerLaunchArgs = (): string[] => {
+  return ['app-server']
 }
 
-export const readCodexUserConfigToml = (): string | null => {
-  try {
-    return fs.readFileSync(path.join(getCodexHomeDir(), 'config.toml'), 'utf8')
-  } catch {
-    return null
-  }
+export const getCodexAppServerEnv = (
+  codexHome: string,
+  envValues: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> => {
+  const {CODEX_SQLITE_HOME: _codexSqliteHome, ...inheritedEnv} = envValues
+
+  return {...inheritedEnv, CODEX_HOME: codexHome}
 }
 
-const parseCodexConfigToml = (configToml: string): Record<string, unknown> | null => {
-  try {
-    const parsed: unknown = globalThis.Bun.TOML.parse(configToml)
-    return isRecord(parsed) ? parsed : null
-  } catch {
-    return null
-  }
+export const getCodexAppServerSpawnOptions = (codexHome: string): CodexAppServerSpawnOptions => {
+  return {cwd: getCodexSafeCwd(), env: getCodexAppServerEnv(codexHome), stdio: ['pipe', 'pipe', 'pipe']}
 }
 
-const isTomlBareKey = (value: string): boolean => {
-  return /^[A-Za-z0-9_-]+$/.test(value)
+export const codexAppServerInitializeParams = {
+  clientInfo: {name: 'forska_ai', title: 'Forska.ai', version: '0.1.0'},
+  capabilities: {
+    experimentalApi: true,
+    optOutNotificationMethods: [
+      'item/agentMessage/delta',
+      'item/commandExecution/outputDelta',
+      'item/plan/delta',
+      'item/reasoning/textDelta',
+      'item/reasoning/summaryTextDelta',
+    ],
+  },
 }
 
-export const getCodexConfiguredMcpServerNames = (configToml: string | null): string[] => {
-  const servers = configToml === null ? null : parseCodexConfigToml(configToml)?.mcp_servers
-
-  return isRecord(servers)
-    ? Object.keys(servers).filter((name) => {
-        return isRecord(servers[name]) && isTomlBareKey(name)
-      })
-    : []
-}
-
-export const getCodexAppServerLaunchArgs = (configToml: string | null): string[] => {
-  const mcpServerOverrides = getCodexConfiguredMcpServerNames(configToml).flatMap((name) => {
-    return ['-c', `mcp_servers.${name}.enabled=false`]
-  })
-
-  return [...mcpServerOverrides, 'app-server']
+const prepareDefaultCodexAppServerHome: PrepareCodexAppServerHome = async (input) => {
+  return prepareCodexAppServerHome({...input, userCodexHome: getCodexUserHomeDir()})
 }
 
 const getCodexErrorMessage = (value: unknown): string | null => {
@@ -458,6 +471,51 @@ const logDeclinedCodexServerRequest = (msg: JsonRpcRequest & {id: JsonRpcId}): v
   })
 }
 
+const logSlowCodexThreadStart = (codexHome: string, durationMs: number): void => {
+  if (durationMs <= CODEX_SLOW_THREAD_START_MS || !shouldLogCodexTransientStderr('codex:thread-start-slow')) return
+
+  writeRuntimeLogEvent({
+    attrs: {codexHome, durationMs},
+    event: 'codex:thread-start-slow',
+    message: `[codex] thread/start took ${durationMs} ms (CODEX_HOME ${codexHome}).`,
+    severity: 'WARN',
+  })
+}
+
+const logCodexAppServerSpawn = ({
+  appServerStopped,
+  codexHome,
+  pruned,
+  waitedMs,
+}: {
+  appServerStopped: boolean
+  codexHome: string
+  pruned: CodexAppServerHomePruneCounts
+  waitedMs: number
+}): void => {
+  writeRuntimeLogEvent({
+    attrs: {appServerStopped, codexHome, waitedMs, ...pruned},
+    event: 'codex:app-server-spawn',
+    message: `[codex] spawning app-server with CODEX_HOME ${codexHome}; pruned ${pruned.sessionFiles} session files, ${pruned.archivedSessionFiles} archived session files, ${pruned.emptyDirectories} empty dirs, ${pruned.databaseFiles} sqlite files (previous app-server ${appServerStopped ? 'stopped' : 'still running'} after ${waitedMs} ms).`,
+    severity: 'INFO',
+  })
+}
+
+const getCodexAppServerExited = async (proc: CodexAppServerProcess): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    proc.on('exit', () => {
+      resolve()
+    })
+    proc.on('error', () => {
+      resolve()
+    })
+  })
+}
+
+const getErrorText = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export const resetCodexStderrLogRateLimitForTests = (): void => {
   lastCodexTransientStderrLogAt.clear()
 }
@@ -474,9 +532,11 @@ export const warmCodexAppServer = async (): Promise<void> => {
 }
 
 export const createCodexAppServerClient = ({
+  codexHome,
   initializeTimeoutMs,
   maxTurnsBeforeRecycle,
-  readCodexConfigToml = readCodexUserConfigToml,
+  prepareCodexHome = prepareDefaultCodexAppServerHome,
+  previousAppServerExitTimeoutMs,
   spawnProcess = (command, args, options) => {
     return spawn(command, args, options)
   },
@@ -484,9 +544,11 @@ export const createCodexAppServerClient = ({
   threadReadRetryDelayMs,
   threadReadTimeoutMs,
 }: {
+  codexHome?: string
   initializeTimeoutMs?: number
   maxTurnsBeforeRecycle?: number
-  readCodexConfigToml?: () => string | null
+  prepareCodexHome?: PrepareCodexAppServerHome
+  previousAppServerExitTimeoutMs?: number
   spawnProcess?: SpawnCodexAppServer
   threadReadMaxAttempts?: number
   threadReadRetryDelayMs?: number
@@ -502,11 +564,13 @@ export const createCodexAppServerClient = ({
   const resolvedThreadReadRetryDelayMs = getPositiveInteger(threadReadRetryDelayMs, CODEX_THREAD_READ_RETRY_DELAY_MS)
   const resolvedThreadReadTimeoutMs = getPositiveInteger(threadReadTimeoutMs, CODEX_THREAD_READ_TIMEOUT_MS)
   const resolvedMaxTurnsBeforeRecycle = getPositiveInteger(maxTurnsBeforeRecycle, CODEX_MAX_TURNS_BEFORE_RECYCLE)
+  const resolvedPreviousAppServerExitTimeoutMs = getPositiveInteger(
+    previousAppServerExitTimeoutMs,
+    CODEX_PREVIOUS_APP_SERVER_EXIT_TIMEOUT_MS,
+  )
+  const resolvedCodexHome = codexHome ?? getDefaultCodexAppServerHomeDir()
 
-  const proc = spawnProcess(codexBin, getCodexAppServerLaunchArgs(readCodexConfigToml()), {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-
+  let proc: CodexAppServerProcess | null = null
   let rawStdout = ''
   let rawStderr = ''
   let closedError: Error | null = null
@@ -518,7 +582,7 @@ export const createCodexAppServerClient = ({
   let clientInstance: CodexAppServerClient | null = null
 
   let buffer = ''
-  proc.stdout.on('data', (data: Buffer) => {
+  const onStdout = (data: Buffer): void => {
     rawStdout = appendDebug(rawStdout, data.toString('utf8'))
     buffer += data.toString('utf8')
     const parts = buffer.split('\n')
@@ -540,13 +604,13 @@ export const createCodexAppServerClient = ({
           rawStdout = appendDebug(rawStdout, `\n${line}`)
         }
       })
-  })
+  }
 
-  proc.stderr.on('data', (data: Buffer) => {
+  const onStderr = (data: Buffer): void => {
     const text = data.toString('utf8')
     rawStderr = appendDebug(rawStderr, text)
     logCodexStderr(text)
-  })
+  }
 
   const buildExitError = (code: number | null, signal: string | null): Error => {
     const hint =
@@ -569,7 +633,7 @@ export const createCodexAppServerClient = ({
 
   const stopAppServer = (): void => {
     try {
-      proc.kill?.('SIGTERM')
+      proc?.kill?.('SIGTERM')
     } catch {
       return undefined
     }
@@ -642,18 +706,42 @@ export const createCodexAppServerClient = ({
     }
   }
 
-  proc.on('exit', (code, signal) => {
-    failAppServer(buildExitError(code, signal))
-  })
+  const attachAppServerProcess = (spawned: CodexAppServerProcess): void => {
+    proc = spawned
+    spawned.stdout.on('data', onStdout)
+    spawned.stderr.on('data', onStderr)
+    spawned.on('exit', (code, signal) => {
+      failAppServer(buildExitError(code, signal))
+    })
+    spawned.on('error', (error) => {
+      const err = new Error(
+        `codex app-server failed to start (${String(error)}). Configure the Codex binary in Settings if needed.`,
+      )
+      failAppServer(err)
+    })
+  }
 
-  proc.on('error', (error) => {
-    const err = new Error(
-      `codex app-server failed to start (${String(error)}). Configure the Codex binary in Settings if needed.`,
+  const spawnAppServer = async (): Promise<void> => {
+    const waitStartedAt = Date.now()
+    const appServerStopped = await waitForCodexAppServerExits(resolvedCodexHome, resolvedPreviousAppServerExitTimeoutMs)
+    const waitedMs = Date.now() - waitStartedAt
+    const pruned = await prepareCodexHome({appServerStopped, codexHome: resolvedCodexHome})
+    const spawned = spawnProcess(
+      codexBin,
+      getCodexAppServerLaunchArgs(),
+      getCodexAppServerSpawnOptions(resolvedCodexHome),
     )
-    failAppServer(err)
-  })
+
+    attachAppServerProcess(spawned)
+    trackCodexAppServerExit(resolvedCodexHome, getCodexAppServerExited(spawned))
+    logCodexAppServerSpawn({appServerStopped, codexHome: resolvedCodexHome, pruned, waitedMs})
+  }
 
   const send = (message: unknown): void => {
+    if (!proc) {
+      throw new Error('codex app-server is not running')
+    }
+
     proc.stdin.write(`${JSON.stringify(message)}\n`)
   }
 
@@ -775,23 +863,7 @@ export const createCodexAppServerClient = ({
 
   const initialize = async (): Promise<void> => {
     try {
-      await request(
-        'initialize',
-        {
-          clientInfo: {name: 'forska_ai', title: 'Forska.ai', version: '0.1.0'},
-          capabilities: {
-            experimentalApi: true,
-            optOutNotificationMethods: [
-              'item/agentMessage/delta',
-              'item/commandExecution/outputDelta',
-              'item/plan/delta',
-              'item/reasoning/textDelta',
-              'item/reasoning/summaryTextDelta',
-            ],
-          },
-        },
-        resolvedInitializeTimeoutMs,
-      )
+      await request('initialize', codexAppServerInitializeParams, resolvedInitializeTimeoutMs)
       send({method: 'initialized', params: {}})
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error))
@@ -800,7 +872,26 @@ export const createCodexAppServerClient = ({
     }
   }
 
-  const initPromise = initialize()
+  const startAppServer = async (): Promise<void> => {
+    await runWithCodexAppServerHomeLock(resolvedCodexHome, spawnAppServer).catch((error: unknown) => {
+      const err = new Error(
+        `codex app-server failed to start with CODEX_HOME ${resolvedCodexHome}: ${getErrorText(error)}`,
+      )
+      failAppServer(err)
+      throw err
+    })
+    await initialize()
+  }
+
+  const initPromise = startAppServer()
+
+  const startThread = async (params: {cwd: string; model: string}): Promise<unknown> => {
+    const startedAt = Date.now()
+
+    return request('thread/start', params).finally(() => {
+      logSlowCodexThreadStart(resolvedCodexHome, Date.now() - startedAt)
+    })
+  }
 
   const modelList = async (params?: {
     limit?: number
@@ -837,7 +928,7 @@ export const createCodexAppServerClient = ({
 
     try {
       const safe = buildSafeTurnConfig()
-      const started = await request('thread/start', {model: params.model, cwd: safe.cwd})
+      const started = await startThread({model: params.model, cwd: safe.cwd})
       params.signal?.throwIfAborted()
       const threadId = (started as {thread?: {id?: unknown}}).thread?.id
       if (typeof threadId !== 'string') {

@@ -1,14 +1,18 @@
 import {EventEmitter} from 'node:events'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, mock, test} from 'bun:test'
 
 import {
   type CodexAppServerClient,
   createCodexAppServerClient,
+  getCodexAppServerEnv,
   getCodexAppServerLaunchArgs,
   getCodexAppServerSingletonForTests,
   getCodexThreadTokenUsageUpdate,
   getCodexTurnAgentMessageText,
+  type PrepareCodexAppServerHome,
   resetCodexStderrLogRateLimitForTests,
   setCodexAppServerSingletonForTests,
   type SpawnCodexAppServer,
@@ -23,6 +27,27 @@ type MockJsonRpcRequest = {
 type MockNotification =
   | {inputText: string; kind: 'item'; text: string}
   | {error?: unknown; inputText: string; kind: 'complete'; status: 'completed' | 'failed'}
+
+type MockCodexProcess = EventEmitter & {
+  kill: () => boolean
+  stderr: EventEmitter
+  stdin: {write: (data: string) => boolean}
+  stdout: EventEmitter
+}
+
+const emptyCodexHomePruneCounts = {archivedSessionFiles: 0, databaseFiles: 0, emptyDirectories: 0, sessionFiles: 0}
+
+let testCodexHomeCount = 0
+
+const prepareTestCodexHome: PrepareCodexAppServerHome = async () => {
+  return emptyCodexHomePruneCounts
+}
+
+const getTestCodexHomeOptions = () => {
+  testCodexHomeCount += 1
+
+  return {codexHome: `/forska-tests/codex-home-${testCodexHomeCount}`, prepareCodexHome: prepareTestCodexHome}
+}
 
 const waitForCodexRecycleTimer = async () => {
   await new Promise((resolve) => {
@@ -54,16 +79,12 @@ const withCapturedConsole = async (work: () => Promise<void>) => {
   }
 }
 
-const createMockModelListCodexClient = ({
+const createMockModelListProcess = ({
   onInitialize,
 }: {onInitialize?: (params: MockJsonRpcRequest['params']) => void} = {}) => {
   const stdout = new EventEmitter()
   const stderr = new EventEmitter()
-  const proc = new EventEmitter() as EventEmitter & {
-    stderr: EventEmitter
-    stdin: {write: (data: string) => boolean}
-    stdout: EventEmitter
-  }
+  const proc = new EventEmitter() as MockCodexProcess
 
   const send = (message: unknown) => {
     stdout.emit('data', Buffer.from(`${JSON.stringify(message)}\n`))
@@ -71,6 +92,9 @@ const createMockModelListCodexClient = ({
 
   proc.stdout = stdout
   proc.stderr = stderr
+  proc.kill = () => {
+    return true
+  }
   proc.stdin = {
     write(payload) {
       String(payload)
@@ -99,11 +123,18 @@ const createMockModelListCodexClient = ({
     },
   }
 
+  return {proc, stderr}
+}
+
+const createMockModelListCodexClient = ({
+  onInitialize,
+}: {onInitialize?: (params: MockJsonRpcRequest['params']) => void} = {}) => {
+  const {proc, stderr} = createMockModelListProcess({onInitialize})
   const spawnProcess: SpawnCodexAppServer = () => {
     return proc
   }
 
-  return {client: createCodexAppServerClient({spawnProcess}), stderr}
+  return {client: createCodexAppServerClient({...getTestCodexHomeOptions(), spawnProcess}), stderr}
 }
 
 const createMockConcurrentCodexClient = ({
@@ -271,7 +302,7 @@ const createMockConcurrentCodexClient = ({
   }
 
   return {
-    client: createCodexAppServerClient({maxTurnsBeforeRecycle, spawnProcess}),
+    client: createCodexAppServerClient({...getTestCodexHomeOptions(), maxTurnsBeforeRecycle, spawnProcess}),
     getKillCount: () => {
       return killCount
     },
@@ -436,7 +467,7 @@ test('modelList stops the app-server process when initialize times out', async (
   const spawnProcess: SpawnCodexAppServer = () => {
     return proc
   }
-  const client = createCodexAppServerClient({initializeTimeoutMs: 1, spawnProcess})
+  const client = createCodexAppServerClient({...getTestCodexHomeOptions(), initializeTimeoutMs: 1, spawnProcess})
   const result = await client.modelList().then(
     () => {
       return null
@@ -682,7 +713,7 @@ test('runJsonTurn keeps a replacement singleton when the recycled app-server dra
   const spawnProcess: SpawnCodexAppServer = () => {
     return proc
   }
-  const oldClient = createCodexAppServerClient({spawnProcess})
+  const oldClient = createCodexAppServerClient({...getTestCodexHomeOptions(), spawnProcess})
   const replacementClient: CodexAppServerClient = {
     modelList: async () => {
       return {data: [], nextCursor: null}
@@ -925,6 +956,7 @@ test('runJsonTurn retries delayed thread reads after a completed turn', async ()
     return proc
   }
   const client = createCodexAppServerClient({
+    ...getTestCodexHomeOptions(),
     spawnProcess,
     threadReadMaxAttempts: 2,
     threadReadRetryDelayMs: 1,
@@ -1021,7 +1053,7 @@ test('runJsonTurn rejects active turns when app-server exits', async () => {
   const spawnProcess: SpawnCodexAppServer = () => {
     return proc
   }
-  const client = createCodexAppServerClient({spawnProcess})
+  const client = createCodexAppServerClient({...getTestCodexHomeOptions(), spawnProcess})
   const result = await client
     .runJsonTurn({model: 'gpt-5.4', inputText: 'active request', outputSchema: {type: 'object'}, timeoutMs: 10_000})
     .then(
@@ -1040,9 +1072,7 @@ test('runJsonTurn rejects active turns when app-server exits', async () => {
 
 type MockJsonRpcResponse = {id: number; result?: unknown; error?: {code: number; message: string}}
 
-const createMockServerRequestCodexClient = ({
-  readCodexConfigToml,
-}: {readCodexConfigToml?: () => string | null} = {}) => {
+const createMockServerRequestCodexClient = ({codexHome}: {codexHome?: string} = {}) => {
   const stdout = new EventEmitter()
   const stderr = new EventEmitter()
   const proc = new EventEmitter() as EventEmitter & {
@@ -1051,7 +1081,13 @@ const createMockServerRequestCodexClient = ({
     stdout: EventEmitter
   }
   const responses: MockJsonRpcResponse[] = []
-  const spawnArgs: string[][] = []
+  const spawnCalls: Array<{args: string[]; cwd: string; env: Record<string, string | undefined>}> = []
+  let resolveInitialized: () => void = () => {
+    return undefined
+  }
+  const initialized = new Promise<void>((resolve) => {
+    resolveInitialized = resolve
+  })
 
   const send = (message: unknown) => {
     stdout.emit('data', Buffer.from(`${JSON.stringify(message)}\n`))
@@ -1074,6 +1110,7 @@ const createMockServerRequestCodexClient = ({
 
           if (message.method === 'initialize') {
             send({id: message.id, result: {}})
+            resolveInitialized()
             return
           }
 
@@ -1086,72 +1123,157 @@ const createMockServerRequestCodexClient = ({
     },
   }
 
-  const spawnProcess: SpawnCodexAppServer = (_command, args) => {
-    spawnArgs.push(args)
+  const spawnProcess: SpawnCodexAppServer = (_command, args, options) => {
+    spawnCalls.push({args, cwd: options.cwd, env: options.env})
     return proc
   }
+  const homeOptions = getTestCodexHomeOptions()
 
   return {
-    client: createCodexAppServerClient({readCodexConfigToml, spawnProcess}),
+    client: createCodexAppServerClient({...homeOptions, codexHome: codexHome ?? homeOptions.codexHome, spawnProcess}),
+    initialized,
     responses,
     sendServerRequest: send,
-    spawnArgs,
+    spawnCalls,
   }
 }
 
-test('codex app-server launch args disable every MCP server declared in the user config', () => {
-  const configToml = [
-    'model = "gpt-5.5"',
-    '[mcp_servers]',
-    'inline = { command = "inline-server" }',
-    '[mcp_servers.node_repl]',
-    'command = "/usr/bin/node_repl"',
-    'startup_timeout_sec = 120',
-    '[mcp_servers.node_repl.env]',
-    'CODEX_HOME = "/Users/example/.codex"',
-    '[mcp_servers.computer-use]',
-    'command = "cua"',
-    'enabled = false',
-    '[mcp_servers."needs quoting"]',
-    'command = "quoted"',
-  ].join('\n')
-
-  expect(getCodexAppServerLaunchArgs(configToml)).toEqual([
-    '-c',
-    'mcp_servers.inline.enabled=false',
-    '-c',
-    'mcp_servers.node_repl.enabled=false',
-    '-c',
-    'mcp_servers.computer-use.enabled=false',
-    'app-server',
-  ])
+test('codex app-server launch args stay plain because the isolated CODEX_HOME declares no MCP servers', () => {
+  expect(getCodexAppServerLaunchArgs()).toEqual(['app-server'])
 })
 
-test('codex app-server launch args stay plain without MCP servers, without a config, or with invalid TOML', () => {
-  expect(getCodexAppServerLaunchArgs(null)).toEqual(['app-server'])
-  expect(getCodexAppServerLaunchArgs('model = "gpt-5.5"')).toEqual(['app-server'])
-  expect(getCodexAppServerLaunchArgs('mcp_servers = "not a table"')).toEqual(['app-server'])
-  expect(getCodexAppServerLaunchArgs('[mcp_servers')).toEqual(['app-server'])
+test('codex app-server env points CODEX_HOME at the isolated home and drops CODEX_SQLITE_HOME', () => {
+  expect(
+    getCodexAppServerEnv('/runtime/codex-home/judge-worker', {
+      CODEX_HOME: '/Users/example/.codex',
+      CODEX_SQLITE_HOME: '/Users/example/.codex',
+      PATH: '/usr/bin',
+    }),
+  ).toEqual({CODEX_HOME: '/runtime/codex-home/judge-worker', PATH: '/usr/bin'})
 })
 
-test('codex app-server client spawns codex with the MCP overrides read from the user config', () => {
-  const {spawnArgs} = createMockServerRequestCodexClient({
-    readCodexConfigToml: () => {
-      return '[mcp_servers.node_repl]\ncommand = "node_repl"\n'
+test('codex app-server client spawns plain app-server in the safe cwd with the isolated CODEX_HOME', async () => {
+  const {initialized, spawnCalls} = createMockServerRequestCodexClient({codexHome: '/runtime/codex-home/api'})
+
+  await initialized
+
+  expect(spawnCalls).toHaveLength(1)
+  expect(spawnCalls[0]?.args).toEqual(['app-server'])
+  expect(spawnCalls[0]?.cwd).toBe(join(tmpdir(), 'forska-codex'))
+  expect(spawnCalls[0]?.env.CODEX_HOME).toBe('/runtime/codex-home/api')
+  expect(spawnCalls[0]?.env).not.toHaveProperty('CODEX_SQLITE_HOME')
+})
+
+test('codex app-server client prepares its CODEX_HOME before spawning', async () => {
+  const events: string[] = []
+  const {proc} = createMockModelListProcess()
+  const client = createCodexAppServerClient({
+    codexHome: '/forska-tests/prepare-order-home',
+    prepareCodexHome: async ({appServerStopped, codexHome}) => {
+      events.push(`prepare:${codexHome}:${appServerStopped ? 'stopped' : 'running'}`)
+      return emptyCodexHomePruneCounts
+    },
+    spawnProcess: () => {
+      events.push('spawn')
+      return proc
     },
   })
 
-  expect(spawnArgs).toEqual([['-c', 'mcp_servers.node_repl.enabled=false', 'app-server']])
+  await client.modelList()
+
+  expect(events).toEqual(['prepare:/forska-tests/prepare-order-home:stopped', 'spawn'])
 })
 
-test('codex server requests that need a human are declined with the response shape codex expects', () => {
-  resetCodexStderrLogRateLimitForTests()
-  const {responses, sendServerRequest} = createMockServerRequestCodexClient({
-    readCodexConfigToml: () => {
+test('codex app-server client fails its requests when CODEX_HOME preparation fails', async () => {
+  let spawnCount = 0
+  const client = createCodexAppServerClient({
+    codexHome: '/forska-tests/prepare-failure-home',
+    prepareCodexHome: async () => {
+      throw new Error('disk full')
+    },
+    spawnProcess: () => {
+      spawnCount += 1
+      return createMockModelListProcess().proc
+    },
+  })
+  const result = await client.modelList().then(
+    () => {
       return null
     },
+    (error: unknown) => {
+      return error
+    },
+  )
+
+  expect(result instanceof Error ? result.message : '').toBe(
+    'codex app-server failed to start with CODEX_HOME /forska-tests/prepare-failure-home: disk full',
+  )
+  expect(spawnCount).toBe(0)
+})
+
+const createReplacementTestClients = ({
+  codexHome,
+  previousAppServerExitTimeoutMs,
+}: {
+  codexHome: string
+  previousAppServerExitTimeoutMs: number
+}) => {
+  const events: string[] = []
+  const previous = createMockModelListProcess().proc
+  const replacement = createMockModelListProcess().proc
+  const prepareCodexHome: PrepareCodexAppServerHome = async ({appServerStopped}) => {
+    events.push(`prepare:${appServerStopped ? 'stopped' : 'running'}`)
+    return emptyCodexHomePruneCounts
+  }
+  const createClient = (label: string, proc: MockCodexProcess) => {
+    return createCodexAppServerClient({
+      codexHome,
+      prepareCodexHome,
+      previousAppServerExitTimeoutMs,
+      spawnProcess: () => {
+        events.push(`spawn:${label}`)
+        return proc
+      },
+    })
+  }
+
+  return {createClient, events, previous, replacement}
+}
+
+test('a replacement app-server waits for the previous process of its CODEX_HOME to exit before pruning sqlite', async () => {
+  const {createClient, events, previous, replacement} = createReplacementTestClients({
+    codexHome: '/forska-tests/replacement-waits-home',
+    previousAppServerExitTimeoutMs: 5_000,
   })
 
+  await createClient('previous', previous).modelList()
+  const replacementClient = createClient('replacement', replacement)
+  setTimeout(() => {
+    events.push('exit:previous')
+    previous.emit('exit', null, 'SIGTERM')
+  }, 20)
+  await replacementClient.modelList()
+
+  expect(events).toEqual(['prepare:stopped', 'spawn:previous', 'exit:previous', 'prepare:stopped', 'spawn:replacement'])
+})
+
+test('a replacement app-server keeps sqlite when the previous process outlives the bounded exit wait', async () => {
+  const {createClient, events, previous, replacement} = createReplacementTestClients({
+    codexHome: '/forska-tests/replacement-timeout-home',
+    previousAppServerExitTimeoutMs: 10,
+  })
+
+  await createClient('previous', previous).modelList()
+  await createClient('replacement', replacement).modelList()
+
+  expect(events).toEqual(['prepare:stopped', 'spawn:previous', 'prepare:running', 'spawn:replacement'])
+})
+
+test('codex server requests that need a human are declined with the response shape codex expects', async () => {
+  resetCodexStderrLogRateLimitForTests()
+  const {initialized, responses, sendServerRequest} = createMockServerRequestCodexClient()
+
+  await initialized
   sendServerRequest({
     id: 11,
     method: 'mcpServer/elicitation/request',
