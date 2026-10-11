@@ -975,7 +975,7 @@ const getMockServingRows = (
     const passesConflictResolutionFilter =
       conflictResolutionFilter === 'all'
       || (conflictResolutionFilter === 'not-set' && row.hasConflict && !resolutionRow)
-      || (row.hasConflict && resolutionRow?.answerValue === conflictResolutionFilter)
+      || resolutionRow?.answerValue === conflictResolutionFilter
 
     return (
       getMockServingRowFilterMatch(rowFilter, row.cells, columns, isSummaryMode)

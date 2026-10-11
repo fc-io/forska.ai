@@ -241,5 +241,5 @@ export const getComparisonProjectConflictResolutionProvenanceFilterPredicateSql 
 
   return predicates.length === 0
     ? 'TRUE'
-    : `(article.has_conflict AND conflict_resolution.article_id IS NOT NULL AND (${predicates.join(' OR ')}))`
+    : `(conflict_resolution.article_id IS NOT NULL AND (${predicates.join(' OR ')}))`
 }

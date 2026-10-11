@@ -244,7 +244,6 @@ const getHasConflictResolutionVsKindDifference = (
 ) => {
   return (
     conflictResolution !== null
-    && getHasAnyDisagreement(promptAnswerBuckets)
     && Array.from(promptAnswerBuckets.values()).some((answerBuckets) => {
       return Array.from(getKindAnswers(answerBuckets, kind)).some((answer) => {
         return answer !== conflictResolution
@@ -262,7 +261,6 @@ const getHasConflictResolutionVsKindTrueConflict = (
 
   return (
     conflictResolutionDecision !== null
-    && getHasAnyDisagreement(promptAnswerBuckets)
     && Array.from(promptAnswerBuckets.values()).some((answerBuckets) => {
       return Array.from(getKindBinaryDecisions(answerBuckets, kind)).some((decision) => {
         return decision !== conflictResolutionDecision
