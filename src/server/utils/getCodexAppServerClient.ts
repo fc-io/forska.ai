@@ -4,13 +4,10 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
-  type CodexAppServerHomePruneCounts,
-  getCodexUserHomeDir,
-  getDefaultCodexAppServerHomeDir,
-  prepareCodexAppServerHome,
-  runWithCodexAppServerHomeLock,
-  trackCodexAppServerExit,
-  waitForCodexAppServerExits,
+  getCodexAppServerSpawnHomeStats,
+  getDefaultCodexAppServerRoleDir,
+  prepareCodexAppServerSpawnHome,
+  removeCodexAppServerSpawnHome,
 } from './codexAppServerHome.ts'
 import {readLocalAppSettings} from './localAppSettings.ts'
 import {writeRuntimeLogEvent} from './runtimeLogger.ts'
@@ -52,10 +49,9 @@ export type SpawnCodexAppServer = (
   options: CodexAppServerSpawnOptions,
 ) => CodexAppServerProcess
 
-export type PrepareCodexAppServerHome = (input: {
-  appServerStopped: boolean
-  codexHome: string
-}) => Promise<CodexAppServerHomePruneCounts>
+export type PrepareCodexAppServerHome = (roleDir: string) => Promise<string>
+
+export type RemoveCodexAppServerHome = (codexHome: string) => Promise<void>
 
 const CODEx_DEFAULT_TIMEOUT_MS = 30_000
 const CODEX_INITIALIZE_TIMEOUT_MS = 180_000
@@ -63,7 +59,6 @@ const CODEX_THREAD_READ_TIMEOUT_MS = 60_000
 const CODEX_THREAD_READ_MAX_ATTEMPTS = 3
 const CODEX_THREAD_READ_RETRY_DELAY_MS = 250
 const CODEX_MAX_TURNS_BEFORE_RECYCLE = 25
-const CODEX_PREVIOUS_APP_SERVER_EXIT_TIMEOUT_MS = 3_000
 const CODEX_SLOW_THREAD_START_MS = 5_000
 
 const MAX_DEBUG_OUTPUT_CHARS = 8_000
@@ -243,8 +238,8 @@ export const codexAppServerInitializeParams = {
   },
 }
 
-const prepareDefaultCodexAppServerHome: PrepareCodexAppServerHome = async (input) => {
-  return prepareCodexAppServerHome({...input, userCodexHome: getCodexUserHomeDir()})
+const prepareDefaultCodexAppServerHome: PrepareCodexAppServerHome = async (roleDir) => {
+  return prepareCodexAppServerSpawnHome({roleDir})
 }
 
 const getCodexErrorMessage = (value: unknown): string | null => {
@@ -482,38 +477,47 @@ const logSlowCodexThreadStart = (codexHome: string, durationMs: number): void =>
   })
 }
 
-const logCodexAppServerSpawn = ({
-  appServerStopped,
-  codexHome,
-  pruned,
-  waitedMs,
-}: {
-  appServerStopped: boolean
-  codexHome: string
-  pruned: CodexAppServerHomePruneCounts
-  waitedMs: number
-}): void => {
+const getErrorText = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const logCodexAppServerSpawn = (codexHome: string): void => {
+  const stats = getCodexAppServerSpawnHomeStats()
+
   writeRuntimeLogEvent({
-    attrs: {appServerStopped, codexHome, waitedMs, ...pruned},
+    attrs: {codexHome, ...stats},
     event: 'codex:app-server-spawn',
-    message: `[codex] spawning app-server with CODEX_HOME ${codexHome}; pruned ${pruned.sessionFiles} session files, ${pruned.archivedSessionFiles} archived session files, ${pruned.emptyDirectories} empty dirs, ${pruned.databaseFiles} sqlite files (previous app-server ${appServerStopped ? 'stopped' : 'still running'} after ${waitedMs} ms).`,
+    message: `[codex] spawning app-server with CODEX_HOME ${codexHome} (${stats.liveSpawnHomes} spawn homes live, ${stats.removedSpawnHomes} deleted after exit since startup).`,
     severity: 'INFO',
   })
 }
 
-const getCodexAppServerExited = async (proc: CodexAppServerProcess): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    proc.on('exit', () => {
-      resolve()
-    })
-    proc.on('error', () => {
-      resolve()
-    })
+const logCodexHomeRemoveFailure = (codexHome: string, error: unknown): void => {
+  writeRuntimeLogEvent({
+    attrs: {codexHome, error: getErrorText(error)},
+    event: 'codex:app-server-home-remove-failed',
+    message: `[codex] failed to delete CODEX_HOME ${codexHome} after its app-server exited; the next startup sweep removes it.`,
+    severity: 'WARN',
   })
 }
 
-const getErrorText = (error: unknown): string => {
-  return error instanceof Error ? error.message : String(error)
+const removeCodexHomeAfterExit = (
+  proc: CodexAppServerProcess,
+  codexHome: string,
+  removeCodexHome: RemoveCodexAppServerHome,
+): void => {
+  let removalStarted = false
+  const remove = (): void => {
+    if (removalStarted) return
+
+    removalStarted = true
+    void removeCodexHome(codexHome).catch((error: unknown) => {
+      logCodexHomeRemoveFailure(codexHome, error)
+    })
+  }
+
+  proc.on('exit', remove)
+  proc.on('error', remove)
 }
 
 export const resetCodexStderrLogRateLimitForTests = (): void => {
@@ -532,11 +536,11 @@ export const warmCodexAppServer = async (): Promise<void> => {
 }
 
 export const createCodexAppServerClient = ({
-  codexHome,
+  codexRoleDir,
   initializeTimeoutMs,
   maxTurnsBeforeRecycle,
   prepareCodexHome = prepareDefaultCodexAppServerHome,
-  previousAppServerExitTimeoutMs,
+  removeCodexHome = removeCodexAppServerSpawnHome,
   spawnProcess = (command, args, options) => {
     return spawn(command, args, options)
   },
@@ -544,11 +548,11 @@ export const createCodexAppServerClient = ({
   threadReadRetryDelayMs,
   threadReadTimeoutMs,
 }: {
-  codexHome?: string
+  codexRoleDir?: string
   initializeTimeoutMs?: number
   maxTurnsBeforeRecycle?: number
   prepareCodexHome?: PrepareCodexAppServerHome
-  previousAppServerExitTimeoutMs?: number
+  removeCodexHome?: RemoveCodexAppServerHome
   spawnProcess?: SpawnCodexAppServer
   threadReadMaxAttempts?: number
   threadReadRetryDelayMs?: number
@@ -564,13 +568,10 @@ export const createCodexAppServerClient = ({
   const resolvedThreadReadRetryDelayMs = getPositiveInteger(threadReadRetryDelayMs, CODEX_THREAD_READ_RETRY_DELAY_MS)
   const resolvedThreadReadTimeoutMs = getPositiveInteger(threadReadTimeoutMs, CODEX_THREAD_READ_TIMEOUT_MS)
   const resolvedMaxTurnsBeforeRecycle = getPositiveInteger(maxTurnsBeforeRecycle, CODEX_MAX_TURNS_BEFORE_RECYCLE)
-  const resolvedPreviousAppServerExitTimeoutMs = getPositiveInteger(
-    previousAppServerExitTimeoutMs,
-    CODEX_PREVIOUS_APP_SERVER_EXIT_TIMEOUT_MS,
-  )
-  const resolvedCodexHome = codexHome ?? getDefaultCodexAppServerHomeDir()
+  const resolvedCodexRoleDir = codexRoleDir ?? getDefaultCodexAppServerRoleDir()
 
   let proc: CodexAppServerProcess | null = null
+  let activeCodexHome: string | null = null
   let rawStdout = ''
   let rawStderr = ''
   let closedError: Error | null = null
@@ -722,19 +723,13 @@ export const createCodexAppServerClient = ({
   }
 
   const spawnAppServer = async (): Promise<void> => {
-    const waitStartedAt = Date.now()
-    const appServerStopped = await waitForCodexAppServerExits(resolvedCodexHome, resolvedPreviousAppServerExitTimeoutMs)
-    const waitedMs = Date.now() - waitStartedAt
-    const pruned = await prepareCodexHome({appServerStopped, codexHome: resolvedCodexHome})
-    const spawned = spawnProcess(
-      codexBin,
-      getCodexAppServerLaunchArgs(),
-      getCodexAppServerSpawnOptions(resolvedCodexHome),
-    )
+    const codexHome = await prepareCodexHome(resolvedCodexRoleDir)
+    const spawned = spawnProcess(codexBin, getCodexAppServerLaunchArgs(), getCodexAppServerSpawnOptions(codexHome))
 
+    activeCodexHome = codexHome
     attachAppServerProcess(spawned)
-    trackCodexAppServerExit(resolvedCodexHome, getCodexAppServerExited(spawned))
-    logCodexAppServerSpawn({appServerStopped, codexHome: resolvedCodexHome, pruned, waitedMs})
+    removeCodexHomeAfterExit(spawned, codexHome, removeCodexHome)
+    logCodexAppServerSpawn(codexHome)
   }
 
   const send = (message: unknown): void => {
@@ -873,10 +868,8 @@ export const createCodexAppServerClient = ({
   }
 
   const startAppServer = async (): Promise<void> => {
-    await runWithCodexAppServerHomeLock(resolvedCodexHome, spawnAppServer).catch((error: unknown) => {
-      const err = new Error(
-        `codex app-server failed to start with CODEX_HOME ${resolvedCodexHome}: ${getErrorText(error)}`,
-      )
+    await spawnAppServer().catch((error: unknown) => {
+      const err = new Error(`codex app-server failed to start under ${resolvedCodexRoleDir}: ${getErrorText(error)}`)
       failAppServer(err)
       throw err
     })
@@ -889,7 +882,7 @@ export const createCodexAppServerClient = ({
     const startedAt = Date.now()
 
     return request('thread/start', params).finally(() => {
-      logSlowCodexThreadStart(resolvedCodexHome, Date.now() - startedAt)
+      logSlowCodexThreadStart(activeCodexHome ?? resolvedCodexRoleDir, Date.now() - startedAt)
     })
   }
 

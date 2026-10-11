@@ -21,7 +21,7 @@ import {
   runProjectTransferStartupRecovery,
   runProjectTransferTtlRecovery,
 } from './services/projectTransfer/projectTransferSessionRecovery.ts'
-import {pruneCodexAppServerHomeOnStartup} from './utils/codexAppServerHome.ts'
+import {sweepCodexAppServerRoleDirOnStartup} from './utils/codexAppServerHome.ts'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {parseDuckdbMemoryLimitToMiB} from './utils/duckdbMemoryLimit.ts'
 import {registerDuckdbShutdownHooks} from './utils/duckdbService.ts'
@@ -369,7 +369,7 @@ writeRuntimeOperatorLogEvent({
   message: `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_owner=${canCurrentServerOwnDuckdb()} duckdb_memory_limit=${env.DUCKDB_MEMORY_LIMIT} commit=${runtimeBuildInfo.shortCommitSha}`,
   severity: 'INFO',
 })
-void pruneCodexAppServerHomeOnStartup()
+void sweepCodexAppServerRoleDirOnStartup()
 if (shouldRunMutatingServerWork && getCurrentServerRole() === 'judge-worker') {
   startJudgeWorkerEventLoopLagMonitor()
   void startJudgeWorkerStartupRolloutCleanup().catch((error) => {

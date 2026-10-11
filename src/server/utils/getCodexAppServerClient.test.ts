@@ -1,9 +1,11 @@
 import {EventEmitter} from 'node:events'
+import {existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
-import {expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 
+import {prepareCodexAppServerSpawnHome, removeCodexAppServerSpawnHome} from './codexAppServerHome.ts'
 import {
   type CodexAppServerClient,
   createCodexAppServerClient,
@@ -35,18 +37,23 @@ type MockCodexProcess = EventEmitter & {
   stdout: EventEmitter
 }
 
-const emptyCodexHomePruneCounts = {archivedSessionFiles: 0, databaseFiles: 0, emptyDirectories: 0, sessionFiles: 0}
-
 let testCodexHomeCount = 0
 
-const prepareTestCodexHome: PrepareCodexAppServerHome = async () => {
-  return emptyCodexHomePruneCounts
+const prepareTestCodexHome: PrepareCodexAppServerHome = async (roleDir) => {
+  testCodexHomeCount += 1
+  return `${roleDir}/spawn-${testCodexHomeCount}`
+}
+
+const removeTestCodexHome = async () => {
+  return undefined
 }
 
 const getTestCodexHomeOptions = () => {
-  testCodexHomeCount += 1
-
-  return {codexHome: `/forska-tests/codex-home-${testCodexHomeCount}`, prepareCodexHome: prepareTestCodexHome}
+  return {
+    codexRoleDir: '/forska-tests/codex-home/test-role',
+    prepareCodexHome: prepareTestCodexHome,
+    removeCodexHome: removeTestCodexHome,
+  }
 }
 
 const waitForCodexRecycleTimer = async () => {
@@ -1072,7 +1079,7 @@ test('runJsonTurn rejects active turns when app-server exits', async () => {
 
 type MockJsonRpcResponse = {id: number; result?: unknown; error?: {code: number; message: string}}
 
-const createMockServerRequestCodexClient = ({codexHome}: {codexHome?: string} = {}) => {
+const createMockServerRequestCodexClient = () => {
   const stdout = new EventEmitter()
   const stderr = new EventEmitter()
   const proc = new EventEmitter() as EventEmitter & {
@@ -1127,15 +1134,84 @@ const createMockServerRequestCodexClient = ({codexHome}: {codexHome?: string} = 
     spawnCalls.push({args, cwd: options.cwd, env: options.env})
     return proc
   }
-  const homeOptions = getTestCodexHomeOptions()
 
   return {
-    client: createCodexAppServerClient({...homeOptions, codexHome: codexHome ?? homeOptions.codexHome, spawnProcess}),
+    client: createCodexAppServerClient({...getTestCodexHomeOptions(), spawnProcess}),
     initialized,
     responses,
     sendServerRequest: send,
     spawnCalls,
   }
+}
+
+const temporaryDirectories: string[] = []
+
+afterEach(() => {
+  temporaryDirectories.splice(0).forEach((directory) => {
+    rmSync(directory, {force: true, recursive: true})
+  })
+})
+
+const createSilentMockProcess = () => {
+  const proc = new EventEmitter() as MockCodexProcess
+
+  proc.stdout = new EventEmitter()
+  proc.stderr = new EventEmitter()
+  proc.kill = () => {
+    return true
+  }
+  proc.stdin = {
+    write() {
+      return true
+    },
+  }
+
+  return proc
+}
+
+const createSpawnHomeTestClient = ({proc = createMockModelListProcess().proc}: {proc?: MockCodexProcess} = {}) => {
+  const root = mkdtempSync(join(tmpdir(), 'forska-codex-client-home-test-'))
+  const userCodexHome = join(root, 'user-codex')
+  const codexRoleDir = join(root, 'codex-home', 'judge-worker')
+  const events: string[] = []
+  const spawnedHomes: string[] = []
+  let resolveRemoved: (codexHome: string) => void = () => {
+    return undefined
+  }
+  const removed = new Promise<string>((resolve) => {
+    resolveRemoved = resolve
+  })
+  let resolveSpawned: () => void = () => {
+    return undefined
+  }
+  const spawned = new Promise<void>((resolve) => {
+    resolveSpawned = resolve
+  })
+  temporaryDirectories.push(root)
+  mkdirSync(userCodexHome)
+  writeFileSync(join(userCodexHome, 'auth.json'), '{"auth_mode":"chatgpt"}')
+
+  const client = createCodexAppServerClient({
+    codexRoleDir,
+    prepareCodexHome: async (roleDir) => {
+      events.push('prepare')
+      return prepareCodexAppServerSpawnHome({roleDir, userCodexHome})
+    },
+    removeCodexHome: async (codexHome) => {
+      events.push('remove')
+      await removeCodexAppServerSpawnHome(codexHome)
+      resolveRemoved(codexHome)
+    },
+    spawnProcess: (_command, _args, options) => {
+      const codexHome = options.env.CODEX_HOME ?? ''
+      events.push(`spawn:config=${existsSync(join(codexHome, 'config.toml'))}`)
+      spawnedHomes.push(codexHome)
+      resolveSpawned()
+      return proc
+    },
+  })
+
+  return {client, codexRoleDir, events, proc, removed, spawned, spawnedHomes, userCodexHome}
 }
 
 test('codex app-server launch args stay plain because the isolated CODEX_HOME declares no MCP servers', () => {
@@ -1144,53 +1220,85 @@ test('codex app-server launch args stay plain because the isolated CODEX_HOME de
 
 test('codex app-server env points CODEX_HOME at the isolated home and drops CODEX_SQLITE_HOME', () => {
   expect(
-    getCodexAppServerEnv('/runtime/codex-home/judge-worker', {
+    getCodexAppServerEnv('/runtime/codex-home/judge-worker/20261011T120000000Z-a1b2c3', {
       CODEX_HOME: '/Users/example/.codex',
       CODEX_SQLITE_HOME: '/Users/example/.codex',
       PATH: '/usr/bin',
     }),
-  ).toEqual({CODEX_HOME: '/runtime/codex-home/judge-worker', PATH: '/usr/bin'})
+  ).toEqual({CODEX_HOME: '/runtime/codex-home/judge-worker/20261011T120000000Z-a1b2c3', PATH: '/usr/bin'})
 })
 
-test('codex app-server client spawns plain app-server in the safe cwd with the isolated CODEX_HOME', async () => {
-  const {initialized, spawnCalls} = createMockServerRequestCodexClient({codexHome: '/runtime/codex-home/api'})
+test('codex app-server client spawns plain app-server in the safe cwd with its spawn CODEX_HOME', async () => {
+  const {initialized, spawnCalls} = createMockServerRequestCodexClient()
 
   await initialized
 
   expect(spawnCalls).toHaveLength(1)
   expect(spawnCalls[0]?.args).toEqual(['app-server'])
   expect(spawnCalls[0]?.cwd).toBe(join(tmpdir(), 'forska-codex'))
-  expect(spawnCalls[0]?.env.CODEX_HOME).toBe('/runtime/codex-home/api')
+  expect(spawnCalls[0]?.env.CODEX_HOME).toMatch(/^\/forska-tests\/codex-home\/test-role\/spawn-\d+$/)
   expect(spawnCalls[0]?.env).not.toHaveProperty('CODEX_SQLITE_HOME')
 })
 
-test('codex app-server client prepares its CODEX_HOME before spawning', async () => {
-  const events: string[] = []
-  const {proc} = createMockModelListProcess()
-  const client = createCodexAppServerClient({
-    codexHome: '/forska-tests/prepare-order-home',
-    prepareCodexHome: async ({appServerStopped, codexHome}) => {
-      events.push(`prepare:${codexHome}:${appServerStopped ? 'stopped' : 'running'}`)
-      return emptyCodexHomePruneCounts
-    },
-    spawnProcess: () => {
-      events.push('spawn')
-      return proc
-    },
-  })
+test('codex app-server client creates its CODEX_HOME before spawning and deletes it after the app-server exits', async () => {
+  const {client, codexRoleDir, events, proc, removed, spawnedHomes, userCodexHome} = createSpawnHomeTestClient()
 
   await client.modelList()
+  const codexHome = spawnedHomes[0] ?? ''
 
-  expect(events).toEqual(['prepare:/forska-tests/prepare-order-home:stopped', 'spawn'])
+  expect(events).toEqual(['prepare', 'spawn:config=true'])
+  expect(codexHome.startsWith(`${codexRoleDir}/`)).toBe(true)
+  expect(existsSync(join(codexHome, 'auth.json'))).toBe(true)
+
+  proc.emit('exit', null, 'SIGTERM')
+  proc.emit('error', new Error('late error'))
+
+  expect(await removed).toBe(codexHome)
+  expect(events).toEqual(['prepare', 'spawn:config=true', 'remove'])
+  expect(existsSync(codexHome)).toBe(false)
+  expect(readdirSync(codexRoleDir)).toEqual([])
+  expect(readFileSync(join(userCodexHome, 'auth.json'), 'utf8')).toBe('{"auth_mode":"chatgpt"}')
+})
+
+test('codex app-server client deletes its CODEX_HOME when the app-server fails to spawn', async () => {
+  const {client, proc, removed, spawned, spawnedHomes} = createSpawnHomeTestClient({proc: createSilentMockProcess()})
+  const result = client.modelList().then(
+    () => {
+      return null
+    },
+    (error: unknown) => {
+      return error
+    },
+  )
+
+  await spawned
+  proc.emit('error', new Error('spawn codex ENOENT'))
+
+  expect(await removed).toBe(spawnedHomes[0] ?? '')
+  expect(existsSync(spawnedHomes[0] ?? '')).toBe(false)
+  expect(await result).toBeInstanceOf(Error)
+})
+
+test('each codex app-server client spawn gets its own CODEX_HOME under the role dir', async () => {
+  const homes = await Promise.all(
+    [1, 2].map(async () => {
+      const {initialized, spawnCalls} = createMockServerRequestCodexClient()
+      await initialized
+      return spawnCalls[0]?.env.CODEX_HOME
+    }),
+  )
+
+  expect(new Set(homes).size).toBe(2)
 })
 
 test('codex app-server client fails its requests when CODEX_HOME preparation fails', async () => {
   let spawnCount = 0
   const client = createCodexAppServerClient({
-    codexHome: '/forska-tests/prepare-failure-home',
+    codexRoleDir: '/forska-tests/codex-home/prepare-failure',
     prepareCodexHome: async () => {
       throw new Error('disk full')
     },
+    removeCodexHome: removeTestCodexHome,
     spawnProcess: () => {
       spawnCount += 1
       return createMockModelListProcess().proc
@@ -1206,67 +1314,9 @@ test('codex app-server client fails its requests when CODEX_HOME preparation fai
   )
 
   expect(result instanceof Error ? result.message : '').toBe(
-    'codex app-server failed to start with CODEX_HOME /forska-tests/prepare-failure-home: disk full',
+    'codex app-server failed to start under /forska-tests/codex-home/prepare-failure: disk full',
   )
   expect(spawnCount).toBe(0)
-})
-
-const createReplacementTestClients = ({
-  codexHome,
-  previousAppServerExitTimeoutMs,
-}: {
-  codexHome: string
-  previousAppServerExitTimeoutMs: number
-}) => {
-  const events: string[] = []
-  const previous = createMockModelListProcess().proc
-  const replacement = createMockModelListProcess().proc
-  const prepareCodexHome: PrepareCodexAppServerHome = async ({appServerStopped}) => {
-    events.push(`prepare:${appServerStopped ? 'stopped' : 'running'}`)
-    return emptyCodexHomePruneCounts
-  }
-  const createClient = (label: string, proc: MockCodexProcess) => {
-    return createCodexAppServerClient({
-      codexHome,
-      prepareCodexHome,
-      previousAppServerExitTimeoutMs,
-      spawnProcess: () => {
-        events.push(`spawn:${label}`)
-        return proc
-      },
-    })
-  }
-
-  return {createClient, events, previous, replacement}
-}
-
-test('a replacement app-server waits for the previous process of its CODEX_HOME to exit before pruning sqlite', async () => {
-  const {createClient, events, previous, replacement} = createReplacementTestClients({
-    codexHome: '/forska-tests/replacement-waits-home',
-    previousAppServerExitTimeoutMs: 5_000,
-  })
-
-  await createClient('previous', previous).modelList()
-  const replacementClient = createClient('replacement', replacement)
-  setTimeout(() => {
-    events.push('exit:previous')
-    previous.emit('exit', null, 'SIGTERM')
-  }, 20)
-  await replacementClient.modelList()
-
-  expect(events).toEqual(['prepare:stopped', 'spawn:previous', 'exit:previous', 'prepare:stopped', 'spawn:replacement'])
-})
-
-test('a replacement app-server keeps sqlite when the previous process outlives the bounded exit wait', async () => {
-  const {createClient, events, previous, replacement} = createReplacementTestClients({
-    codexHome: '/forska-tests/replacement-timeout-home',
-    previousAppServerExitTimeoutMs: 10,
-  })
-
-  await createClient('previous', previous).modelList()
-  await createClient('replacement', replacement).modelList()
-
-  expect(events).toEqual(['prepare:stopped', 'spawn:previous', 'prepare:running', 'spawn:replacement'])
 })
 
 test('codex server requests that need a human are declined with the response shape codex expects', async () => {
