@@ -937,6 +937,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
   ensureCompletionAckSchema(database)
   ensureCompletionTokenUseOutboxSchema(database)
   ensurePreparedExecutionSnapshotSchema(database)
+  ensureAdmittedArticleSchema(database)
 
   openDatabases.set(jobId, database)
   return database
@@ -1390,6 +1391,25 @@ const ensurePreparedExecutionSnapshotSchema = (database: Database) => {
       created_at TEXT NOT NULL
     )
   `)
+}
+
+const ensureAdmittedArticleSchema = (database: Database) => {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS admitted_article (
+      article_id TEXT PRIMARY KEY,
+      admitted_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS admitted_article_backfill (
+      job_id TEXT PRIMARY KEY,
+      backfilled_at TEXT NOT NULL
+    );
+  `)
+}
+
+const getAdmittedArticleCountFromDatabase = (database: Database) => {
+  const row = database.query(`SELECT COUNT(*) AS count FROM admitted_article`).get() as {count: number} | null
+
+  return Number(row?.count ?? 0)
 }
 
 const getPendingCompletionTokenUseCount = (database: Database) => {
@@ -2189,6 +2209,7 @@ const upgradeJudgmentJobSqliteSchemaInPlace = (jobId: string) => {
     ensureQueuePromptSchema(cachedDatabase)
     ensureOutboxClaimSchema(cachedDatabase)
     ensureCompletionAckSchema(cachedDatabase)
+    ensureAdmittedArticleSchema(cachedDatabase)
     return
   }
 
@@ -2220,6 +2241,7 @@ const upgradeJudgmentJobSqliteSchemaInPlace = (jobId: string) => {
     }
 
     ensureCompletionAckSchema(database)
+    ensureAdmittedArticleSchema(database)
   } finally {
     database?.close(false)
   }
@@ -4847,6 +4869,9 @@ const sqliteService = {
           updated_at
         ) VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, ?)
       `)
+        const admitArticle = database.query(`
+          INSERT OR IGNORE INTO admitted_article (article_id, admitted_at) VALUES (?, ?)
+        `)
         const now = new Date().toISOString()
         const selectMaxReadyInsertSeq = database.query(`
           SELECT COALESCE(MAX(ready_insert_seq), 0) AS maxReadyInsertSeq
@@ -4874,6 +4899,10 @@ const sqliteService = {
                 now,
                 now,
               ) as {changes?: number}
+
+              if (result.changes === 1) {
+                admitArticle.run(entry.articleId, now)
+              }
 
               return {
                 count: state.count + (result.changes === 1 ? 1 : 0),
@@ -5555,6 +5584,131 @@ const sqliteService = {
             return !existingQueuedSet.has(`${entry.articleId}:${entry.promptId}`)
           })
         }) ?? [])
+  },
+  getAdmittedArticleState: async (jobId: string): Promise<{backfilled: boolean; count: number}> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const marker = database
+          .query(`SELECT job_id AS jobId FROM admitted_article_backfill WHERE job_id = ? LIMIT 1`)
+          .get(jobId) as {jobId: string} | null
+
+        return {backfilled: marker !== null, count: getAdmittedArticleCountFromDatabase(database)}
+      }) ?? {backfilled: false, count: 0}
+    )
+  },
+  admitQueuedArticles: async (jobId: string, serverJobId?: string): Promise<number> => {
+    return (
+      (await withOwnedJobDatabase(
+        jobId,
+        false,
+        (database) => {
+          database
+            .query(
+              `
+                INSERT OR IGNORE INTO admitted_article (article_id, admitted_at)
+                SELECT DISTINCT article_id, ? FROM queue_prompt
+              `,
+            )
+            .run(new Date().toISOString())
+
+          return getAdmittedArticleCountFromDatabase(database)
+        },
+        serverJobId,
+      )) ?? 0
+    )
+  },
+  completeAdmittedArticleBackfill: async (
+    jobId: string,
+    judgedArticleIds: string[],
+    serverJobId?: string,
+  ): Promise<number> => {
+    return (
+      (await withOwnedJobDatabase(
+        jobId,
+        false,
+        (database) => {
+          const now = new Date().toISOString()
+          const admitArticle = database.query(
+            `INSERT OR IGNORE INTO admitted_article (article_id, admitted_at) VALUES (?, ?)`,
+          )
+
+          database.transaction((articleIds: string[]) => {
+            articleIds.map((articleId) => {
+              return admitArticle.run(articleId, now)
+            })
+            database
+              .query(`INSERT OR REPLACE INTO admitted_article_backfill (job_id, backfilled_at) VALUES (?, ?)`)
+              .run(jobId, now)
+          })(judgedArticleIds)
+
+          return getAdmittedArticleCountFromDatabase(database)
+        },
+        serverJobId,
+      )) ?? 0
+    )
+  },
+  getAdmittedArticleIdsAmong: async (jobId: string, articleIds: string[]): Promise<string[]> => {
+    const uniqueArticleIds = Array.from(new Set(articleIds))
+
+    return uniqueArticleIds.length === 0
+      ? []
+      : (withJobDatabase(jobId, false, (database) => {
+          return (
+            database
+              .query(
+                `
+                  SELECT article_id AS articleId
+                  FROM admitted_article
+                  WHERE article_id IN (${getSqlPlaceholders(uniqueArticleIds.length).join(', ')})
+                `,
+              )
+              .all(...uniqueArticleIds) as Array<{articleId: string}>
+          ).map((row) => {
+            return row.articleId
+          })
+        }) ?? [])
+  },
+  getAdmittedArticleIdsAfter: async (
+    jobId: string,
+    afterArticleId: string | null,
+    limit: number,
+  ): Promise<string[]> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return (
+          database
+            .query(
+              `
+                SELECT article_id AS articleId
+                FROM admitted_article
+                WHERE ? IS NULL OR article_id > ?
+                ORDER BY article_id ASC
+                LIMIT ?
+              `,
+            )
+            .all(afterArticleId, afterArticleId, Math.max(1, Math.trunc(limit))) as Array<{articleId: string}>
+        ).map((row) => {
+          return row.articleId
+        })
+      }) ?? []
+    )
+  },
+  getQueueIdleState: async (
+    jobId: string,
+  ): Promise<{activeRowCount: number; pendingTokenUseCount: number; unexportedOutboxCount: number}> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const unexportedOutbox = database
+          .query(`SELECT COUNT(*) AS count FROM judgment_outbox WHERE exported_at IS NULL`)
+          .get() as {count: number} | null
+
+        return {
+          activeRowCount: getActiveQueueRowCount(database),
+          pendingTokenUseCount: getPendingCompletionTokenUseCount(database),
+          unexportedOutboxCount: Number(unexportedOutbox?.count ?? 0),
+        }
+      }) ?? {activeRowCount: 0, pendingTokenUseCount: 0, unexportedOutboxCount: 0}
+    )
   },
   hasJob: (jobId: string) => {
     return existsSync(getJudgmentJobSqlitePath(jobId))

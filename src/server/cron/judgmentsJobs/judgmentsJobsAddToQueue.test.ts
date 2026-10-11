@@ -2159,3 +2159,244 @@ test('queue reuse does not skip matching judgments outside the target project sc
 
   expect(addReadyPromptsCalls).toEqual([[{articleId: outOfScopeArticleId, promptId}]])
 })
+
+type StopConditionMockSqliteService = MockSqliteService & {
+  getAdmittedArticleIdsAmong: (jobId: string, articleIds: string[]) => Promise<string[]>
+  getAdmittedArticleState: (jobId: string) => Promise<{backfilled: boolean; count: number}>
+  getQueueIdleState: (
+    jobId: string,
+  ) => Promise<{activeRowCount: number; pendingTokenUseCount: number; unexportedOutboxCount: number}>
+}
+
+const getStopConditionMockSqliteService = (
+  addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>>,
+  admittedArticleIds: string[] = [],
+): StopConditionMockSqliteService => {
+  return {
+    addReadyPrompts: async (_jobId, entries) => {
+      addReadyPromptsCalls.push(entries)
+      return entries.length
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getAdmittedArticleIdsAmong: async (_jobId, articleIds) => {
+      return admittedArticleIds.filter((articleId) => {
+        return articleIds.includes(articleId)
+      })
+    },
+    getAdmittedArticleState: async () => {
+      return {backfilled: true, count: admittedArticleIds.length}
+    },
+    getQueueIdleState: async () => {
+      return {activeRowCount: 0, pendingTokenUseCount: 0, unexportedOutboxCount: 0}
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+}
+
+const insertStopConditionJobFixture = async ({
+  dbRun,
+  stopAssignments,
+  suffix,
+}: {
+  dbRun: (statement: string) => Promise<void>
+  stopAssignments: string
+  suffix: string
+}) => {
+  const connectionId = `${suffix}-connection`
+  const modelId = `${suffix}-model`
+  const projectId = `${suffix}-project`
+  const jobId = `${suffix}-job`
+
+  await dbRun(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await dbRun(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Stop model', 'stop-model', 'Stop model', 'manual', TRUE)
+  `)
+  await dbRun(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Stop Condition Project', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await dbRun(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await dbRun(`UPDATE app.judgment_job SET ${stopAssignments} WHERE id = '${jobId}'`)
+
+  return {jobId, projectId}
+}
+
+const registerStopConditionMocks = ({
+  dbQuery,
+  dbRun,
+  jobId,
+  projectId,
+  regularPromptEntries,
+  regularReadCalls,
+  sqliteService,
+}: {
+  dbQuery: MockReadOnlyQuery
+  dbRun: (statement: string) => Promise<void>
+  jobId: string
+  projectId: string
+  regularPromptEntries: Array<{articleId: string; promptId: string}>
+  regularReadCalls: {count: number}
+  sqliteService: StopConditionMockSqliteService
+}) => {
+  void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
+    return {
+      getJudgeWorkerReadOnlyAppDatabaseService: () => {
+        return getMockJudgeReadOnlyDatabaseService(dbQuery, dbRun)
+      },
+      getJudgmentJobSqliteService: () => {
+        return sqliteService
+      },
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 10, maxInflight: 10, readyTargetPerJob: 10}
+      },
+      inferenceRuntimeConfig: {
+        codexMaxInflight: 1,
+        judgmentsAddToQueueMaxBatchSize: 10,
+        judgmentsReadyTargetMultiplier: 1,
+      },
+      JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+      judgmentsJobsCronGetPrompts: async (...args: unknown[]) => {
+        if (!args[4]) {
+          regularReadCalls.count += 1
+        }
+
+        return args[4] ? {nextCursor: null, promptEntries: []} : {nextCursor: null, promptEntries: regularPromptEntries}
+      },
+      judgmentsJobsGetRunningJobs: async () => {
+        return [{id: jobId, maxInflightRequests: 10, modelProvider: 'openai', projectId, providerConnectionId: null}]
+      },
+    }
+  })
+}
+
+test('the human-answered stop condition skips the regular scan and pauses the idle job', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {resetJudgmentJobStopConditionStateForTests} = await import('./judgmentJobStopConditionRefill.ts')
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const regularReadCalls = {count: 0}
+  const sqliteService = getStopConditionMockSqliteService(addReadyPromptsCalls)
+  const {jobId, projectId} = await insertStopConditionJobFixture({
+    dbRun,
+    stopAssignments: 'stop_when_human_answered_done = TRUE',
+    suffix: `stop-human-${Date.now()}`,
+  })
+
+  resetJudgmentJobStopConditionStateForTests()
+  registerStopConditionMocks({
+    dbQuery,
+    dbRun,
+    jobId,
+    projectId,
+    regularPromptEntries: [{articleId: `${jobId}-article`, promptId: `${jobId}-prompt`}],
+    regularReadCalls,
+    sqliteService,
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?stop-human-answered=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(regularReadCalls.count).toBe(0)
+  expect(addReadyPromptsCalls).toEqual([])
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  const [job] = await dbQuery<{status: string; stopReason: string | null; storageState: string}>(`
+    SELECT status, storage_state AS storageState, stop_reason AS stopReason
+    FROM app.judgment_job
+    WHERE id = '${jobId}'
+  `)
+
+  expect(regularReadCalls.count).toBe(0)
+  expect(job).toEqual({status: 'paused', stopReason: 'human_answered_done', storageState: 'draining'})
+})
+
+test('the article stop condition admits new articles only up to the cap during the regular scan', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {resetJudgmentJobStopConditionStateForTests} = await import('./judgmentJobStopConditionRefill.ts')
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const regularReadCalls = {count: 0}
+  const sqliteService = getStopConditionMockSqliteService(addReadyPromptsCalls, ['article-a'])
+  const {jobId, projectId} = await insertStopConditionJobFixture({
+    dbRun,
+    stopAssignments: 'stop_after_articles = 2',
+    suffix: `stop-cap-${Date.now()}`,
+  })
+
+  resetJudgmentJobStopConditionStateForTests()
+  registerStopConditionMocks({
+    dbQuery,
+    dbRun,
+    jobId,
+    projectId,
+    regularPromptEntries: [
+      {articleId: 'article-a', promptId: 'prompt-1'},
+      {articleId: 'article-b', promptId: 'prompt-1'},
+      {articleId: 'article-b', promptId: 'prompt-2'},
+      {articleId: 'article-c', promptId: 'prompt-1'},
+      {articleId: 'article-a', promptId: 'prompt-2'},
+    ],
+    regularReadCalls,
+    sqliteService,
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?stop-article-cap=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(regularReadCalls.count).toBe(1)
+  expect(addReadyPromptsCalls).toEqual([
+    [
+      {articleId: 'article-a', promptId: 'prompt-1'},
+      {articleId: 'article-b', promptId: 'prompt-1'},
+      {articleId: 'article-b', promptId: 'prompt-2'},
+      {articleId: 'article-a', promptId: 'prompt-2'},
+    ],
+  ])
+})

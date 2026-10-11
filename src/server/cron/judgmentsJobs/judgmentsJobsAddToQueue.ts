@@ -1,4 +1,5 @@
 import type {SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
+import {getJudgmentJobStopConditions, hasJudgmentJobStopCondition} from '../../../utils/judgmentJobStopConditions.ts'
 import type {JudgmentJobHumanAnsweredMode} from '../../reviewServing/reviewServingJudgmentJobQueueService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
@@ -10,6 +11,16 @@ import {
   getJudgmentJobSqliteErrorMessage,
   isTransientJudgmentJobSqliteLockError,
 } from './judgmentJobSqliteTransientLock.ts'
+import {
+  type ArticleCapSelection,
+  finishAdmittedArticlesForJob,
+  getJudgmentJobStopPlan,
+  type JudgmentJobArticleAdmission,
+  pauseJudgmentJobWhenStopped,
+  pruneJudgmentJobStopConditionState,
+  recordHumanAnsweredPassResult,
+  selectEntriesForArticleAdmission,
+} from './judgmentJobStopConditionRefill.ts'
 import {
   getJudgeWorkerReadOnlyAppDatabaseService,
   getJudgmentJobSqliteService,
@@ -32,6 +43,10 @@ type JobConfig = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
+  stopAfterArticles?: number | null
+  stopAfterTotalTokens?: number | string | null
+  stopAt?: string | null
+  stopWhenHumanAnsweredDone?: boolean | null
 }
 
 const addToQueueLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
@@ -463,6 +478,42 @@ const startHumanAnsweredPass = (scanState: HumanAnsweredScanState) => {
   scanState.reachedEnd = false
 }
 
+const getEntriesWithinReadyDeficit = <T extends PromptQueueEntry>(
+  entries: T[],
+  readyDeficit: number,
+): ArticleCapSelection<T> => {
+  return {
+    deferredEntries: entries.slice(readyDeficit),
+    entries: entries.slice(0, readyDeficit),
+    newArticleIds: [],
+    skippedCount: 0,
+  }
+}
+
+const selectEntriesToInsert = async <T extends PromptQueueEntry>({
+  articleAdmission,
+  entries,
+  job,
+  readyDeficit,
+  sqliteService,
+}: {
+  articleAdmission: JudgmentJobArticleAdmission | null
+  entries: T[]
+  job: Job
+  readyDeficit: number
+  sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
+}): Promise<ArticleCapSelection<T>> => {
+  return articleAdmission === null
+    ? getEntriesWithinReadyDeficit(entries, readyDeficit)
+    : selectEntriesForArticleAdmission({
+        admission: articleAdmission,
+        entries,
+        jobId: job.id,
+        maxEntries: readyDeficit,
+        sqliteService,
+      })
+}
+
 // The serving queue orders pairs by retry bucket, partial article and article activity, not by human
 // answers, so the regular cursor scan only reaches human-answered pairs when it happens to pass them.
 // This pass walks only the human-answered unassessed pairs with its own in-memory cursor and fills the
@@ -471,6 +522,7 @@ const startHumanAnsweredPass = (scanState: HumanAnsweredScanState) => {
 // without filling the deficit (the human-answered pairs are exhausted), which then cools down for 30s.
 const topUpHumanAnsweredPromptsForJob = async ({
   addToQueueMaxBatchSize,
+  articleAdmission,
   humanJudgmentMode,
   job,
   readyDeficit,
@@ -478,6 +530,7 @@ const topUpHumanAnsweredPromptsForJob = async ({
   sqliteService,
 }: {
   addToQueueMaxBatchSize: number
+  articleAdmission: JudgmentJobArticleAdmission | null
   humanJudgmentMode: JudgmentJobHumanAnsweredMode
   job: Job
   readyDeficit: number
@@ -501,13 +554,19 @@ const topUpHumanAnsweredPromptsForJob = async ({
     const rest = scanState.pendingEntries.slice(humanAnsweredPendingBatchSize)
     const unjudgedEntries = await filterAlreadyJudged(batch, job.id, job.projectId, remainingDeficit, serverJobId)
     const insertableEntries = await sqliteService.filterOutExistingQueuedPrompts(job.id, unjudgedEntries)
-    const entriesToInsert = insertableEntries.slice(0, remainingDeficit)
+    const selection = await selectEntriesToInsert({
+      articleAdmission,
+      entries: insertableEntries,
+      job,
+      readyDeficit: remainingDeficit,
+      sqliteService,
+    })
 
-    scanState.pendingEntries = [...insertableEntries.slice(remainingDeficit), ...rest]
+    scanState.pendingEntries = [...selection.deferredEntries, ...rest]
 
-    return entriesToInsert.length === 0
+    return selection.entries.length === 0
       ? 0
-      : sqliteService.addReadyPrompts(job.id, entriesToInsert, serverJobId, remainingDeficit)
+      : sqliteService.addReadyPrompts(job.id, selection.entries, serverJobId, remainingDeficit)
   }
 
   const readWindow = async (input: {insertedCount: number; windowsLeft: number}): Promise<HumanAnsweredTopUpResult> => {
@@ -673,6 +732,16 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     return
   }
 
+  const readyDeficit = Math.max(0, readyTargetPerJob - countOfReadyPrompts)
+  const stopConditions = getJudgmentJobStopConditions(jobConfig)
+  const stopPlan = hasJudgmentJobStopCondition(stopConditions)
+    ? await getJudgmentJobStopPlan({conditions: stopConditions, job, serverJobId, sqliteService})
+    : null
+
+  if (stopPlan && (await runStopConditionRefill({job, plan: stopPlan, readyDeficit, serverJobId, sqliteService}))) {
+    return
+  }
+
   const scanState = await sqliteService.getScanState(job.id)
 
   if (hasSqliteExhaustedCooldown(scanState)) {
@@ -689,14 +758,21 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   }
 
   const getNewStartMs = Date.now()
+  const articleAdmission = stopPlan?.articleAdmission ?? null
   const humanAnsweredTopUp = await topUpHumanAnsweredPromptsForJob({
     addToQueueMaxBatchSize,
+    articleAdmission,
     humanJudgmentMode: jobConfig.humanJudgmentMode ?? 'prompt',
     job,
-    readyDeficit: Math.max(0, readyTargetPerJob - countOfReadyPrompts),
+    readyDeficit,
     serverJobId,
     sqliteService,
   })
+
+  if (stopPlan) {
+    recordHumanAnsweredPassResult(job.id, humanAnsweredTopUp.exhausted)
+  }
+
   const readyCountBeforeScan =
     humanAnsweredTopUp.insertedCount > 0 ? await sqliteService.getReadyCount(job.id) : countOfReadyPrompts
 
@@ -739,10 +815,22 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       readyDeficit,
       serverJobId,
     )
+    const entriesToInsert =
+      articleAdmission === null
+        ? filteredEntries
+        : (
+            await selectEntriesToInsert({
+              articleAdmission,
+              entries: await sqliteService.filterOutExistingQueuedPrompts(job.id, filteredEntries),
+              job,
+              readyDeficit,
+              sqliteService,
+            })
+          ).entries
 
-    await (filteredEntries.length === 0
+    await (entriesToInsert.length === 0
       ? Promise.resolve(0)
-      : sqliteService.addReadyPrompts(job.id, filteredEntries, serverJobId, readyDeficit))
+      : sqliteService.addReadyPrompts(job.id, entriesToInsert, serverJobId, readyDeficit))
 
     const nextReadyCount = await sqliteService.getReadyCount(job.id)
     const wrapVisibilityAckSeq = promptData.nextCursor ? null : scanState.lastProjectRefreshAckSeq
@@ -766,7 +854,10 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   // The regular scan only fills what the human-answered pass could not: a deficit that opened while the
   // pass was still finding pairs waits for the next tick. A timed-out human-answered read means DuckDB
   // is stalled; skip the regular read this tick too.
-  await (humanAnsweredTopUp.exhausted && !isServingQueueReadCoolingDown(job.id) ? runRegularScan() : Promise.resolve())
+  const shouldRunRegularScan =
+    humanAnsweredTopUp.exhausted && !stopPlan?.humanAnsweredOnly && !isServingQueueReadCoolingDown(job.id)
+
+  await (shouldRunRegularScan ? runRegularScan() : Promise.resolve())
   // Prepare the rows this refill just inserted so they are claimable without DuckDB this tick.
   await prepareReadyPromptsForJob({job, serverJobId, sqliteService})
 
@@ -785,7 +876,31 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     ready: countOfReadyPrompts,
     readyAfter: finalReadyCount,
     readyTargetPerJob,
+    stopReason: stopPlan?.stopReason ?? null,
   })
+}
+
+const runStopConditionRefill = async ({
+  job,
+  plan,
+  readyDeficit,
+  serverJobId,
+  sqliteService,
+}: {
+  job: Job
+  plan: Awaited<ReturnType<typeof getJudgmentJobStopPlan>>
+  readyDeficit: number
+  serverJobId: string
+  sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
+}): Promise<boolean> => {
+  const paused = await pauseJudgmentJobWhenStopped({job, plan, sqliteService})
+
+  if (!paused && plan.refill === 'finishAdmitted') {
+    await finishAdmittedArticlesForJob({job, readyDeficit, serverJobId, sqliteService})
+    await prepareReadyPromptsForJob({job, serverJobId, sqliteService})
+  }
+
+  return paused || plan.refill !== 'normal'
 }
 
 const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
@@ -798,7 +913,11 @@ const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
       p.use_fulltext AS useFulltext,
       p.use_fulltext_no_images AS useFulltextNoImages,
       COALESCE(p.use_metadata, FALSE) AS useMetadata,
-      COALESCE(p.system_prompt_variant, 'legacy') AS systemPromptVariant
+      COALESCE(p.system_prompt_variant, 'legacy') AS systemPromptVariant,
+      jj.stop_after_articles AS stopAfterArticles,
+      jj.stop_after_total_tokens AS stopAfterTotalTokens,
+      jj.stop_at AS stopAt,
+      COALESCE(jj.stop_when_human_answered_done, FALSE) AS stopWhenHumanAnsweredDone
     FROM app.judgment_job jj
     INNER JOIN app.project p ON p.id = jj.project_id
     WHERE jj.id = '${escapeSqlString(jobId)}'
@@ -838,6 +957,11 @@ export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void
   const runningJobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
   const sqliteService = getJudgmentJobSqliteService()
 
+  pruneJudgmentJobStopConditionState(
+    runningJobs.map((job) => {
+      return job.id
+    }),
+  )
   await sqliteService.syncOwnedLeases(
     runningJobs.map((job) => {
       return job.id
