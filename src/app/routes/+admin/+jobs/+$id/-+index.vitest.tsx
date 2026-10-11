@@ -380,10 +380,53 @@ const openPauseOptions = async (container: HTMLElement) => {
   expect(trigger).toBeInstanceOf(HTMLButtonElement)
   ;(trigger as HTMLButtonElement).click()
   await waitForCondition(() => {
-    expect(document.body.textContent).toContain('Pause automatically when')
+    expect(getMenuItem('Pause after … articles')).toBeInstanceOf(HTMLButtonElement)
   })
 
   return trigger as HTMLButtonElement
+}
+
+const getMenuItem = (label: string) => {
+  return Array.from(document.body.querySelectorAll<HTMLButtonElement>('[data-stop-menu-item]')).find((item) => {
+    return item.querySelector('[data-stop-menu-label]')?.textContent?.trim() === label
+  })
+}
+
+const getMenuItemValue = (label: string) => {
+  return getMenuItem(label)?.querySelector('span.text-xs')?.textContent?.trim() ?? null
+}
+
+const clickMenuItem = async (label: string) => {
+  await waitForCondition(() => {
+    expect(getMenuItem(label)).toBeInstanceOf(HTMLButtonElement)
+  })
+  getMenuItem(label)?.click()
+}
+
+const stopConditionDefaultsPath = () => {
+  return `api.judgmentsjobs.:${mockState.jobId}.stop-condition-defaults.get`
+}
+
+const setStopConditionDefaults = (data: Record<string, unknown> = {}) => {
+  mockState.responses[stopConditionDefaultsPath()] = {
+    data: {
+      data: {
+        admittedArticleCount: 40,
+        articleCount: 1_500,
+        humanJudgedArticleCount: 412,
+        serverNow: new Date().toISOString(),
+        totalTokens: 98_765,
+        ...data,
+      },
+      error: null,
+    },
+    error: null,
+    status: 200,
+  }
+}
+
+const isMenuItemWithArrow = (label: string) => {
+  return getMenuItem(label)?.querySelector('[data-stop-menu-arrow]') != null
 }
 
 describe('judgment job stop conditions', () => {
@@ -403,55 +446,243 @@ describe('judgment job stop conditions', () => {
     }
   })
 
-  test('the chevron opens the pause menu with the stop conditions', async () => {
-    mockState.job = {
-      ...buildJob(null),
-      admittedArticleCount: 1234,
-      status: 'running',
-      stopAfterArticles: 2000,
-      stopWhenHumanAnsweredDone: true,
-      totalTokenUsage: {totalTokens: 98765},
-    }
+  test('level one lists the conditions with their state and arrows only on configurable rows', async () => {
+    mockState.job = {...buildJob(null), status: 'running', stopAfterArticles: 2000, stopWhenHumanAnsweredDone: true}
+    setStopConditionDefaults()
     const {cleanup, container} = await renderJobDetailPage()
 
     try {
       const trigger = await openPauseOptions(container)
-      const menuText = document.body.textContent ?? ''
 
       expect(trigger.getAttribute('aria-expanded')).toBe('true')
       expect(trigger.getAttribute('aria-haspopup')).not.toBeNull()
-      expect(findButtonByText(document.body, 'Pause now')).toBeInstanceOf(HTMLButtonElement)
-      expect(menuText).toContain('1,234 of 2,000 admitted')
-      expect(menuText).toContain('Pause when human-answered articles are done')
-      expect(menuText).toContain('Current total: 98,765 tokens')
-      expect(menuText).toContain('Tomorrow 07:00')
+      expect(
+        Array.from(document.body.querySelectorAll('[data-stop-menu-item]')).map((item) => {
+          return item.querySelector('[data-stop-menu-label]')?.textContent?.trim()
+        }),
+      ).toEqual([
+        'Pause now',
+        'Pause after … articles',
+        'Pause when human-answered articles are done',
+        'Pause after … tokens',
+        'Pause at …',
+      ])
+      expect(isMenuItemWithArrow('Pause now')).toBe(false)
+      expect(isMenuItemWithArrow('Pause after … articles')).toBe(true)
+      expect(isMenuItemWithArrow('Pause when human-answered articles are done')).toBe(false)
+      expect(isMenuItemWithArrow('Pause after … tokens')).toBe(true)
+      expect(isMenuItemWithArrow('Pause at …')).toBe(true)
+      expect(getMenuItemValue('Pause after … articles')).toBe('2,000')
+      expect(getMenuItemValue('Pause after … tokens')).toBe('off')
+      expect(getMenuItemValue('Pause at …')).toBe('off')
+      expect(getMenuItem('Pause when human-answered articles are done')?.getAttribute('aria-checked')).toBe('true')
       expect(container.textContent).toContain('≤ 2,000 articles')
-      expect(container.textContent).toContain('human-answered')
     } finally {
       cleanup()
     }
   })
 
-  test('editing the article cap saves it with a PATCH and shows that it saved', async () => {
+  test('opens the article level with the defaults and goes back with the header row', async () => {
     mockState.job = {...buildJob(null), status: 'running'}
-    mockState.responses[`api.judgmentsjobs.:${mockState.jobId}.patch`] = getPatchResponse({stopAfterArticles: 2500})
+    setStopConditionDefaults()
     const {cleanup, container} = await renderJobDetailPage()
 
     try {
       await openPauseOptions(container)
+      await clickMenuItem('Pause after … articles')
+      await waitForCondition(() => {
+        expect(getMenuItem('1,000 articles')).toBeInstanceOf(HTMLButtonElement)
+      })
 
-      const input = document.body.querySelector('input[aria-label="Pause after this many articles"]')
+      expect(document.body.textContent).toContain('40 admitted of 1,500 articles')
+      expect(getMenuItem('100 articles')).toBeInstanceOf(HTMLButtonElement)
+      expect(getMenuItem('10,000 articles')).toBeUndefined()
+      expect(getMenuItem('Human-judged articles (412)')?.disabled).toBe(false)
+      expect(isMenuItemWithArrow('Custom…')).toBe(true)
+      expect(getMenuItem('Clear')).toBeUndefined()
+      expect(getMenuItem('Pause now')).toBeUndefined()
 
-      expect(input).toBeInstanceOf(HTMLInputElement)
+      await clickMenuItem('Pause after articles')
+      await waitForCondition(() => {
+        expect(getMenuItem('Pause now')).toBeInstanceOf(HTMLButtonElement)
+      })
+      expect(getMenuItem('1,000 articles')).toBeUndefined()
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('picking a default saves it and returns to level one with the new value', async () => {
+    mockState.job = {...buildJob(null), status: 'running'}
+    mockState.responses[`api.judgmentsjobs.:${mockState.jobId}.patch`] = getPatchResponse({stopAfterArticles: 1000})
+    setStopConditionDefaults()
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      await openPauseOptions(container)
+      await clickMenuItem('Pause after … articles')
+      mockState.job = {...mockState.job, stopAfterArticles: 1000}
+      await clickMenuItem('1,000 articles')
+      await waitForCondition(() => {
+        expect(getMenuItemValue('Pause after … articles')).toBe('1,000')
+      })
+
+      expect(
+        getJobPatchCalls().map((call) => {
+          return call.args[0]
+        }),
+      ).toEqual([{stopAfterArticles: 1000}])
+      expect(getMenuItem('Pause now')).toBeInstanceOf(HTMLButtonElement)
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('Custom opens a number field that saves the article cap', async () => {
+    mockState.job = {...buildJob(null), status: 'running'}
+    mockState.responses[`api.judgmentsjobs.:${mockState.jobId}.patch`] = getPatchResponse({stopAfterArticles: 2500})
+    setStopConditionDefaults()
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      await openPauseOptions(container)
+      await clickMenuItem('Pause after … articles')
+      await clickMenuItem('Custom…')
+      await waitForCondition(() => {
+        expect(document.body.querySelector('input[aria-label="Pause after this many articles"]')).toBeInstanceOf(
+          HTMLInputElement,
+        )
+      })
+
+      const input = document.body.querySelector<HTMLInputElement>('input[aria-label="Pause after this many articles"]')
+
       ;(input as HTMLInputElement).value = '2500'
       input?.dispatchEvent(new InputEvent('input', {bubbles: true, data: '2500', inputType: 'insertText'}))
-      input?.dispatchEvent(new FocusEvent('blur'))
+      mockState.job = {...mockState.job, stopAfterArticles: 2500}
+      findButtonByText(document.body, 'Save')?.click()
 
       await waitForCondition(() => {
-        expect(getJobPatchCalls()).toHaveLength(1)
-        expect(document.body.textContent).toContain('Saved')
+        expect(getMenuItemValue('Pause after … articles')).toBe('2,500')
       })
-      expect(getJobPatchCalls()[0]?.args[0]).toEqual({stopAfterArticles: 2500})
+      expect(
+        getJobPatchCalls().map((call) => {
+          return call.args[0]
+        }),
+      ).toEqual([{stopAfterArticles: 2500}])
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('the deadline pick view shows a calendar with hour and minute selects and no typed date field', async () => {
+    mockState.job = {...buildJob(null), status: 'running'}
+    setStopConditionDefaults()
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      await openPauseOptions(container)
+      await clickMenuItem('Pause at …')
+      await waitForCondition(() => {
+        expect(getMenuItem('In 1 hour')).toBeInstanceOf(HTMLButtonElement)
+      })
+
+      expect(getMenuItem('In 4 hours')).toBeInstanceOf(HTMLButtonElement)
+      expect(getMenuItem('Tomorrow 07:00')).toBeInstanceOf(HTMLButtonElement)
+      expect(isMenuItemWithArrow('Pick date and time…')).toBe(true)
+
+      await clickMenuItem('Pick date and time…')
+      await waitForCondition(() => {
+        expect(document.body.querySelector('select[aria-label="Hour"]')).toBeInstanceOf(HTMLSelectElement)
+      })
+
+      const menu = document.body.querySelector('[role="menu"][aria-label="Pause options"]')
+
+      expect(menu?.querySelector('[data-scope="date-picker"][data-part="table"]')).not.toBeNull()
+      expect(menu?.querySelector('select[aria-label="Minute"]')).toBeInstanceOf(HTMLSelectElement)
+      expect(menu?.querySelectorAll('input:not([type="hidden"])')).toHaveLength(0)
+      expect(menu?.querySelector('input[type="datetime-local"]')).toBeNull()
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('the human-answered row toggles directly without a second level', async () => {
+    mockState.job = {...buildJob(null), status: 'running'}
+    mockState.responses[`api.judgmentsjobs.:${mockState.jobId}.patch`] = getPatchResponse({
+      stopWhenHumanAnsweredDone: true,
+    })
+    setStopConditionDefaults()
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      await openPauseOptions(container)
+      mockState.job = {...mockState.job, stopWhenHumanAnsweredDone: true}
+      await clickMenuItem('Pause when human-answered articles are done')
+      await waitForCondition(() => {
+        expect(getMenuItem('Pause when human-answered articles are done')?.getAttribute('aria-checked')).toBe('true')
+      })
+
+      expect(
+        getJobPatchCalls().map((call) => {
+          return call.args[0]
+        }),
+      ).toEqual([{stopWhenHumanAnsweredDone: true}])
+      expect(getMenuItem('Pause now')).toBeInstanceOf(HTMLButtonElement)
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('Pause now in the menu pauses the job and closes the menu', async () => {
+    mockState.job = {...buildJob(null), status: 'running'}
+    mockState.responses[`api.judgmentsjobs.:${mockState.jobId}.patch`] = getPatchResponse({status: 'paused'})
+    setStopConditionDefaults()
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      const trigger = await openPauseOptions(container)
+
+      await clickMenuItem('Pause now')
+      await waitForCondition(() => {
+        expect(getJobPatchCalls()).toHaveLength(1)
+        expect(trigger.getAttribute('aria-expanded')).toBe('false')
+      })
+      expect(getJobPatchCalls()[0]?.args[0]).toEqual({status: 'paused'})
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('keyboard: Left and Backspace go back a level and Escape closes the menu', async () => {
+    mockState.job = {...buildJob(null), status: 'running'}
+    setStopConditionDefaults()
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      const trigger = await openPauseOptions(container)
+
+      await clickMenuItem('Pause after … tokens')
+      await waitForCondition(() => {
+        expect(getMenuItem('Pause after tokens')).toBeInstanceOf(HTMLButtonElement)
+      })
+      getMenuItem('Pause after tokens')?.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'ArrowLeft'}))
+      await waitForCondition(() => {
+        expect(getMenuItem('Pause now')).toBeInstanceOf(HTMLButtonElement)
+      })
+
+      await clickMenuItem('Pause at …')
+      await waitForCondition(() => {
+        expect(getMenuItem('Pause at')).toBeInstanceOf(HTMLButtonElement)
+      })
+      getMenuItem('Pause at')?.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Backspace'}))
+      await waitForCondition(() => {
+        expect(getMenuItem('Pause now')).toBeInstanceOf(HTMLButtonElement)
+      })
+
+      getMenuItem('Pause now')?.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, key: 'Escape'}))
+      await waitForCondition(() => {
+        expect(trigger.getAttribute('aria-expanded')).toBe('false')
+      })
     } finally {
       cleanup()
     }
