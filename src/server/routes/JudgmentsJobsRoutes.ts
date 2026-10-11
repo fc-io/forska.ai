@@ -6,6 +6,12 @@ import {
   systemPromptVariants,
 } from '../../agent/judge/systemPromptVariant.ts'
 import {
+  getJudgmentJobResumeBlockedMessage,
+  getJudgmentJobResumeBlockingStopReason,
+  getJudgmentJobStopConditions,
+  isJudgmentJobStopReason,
+} from '../../utils/judgmentJobStopConditions.ts'
+import {
   type CronRuntimeClassState,
   cronRuntimeTickNames,
   type CronRuntimeTickState,
@@ -27,6 +33,10 @@ import {
   getJudgmentEndpointAvailabilityDiagnostics,
 } from '../cron/judgmentsJobs/judgmentEndpointAvailability.ts'
 import {
+  getJudgmentJobAdmittedArticleCount,
+  getJudgmentJobTotalTokens,
+} from '../cron/judgmentsJobs/judgmentJobAdmittedArticles.ts'
+import {
   runAutomaticOrphanedQueueRepairForJob,
   runJudgmentJobAutomaticOrphanedQueueRepairAction,
   runJudgmentJobRepairAction,
@@ -43,6 +53,17 @@ import {
   JudgmentPromptClaimIdentityError,
 } from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {isTransientJudgmentJobSqliteLockMessage} from '../cron/judgmentsJobs/judgmentJobSqliteTransientLock.ts'
+import {
+  getJudgmentJobMutationState,
+  type JudgmentJobMutationState,
+  updateJudgmentJobStatus,
+} from '../cron/judgmentsJobs/judgmentJobStatusMutation.ts'
+import {
+  getJudgmentJobStopConditionAssignments,
+  type JudgmentJobStopConditionUpdate,
+  mergeJudgmentJobStopConditions,
+  parseJudgmentJobStopConditionUpdate,
+} from '../cron/judgmentsJobs/judgmentJobStopConditionInput.ts'
 import {
   getJudgmentJobRepairMode,
   getJudgmentJobStartupHandling,
@@ -136,23 +157,24 @@ import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
 const judgmentJobServerId = getDefaultJudgmentServerJobId()
 
-type JudgmentJobMutationState = {
-  error: unknown
-  id: string
-  status: string
-  storageState: string
-  quarantinedAt: unknown
-  quarantineReason: string | null
-  lastImportStartedAt: unknown
-  lastImportCompletedAt: unknown
-  lastImportErrorAt: unknown
-  lastImportError: string | null
-  lastImportExitCode: number | null
-  importFailureCount: number | null
-  pauseRequestedAt: unknown
-  updatedAt: unknown
+type JudgmentJobStopRow = {
+  stopAfterArticles?: unknown
+  stopAfterTotalTokens?: unknown
+  stopAt?: unknown
+  stopReason?: unknown
+  stopReasonAt?: unknown
+  stopWhenHumanAnsweredDone?: unknown
 }
 type JudgmentJobMutationQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+
+const getJudgmentJobStopFields = (row: JudgmentJobStopRow) => {
+  return {
+    ...getJudgmentJobStopConditions(row),
+    stopReason: isJudgmentJobStopReason(row.stopReason) ? row.stopReason : null,
+    stopReasonAt: getDateValue(row.stopReasonAt),
+  }
+}
+
 type JudgmentJobSqliteHealthSnapshot = JudgmentJobSqliteHealthSnapshotForProjection & {
   healthProjection?: {freshUntilAt: Date; projectedAt: Date; projectedBy: string | null; source: string}
 }
@@ -487,6 +509,7 @@ const judgmentCompletionBodySchema = t.Object({
     ]),
   ),
 })
+const judgmentJobStopConditionValueSchema = t.Union([t.Null(), t.Boolean(), t.Number(), t.String()])
 const judgmentSnapshotQuerySchema = t.Object({
   executionSnapshotHash: t.Optional(t.String()),
   hash: t.Optional(t.String()),
@@ -1521,7 +1544,7 @@ const getJobContext = async ({
     useFulltext: boolean
     useFulltextNoImages: boolean
     useMetadata: boolean
-  }
+  } & ReturnType<typeof getJudgmentJobStopFields>
   projectModelId: string
   projectDateFrom: Date | null
   projectDateTo: Date | null
@@ -1555,6 +1578,12 @@ const getJobContext = async ({
       projectUseFulltext: boolean | null
       projectUseFulltextNoImages: boolean | null
       projectUseMetadata: boolean | null
+      stopAfterArticles: number | null
+      stopAfterTotalTokens: number | string | null
+      stopAt: unknown
+      stopReason: string | null
+      stopReasonAt: unknown
+      stopWhenHumanAnsweredDone: boolean | null
     }>(`
       SELECT
         jj.id AS id,
@@ -1573,6 +1602,12 @@ const getJobContext = async ({
         jj.last_import_exit_code AS lastImportExitCode,
         jj.import_failure_count AS importFailureCount,
         jj.pause_requested_at AS pauseRequestedAt,
+        jj.stop_after_articles AS stopAfterArticles,
+        jj.stop_after_total_tokens AS stopAfterTotalTokens,
+        jj.stop_at AS stopAt,
+        COALESCE(jj.stop_when_human_answered_done, FALSE) AS stopWhenHumanAnsweredDone,
+        jj.stop_reason AS stopReason,
+        jj.stop_reason_at AS stopReasonAt,
         p.name AS projectName,
         p.model_id AS projectModelId,
         p.date_from AS projectDateFrom,
@@ -1612,11 +1647,25 @@ const getJobContext = async ({
     projectUseFulltext,
     projectUseFulltextNoImages,
     projectUseMetadata,
+    stopAfterArticles,
+    stopAfterTotalTokens,
+    stopAt,
+    stopReason,
+    stopReasonAt,
+    stopWhenHumanAnsweredDone,
     ...rest
   } = jobWithProject
 
   const job = {
     ...rest,
+    ...getJudgmentJobStopFields({
+      stopAfterArticles,
+      stopAfterTotalTokens,
+      stopAt,
+      stopReason,
+      stopReasonAt,
+      stopWhenHumanAnsweredDone,
+    }),
     createdAt: getDateValue(rest.createdAt) ?? new Date(0),
     updatedAt: getDateValue(rest.updatedAt) ?? new Date(0),
     error: getJsonValue(rest.error) as string[] | null,
@@ -2667,55 +2716,89 @@ const getProgressStateCounts = (entries: Array<{progressState: JudgmentJobProgre
   )
 }
 
-const getJudgmentJobMutationState = async (
-  db: JudgmentJobMutationQueryRunner,
-  jobId: string,
-): Promise<JudgmentJobMutationState | null> => {
-  const [job] = await db.queryJson<JudgmentJobMutationState>(`
-    SELECT
-      id,
-      status,
-      storage_state AS storageState,
-      quarantined_at AS quarantinedAt,
-      quarantine_reason AS quarantineReason,
-      last_import_started_at AS lastImportStartedAt,
-      last_import_completed_at AS lastImportCompletedAt,
-      last_import_error_at AS lastImportErrorAt,
-      last_import_error AS lastImportError,
-      last_import_exit_code AS lastImportExitCode,
-      import_failure_count AS importFailureCount,
-      pause_requested_at AS pauseRequestedAt,
-      updated_at AS updatedAt,
-      TO_JSON(error) AS error
-    FROM app.judgment_job
-    WHERE id = '${escapeSqlString(jobId)}'
-    LIMIT 1
-  `)
-
-  return job ?? null
+const getJudgmentJobMutationResponse = (job: JudgmentJobMutationState) => {
+  return {
+    jobId: job.id,
+    status: job.status,
+    storageState: job.storageState,
+    quarantinedAt: getDateValue(job.quarantinedAt),
+    quarantineReason: job.quarantineReason,
+    lastImportStartedAt: getDateValue(job.lastImportStartedAt),
+    lastImportCompletedAt: getDateValue(job.lastImportCompletedAt),
+    lastImportErrorAt: getDateValue(job.lastImportErrorAt),
+    lastImportError: job.lastImportError,
+    lastImportExitCode: job.lastImportExitCode,
+    importFailureCount: Number(job.importFailureCount ?? 0),
+    pauseRequestedAt: getDateValue(job.pauseRequestedAt),
+    updatedAt: getDateValue(job.updatedAt),
+    error: getJsonValue(job.error) as string[] | null,
+    ...getJudgmentJobStopFields(job),
+  }
 }
 
-const getJudgmentJobMutationStorageAssignments = ({
-  clearTransientQuarantine,
-  status,
+const assertJudgmentJobStopConditionsAllowResume = async ({
+  jobId,
+  update,
 }: {
-  clearTransientQuarantine: boolean
-  status?: string
-}) => {
-  const statusAssignments =
-    status === 'paused'
-      ? "storage_state = 'draining', pause_requested_at = current_timestamp"
-      : status === 'running'
-        ? "storage_state = 'active', pause_requested_at = NULL"
-        : null
-  const quarantineAssignments = clearTransientQuarantine
-    ? 'quarantined_at = NULL, quarantine_reason = NULL, import_failure_count = 0, last_import_error = NULL, last_import_error_at = NULL'
-    : null
-  const assignments = [statusAssignments, quarantineAssignments].filter((assignment): assignment is string => {
-    return assignment !== null
+  jobId: string
+  update: JudgmentJobStopConditionUpdate
+}): Promise<void> => {
+  const db = getAppDatabaseService()
+  const [row] = await db.queryJson<JudgmentJobStopRow>(`
+    SELECT
+      stop_after_articles AS stopAfterArticles,
+      stop_after_total_tokens AS stopAfterTotalTokens,
+      stop_at AS stopAt,
+      COALESCE(stop_when_human_answered_done, FALSE) AS stopWhenHumanAnsweredDone
+    FROM app.judgment_job
+    WHERE id = ${getSqlLiteral(jobId)}
+    LIMIT 1
+  `)
+  const conditions = mergeJudgmentJobStopConditions(getJudgmentJobStopConditions(row ?? {}), update)
+  const [admittedArticleCount, totalTokens] = await Promise.all([
+    getJudgmentJobAdmittedArticleCount({db, jobId, stopAfterArticles: conditions.stopAfterArticles}),
+    conditions.stopAfterTotalTokens === null ? Promise.resolve(null) : getJudgmentJobTotalTokens({db, jobId}),
+  ])
+  const blockingReason = getJudgmentJobResumeBlockingStopReason({
+    conditions,
+    now: new Date(),
+    progress: {admittedArticleCount, totalTokens},
   })
 
-  return assignments.length > 0 ? assignments.join(', ') : null
+  if (blockingReason !== null) {
+    throw new HttpError(409, getJudgmentJobResumeBlockedMessage(blockingReason))
+  }
+}
+
+const getJudgmentJobStopConditionUpdate = (body: Parameters<typeof parseJudgmentJobStopConditionUpdate>[0]) => {
+  const parsed = parseJudgmentJobStopConditionUpdate(body, new Date())
+
+  if (!parsed.ok) {
+    throw new HttpError(400, parsed.error)
+  }
+
+  return parsed.value
+}
+
+const getStopProgressForJobs = async ({
+  db,
+  jobs,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobs: Array<{id: string; stopAfterArticles: number | null; stopAfterTotalTokens: number | null}>
+}) => {
+  const progressEntries = await Promise.all(
+    jobs.map(async (job) => {
+      const [admittedArticleCount, totalTokens] = await Promise.all([
+        getJudgmentJobAdmittedArticleCount({db, jobId: job.id, stopAfterArticles: job.stopAfterArticles}),
+        job.stopAfterTotalTokens === null ? Promise.resolve(null) : getJudgmentJobTotalTokens({db, jobId: job.id}),
+      ])
+
+      return [job.id, {admittedArticleCount, totalTokens}] as const
+    }),
+  )
+
+  return new Map(progressEntries)
 }
 
 const getFailedRequestDetailRecords = (value: unknown): FailedRequestDetailRecord[] => {
@@ -3193,6 +3276,11 @@ export const judgmentsJobsRoutes = new Elysia()
           })
 
           const judgingRuntimePromise = getJudgingRuntime()
+          const admittedArticleCountPromise = getJudgmentJobAdmittedArticleCount({
+            db,
+            jobId: job.id,
+            stopAfterArticles: job.stopAfterArticles,
+          })
           const [
             sqliteHealth,
             leaseMetadata,
@@ -3201,6 +3289,7 @@ export const judgmentsJobsRoutes = new Elysia()
             judgingRuntime,
             providerConnection,
             providerHealth,
+            admittedArticleCount,
           ] = await Promise.all([
             sqliteHealthPromise,
             leaseMetadataPromise,
@@ -3222,6 +3311,7 @@ export const judgmentsJobsRoutes = new Elysia()
             judgingRuntimePromise,
             providerConnectionPromise,
             getProviderHealthForReadableRoute({db, jobId: job.id}),
+            admittedArticleCountPromise,
           ])
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
@@ -3266,6 +3356,7 @@ export const judgmentsJobsRoutes = new Elysia()
 
           return {
             ...job,
+            admittedArticleCount,
             leaseMetadata,
             promptStats,
             providerHealth: getProviderHealthApi(providerHealth),
@@ -3420,6 +3511,12 @@ export const judgmentsJobsRoutes = new Elysia()
           importFailureCount: number | null
           pauseRequestedAt: unknown
           projectName: string | null
+          stopAfterArticles: number | null
+          stopAfterTotalTokens: number | string | null
+          stopAt: unknown
+          stopReason: string | null
+          stopReasonAt: unknown
+          stopWhenHumanAnsweredDone: boolean | null
         }>(`
         SELECT
           jj.id AS id,
@@ -3438,13 +3535,22 @@ export const judgmentsJobsRoutes = new Elysia()
           jj.last_import_exit_code AS lastImportExitCode,
           jj.import_failure_count AS importFailureCount,
           jj.pause_requested_at AS pauseRequestedAt,
+          jj.stop_after_articles AS stopAfterArticles,
+          jj.stop_after_total_tokens AS stopAfterTotalTokens,
+          jj.stop_at AS stopAt,
+          COALESCE(jj.stop_when_human_answered_done, FALSE) AS stopWhenHumanAnsweredDone,
+          jj.stop_reason AS stopReason,
+          jj.stop_reason_at AS stopReasonAt,
           p.name AS projectName
         FROM app.judgment_job jj
         INNER JOIN app.project p ON jj.project_id = p.id
         WHERE p.archived = FALSE
         ORDER BY jj.created_at ASC
       `)
-        const [sqliteHealthByJobId, providerHealthByJobId] = await Promise.all([
+        const jobsWithStopFields = jobs.map((job) => {
+          return {...job, ...getJudgmentJobStopFields(job)}
+        })
+        const [sqliteHealthByJobId, providerHealthByJobId, stopProgressByJobId] = await Promise.all([
           getSqliteHealthMapForReadableRoute({db, jobs}),
           getProviderHealthMapForReadableRoute({
             db,
@@ -3452,10 +3558,12 @@ export const judgmentsJobsRoutes = new Elysia()
               return job.id
             }),
           }),
+          getStopProgressForJobs({db, jobs: jobsWithStopFields}),
         ])
-        const jobsWithHealth = jobs.map((job) => {
+        const jobsWithHealth = jobsWithStopFields.map((job) => {
           const normalizedJob = {
             ...job,
+            ...(stopProgressByJobId.get(job.id) ?? {admittedArticleCount: null, totalTokens: null}),
             createdAt: getDateValue(job.createdAt),
             updatedAt: getDateValue(job.updatedAt),
             error: getJsonValue(job.error) as string[] | null,
@@ -3688,9 +3796,11 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id',
     async ({params, body}) => {
       const sqliteService = getJudgmentJobSqliteService()
+      const stopConditionUpdate = getJudgmentJobStopConditionUpdate(body)
       let clearTransientQuarantine = false
 
       if (body.status === 'running') {
+        await assertJudgmentJobStopConditionsAllowResume({jobId: params.id, update: stopConditionUpdate})
         await assertJudgingRuntimeCanRun()
         const {job, projectModelId} = await getJobContext({jobId: params.id})
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
@@ -3728,54 +3838,19 @@ export const judgmentsJobsRoutes = new Elysia()
         clearTransientQuarantine = clearTransientQuarantine || preflightResult.clearTransientQuarantine
       }
 
-      const updatedJob = await getAppDatabaseService().transaction(async (tx) => {
-        const storageAssignments = getJudgmentJobMutationStorageAssignments({
-          clearTransientQuarantine,
-          status: body.status,
-        })
-        await tx.run(`
-          UPDATE app.judgment_job
-          SET status = ${getSqlLiteral(body.status)},
-              error = ${getSqlLiteral(body.error ?? null)},
-              ${storageAssignments ? `${storageAssignments},` : ''}
-              updated_at = current_timestamp
-          WHERE id = '${escapeSqlString(params.id)}'
-        `)
-
-        return getJudgmentJobMutationState(tx, params.id)
+      const updatedJob = await updateJudgmentJobStatus({
+        clearTransientQuarantine,
+        error: body.error,
+        jobId: params.id,
+        status: body.status,
+        stopConditionAssignments: getJudgmentJobStopConditionAssignments(stopConditionUpdate),
       })
-
-      if (body.status === 'paused') {
-        await sqliteService.clearActiveQueue(params.id)
-      }
-
-      if (body.status && body.status !== 'running') {
-        await sqliteService.releaseOwnedLease(params.id)
-      }
 
       if (!updatedJob) {
         throw new Error('Job not found')
       }
 
-      return {
-        data: {
-          jobId: updatedJob.id,
-          status: updatedJob.status,
-          storageState: updatedJob.storageState,
-          quarantinedAt: getDateValue(updatedJob.quarantinedAt),
-          quarantineReason: updatedJob.quarantineReason,
-          lastImportStartedAt: getDateValue(updatedJob.lastImportStartedAt),
-          lastImportCompletedAt: getDateValue(updatedJob.lastImportCompletedAt),
-          lastImportErrorAt: getDateValue(updatedJob.lastImportErrorAt),
-          lastImportError: updatedJob.lastImportError,
-          lastImportExitCode: updatedJob.lastImportExitCode,
-          importFailureCount: Number(updatedJob.importFailureCount ?? 0),
-          pauseRequestedAt: getDateValue(updatedJob.pauseRequestedAt),
-          updatedAt: getDateValue(updatedJob.updatedAt),
-          error: getJsonValue(updatedJob.error) as string[] | null,
-        },
-        error: null,
-      }
+      return {data: getJudgmentJobMutationResponse(updatedJob), error: null}
     },
     {
       params: t.Object({id: t.String()}),
@@ -3793,6 +3868,10 @@ export const judgmentsJobsRoutes = new Elysia()
           ]),
         ),
         error: t.Optional(t.Array(t.String())),
+        stopAfterArticles: t.Optional(judgmentJobStopConditionValueSchema),
+        stopAfterTotalTokens: t.Optional(judgmentJobStopConditionValueSchema),
+        stopAt: t.Optional(judgmentJobStopConditionValueSchema),
+        stopWhenHumanAnsweredDone: t.Optional(judgmentJobStopConditionValueSchema),
       }),
     },
   )
@@ -3808,6 +3887,7 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new HttpError(409, `Pause job ${params.id} before starting it clean.`)
       }
 
+      await assertJudgmentJobStopConditionsAllowResume({jobId: params.id, update: {}})
       await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
       await resetJudgmentJobLocalSqliteState({jobId: params.id, storageState: job.storageState})
       await sqliteService.initializeJob(params.id)
@@ -3822,6 +3902,8 @@ export const judgmentsJobsRoutes = new Elysia()
               pause_requested_at = NULL,
               quarantined_at = NULL,
               quarantine_reason = NULL,
+              stop_reason = NULL,
+              stop_reason_at = NULL,
               updated_at = current_timestamp
           WHERE id = '${escapeSqlString(params.id)}'
         `)
@@ -3833,25 +3915,7 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Job not found')
       }
 
-      return {
-        data: {
-          jobId: updatedJob.id,
-          status: updatedJob.status,
-          storageState: updatedJob.storageState,
-          quarantinedAt: getDateValue(updatedJob.quarantinedAt),
-          quarantineReason: updatedJob.quarantineReason,
-          lastImportStartedAt: getDateValue(updatedJob.lastImportStartedAt),
-          lastImportCompletedAt: getDateValue(updatedJob.lastImportCompletedAt),
-          lastImportErrorAt: getDateValue(updatedJob.lastImportErrorAt),
-          lastImportError: updatedJob.lastImportError,
-          lastImportExitCode: updatedJob.lastImportExitCode,
-          importFailureCount: Number(updatedJob.importFailureCount ?? 0),
-          pauseRequestedAt: getDateValue(updatedJob.pauseRequestedAt),
-          updatedAt: getDateValue(updatedJob.updatedAt),
-          error: getJsonValue(updatedJob.error) as string[] | null,
-        },
-        error: null,
-      }
+      return {data: getJudgmentJobMutationResponse(updatedJob), error: null}
     },
     {params: t.Object({id: t.String()})},
   )
