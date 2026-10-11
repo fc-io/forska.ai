@@ -11,7 +11,12 @@ import type {JudgmentJobProviderHealth} from '../jobsPageShared.ts'
 type MockLinkProps = ParentProps<{class?: string; params?: {id?: string}; to: string}>
 
 const mockState = vi.hoisted(() => {
-  return {job: {} as Record<string, unknown>, jobId: 'job-limited', responses: {} as Record<string, unknown>}
+  return {
+    calls: [] as Array<{args: unknown[]; path: string}>,
+    job: {} as Record<string, unknown>,
+    jobId: 'job-limited',
+    responses: {} as Record<string, unknown>,
+  }
 })
 
 vi.mock('@tanstack/solid-router', () => {
@@ -69,8 +74,11 @@ vi.mock('../../../../../services/apiClient.ts', () => {
           return typeof property !== 'string' || property === 'then'
             ? undefined
             : edenMethods.has(property)
-              ? async () => {
-                  return getEdenResponse([...segments, property].join('.'))
+              ? async (...methodArgs: unknown[]) => {
+                  const path = [...segments, property].join('.')
+
+                  mockState.calls.push({args: methodArgs, path})
+                  return getEdenResponse(path)
                 }
               : createEdenNode([...segments, property])
         },
@@ -180,6 +188,7 @@ const renderJobDetailPage = async () => {
 
 beforeEach(() => {
   document.body.innerHTML = ''
+  mockState.calls = []
   mockState.job = buildJob(null)
   mockState.responses = {}
 })
@@ -343,6 +352,169 @@ describe('judgment job detail action feedback', () => {
       })
       expect(container.textContent).toContain('Delete Job')
       expect(container.textContent).not.toContain('Deleting...')
+    } finally {
+      cleanup()
+    }
+  })
+})
+
+const getJobPatchCalls = () => {
+  return mockState.calls.filter((call) => {
+    return call.path === `api.judgmentsjobs.:${mockState.jobId}.patch`
+  })
+}
+
+const getPatchResponse = (data: Record<string, unknown>) => {
+  return {data: {data: {jobId: mockState.jobId, ...data}, error: null}, error: null, status: 200}
+}
+
+const findButtonByText = (root: ParentNode, text: string) => {
+  return Array.from(root.querySelectorAll('button')).find((candidate) => {
+    return candidate.textContent?.trim() === text
+  })
+}
+
+const openPauseOptions = async (container: HTMLElement) => {
+  const trigger = container.querySelector('button[aria-label="Pause options"]')
+
+  expect(trigger).toBeInstanceOf(HTMLButtonElement)
+  ;(trigger as HTMLButtonElement).click()
+  await waitForCondition(() => {
+    expect(document.body.textContent).toContain('Pause automatically when')
+  })
+
+  return trigger as HTMLButtonElement
+}
+
+describe('judgment job stop conditions', () => {
+  test('the main segment still pauses the running job right away', async () => {
+    mockState.job = {...buildJob(null), status: 'running'}
+    mockState.responses[`api.judgmentsjobs.:${mockState.jobId}.patch`] = getPatchResponse({status: 'paused'})
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      clickButtonByText(container, 'Pause Job')
+      await waitForCondition(() => {
+        expect(getJobPatchCalls()).toHaveLength(1)
+      })
+      expect(getJobPatchCalls()[0]?.args[0]).toEqual({status: 'paused'})
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('the chevron opens the pause menu with the stop conditions', async () => {
+    mockState.job = {
+      ...buildJob(null),
+      admittedArticleCount: 1234,
+      status: 'running',
+      stopAfterArticles: 2000,
+      stopWhenHumanAnsweredDone: true,
+      totalTokenUsage: {totalTokens: 98765},
+    }
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      const trigger = await openPauseOptions(container)
+      const menuText = document.body.textContent ?? ''
+
+      expect(trigger.getAttribute('aria-expanded')).toBe('true')
+      expect(trigger.getAttribute('aria-haspopup')).not.toBeNull()
+      expect(findButtonByText(document.body, 'Pause now')).toBeInstanceOf(HTMLButtonElement)
+      expect(menuText).toContain('1,234 of 2,000 admitted')
+      expect(menuText).toContain('Pause when human-answered articles are done')
+      expect(menuText).toContain('Current total: 98,765 tokens')
+      expect(menuText).toContain('Tomorrow 07:00')
+      expect(container.textContent).toContain('≤ 2,000 articles')
+      expect(container.textContent).toContain('human-answered')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('editing the article cap saves it with a PATCH and shows that it saved', async () => {
+    mockState.job = {...buildJob(null), status: 'running'}
+    mockState.responses[`api.judgmentsjobs.:${mockState.jobId}.patch`] = getPatchResponse({stopAfterArticles: 2500})
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      await openPauseOptions(container)
+
+      const input = document.body.querySelector('input[aria-label="Pause after this many articles"]')
+
+      expect(input).toBeInstanceOf(HTMLInputElement)
+      ;(input as HTMLInputElement).value = '2500'
+      input?.dispatchEvent(new InputEvent('input', {bubbles: true, data: '2500', inputType: 'insertText'}))
+      input?.dispatchEvent(new FocusEvent('blur'))
+
+      await waitForCondition(() => {
+        expect(getJobPatchCalls()).toHaveLength(1)
+        expect(document.body.textContent).toContain('Saved')
+      })
+      expect(getJobPatchCalls()[0]?.args[0]).toEqual({stopAfterArticles: 2500})
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('shows the stop reason banner after a stop condition paused the job', async () => {
+    mockState.job = {
+      ...buildJob(null),
+      admittedArticleCount: 1500,
+      stopAfterArticles: 3000,
+      stopReason: 'article_cap',
+      stopReasonAt: new Date(2026, 9, 11, 18, 0, 0).toISOString(),
+    }
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      const banner = Array.from(container.querySelectorAll('[role="status"]')).find((candidate) => {
+        return candidate.textContent?.includes('Paused by stop condition')
+      })
+
+      expect(banner?.textContent).toContain('Paused by stop condition: 3,000 articles reached')
+      expect(banner?.textContent).toContain('Paused at 2026-10-11 18:00:00')
+      expect(banner?.textContent).toContain('Resume to continue judging.')
+      expect(banner?.classList.contains('border-amber-200')).toBe(true)
+      expect(banner?.classList.contains('bg-amber-50')).toBe(true)
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('disables Resume with the hint while a stop condition is still satisfied', async () => {
+    mockState.job = {
+      ...buildJob(null),
+      admittedArticleCount: 2000,
+      stopAfterArticles: 2000,
+      stopReason: 'article_cap',
+      stopReasonAt: new Date(2026, 9, 11, 18, 0, 0).toISOString(),
+    }
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      const startButton = findButtonByText(container, 'Start Job')
+
+      expect(startButton?.disabled).toBe(true)
+      expect(startButton?.title).toBe('Raise or clear the article cap stop condition to resume.')
+      expect(container.textContent).toContain('Paused by stop condition: 2,000 articles reached')
+      expect(container.textContent).toContain('Raise or clear the article cap stop condition to resume.')
+
+      await openPauseOptions(container)
+
+      expect(findButtonByText(document.body, 'Resume')?.disabled).toBe(true)
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('enables Resume once the condition no longer blocks it', async () => {
+    mockState.job = {...buildJob(null), admittedArticleCount: 2000, stopAfterArticles: 2500, stopReason: 'article_cap'}
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      expect(findButtonByText(container, 'Start Job')?.disabled).toBe(false)
+      expect(container.textContent).not.toContain('Raise or clear the article cap stop condition to resume.')
     } finally {
       cleanup()
     }

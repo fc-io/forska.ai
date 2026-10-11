@@ -16,6 +16,7 @@ import {
   formatStatus,
   getActionErrorMessage,
   getHealthBadgeColor,
+  getJudgmentJobListStopHint,
   getJudgmentsJobsQuery,
   getProviderHealthToneClass,
   getStatusColor,
@@ -468,6 +469,11 @@ const JudgmentsJobsTable = () => {
                           >
                             {formatStatus(job.status)}
                           </span>
+                          <Show when={getJudgmentJobListStopHint(job)}>
+                            {(stopHint) => {
+                              return <p class="mt-1 text-xs text-gray-500">{stopHint()}</p>
+                            }}
+                          </Show>
                         </td>
                         <td class="px-6 py-4 text-sm text-gray-900">
                           <div class="flex flex-wrap gap-2">
