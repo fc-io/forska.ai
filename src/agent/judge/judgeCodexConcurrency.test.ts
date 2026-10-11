@@ -236,7 +236,13 @@ const createSharedCodexInvoker = () => {
     return proc
   }
 
-  const client = createCodexAppServerClient({spawnProcess})
+  const client = createCodexAppServerClient({
+    codexHome: '/forska-tests/judge-codex-concurrency-home',
+    prepareCodexHome: async () => {
+      return {archivedSessionFiles: 0, databaseFiles: 0, emptyDirectories: 0, sessionFiles: 0}
+    },
+    spawnProcess,
+  })
 
   const invokeStoredProviderModel = mock(
     async ({outputSchema, prompt, systemPrompt}: {outputSchema: unknown; prompt: string; systemPrompt: string}) => {
