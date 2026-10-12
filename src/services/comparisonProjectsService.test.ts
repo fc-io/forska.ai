@@ -14,7 +14,7 @@ const {
   fetchComparisonProjectJudgmentsCount,
   fetchComparisonProjectJudgmentsPage,
   fetchComparisonProjectStats,
-  setComparisonProjectConflictResolutionComment,
+  setComparisonProjectConflictComment,
 } = await import('./comparisonProjectsService.ts')
 
 const getJsonResponse = (data: unknown) => {
@@ -97,55 +97,53 @@ test('stats requests send the provenance scope only for the current-prompts scop
   expect(allCall.url.searchParams.has('conflictResolutionProvenance')).toBe(false)
 })
 
-test('resolution comment requests post the article and the comment, null to remove it', async () => {
-  const savedResolution = {
+test('conflict comment requests post the article and the comment, null to remove it', async () => {
+  const savedComment = {
     articleId: 'article-1',
-    comment: 'Checked the full text',
-    commentUpdatedAt: '2026-10-10T12:00:00.000Z',
-    label: 'Yes',
-    provenance: null,
-    provenanceMatchesCurrent: null,
-    reviewer: null,
-    reviewerDisplayName: null,
-    reviewerUserId: null,
-    setAt: '2026-10-10T11:00:00.000Z',
-    value: 'yes',
+    conflictComment: {
+      author: {displayName: 'Dr Local', userId: 'local-user'},
+      comment: 'Checked the full text',
+      updatedAt: '2026-10-10T12:00:00.000Z',
+    },
   }
 
-  fetchResponse = getJsonResponse(savedResolution)
-  const saved = await setComparisonProjectConflictResolutionComment('comparison-project-1', {
+  fetchResponse = getJsonResponse(savedComment)
+  const saved = await setComparisonProjectConflictComment('comparison-project-1', {
     articleId: 'article-1',
     comment: 'Checked the full text',
   })
   const saveCall = getFetchCall()
 
-  fetchResponse = getJsonResponse({...savedResolution, comment: null})
-  await setComparisonProjectConflictResolutionComment('comparison-project-1', {articleId: 'article-1', comment: null})
+  fetchResponse = getJsonResponse({articleId: 'article-1', conflictComment: null})
+  const removed = await setComparisonProjectConflictComment('comparison-project-1', {
+    articleId: 'article-1',
+    comment: null,
+  })
   const removeCall = getFetchCall()
 
   expect(saved).toEqual({
-    ...savedResolution,
-    commentUpdatedAt: new Date('2026-10-10T12:00:00.000Z'),
-    setAt: new Date('2026-10-10T11:00:00.000Z'),
+    articleId: 'article-1',
+    conflictComment: {...savedComment.conflictComment, updatedAt: new Date('2026-10-10T12:00:00.000Z')},
   })
-  expect(saveCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/conflict-resolution/comment')
+  expect(removed).toEqual({articleId: 'article-1', conflictComment: null})
+  expect(saveCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/conflict-comment')
   expect(saveCall.body).toEqual({articleId: 'article-1', comment: 'Checked the full text'})
-  expect(removeCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/conflict-resolution/comment')
+  expect(removeCall.url.pathname).toBe('/api/comparison-projects/comparison-project-1/conflict-comment')
   expect(removeCall.body).toEqual({articleId: 'article-1', comment: null})
 })
 
-test('resolution comment requests surface server errors', async () => {
+test('conflict comment requests surface server errors', async () => {
   fetchResponse = new Response(
-    JSON.stringify({data: null, error: 'Set a conflict resolution before commenting on it'}),
+    JSON.stringify({data: null, error: 'Conflict comments are only available for articles in this comparison project'}),
     {headers: {'Content-Type': 'application/json'}, status: 400},
   )
 
   const error = await getThrownError(() => {
-    return setComparisonProjectConflictResolutionComment('comparison-project-1', {articleId: 'article-1', comment: 'x'})
+    return setComparisonProjectConflictComment('comparison-project-1', {articleId: 'article-1', comment: 'x'})
   })
 
   expect(error).toBeInstanceOf(Error)
-  expect((error as Error).message).toContain('Set a conflict resolution before commenting on it')
+  expect((error as Error).message).toContain('Conflict comments are only available for articles')
 })
 
 afterAll(() => {

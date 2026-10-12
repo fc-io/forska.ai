@@ -55,12 +55,20 @@ test('never revives free-text keys, even when the text is an exact timestamp', (
 
 test('parses successful JSON responses with the reviver and leaves other responses to Eden', async () => {
   const parsed = (await parseApiJsonResponse(
-    getJsonResponse({data: {comment: '2026-10-10', commentUpdatedAt: '2026-10-10T12:00:00.000Z', name: '10/10/2026'}}),
-  )) as {data: {comment: unknown; commentUpdatedAt: unknown; name: unknown}}
+    getJsonResponse({
+      data: {
+        conflictComment: {
+          author: {displayName: '10/10/2026', userId: 'user-1'},
+          comment: '2026-10-10',
+          updatedAt: '2026-10-10T12:00:00.000Z',
+        },
+      },
+    }),
+  )) as {data: {conflictComment: {author: {displayName: unknown}; comment: unknown; updatedAt: unknown}}}
 
-  expect(parsed.data.comment).toBe('2026-10-10')
-  expect(parsed.data.name).toBe('10/10/2026')
-  expect(parsed.data.commentUpdatedAt).toEqual(new Date('2026-10-10T12:00:00.000Z'))
+  expect(parsed.data.conflictComment.comment).toBe('2026-10-10')
+  expect(parsed.data.conflictComment.author.displayName).toBe('10/10/2026')
+  expect(parsed.data.conflictComment.updatedAt).toEqual(new Date('2026-10-10T12:00:00.000Z'))
   expect(await parseApiJsonResponse(getJsonResponse({error: 'Bad request'}, {status: 400}))).toBeNull()
   expect(await parseApiJsonResponse(new Response('2026-10-10', {headers: {'Content-Type': 'text/plain'}}))).toBeNull()
 })

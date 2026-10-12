@@ -191,6 +191,18 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
               const setRowCommentDraft = (draft: string | null) => {
                 setCommentDraft(rowArticleId(), draft)
               }
+              const conflictCommentEditor = () => {
+                return (
+                  <ComparisonProjectConflictResolutionComment
+                    articleTitle={rowArticleLabel()}
+                    conflictComment={row()?.conflictComment ?? null}
+                    disabled={getIsConflictResolutionPending(rowArticleId())}
+                    draft={getCommentDraft(rowArticleId())}
+                    onDraftChange={setRowCommentDraft}
+                    onSave={saveRowConflictResolutionComment}
+                  />
+                )
+              }
 
               return (
                 <tr class="align-top">
@@ -208,14 +220,26 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                     <td class={`w-[13rem] min-w-[13rem] max-w-[13rem] px-2 py-2 text-xs ${rowHighlightClasses().cell}`}>
                       <Show
                         when={row()?.hasConflict || row()?.conflictResolution}
-                        fallback={<span class="text-gray-400">No conflict</span>}
+                        fallback={
+                          <Show when={row()?.conflictComment} fallback={<span class="text-gray-400">No conflict</span>}>
+                            <div class="flex items-start gap-2">
+                              <span class="min-w-0 flex-1 leading-5 text-gray-400">No current conflict</span>
+                              {conflictCommentEditor()}
+                            </div>
+                          </Show>
+                        }
                       >
                         <Show
                           when={conflictResolutionOptions().length > 0}
                           fallback={
                             <Show
                               when={row().conflictResolution}
-                              fallback={<span class="text-gray-400">No options available</span>}
+                              fallback={
+                                <div class="flex items-start gap-2">
+                                  <span class="min-w-0 flex-1 leading-5 text-gray-400">No options available</span>
+                                  {conflictCommentEditor()}
+                                </div>
+                              }
                             >
                               {(resolution) => {
                                 return (
@@ -226,14 +250,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                     >
                                       {resolution().label}
                                     </span>
-                                    <ComparisonProjectConflictResolutionComment
-                                      articleTitle={rowArticleLabel()}
-                                      disabled={getIsConflictResolutionPending(rowArticleId())}
-                                      draft={getCommentDraft(rowArticleId())}
-                                      resolution={resolution()}
-                                      onDraftChange={setRowCommentDraft}
-                                      onSave={saveRowConflictResolutionComment}
-                                    />
+                                    {conflictCommentEditor()}
                                     <button
                                       type="button"
                                       class="inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
@@ -294,14 +311,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                                 }}
                               </For>
                             </select>
-                            <ComparisonProjectConflictResolutionComment
-                              articleTitle={rowArticleLabel()}
-                              disabled={getIsConflictResolutionPending(rowArticleId())}
-                              draft={getCommentDraft(rowArticleId())}
-                              resolution={row()?.conflictResolution ?? null}
-                              onDraftChange={setRowCommentDraft}
-                              onSave={saveRowConflictResolutionComment}
-                            />
+                            {conflictCommentEditor()}
                             <Show when={row().conflictResolution}>
                               <button
                                 type="button"

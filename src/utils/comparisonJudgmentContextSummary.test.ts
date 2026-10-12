@@ -22,14 +22,13 @@ const getRow = (id: string, contextId: string | null | undefined): ComparisonPro
     articleTitle: id,
     canonicalArticleId: id,
     cells: {},
+    conflictComment: null,
     conflictResolution:
       contextId === undefined
         ? null
         : {
             articleId: id,
             label: 'yes',
-            comment: null,
-            commentUpdatedAt: null,
             provenance: {contextId, generation: null, origin: 'ui', setAt: null},
             provenanceMatchesCurrent: null,
             reviewer: null,
