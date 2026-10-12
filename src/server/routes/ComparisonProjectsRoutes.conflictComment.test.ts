@@ -7,7 +7,7 @@ import {pdfConflictResolutionNotSetValue} from './comparisonProjectsRoutes/compa
 
 setDefaultTimeout(180_000)
 
-const tempRuntimeRoot = createTempRuntimeRoot('comparison-projects-resolution-comment')
+const tempRuntimeRoot = createTempRuntimeRoot('comparison-projects-conflict-comment')
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
@@ -17,28 +17,42 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 const sourceComparisonProjectId = 'comment-comparison-a'
 const targetComparisonProjectId = 'comment-comparison-b'
 
-type ResolutionResponse = {
-  data: {
-    articleId: string
-    comment: string | null
-    commentUpdatedAt: string | null
-    setAt: string | null
-    value: string
-  } | null
-  error?: unknown
+type ConflictComment = {
+  author: {displayName: string | null; userId: string} | null
+  comment: string
+  updatedAt: string | null
 }
 
-type ResolutionRow = {
+type CommentResponse = {data: {articleId: string; conflictComment: ConflictComment | null} | null; error?: unknown}
+
+type ResolutionResponse = {data: {articleId: string; setAt: string | null; value: string} | null; error?: unknown}
+
+type ResolutionRow = {articleId: string; id: string; origin: string | null; setAt: string}
+
+type CommentRow = {
   articleId: string
-  comment: string | null
-  commentUpdatedAt: string | null
-  id: string
-  origin: string | null
-  setAt: string
+  authorDisplayName: string | null
+  authorUserId: string | null
+  comment: string
+  createdAt: string
+  updatedAt: string
+}
+
+type ListedRow = {
+  canonicalArticleId: string
+  conflictComment: ConflictComment | null
+  conflictResolution: ResolutionResponse['data']
+  hasConflict: boolean
 }
 
 type TransferArtifact = {
-  rows: Array<{comment?: string | null; provenance?: unknown; sourceResolutionId: string | null}>
+  rows: Array<{
+    comment?: string | null
+    provenance?: unknown
+    resolution: {value: string} | null
+    sourceArticleRowId: string | null
+    sourceResolutionId: string | null
+  }>
   version: number
 } & Record<string, unknown>
 
@@ -80,15 +94,14 @@ const postComment = async (
   comment: string | null,
   comparisonProjectId = sourceComparisonProjectId,
 ) => {
-  const response = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution/comment`, {
+  const response = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-comment`, {
     articleId,
     comment,
   })
-
   const text = await response.text()
 
   return {
-    body: (response.ok ? JSON.parse(text) : {data: null, error: text}) as ResolutionResponse,
+    body: (response.ok ? JSON.parse(text) : {data: null, error: text}) as CommentResponse,
     status: response.status,
   }
 }
@@ -103,33 +116,59 @@ const postResolution = async (articleId: string, value: string, comparisonProjec
   return (await response.json()) as ResolutionResponse
 }
 
+const postReset = async (articleId: string, comparisonProjectId = sourceComparisonProjectId) => {
+  const response = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution/reset`, {
+    articleId,
+  })
+
+  expect(response.status).toBe(200)
+}
+
 const getResolutionRows = (comparisonProjectId: string) => {
   return getDatabase().queryJson<ResolutionRow>(`
-    SELECT
-      id,
-      article_id AS articleId,
-      comment,
-      CAST(comment_updated_at AS VARCHAR) AS commentUpdatedAt,
-      origin,
-      CAST(updated_at AS VARCHAR) AS setAt
+    SELECT id, article_id AS articleId, origin, CAST(updated_at AS VARCHAR) AS setAt
     FROM app.comparison_project_conflict_resolution
     WHERE comparison_project_id = '${comparisonProjectId}'
     ORDER BY article_id ASC
   `)
 }
 
-const getListedResolution = async (articleId: string) => {
-  const response = await postJson(`/api/comparison-projects/${sourceComparisonProjectId}/judgments`, {limit: 50})
-  const body = (await response.json()) as {
-    data: {data: Array<{canonicalArticleId: string; conflictResolution: ResolutionResponse['data']}>}
-  }
+const getCommentRows = (comparisonProjectId: string) => {
+  return getDatabase().queryJson<CommentRow>(`
+    SELECT
+      article_id AS articleId,
+      comment,
+      author_user_id AS authorUserId,
+      author_display_name AS authorDisplayName,
+      CAST(created_at AS VARCHAR) AS createdAt,
+      CAST(updated_at AS VARCHAR) AS updatedAt
+    FROM app.comparison_project_conflict_comment
+    WHERE comparison_project_id = '${comparisonProjectId}'
+    ORDER BY article_id ASC
+  `)
+}
+
+const getCommentRow = async (articleId: string, comparisonProjectId = sourceComparisonProjectId) => {
+  return (await getCommentRows(comparisonProjectId)).find((row) => {
+    return row.articleId === articleId
+  })
+}
+
+const getListedRow = async (articleId: string, comparisonProjectId = sourceComparisonProjectId) => {
+  const response = await postJson(`/api/comparison-projects/${comparisonProjectId}/judgments`, {limit: 50})
+  const body = (await response.json()) as {data: {data: ListedRow[]}}
 
   expect(response.status).toBe(200)
-  return (
-    body.data.data.find((row) => {
-      return row.canonicalArticleId === articleId
-    })?.conflictResolution ?? null
-  )
+  return body.data.data.find((row) => {
+    return row.canonicalArticleId === articleId
+  })
+}
+
+const clearComparisonProject = async (comparisonProjectId: string) => {
+  await getDatabase().run(`
+    DELETE FROM app.comparison_project_conflict_resolution WHERE comparison_project_id = '${comparisonProjectId}';
+    DELETE FROM app.comparison_project_conflict_comment WHERE comparison_project_id = '${comparisonProjectId}';
+  `)
 }
 
 const seedComparisonProjects = async () => {
@@ -230,84 +269,115 @@ afterAll(async () => {
   tempRuntimeRoot.cleanup()
 })
 
-test('a comment needs an existing resolution and is trimmed, capped and cleared in place', async () => {
-  const withoutResolution = await postComment('comment-article-1', 'Too early')
-
-  expect(withoutResolution.status).toBe(400)
-  expect(await getResolutionRows(sourceComparisonProjectId)).toEqual([])
-
-  const saved = await postResolution('comment-article-1', 'yes')
-  const [savedRow] = await getResolutionRows(sourceComparisonProjectId)
-
-  expect(saved.data).toMatchObject({comment: null, commentUpdatedAt: null, value: 'yes'})
-
+test('a comment needs no resolution and is trimmed, capped, attributed and deleted when cleared', async () => {
   const commented = await postComment('comment-article-1', '  Checked the full text; "maybe" before  ')
-  const [commentedRow] = await getResolutionRows(sourceComparisonProjectId)
+  const [commentRow] = await getCommentRows(sourceComparisonProjectId)
 
   expect(commented.status).toBe(200)
-  expect(commented.body.data).toMatchObject({
+  expect(commented.body.data).toEqual({
     articleId: 'comment-article-1',
-    comment: 'Checked the full text; "maybe" before',
-    setAt: saved.data?.setAt,
-    value: 'yes',
+    conflictComment: {
+      author: {displayName: commentRow?.authorDisplayName ?? null, userId: commentRow?.authorUserId ?? ''},
+      comment: 'Checked the full text; "maybe" before',
+      updatedAt: commented.body.data?.conflictComment?.updatedAt ?? null,
+    },
   })
-  expect(typeof commented.body.data?.commentUpdatedAt).toBe('string')
-  expect(commentedRow).toMatchObject({
-    comment: 'Checked the full text; "maybe" before',
-    id: savedRow?.id,
-    setAt: savedRow?.setAt,
+  expect(Number.isNaN(Date.parse(commented.body.data?.conflictComment?.updatedAt ?? ''))).toBe(false)
+  expect(commentRow).toMatchObject({articleId: 'comment-article-1', comment: 'Checked the full text; "maybe" before'})
+  expect(commentRow?.authorUserId).toBeTruthy()
+  expect(await getResolutionRows(sourceComparisonProjectId)).toEqual([])
+  expect(await getListedRow('comment-article-1')).toMatchObject({
+    conflictComment: {
+      comment: 'Checked the full text; "maybe" before',
+      updatedAt: commented.body.data?.conflictComment?.updatedAt,
+    },
+    conflictResolution: null,
+    hasConflict: true,
   })
-  expect(commentedRow?.commentUpdatedAt).not.toBeNull()
-  expect(await getListedResolution('comment-article-1')).toMatchObject({
-    comment: 'Checked the full text; "maybe" before',
-    commentUpdatedAt: commented.body.data?.commentUpdatedAt,
-  })
+  expect((await getListedRow('comment-article-2'))?.conflictComment).toBeNull()
 
   const tooLong = await postComment('comment-article-1', 'x'.repeat(4001))
   const atLimit = await postComment('comment-article-1', ` ${'y'.repeat(4000)} `)
+  const [atLimitRow] = await getCommentRows(sourceComparisonProjectId)
 
   expect(tooLong.status).toBe(400)
+  expect(tooLong.body.error).toContain('4000')
   expect(atLimit.status).toBe(200)
-  expect(atLimit.body.data?.comment).toBe('y'.repeat(4000))
+  expect(atLimit.body.data?.conflictComment?.comment).toBe('y'.repeat(4000))
+  expect(await getCommentRows(sourceComparisonProjectId)).toHaveLength(1)
+  expect(atLimitRow?.createdAt).toBe(commentRow?.createdAt)
 
   const cleared = await postComment('comment-article-1', '   ')
-  const removed = await postComment('comment-article-1', null)
-  const [clearedRow] = await getResolutionRows(sourceComparisonProjectId)
 
   expect(cleared.status).toBe(200)
-  expect(cleared.body.data?.comment).toBeNull()
-  expect(removed.status).toBe(200)
-  expect(removed.body.data?.comment).toBeNull()
-  expect(clearedRow).toMatchObject({comment: null, id: savedRow?.id, setAt: savedRow?.setAt})
+  expect(cleared.body.data).toEqual({articleId: 'comment-article-1', conflictComment: null})
+  expect(await getCommentRows(sourceComparisonProjectId)).toEqual([])
+
+  await postComment('comment-article-1', 'Again')
+  const removed = await postComment('comment-article-1', null)
+
+  expect(removed.body.data).toEqual({articleId: 'comment-article-1', conflictComment: null})
+  expect(await getCommentRows(sourceComparisonProjectId)).toEqual([])
+  expect((await getListedRow('comment-article-1'))?.conflictComment).toBeNull()
 })
 
-test('re-resolving carries the comment over and reset removes it', async () => {
-  const commented = await postComment('comment-article-1', 'Population unclear')
-  const [beforeRow] = await getResolutionRows(sourceComparisonProjectId)
-  const reResolved = await postResolution('comment-article-1', 'no')
-  const [afterRow] = await getResolutionRows(sourceComparisonProjectId)
+test('a comment needs an article of the comparison project, not a current conflict', async () => {
+  const unknownArticle = await postComment('not-in-this-project', 'Nope')
+  const noConflict = await postComment('comment-article-3', 'Agreed now, kept for the record')
 
-  expect(reResolved.data).toMatchObject({
-    comment: 'Population unclear',
-    commentUpdatedAt: commented.body.data?.commentUpdatedAt,
-    value: 'no',
+  expect(unknownArticle.status).toBe(400)
+  expect(unknownArticle.body.error).toContain('articles in this comparison project')
+  expect(noConflict.status).toBe(200)
+  expect(await getListedRow('comment-article-3')).toMatchObject({
+    conflictComment: {comment: 'Agreed now, kept for the record'},
+    conflictResolution: null,
+    hasConflict: false,
   })
-  expect(afterRow?.id).not.toBe(beforeRow?.id)
-  expect(afterRow).toMatchObject({comment: 'Population unclear', commentUpdatedAt: beforeRow?.commentUpdatedAt})
 
-  const resetResponse = await postJson(
-    `/api/comparison-projects/${sourceComparisonProjectId}/conflict-resolution/reset`,
-    {articleId: 'comment-article-1'},
-  )
-
-  expect(resetResponse.status).toBe(200)
-  expect(await getResolutionRows(sourceComparisonProjectId)).toEqual([])
-  expect((await postComment('comment-article-1', 'After reset')).status).toBe(400)
-  expect((await postResolution('comment-article-1', 'yes')).data).toMatchObject({comment: null, commentUpdatedAt: null})
+  await postComment('comment-article-3', null)
 })
 
-test('the CSV export writes the comment next to the resolution', async () => {
+test('setting, changing and resetting a resolution leaves the comment untouched', async () => {
+  await postComment('comment-article-1', 'Population unclear')
+  const before = await getCommentRow('comment-article-1')
+  const saved = await postResolution('comment-article-1', 'yes')
+  const changed = await postResolution('comment-article-1', 'no')
+
+  expect(saved.data).toMatchObject({value: 'yes'})
+  expect(saved.data).not.toHaveProperty('comment')
+  expect(changed.data).toMatchObject({value: 'no'})
+  expect(await getCommentRow('comment-article-1')).toEqual(before)
+  expect(await getListedRow('comment-article-1')).toMatchObject({
+    conflictComment: {comment: 'Population unclear'},
+    conflictResolution: {value: 'no'},
+  })
+
+  await postReset('comment-article-1')
+
+  expect(await getResolutionRows(sourceComparisonProjectId)).toEqual([])
+  expect(await getCommentRow('comment-article-1')).toEqual(before)
+  expect(await getListedRow('comment-article-1')).toMatchObject({
+    conflictComment: {comment: 'Population unclear'},
+    conflictResolution: null,
+  })
+
+  await postResolution('comment-article-1', 'yes')
+  const edited = await postComment('comment-article-1', 'Population clear after all')
+
+  expect(edited.body.data?.conflictComment?.comment).toBe('Population clear after all')
+  expect(
+    (await getResolutionRows(sourceComparisonProjectId)).map((row) => {
+      return row.articleId
+    }),
+  ).toEqual(['comment-article-1'])
+  await postReset('comment-article-1')
+  await postComment('comment-article-1', null)
+})
+
+test('the CSV export writes the conflict comment, also for articles without a resolution', async () => {
+  await postResolution('comment-article-1', 'yes')
   await postComment('comment-article-1', 'Line one,\nline "two"')
+  await postComment('comment-article-2', 'No decision yet')
 
   const response = await postJson(`/api/comparison-projects/${sourceComparisonProjectId}/export`, {format: 'csv'})
   const responseText = await response.text()
@@ -319,94 +389,30 @@ test('the CSV export writes the comment next to the resolution', async () => {
     'Abstract/Summary',
     'Date added',
     'Conflict Handling',
-    'Resolution comment',
+    'Conflict comment',
   ])
   expect(csv).toContain('Comment article one,Summary one,2026-10-01T00:00:00.000Z,yes,"Line one,\nline ""two""",yes,no')
-  expect(csv).toContain('Comment article two,Summary two,2026-10-02T00:00:00.000Z,,,yes,no')
+  expect(csv).toContain('Comment article two,Summary two,2026-10-02T00:00:00.000Z,,No decision yet,yes,no')
   expect(csv).toContain('Comment article three,Summary three,2026-10-03T00:00:00.000Z,No conflict,,yes,yes')
 })
 
-test('export version 2 carries the comment and the file import stores it', async () => {
-  await postResolution('comment-article-2', 'no')
-
-  const exportResponse = await postJson(
-    `/api/comparison-projects/${sourceComparisonProjectId}/conflict-resolutions/export`,
-    {},
-  )
-  const artifact = (await exportResponse.json()) as TransferArtifact
-  const sourceRows = await getResolutionRows(sourceComparisonProjectId)
-  const exportedComments = artifact.rows.map((row) => {
-    return {comment: row.comment, sourceResolutionId: row.sourceResolutionId}
-  })
-
-  expect(exportResponse.status).toBe(200)
-  expect(artifact.version).toBe(2)
-  expect(exportedComments).toEqual([
-    {comment: 'Line one,\nline "two"', sourceResolutionId: sourceRows[0]?.id ?? ''},
-    {comment: null, sourceResolutionId: sourceRows[1]?.id ?? ''},
-  ])
-
-  const importResponse = await postJson(
-    `/api/comparison-projects/${targetComparisonProjectId}/conflict-resolutions/import/commit`,
-    {artifact, importMode: 'conflicting-only', overwriteMode: 'skip-existing'},
-  )
-  const importedRows = await getResolutionRows(targetComparisonProjectId)
-
-  expect(importResponse.status).toBe(200)
-  expect(
-    importedRows.map((row) => {
-      return [row.articleId, row.comment, row.commentUpdatedAt === null, row.origin]
-    }),
-  ).toEqual([
-    ['comment-article-1', 'Line one,\nline "two"', false, 'file-import'],
-    ['comment-article-2', null, true, 'file-import'],
-  ])
-
-  const {judgmentContexts: _judgmentContexts, ...artifactWithoutContexts} = artifact
-  const versionOneArtifact = {
-    ...artifactWithoutContexts,
-    rows: artifact.rows.map(({comment: _comment, provenance: _provenance, ...row}) => {
-      return row
-    }),
-    version: 1,
-  }
-
-  await getDatabase().run(
-    `DELETE FROM app.comparison_project_conflict_resolution WHERE comparison_project_id = '${targetComparisonProjectId}'`,
-  )
-  const versionOneImportResponse = await postJson(
-    `/api/comparison-projects/${targetComparisonProjectId}/conflict-resolutions/import/commit`,
-    {artifact: versionOneArtifact, importMode: 'conflicting-only', overwriteMode: 'skip-existing'},
-  )
-
-  expect(versionOneImportResponse.status).toBe(200)
-  expect(
-    (await getResolutionRows(targetComparisonProjectId)).map((row) => {
-      return [row.articleId, row.comment, row.commentUpdatedAt]
-    }),
-  ).toEqual([
-    ['comment-article-1', null, null],
-    ['comment-article-2', null, null],
-  ])
-})
-
 test('comments keep quotes, SQL comment markers, tabs and newlines, and reject other control characters', async () => {
-  const comment = "Reviewer's note -- see the 'protocol'; ok'--\n\tsecond line"
+  const comment = "Reviewer's note -- see the 'protocol'; ok'--\n\tsecond line\r\nthird"
   const saved = await postComment('comment-article-1', comment)
-  const [row] = await getResolutionRows(sourceComparisonProjectId)
 
   expect(saved.status).toBe(200)
-  expect(saved.body.data?.comment).toBe(comment)
-  expect(row?.comment).toBe(comment)
+  expect(saved.body.data?.conflictComment?.comment).toBe(comment)
+  expect((await getCommentRow('comment-article-1'))?.comment).toBe(comment)
 
   const withNull = await postComment('comment-article-1', 'before\u0000after')
   const withBell = await postComment('comment-article-1', 'ring\u0007')
-  const [unchangedRow] = await getResolutionRows(sourceComparisonProjectId)
 
   expect(withNull.status).toBe(400)
   expect(withNull.body.error).toContain('control characters')
   expect(withBell.status).toBe(400)
-  expect(unchangedRow?.comment).toBe(comment)
+  expect((await getCommentRow('comment-article-1'))?.comment).toBe(comment)
+
+  await postComment('comment-article-1', 'Line one,\nline "two"')
 })
 
 const getPdfMetadataValue = (value: unknown) => {
@@ -474,12 +480,10 @@ const setTargetResolution = async (value: string, comment: string) => {
   await postResolution('comment-article-1', value, targetComparisonProjectId)
   await postComment('comment-article-1', comment, targetComparisonProjectId)
 
-  return (await getResolutionRows(targetComparisonProjectId)).find((row) => {
-    return row.articleId === 'comment-article-1'
-  })
+  return getCommentRow('comment-article-1', targetComparisonProjectId)
 }
 
-const getTargetArticleOneRow = async () => {
+const getTargetArticleOneResolution = async () => {
   return (await getResolutionRows(targetComparisonProjectId)).find((row) => {
     return row.articleId === 'comment-article-1'
   })
@@ -492,27 +496,88 @@ const commitFileImport = async (artifact: unknown, overwriteMode: 'overwrite-dif
   )
 
   expect(response.status).toBe(200)
+  return (await response.json()) as {data: {summary: {importable: number; inserted: number}}}
 }
 
-test('imports replace a target comment only when the source row carries a comment field', async () => {
-  await postResolution('comment-article-1', 'yes')
-  await postComment('comment-article-1', 'Source note')
-  const artifact = (await (
-    await postJson(`/api/comparison-projects/${sourceComparisonProjectId}/conflict-resolutions/export`, {})
-  ).json()) as TransferArtifact
+const exportSourceArtifact = async () => {
+  const response = await postJson(
+    `/api/comparison-projects/${sourceComparisonProjectId}/conflict-resolutions/export`,
+    {},
+  )
+
+  expect(response.status).toBe(200)
+  return (await response.json()) as TransferArtifact
+}
+
+const getVersionOneArtifact = (artifact: TransferArtifact) => {
   const {judgmentContexts: _judgmentContexts, ...artifactWithoutContexts} = artifact
+
+  return {
+    ...artifactWithoutContexts,
+    rows: artifact.rows
+      .filter((row) => {
+        return row.resolution !== null
+      })
+      .map(({comment: _comment, provenance: _provenance, ...row}) => {
+        return row
+      }),
+    version: 1,
+  }
+}
+
+test('the resolution export carries comments and a file import stores them in the comment table', async () => {
+  await postResolution('comment-article-2', 'no')
+
+  const artifact = await exportSourceArtifact()
+  const sourceResolutionRows = await getResolutionRows(sourceComparisonProjectId)
+
+  expect(
+    artifact.rows.map((row) => {
+      return {comment: row.comment, sourceResolutionId: row.sourceResolutionId}
+    }),
+  ).toEqual([
+    {comment: 'Line one,\nline "two"', sourceResolutionId: sourceResolutionRows[0]?.id ?? ''},
+    {comment: 'No decision yet', sourceResolutionId: sourceResolutionRows[1]?.id ?? ''},
+  ])
+
+  await commitFileImport(artifact, 'skip-existing')
+
+  expect(
+    (await getResolutionRows(targetComparisonProjectId)).map((row) => {
+      return [row.articleId, row.origin]
+    }),
+  ).toEqual([
+    ['comment-article-1', 'file-import'],
+    ['comment-article-2', 'file-import'],
+  ])
+  expect(
+    (await getCommentRows(targetComparisonProjectId)).map((row) => {
+      return [row.articleId, row.comment, row.authorUserId, row.authorDisplayName]
+    }),
+  ).toEqual([
+    ['comment-article-1', 'Line one,\nline "two"', null, null],
+    ['comment-article-2', 'No decision yet', null, null],
+  ])
+  expect((await getListedRow('comment-article-1', targetComparisonProjectId))?.conflictComment).toMatchObject({
+    author: null,
+    comment: 'Line one,\nline "two"',
+  })
+
+  await clearComparisonProject(targetComparisonProjectId)
+  await commitFileImport(getVersionOneArtifact(artifact), 'skip-existing')
+
+  expect(await getResolutionRows(targetComparisonProjectId)).toHaveLength(2)
+  expect(await getCommentRows(targetComparisonProjectId)).toEqual([])
+  await clearComparisonProject(targetComparisonProjectId)
+})
+
+test('imports replace a target comment only when the source row carries a comment field', async () => {
+  const artifact = await exportSourceArtifact()
   const withoutCommentField = {
     ...artifact,
     rows: artifact.rows.map(({comment: _comment, ...row}) => {
       return row
     }),
-  }
-  const versionOne = {
-    ...artifactWithoutContexts,
-    rows: artifact.rows.map(({comment: _comment, provenance: _provenance, ...row}) => {
-      return row
-    }),
-    version: 1,
   }
   const withNullComment = {
     ...artifact,
@@ -523,43 +588,54 @@ test('imports replace a target comment only when the source row carries a commen
 
   const targetBefore = await setTargetResolution('no', 'Target note')
   await commitFileImport(withoutCommentField, 'overwrite-different')
-  expect(await getTargetArticleOneRow()).toMatchObject({
-    comment: 'Target note',
-    commentUpdatedAt: targetBefore?.commentUpdatedAt,
-    origin: 'file-import',
-  })
+  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'file-import'})
+  expect(await getCommentRow('comment-article-1', targetComparisonProjectId)).toEqual(targetBefore)
 
   await setTargetResolution('no', 'Target note')
-  await commitFileImport(versionOne, 'overwrite-different')
-  expect(await getTargetArticleOneRow()).toMatchObject({comment: 'Target note', origin: 'file-import'})
+  await commitFileImport(getVersionOneArtifact(artifact), 'overwrite-different')
+  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'file-import'})
+  expect((await getCommentRow('comment-article-1', targetComparisonProjectId))?.comment).toBe('Target note')
 
   await setTargetResolution('no', 'Target note')
   await commitFileImport(artifact, 'skip-existing')
-  expect(await getTargetArticleOneRow()).toMatchObject({comment: 'Target note', origin: 'ui'})
+  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'ui'})
+  expect((await getCommentRow('comment-article-1', targetComparisonProjectId))?.comment).toBe('Target note')
 
   await commitFileImport(artifact, 'overwrite-different')
-  const replacedRow = await getTargetArticleOneRow()
-  expect(replacedRow).toMatchObject({comment: 'Source note', origin: 'file-import'})
-  expect(replacedRow?.commentUpdatedAt).not.toBeNull()
+  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'file-import'})
+  expect(await getCommentRow('comment-article-1', targetComparisonProjectId)).toMatchObject({
+    authorUserId: null,
+    comment: 'Line one,\nline "two"',
+  })
 
   await setTargetResolution('no', 'Target note')
   await commitFileImport(withNullComment, 'overwrite-different')
-  expect(await getTargetArticleOneRow()).toMatchObject({comment: null, commentUpdatedAt: null, origin: 'file-import'})
+  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'file-import'})
+  expect(await getCommentRow('comment-article-1', targetComparisonProjectId)).toBeUndefined()
+
+  await clearComparisonProject(targetComparisonProjectId)
+  await postComment('comment-article-1', 'Target note without a resolution', targetComparisonProjectId)
+  await commitFileImport(artifact, 'skip-existing')
+  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'file-import'})
+  expect((await getCommentRow('comment-article-1', targetComparisonProjectId))?.comment).toBe(
+    'Target note without a resolution',
+  )
+  expect((await getCommentRow('comment-article-2', targetComparisonProjectId))?.comment).toBe('No decision yet')
+  await clearComparisonProject(targetComparisonProjectId)
 })
 
-test('PDF imports keep the target comment, and clearing an undecided article removes it with the row', async () => {
+test('PDF imports never touch comments, also when clearing an undecided article', async () => {
   const targetBefore = await setTargetResolution('no', 'Target note')
   const importResponse = await commitPdfImport('yes', 'ignore')
 
   expect(importResponse.status).toBe(200)
-  expect(await getTargetArticleOneRow()).toMatchObject({
-    comment: 'Target note',
-    commentUpdatedAt: targetBefore?.commentUpdatedAt,
-    origin: 'pdf-import',
-  })
+  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'pdf-import'})
+  expect(await getCommentRow('comment-article-1', targetComparisonProjectId)).toEqual(targetBefore)
 
   const clearResponse = await commitPdfImport(pdfConflictResolutionNotSetValue, 'clear')
 
   expect(clearResponse.status).toBe(200)
-  expect(await getTargetArticleOneRow()).toBeUndefined()
+  expect(await getTargetArticleOneResolution()).toBeUndefined()
+  expect(await getCommentRow('comment-article-1', targetComparisonProjectId)).toEqual(targetBefore)
+  await clearComparisonProject(targetComparisonProjectId)
 })

@@ -5,7 +5,7 @@ import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 
 setDefaultTimeout(180_000)
 
-const tempRuntimeRoot = createTempRuntimeRoot('comparison-projects-resolution-comment-prompt-mode')
+const tempRuntimeRoot = createTempRuntimeRoot('comparison-projects-conflict-comment-prompt-mode')
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
@@ -15,7 +15,17 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 const comparisonProjectId = 'comment-prompt-mode-comparison'
 
 type AppDatabase = ReturnType<typeof import('../services/appDatabaseService.ts').getAppDatabaseService>
-type ResolutionResponse = {data: {comment: string | null; commentUpdatedAt: string | null; value: string} | null}
+type ConflictComment = {
+  author: {displayName: string | null; userId: string} | null
+  comment: string
+  updatedAt: string | null
+}
+type ResponseBody = {data: {articleId?: string; conflictComment?: ConflictComment | null; value?: string} | null}
+type ListedRow = {
+  canonicalArticleId: string
+  conflictComment: ConflictComment | null
+  conflictResolution: {value: string} | null
+}
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let database: AppDatabase | null = null
@@ -46,27 +56,46 @@ const postJson = async (path: string, body: unknown) => {
   )
   const text = await response.text()
 
-  return {body: (response.ok ? JSON.parse(text) : {data: null}) as ResolutionResponse, status: response.status}
+  return {body: (response.ok ? JSON.parse(text) : {data: null}) as ResponseBody, status: response.status}
 }
 
 const getResolutionRow = async () => {
-  const [row] = await getDatabase().queryJson<{
-    answerValue: string | null
-    comment: string | null
-    commentUpdatedAt: string | null
-    promptId: string | null
-  }>(`
-    SELECT
-      prompt_id AS promptId,
-      answer_value AS answerValue,
-      comment,
-      CAST(comment_updated_at AS VARCHAR) AS commentUpdatedAt
+  const [row] = await getDatabase().queryJson<{answerValue: string | null; promptId: string | null}>(`
+    SELECT prompt_id AS promptId, answer_value AS answerValue
     FROM app.comparison_project_conflict_resolution
     WHERE comparison_project_id = '${comparisonProjectId}'
       AND article_id = 'comment-prompt-mode-article-1'
   `)
 
   return row
+}
+
+const getCommentRows = () => {
+  return getDatabase().queryJson<{articleId: string; comment: string; updatedAt: string}>(`
+    SELECT article_id AS articleId, comment, CAST(updated_at AS VARCHAR) AS updatedAt
+    FROM app.comparison_project_conflict_comment
+    WHERE comparison_project_id = '${comparisonProjectId}'
+    ORDER BY article_id
+  `)
+}
+
+const postComment = (articleId: string, comment: string | null) => {
+  return postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-comment`, {articleId, comment})
+}
+
+const getListedRow = async (articleId: string) => {
+  const response = await getApp().handle(
+    new Request(`http://localhost/api/comparison-projects/${comparisonProjectId}/judgments`, {
+      body: JSON.stringify({limit: 50}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {data: ListedRow[]}}
+
+  return body.data.data.find((row) => {
+    return row.canonicalArticleId === articleId
+  })
 }
 
 const seed = async () => {
@@ -141,61 +170,71 @@ afterAll(async () => {
   tempRuntimeRoot.cleanup()
 })
 
-test('prompt mode: a comment is stored on the prompt resolution and carried over when another prompt wins', async () => {
+test('prompt mode: a comment needs no resolution and survives prompt switches and reset', async () => {
+  const commented = await postComment('comment-prompt-mode-article-1', 'Population drives the conflict')
+  const commentRows = await getCommentRows()
+
+  expect(commented.status).toBe(200)
+  expect(commented.body.data).toMatchObject({
+    articleId: 'comment-prompt-mode-article-1',
+    conflictComment: {comment: 'Population drives the conflict'},
+  })
+  expect(commented.body.data?.conflictComment?.author?.userId).toBeTruthy()
+  expect(await getResolutionRow()).toBeUndefined()
+  expect(await getListedRow('comment-prompt-mode-article-1')).toMatchObject({
+    conflictComment: {
+      comment: 'Population drives the conflict',
+      updatedAt: commented.body.data?.conflictComment?.updatedAt,
+    },
+    conflictResolution: null,
+  })
+
   const saved = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution`, {
     articleId: 'comment-prompt-mode-article-1',
     value: 'comment-prompt-mode-population',
   })
-  const commented = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution/comment`, {
-    articleId: 'comment-prompt-mode-article-1',
-    comment: 'Population drives the conflict',
-  })
-  const commentedRow = await getResolutionRow()
-
-  expect(saved.status).toBe(200)
-  expect(commented.status).toBe(200)
-  expect(commented.body.data).toMatchObject({
-    comment: 'Population drives the conflict',
-    value: 'comment-prompt-mode-population',
-  })
-  expect(commentedRow).toMatchObject({
-    answerValue: null,
-    comment: 'Population drives the conflict',
-    promptId: 'comment-prompt-mode-population',
-  })
-
   const reResolved = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution`, {
     articleId: 'comment-prompt-mode-article-1',
     value: 'comment-prompt-mode-outcome',
   })
 
-  expect(reResolved.body.data).toMatchObject({
-    comment: 'Population drives the conflict',
-    commentUpdatedAt: commented.body.data?.commentUpdatedAt,
-    value: 'comment-prompt-mode-outcome',
+  expect(saved.status).toBe(200)
+  expect(reResolved.body.data).toMatchObject({value: 'comment-prompt-mode-outcome'})
+  expect(reResolved.body.data).not.toHaveProperty('comment')
+  expect(await getResolutionRow()).toEqual({answerValue: null, promptId: 'comment-prompt-mode-outcome'})
+  expect(await getCommentRows()).toEqual(commentRows)
+  expect(await getListedRow('comment-prompt-mode-article-1')).toMatchObject({
+    conflictComment: {comment: 'Population drives the conflict'},
+    conflictResolution: {value: 'comment-prompt-mode-outcome'},
   })
-  expect(await getResolutionRow()).toEqual({
-    answerValue: null,
-    comment: 'Population drives the conflict',
-    commentUpdatedAt: commentedRow?.commentUpdatedAt ?? null,
-    promptId: 'comment-prompt-mode-outcome',
+
+  const reset = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution/reset`, {
+    articleId: 'comment-prompt-mode-article-1',
   })
+
+  expect(reset.status).toBe(200)
+  expect(await getResolutionRow()).toBeUndefined()
+  expect(await getCommentRows()).toEqual(commentRows)
 })
 
-test('prompt mode: a resolution whose prompt left the project rejects a comment and rolls the update back', async () => {
+test('prompt mode: a comment does not depend on the resolution value still being an option', async () => {
+  await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution`, {
+    articleId: 'comment-prompt-mode-article-1',
+    value: 'comment-prompt-mode-population',
+  })
   await getDatabase().run(`
     UPDATE app.comparison_project_conflict_resolution
     SET prompt_id = 'comment-prompt-mode-retired'
     WHERE comparison_project_id = '${comparisonProjectId}'
       AND article_id = 'comment-prompt-mode-article-1'
   `)
-  const before = await getResolutionRow()
-  const response = await postJson(`/api/comparison-projects/${comparisonProjectId}/conflict-resolution/comment`, {
-    articleId: 'comment-prompt-mode-article-1',
-    comment: 'Should not be stored',
-  })
+  const response = await postComment('comment-prompt-mode-article-1', 'Retired prompt, still worth a note')
 
-  expect(response.status).toBe(400)
-  expect(await getResolutionRow()).toEqual(before)
-  expect(before?.comment).toBe('Population drives the conflict')
+  expect(response.status).toBe(200)
+  expect(await getResolutionRow()).toEqual({answerValue: null, promptId: 'comment-prompt-mode-retired'})
+  expect(
+    (await getCommentRows()).map((row) => {
+      return row.comment
+    }),
+  ).toEqual(['Retired prompt, still worth a note'])
 })
