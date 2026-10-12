@@ -434,7 +434,7 @@ test('stats can be restricted to resolutions made under the current context', as
   expect(currentStats.data.additionalProjectStats.resolvedTruthComparisons[0]?.resolvedCount).toBe(1)
 })
 
-test('export version 2 carries provenance and the judgment context, file import never attributes the importer', async () => {
+test('export version 3 carries provenance and the judgment context, file import never attributes the importer', async () => {
   const sourceContextId = await getActiveContextId(sourceComparisonProjectId)
   const exportResponse = await postJson(
     `/api/comparison-projects/${sourceComparisonProjectId}/conflict-resolutions/export`,
@@ -448,7 +448,7 @@ test('export version 2 carries provenance and the judgment context, file import 
   )
 
   expect(exportResponse.status).toBe(200)
-  expect(artifact.version).toBe(2)
+  expect(artifact.version).toBe(3)
   expect(
     artifact.judgmentContexts?.map((entry) => {
       return entry.id

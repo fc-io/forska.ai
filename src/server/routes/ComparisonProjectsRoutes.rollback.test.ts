@@ -8371,7 +8371,7 @@ test('comparison project conflict resolution export returns saved resolutions as
     'attachment; filename="conflict-resolutions-comparison-project-1.json"',
   )
   expect(artifact.format).toBe('forska.comparisonProject.conflictResolution.transfer')
-  expect(artifact.version).toBe(2)
+  expect(artifact.version).toBe(3)
   expect(artifact.judgmentContexts).toEqual([
     {
       context: JSON.parse(exportJudgmentContextJson) as unknown,
@@ -8421,7 +8421,10 @@ test('comparison project conflict resolution export returns saved resolutions as
     },
   ])
   expect(exportStatement).toContain('FROM app.comparison_project_conflict_resolution cr')
-  expect(exportStatement).toContain('cr.judgment_context_id AS provenanceContextId')
+  expect(exportStatement).toContain('br.judgment_context_id AS provenanceContextId')
+  expect(exportStatement).toContain(
+    'FULL OUTER JOIN batch_comment ON batch_comment.article_id = batch_resolution.article_id',
+  )
   expect(exportStatement).toContain('INNER JOIN mart.comparison_article_serving a')
   expect(exportStatement).toContain('LEFT JOIN mart.comparison_article_identifier_serving ai')
   expect(exportStatement).toContain('AND cr.article_id IN')

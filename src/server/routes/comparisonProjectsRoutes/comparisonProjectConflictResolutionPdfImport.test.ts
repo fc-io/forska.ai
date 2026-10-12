@@ -240,7 +240,7 @@ endobj`
 
     expect(artifact).toMatchObject({
       format: 'forska.comparisonProject.conflictResolution.transfer',
-      version: 2,
+      version: 3,
       exportedAt: '2026-09-04T10:00:00.000Z',
       source: {
         comparisonProjectId: 'comparison-project-1',
