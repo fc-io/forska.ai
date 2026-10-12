@@ -1,6 +1,7 @@
 import type {
   ComparisonProjectConflictResolutionImportAnalyzeRowBase,
   ComparisonProjectConflictResolutionImportAnalyzeSummary,
+  ComparisonProjectConflictResolutionImportCommentChange,
   ComparisonProjectConflictResolutionImportCommitSummary,
   ComparisonProjectConflictResolutionImportSkipReason,
   ComparisonProjectConflictResolutionTransferArtifact,
@@ -22,7 +23,7 @@ export type CommitImportDisabledState = AnalyzeImportDisabledState & {
   importableCount: number
 }
 
-export type ImportSummaryStat = {label: string; value: number; description: string}
+export type ImportSummaryStat = {label: string; value: number; description: string; unit: 'comment' | 'resolution'}
 
 export const conflictResolutionImportInvalidJsonCopy =
   'Could not parse the selected file as JSON. Choose a valid conflict-resolution export file.'
@@ -57,30 +58,106 @@ export const getRowCountLabel = (count: number) => {
   return getImportCountLabel(count, 'row', 'rows')
 }
 
+export const getCommentCountLabel = (count: number) => {
+  return getImportCountLabel(count, 'comment', 'comments')
+}
+
+export const getImportSummaryStatValueLabel = (stat: ImportSummaryStat) => {
+  return stat.unit === 'comment' ? getCommentCountLabel(stat.value) : getResolutionCountLabel(stat.value)
+}
+
+export const getImportCommentChangeCount = (
+  summary: Pick<ComparisonProjectConflictResolutionImportAnalyzeSummary, 'commentsAdded' | 'commentsReplaced'>,
+) => {
+  return summary.commentsAdded + summary.commentsReplaced
+}
+
+export const getImportCommentChangeLabel = (change: ComparisonProjectConflictResolutionImportCommentChange) => {
+  const labels: Record<ComparisonProjectConflictResolutionImportCommentChange, string> = {
+    add: 'Adds comment',
+    keep: 'Keeps target comment',
+    replace: 'Replaces comment',
+  }
+
+  return labels[change]
+}
+
+const getCommentSummaryStats = (
+  summary: Pick<
+    ComparisonProjectConflictResolutionImportAnalyzeSummary,
+    'commentsAdded' | 'commentsKept' | 'commentsReplaced'
+  >,
+): ImportSummaryStat[] => {
+  return [
+    {
+      label: 'Comments added',
+      value: summary.commentsAdded,
+      description: 'Conflict comments written where the target article has none.',
+      unit: 'comment',
+    },
+    {
+      label: 'Comments replaced',
+      value: summary.commentsReplaced,
+      description: 'Target comments replaced by different source text. Comments are never removed.',
+      unit: 'comment',
+    },
+    {
+      label: 'Comments kept',
+      value: summary.commentsKept,
+      description: 'Different target comments kept because existing target data is skipped.',
+      unit: 'comment',
+    },
+  ]
+}
+
 export const getImportSummaryStats = (
   summary: ComparisonProjectConflictResolutionImportAnalyzeSummary,
 ): ImportSummaryStat[] => {
   return [
-    {label: 'Scanned', value: summary.scanned, description: 'Rows found in the selected export file.'},
-    {label: 'Matched', value: summary.matched, description: 'Source rows matched to target comparison articles.'},
-    {label: 'Will import', value: summary.importable, description: 'Safe saved decisions ready to commit.'},
-    {label: 'Skipped', value: summary.skipped, description: 'Rows not eligible for import.'},
+    {
+      label: 'Scanned',
+      value: summary.scanned,
+      description: 'Rows found in the selected export file.',
+      unit: 'resolution',
+    },
+    {
+      label: 'Matched',
+      value: summary.matched,
+      description: 'Source rows matched to target comparison articles.',
+      unit: 'resolution',
+    },
+    {
+      label: 'Will import',
+      value: summary.importable,
+      description: 'Safe saved decisions ready to commit.',
+      unit: 'resolution',
+    },
+    {label: 'Skipped', value: summary.skipped, description: 'Rows not eligible for import.', unit: 'resolution'},
     {
       label: 'Already resolved',
       value: summary.skippedExisting,
       description: 'Rows with an existing target conflict resolution.',
+      unit: 'resolution',
     },
     {
       label: 'Same value',
       value: summary.sameValue,
       description: 'Rows already saved with the same conflict-resolution value.',
+      unit: 'resolution',
     },
     {
       label: 'Will overwrite',
       value: summary.overwriteCandidates,
       description: 'Existing target decisions that will be replaced when committed.',
+      unit: 'resolution',
     },
-    {label: 'Deduped', value: summary.deduped, description: 'Duplicate compatible source rows folded into one import.'},
+    {
+      label: 'Deduped',
+      value: summary.deduped,
+      description: 'Duplicate compatible source rows folded into one import.',
+      unit: 'resolution',
+    },
+    ...getCommentSummaryStats(summary),
   ]
 }
 
@@ -88,13 +165,25 @@ export const getCommitSummaryStats = (
   summary: ComparisonProjectConflictResolutionImportCommitSummary,
 ): ImportSummaryStat[] => {
   return [
-    {label: 'Inserted', value: summary.inserted, description: 'Saved decisions created in this comparison project.'},
+    {
+      label: 'Inserted',
+      value: summary.inserted,
+      description: 'Saved decisions created in this comparison project.',
+      unit: 'resolution',
+    },
     {
       label: 'Cleared',
       value: summary.cleared ?? 0,
       description: 'Existing decisions cleared by undecided PDF selections.',
+      unit: 'resolution',
     },
-    {label: 'Skipped', value: summary.skipped, description: 'Rows the server rechecked and left unchanged.'},
+    {
+      label: 'Skipped',
+      value: summary.skipped,
+      description: 'Rows the server rechecked and left unchanged.',
+      unit: 'resolution',
+    },
+    ...getCommentSummaryStats(summary),
   ]
 }
 
@@ -187,7 +276,7 @@ export const getCommitImportDisabledReason = (state: CommitImportDisabledState) 
     return 'Analyze the import before committing.'
   }
 
-  return state.importableCount > 0 ? null : 'Analyze found no importable rows.'
+  return state.importableCount > 0 ? null : 'Analyze found no importable rows or comments.'
 }
 
 export const readConflictResolutionImportFile = async (file: File): Promise<ParsedConflictResolutionImportFile> => {

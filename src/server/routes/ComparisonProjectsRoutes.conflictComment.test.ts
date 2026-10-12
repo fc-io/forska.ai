@@ -45,6 +45,15 @@ type ListedRow = {
   hasConflict: boolean
 }
 
+type AnalyzeRow = {
+  commentChange?: 'add' | 'keep' | 'replace'
+  reason: string
+  selectedResolution: string
+  sourceArticleRowId: string
+}
+
+type AnalyzeBody = {data: {importableRows: AnalyzeRow[]; skippedRows: AnalyzeRow[]; summary: Record<string, number>}}
+
 type TransferArtifact = {
   rows: Array<{
     comment?: string | null
@@ -396,7 +405,7 @@ test('the CSV export writes the conflict comment, also for articles without a re
   expect(csv).toContain('Comment article three,Summary three,2026-10-03T00:00:00.000Z,No conflict,,yes,yes')
 })
 
-test('comments keep quotes, SQL comment markers, tabs and newlines, and reject other control characters', async () => {
+test('comments keep quotes, SQL comment markers, tabs and newlines, and drop other control characters', async () => {
   const comment = "Reviewer's note -- see the 'protocol'; ok'--\n\tsecond line\r\nthird"
   const saved = await postComment('comment-article-1', comment)
 
@@ -404,15 +413,34 @@ test('comments keep quotes, SQL comment markers, tabs and newlines, and reject o
   expect(saved.body.data?.conflictComment?.comment).toBe(comment)
   expect((await getCommentRow('comment-article-1'))?.comment).toBe(comment)
 
-  const withNull = await postComment('comment-article-1', 'before\u0000after')
-  const withBell = await postComment('comment-article-1', 'ring\u0007')
+  const withNull = await postComment('comment-article-1', ' before\u0000after\u0007 ')
 
-  expect(withNull.status).toBe(400)
-  expect(withNull.body.error).toContain('control characters')
-  expect(withBell.status).toBe(400)
-  expect((await getCommentRow('comment-article-1'))?.comment).toBe(comment)
+  expect(withNull.status).toBe(200)
+  expect(withNull.body.data?.conflictComment?.comment).toBe('beforeafter')
+
+  const onlyControl = await postComment('comment-article-1', '\u0007\u0000')
+  const onlyControlWithSpace = await postComment('comment-article-1', ' \u0007 ')
+
+  expect(onlyControl.status).toBe(400)
+  expect(onlyControl.body.error).toContain('control characters')
+  expect(onlyControlWithSpace.status).toBe(400)
+  expect((await getCommentRow('comment-article-1'))?.comment).toBe('beforeafter')
 
   await postComment('comment-article-1', 'Line one,\nline "two"')
+})
+
+test('a stored author name shows even without an author user id', async () => {
+  await getDatabase().run(`
+    INSERT INTO app.comparison_project_conflict_comment (id, comparison_project_id, article_id, comment, author_display_name)
+    VALUES ('legacy-comment', '${sourceComparisonProjectId}', 'comment-article-3', 'Legacy note', 'Dr Legacy')
+  `)
+
+  expect((await getListedRow('comment-article-3'))?.conflictComment).toMatchObject({
+    author: {displayName: 'Dr Legacy', userId: null},
+    comment: 'Legacy note',
+  })
+
+  await postComment('comment-article-3', null)
 })
 
 const getPdfMetadataValue = (value: unknown) => {
@@ -567,27 +595,22 @@ test('export version 3 carries comment-only rows and a file import stores them w
     `/api/comparison-projects/${targetComparisonProjectId}/conflict-resolutions/import/analyze`,
     {artifact, importMode: 'conflicting-only', overwriteMode: 'skip-existing'},
   )
-  const analyzeBody = (await analyzeResponse.json()) as {
-    data: {
-      importableRows: Array<{selectedResolution: string; sourceArticleRowId: string}>
-      summary: {importable: number}
-    }
-  }
+  const analyzeBody = (await analyzeResponse.json()) as AnalyzeBody
 
   expect(analyzeResponse.status).toBe(200)
-  expect(analyzeBody.data.summary.importable).toBe(2)
+  expect(analyzeBody.data.summary).toMatchObject({commentsAdded: 2, commentsReplaced: 0, importable: 2})
   expect(
     analyzeBody.data.importableRows.map((row) => {
-      return [row.sourceArticleRowId, row.selectedResolution]
+      return [row.sourceArticleRowId, row.selectedResolution, row.commentChange]
     }),
   ).toEqual([
-    ['comment-article-1', 'yes'],
-    ['comment-article-2', ''],
+    ['comment-article-1', 'yes', 'add'],
+    ['comment-article-2', '', 'add'],
   ])
 
   const committed = await commitFileImport(artifact, 'skip-existing')
 
-  expect(committed.data.summary).toMatchObject({importable: 2, inserted: 2})
+  expect(committed.data.summary).toMatchObject({commentsAdded: 2, importable: 2, inserted: 1})
   expect(
     (await getResolutionRows(targetComparisonProjectId)).map((row) => {
       return [row.articleId, row.origin]
@@ -636,7 +659,23 @@ test('version 1 and 2 artifacts still import, and only version 3 may carry comme
   expect(await getCommentRows(targetComparisonProjectId)).toEqual([])
 })
 
-test('imports replace a target comment only when the source row carries a comment field', async () => {
+const getTargetCommentTexts = async () => {
+  return (await getCommentRows(targetComparisonProjectId)).map((row) => {
+    return [row.articleId, row.comment]
+  })
+}
+
+const analyzeFileImport = async (artifact: unknown, overwriteMode: 'overwrite-different' | 'skip-existing') => {
+  const response = await postJson(
+    `/api/comparison-projects/${targetComparisonProjectId}/conflict-resolutions/import/analyze`,
+    {artifact, importMode: 'conflicting-only', overwriteMode},
+  )
+
+  expect(response.status).toBe(200)
+  return (await response.json()) as AnalyzeBody
+}
+
+test('imports never remove a target comment: null or missing source comments bring nothing', async () => {
   const artifact = await exportSourceArtifact()
   const withoutCommentField = {
     ...artifact,
@@ -658,49 +697,147 @@ test('imports replace a target comment only when the source row carries a commen
 
   await setTargetResolution('no', 'Target note')
   await commitFileImport(getVersionOneArtifact(artifact), 'overwrite-different')
-  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'file-import'})
   expect((await getCommentRow('comment-article-1', targetComparisonProjectId))?.comment).toBe('Target note')
 
   await setTargetResolution('no', 'Target note')
-  await commitFileImport(artifact, 'skip-existing')
-  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'ui'})
-  expect((await getCommentRow('comment-article-1', targetComparisonProjectId))?.comment).toBe('Target note')
-
-  await commitFileImport(artifact, 'overwrite-different')
-  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'file-import'})
-  expect(await getCommentRow('comment-article-1', targetComparisonProjectId)).toMatchObject({
-    authorUserId: null,
-    comment: 'Line one,\nline "two"',
-  })
-
-  await setTargetResolution('no', 'Target note')
+  const nullPreview = await analyzeFileImport(withNullComment, 'overwrite-different')
   await commitFileImport(withNullComment, 'overwrite-different')
+  expect(nullPreview.data.summary).toMatchObject({commentsAdded: 0, commentsReplaced: 0, overwriteCandidates: 1})
   expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'file-import'})
-  expect(await getCommentRow('comment-article-1', targetComparisonProjectId)).toBeUndefined()
-
+  expect((await getCommentRow('comment-article-1', targetComparisonProjectId))?.comment).toBe('Target note')
   await clearComparisonProject(targetComparisonProjectId)
-  await postComment('comment-article-1', 'Target note without a resolution', targetComparisonProjectId)
-  await postComment('comment-article-2', 'Target note on two', targetComparisonProjectId)
-  await commitFileImport(artifact, 'skip-existing')
-  expect(await getTargetArticleOneResolution()).toMatchObject({origin: 'file-import'})
-  expect(
-    (await getCommentRows(targetComparisonProjectId)).map((row) => {
-      return [row.articleId, row.comment]
-    }),
-  ).toEqual([
-    ['comment-article-1', 'Target note without a resolution'],
-    ['comment-article-2', 'Target note on two'],
-  ])
 
-  await commitFileImport(artifact, 'overwrite-different')
+  await postComment('comment-article-2', 'Target note on an unresolved conflict', targetComparisonProjectId)
+  const unresolvedPreview = await analyzeFileImport(withNullComment, 'overwrite-different')
+  await commitFileImport(withNullComment, 'overwrite-different')
+  expect(unresolvedPreview.data.summary).toMatchObject({commentsAdded: 0, commentsReplaced: 0})
+  expect(await getTargetCommentTexts()).toEqual([['comment-article-2', 'Target note on an unresolved conflict']])
+  await clearComparisonProject(targetComparisonProjectId)
+
+  const controlOnly = await postJson(
+    `/api/comparison-projects/${targetComparisonProjectId}/conflict-resolutions/import/commit`,
+    {
+      artifact: {
+        ...artifact,
+        rows: artifact.rows.map((row) => {
+          return row.resolution === null ? {...row, comment: '\u0007'} : row
+        }),
+      },
+      importMode: 'conflicting-only',
+      overwriteMode: 'overwrite-different',
+    },
+  )
+
+  expect(controlOnly.status).toBe(400)
+  expect(await controlOnly.text()).toContain('has no resolution')
+})
+
+test('skip-existing only fills empty target comments, for every matched row including same-value ones', async () => {
+  const artifact = await exportSourceArtifact()
+
+  await postResolution('comment-article-1', 'yes', targetComparisonProjectId)
+  await postResolution('comment-article-2', 'no', targetComparisonProjectId)
+  const preview = await analyzeFileImport(artifact, 'skip-existing')
+
+  expect(preview.data.summary).toMatchObject({commentsAdded: 2, commentsReplaced: 0, importable: 1, sameValue: 1})
   expect(
-    (await getCommentRows(targetComparisonProjectId)).map((row) => {
-      return [row.articleId, row.comment]
+    preview.data.skippedRows.map((row) => {
+      return [row.sourceArticleRowId, row.reason, row.commentChange]
     }),
-  ).toEqual([
-    ['comment-article-1', 'Target note without a resolution'],
+  ).toEqual([['comment-article-1', 'same-value', 'add']])
+  expect(
+    preview.data.importableRows.map((row) => {
+      return [row.sourceArticleRowId, row.selectedResolution, row.commentChange]
+    }),
+  ).toEqual([['comment-article-2', '', 'add']])
+
+  await commitFileImport(artifact, 'skip-existing')
+  expect(await getTargetCommentTexts()).toEqual([
+    ['comment-article-1', 'Line one,\nline "two"'],
     ['comment-article-2', 'No decision yet'],
   ])
+
+  await postComment('comment-article-1', 'Target keeps this', targetComparisonProjectId)
+  await postComment('comment-article-2', 'And this', targetComparisonProjectId)
+  const keepPreview = await analyzeFileImport(artifact, 'skip-existing')
+
+  await commitFileImport(artifact, 'skip-existing')
+  expect(keepPreview.data.summary).toMatchObject({commentsAdded: 0, commentsKept: 2, commentsReplaced: 0})
+  expect(
+    [...keepPreview.data.importableRows, ...keepPreview.data.skippedRows].map((row) => {
+      return [row.sourceArticleRowId, row.commentChange]
+    }),
+  ).toEqual([
+    ['comment-article-2', 'keep'],
+    ['comment-article-1', 'keep'],
+  ])
+  expect(await getTargetCommentTexts()).toEqual([
+    ['comment-article-1', 'Target keeps this'],
+    ['comment-article-2', 'And this'],
+  ])
+  await clearComparisonProject(targetComparisonProjectId)
+})
+
+test('overwrite-different adds or replaces with different text, also on same-value and comment-only rows', async () => {
+  const artifact = await exportSourceArtifact()
+
+  await postResolution('comment-article-1', 'yes', targetComparisonProjectId)
+  await postComment('comment-article-1', 'Old target note', targetComparisonProjectId)
+  const replacePreview = await analyzeFileImport(artifact, 'overwrite-different')
+
+  expect(replacePreview.data.summary).toMatchObject({commentsAdded: 1, commentsReplaced: 1, sameValue: 1})
+  expect(
+    [...replacePreview.data.importableRows, ...replacePreview.data.skippedRows].map((row) => {
+      return [row.sourceArticleRowId, row.commentChange]
+    }),
+  ).toEqual([
+    ['comment-article-2', 'add'],
+    ['comment-article-1', 'replace'],
+  ])
+
+  await commitFileImport(artifact, 'overwrite-different')
+  expect(await getTargetCommentTexts()).toEqual([
+    ['comment-article-1', 'Line one,\nline "two"'],
+    ['comment-article-2', 'No decision yet'],
+  ])
+
+  const unchangedPreview = await analyzeFileImport(artifact, 'overwrite-different')
+  const [beforeRow] = await getCommentRows(targetComparisonProjectId)
+
+  await commitFileImport(artifact, 'overwrite-different')
+  expect(unchangedPreview.data.summary).toMatchObject({commentsAdded: 0, commentsKept: 0, commentsReplaced: 0})
+  expect((await getCommentRows(targetComparisonProjectId))[0]).toEqual(beforeRow)
+  await clearComparisonProject(targetComparisonProjectId)
+})
+
+test('several source rows on one target take the first non-empty comment, whichever row has the resolution', async () => {
+  const artifact = await exportSourceArtifact()
+  const [resolutionRow] = getResolutionRowsOnly(artifact)
+
+  if (!resolutionRow) {
+    throw new Error('Missing exported resolution row')
+  }
+
+  const collapsedArtifact = {
+    ...artifact,
+    rows: [
+      {...resolutionRow, comment: null},
+      {
+        ...resolutionRow,
+        comment: 'Second source note',
+        provenance: undefined,
+        resolution: null,
+        sourceResolutionId: null,
+      },
+    ].map((row) => {
+      return JSON.parse(JSON.stringify(row)) as unknown
+    }),
+  }
+  const preview = await analyzeFileImport(collapsedArtifact, 'skip-existing')
+
+  await commitFileImport(collapsedArtifact, 'skip-existing')
+  expect(preview.data.summary).toMatchObject({commentsAdded: 1, deduped: 1, importable: 1})
+  expect(await getTargetCommentTexts()).toEqual([['comment-article-1', 'Second source note']])
   expect(
     (await getResolutionRows(targetComparisonProjectId)).map((row) => {
       return row.articleId

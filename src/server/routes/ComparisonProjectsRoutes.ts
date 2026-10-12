@@ -82,14 +82,14 @@ import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
 import {SimplePdfDocument} from '../utils/simplePdf.ts'
 import {
   type ComparisonProjectConflictComment,
-  type ComparisonProjectConflictCommentImport,
   type ComparisonProjectConflictCommentReadRow,
   comparisonProjectConflictCommentTable,
   getComparisonProjectConflictCommentReadRowsSql,
   getComparisonProjectConflictCommentsByArticleId,
+  getComparisonProjectConflictCommentTextsByArticleId,
   getValidatedComparisonProjectConflictComment,
-  importComparisonProjectConflictComments,
   replaceComparisonProjectConflictComment,
+  writeComparisonProjectConflictCommentImportChanges,
 } from './comparisonProjectsRoutes/comparisonProjectConflictComment.ts'
 import {
   type ComparisonProjectConflictResolutionTransferArtifact,
@@ -112,6 +112,7 @@ import {
   type ComparisonProjectConflictResolutionImportTargetArticleQueryRow,
   getComparisonProjectConflictResolutionImportAnalyzeResult,
   getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportCommentChanges,
   getComparisonProjectConflictResolutionImportCommitResult,
   getComparisonProjectConflictResolutionImportIdentifierKeys,
   getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
@@ -2325,40 +2326,22 @@ const getComparisonProjectConflictResolutionImportProvenanceResolver = (params: 
   }
 }
 
-const getComparisonProjectConflictResolutionImportCommentSourceRow = (
-  candidate: ComparisonProjectConflictResolutionImportCandidate,
-  sourceRowsById: ReadonlyMap<string, ComparisonProjectConflictResolutionImportSourceRow>,
-) => {
-  return (
-    candidate.sourceRows
-      .map((candidateSourceRow) => {
-        return sourceRowsById.get(candidateSourceRow.sourceRowId) ?? null
-      })
-      .find((sourceRow): sourceRow is ComparisonProjectConflictResolutionImportSourceRow => {
-        return sourceRow?.sourceComment !== undefined
-      }) ?? null
-  )
-}
-
-const getComparisonProjectConflictCommentImports = (params: {
-  candidates: readonly ComparisonProjectConflictResolutionImportCandidate[]
-  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+const getConflictResolutionImportCommentChanges = async (params: {
+  comparisonProjectId: string
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode
+  plan: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>
+  tx: AppQueryRunner
 }) => {
-  const sourceRowsById = getComparisonProjectConflictResolutionImportSourceRowsById(params.sourceRows)
-
-  return params.candidates.flatMap<ComparisonProjectConflictCommentImport>((candidate) => {
-    const sourceRow = getComparisonProjectConflictResolutionImportCommentSourceRow(candidate, sourceRowsById)
-
-    return sourceRow
-      ? [
-          {
-            articleId: candidate.targetArticleId,
-            authorDisplayName: sourceRow.sourceCommentAuthorDisplayName ?? null,
-            authorUserId: sourceRow.sourceCommentAuthorUserId ?? null,
-            comment: sourceRow.sourceComment ?? null,
-          },
-        ]
-      : []
+  return getComparisonProjectConflictResolutionImportCommentChanges({
+    commentSources: params.plan.commentSources,
+    existingCommentsByArticleId: await getComparisonProjectConflictCommentTextsByArticleId({
+      articleIds: params.plan.commentSources.map((commentSource) => {
+        return commentSource.targetArticleId
+      }),
+      comparisonProjectId: params.comparisonProjectId,
+      queryRunner: params.tx,
+    }),
+    overwriteMode: params.overwriteMode,
   })
 }
 
@@ -2401,7 +2384,7 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
   const resolutionCandidates = getComparisonProjectConflictResolutionImportResolutionCandidates(params.candidates)
 
   if (resolutionCandidates.length === 0) {
-    return params.candidates.length
+    return 0
   }
 
   const targetArticleIds = getUniqueStringValues(
@@ -2431,7 +2414,7 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
       .join(',\n')}
   `)
 
-  return params.candidates.length
+  return resolutionCandidates.length
 }
 
 const clearComparisonProjectConflictResolutionImportCandidates = async (params: {
@@ -2529,10 +2512,14 @@ const importComparisonProjectConflictResolutions = async (params: {
     }),
     tx: params.tx,
   })
-  await importComparisonProjectConflictComments({
-    commentImports: getComparisonProjectConflictCommentImports({candidates: plan.candidates, sourceRows}),
+  await writeComparisonProjectConflictCommentImportChanges({
+    commentChanges: await getConflictResolutionImportCommentChanges({
+      comparisonProjectId: params.comparisonProjectId,
+      overwriteMode: 'skip-existing',
+      plan,
+      tx: params.tx,
+    }),
     comparisonProjectId: params.comparisonProjectId,
-    overwriteMode: 'skip-existing',
     tx: params.tx,
   })
 
@@ -2684,6 +2671,9 @@ const addPdfUndecidedAnalyzeSummary = (
     skippedInvalidValue: left.skippedInvalidValue + right.skippedInvalidValue,
     sameValue: left.sameValue + right.sameValue,
     overwriteCandidates: left.overwriteCandidates + right.overwriteCandidates,
+    commentsAdded: left.commentsAdded + right.commentsAdded,
+    commentsKept: left.commentsKept + right.commentsKept,
+    commentsReplaced: left.commentsReplaced + right.commentsReplaced,
   }
 }
 
@@ -2786,20 +2776,9 @@ const validateConflictResolutionImportAnalyzeTarget = (scope: ComparisonProjectS
 }
 
 const analyzeComparisonProjectConflictResolutionImport = async (scope: ComparisonProjectScope, body: unknown) => {
-  validateConflictResolutionImportAnalyzeTarget(scope)
+  const {analyzeResult} = await getConflictResolutionArtifactImportAnalysis({body, scope, tx: appDatabaseService})
 
-  const {artifact, importMode, overwriteMode} = getComparisonProjectConflictResolutionArtifactImportRequest(body)
-  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
-  const targetArticles = await getConflictResolutionImportTargetArticles({sourceRows, scope, tx: appDatabaseService})
-
-  return getComparisonProjectConflictResolutionImportAnalyzeResult({
-    artifact,
-    importMode,
-    overwriteMode,
-    sourceRows,
-    targetArticles,
-    targetSummaryOptionValues: getComparisonProjectScopeSummaryOptionValues(scope),
-  })
+  return analyzeResult
 }
 
 const analyzeComparisonProjectConflictResolutionPdfImport = async (
@@ -2855,8 +2834,15 @@ const getConflictResolutionArtifactImportAnalysis = async (params: {
     targetArticles,
     targetSummaryOptionValues,
   })
+  const commentChanges = await getConflictResolutionImportCommentChanges({
+    comparisonProjectId: params.scope.id,
+    overwriteMode,
+    plan,
+    tx: params.tx,
+  })
   const analyzeResult = getComparisonProjectConflictResolutionImportAnalyzeResult({
     artifact,
+    commentChanges,
     importMode,
     overwriteMode,
     sourceRows,
@@ -2864,7 +2850,7 @@ const getConflictResolutionArtifactImportAnalysis = async (params: {
     targetSummaryOptionValues,
   })
 
-  return {analyzeResult, artifact, overwriteMode, plan, sourceRows}
+  return {analyzeResult, artifact, commentChanges, plan, sourceRows}
 }
 
 const getComparisonProjectConflictResolutionImportCandidateSourceRows = (params: {
@@ -2934,7 +2920,7 @@ const upsertComparisonProjectConflictResolutionTransferJudgmentContexts = async 
 
 const commitComparisonProjectConflictResolutionImport = async (scope: ComparisonProjectScope, body: unknown) => {
   return appDatabaseService.transaction(async (tx) => {
-    const {analyzeResult, artifact, overwriteMode, plan, sourceRows} =
+    const {analyzeResult, artifact, commentChanges, plan, sourceRows} =
       await getConflictResolutionArtifactImportAnalysis({body, scope, tx})
     const candidateSourceRows = getComparisonProjectConflictResolutionImportCandidateSourceRows({
       candidates: plan.candidates,
@@ -2957,12 +2943,7 @@ const commitComparisonProjectConflictResolutionImport = async (scope: Comparison
       }),
       tx,
     })
-    await importComparisonProjectConflictComments({
-      commentImports: getComparisonProjectConflictCommentImports({candidates: plan.candidates, sourceRows}),
-      comparisonProjectId: scope.id,
-      overwriteMode,
-      tx,
-    })
+    await writeComparisonProjectConflictCommentImportChanges({commentChanges, comparisonProjectId: scope.id, tx})
 
     return getComparisonProjectConflictResolutionImportCommitResult({analyzeResult, inserted})
   })

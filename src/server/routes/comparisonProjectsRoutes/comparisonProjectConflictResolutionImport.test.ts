@@ -11,6 +11,7 @@ import {
   type ComparisonProjectConflictResolutionImportTargetArticle,
   getComparisonProjectConflictResolutionImportAnalyzeResult,
   getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql,
+  getComparisonProjectConflictResolutionImportCommentChanges,
   getComparisonProjectConflictResolutionImportCommitResult,
   getComparisonProjectConflictResolutionImportCovidenceArticleKey,
   getComparisonProjectConflictResolutionImportCovidenceIdTitleKey,
@@ -749,6 +750,9 @@ test('analyzes transfer artifact rows with stable importable and skipped details
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 1,
     sameValue: 0,
+    commentsAdded: 0,
+    commentsKept: 0,
+    commentsReplaced: 0,
     overwriteCandidates: 0,
   })
   expect(result.importableRows).toEqual([
@@ -1927,4 +1931,140 @@ test('version 3 comment-only transfer rows adapt to source rows without a resolu
     }) as ComparisonProjectConflictResolutionImportSourceRow,
   ])
   expect(rows[0]).not.toHaveProperty('sourceProvenance')
+})
+
+test('comment sources cover every matched row, take the first non-empty comment per target and never remove', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        sourceArticleId: 'source-article-1',
+        sourceComment: null,
+        sourceResolutionId: 'resolution-1',
+        sourceRowId: 'resolution-1',
+      }),
+      getSourceRow({
+        resolutionValue: null,
+        sourceArticleId: 'source-article-2',
+        sourceComment: 'From the comment-only row',
+        sourceCommentAuthorDisplayName: 'Dr Source',
+        sourceResolutionId: 'comment-2',
+        sourceRowId: 'comment-2',
+      }),
+      getSourceRow({
+        externalArticleId: 'source-ext-3',
+        sourceArticleId: 'source-article-3',
+        sourceComment: 'On a same-value article',
+        sourceExternalArticleId: 'source-ext-3',
+        sourceResolutionId: 'resolution-3',
+        sourceRowId: 'resolution-3',
+        title: 'Same value title',
+      }),
+      getSourceRow({
+        externalArticleId: 'source-ext-4',
+        sourceArticleId: 'source-article-4',
+        sourceComment: '\u0007',
+        sourceExternalArticleId: 'source-ext-4',
+        sourceResolutionId: 'resolution-4',
+        sourceRowId: 'resolution-4',
+        title: 'Control characters only',
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle(),
+      getTargetArticle({
+        articleId: 'target-article-3',
+        existingResolutionValue: 'yes',
+        externalArticleId: 'source-ext-3',
+        hasExistingResolution: true,
+        title: 'Same value title',
+      }),
+      getTargetArticle({
+        articleId: 'target-article-4',
+        externalArticleId: 'source-ext-4',
+        title: 'Control characters only',
+      }),
+    ],
+  })
+
+  expect(plan.skipCounts).toEqual(getSkipCounts({sameValue: 1}))
+  expect(plan.commentSources).toEqual([
+    {
+      authorDisplayName: 'Dr Source',
+      authorUserId: null,
+      comment: 'From the comment-only row',
+      sourceRowId: 'comment-2',
+      targetArticleId: 'target-article-1',
+    },
+    {
+      authorDisplayName: null,
+      authorUserId: null,
+      comment: 'On a same-value article',
+      sourceRowId: 'resolution-3',
+      targetArticleId: 'target-article-3',
+    },
+  ])
+})
+
+test('comment changes add to empty targets, replace only different text when overwriting and never remove', () => {
+  const commentSources = [
+    {authorDisplayName: null, authorUserId: null, comment: 'New', sourceRowId: 'row-1', targetArticleId: 'empty'},
+    {authorDisplayName: null, authorUserId: null, comment: 'New', sourceRowId: 'row-2', targetArticleId: 'different'},
+    {authorDisplayName: null, authorUserId: null, comment: 'Same', sourceRowId: 'row-3', targetArticleId: 'same'},
+  ]
+  const existingCommentsByArticleId = new Map([
+    ['different', 'Old'],
+    ['same', 'Same'],
+    ['untouched', 'Kept'],
+  ])
+  const getChanges = (overwriteMode: 'overwrite-different' | 'skip-existing') => {
+    return getComparisonProjectConflictResolutionImportCommentChanges({
+      commentSources,
+      existingCommentsByArticleId,
+      overwriteMode,
+    }).map((commentChange) => {
+      return [commentChange.targetArticleId, commentChange.change]
+    })
+  }
+
+  expect(getChanges('skip-existing')).toEqual([
+    ['empty', 'add'],
+    ['different', 'keep'],
+  ])
+  expect(getChanges('overwrite-different')).toEqual([
+    ['empty', 'add'],
+    ['different', 'replace'],
+  ])
+})
+
+test('analyze rows mark the source row that adds or replaces a comment and count the changes', () => {
+  const sourceRows = [
+    getSourceRow({sourceComment: 'Note', sourceResolutionId: 'resolution-1', sourceRowId: 'resolution-1'}),
+  ]
+  const targetArticles = [getTargetArticle({existingResolutionValue: 'yes', hasExistingResolution: true})]
+  const result = getComparisonProjectConflictResolutionImportAnalyzeResult({
+    artifact: {
+      exportedAt: '2026-10-12T10:00:00.000Z',
+      format: comparisonProjectConflictResolutionTransferFormat,
+      rows: [],
+      source: {comparisonProjectDescription: null, comparisonProjectId: 'source', comparisonProjectName: 'Source'},
+      version: 3,
+    },
+    commentChanges: [
+      {
+        authorDisplayName: null,
+        authorUserId: null,
+        change: 'replace',
+        comment: 'Note',
+        sourceRowId: 'resolution-1',
+        targetArticleId: 'target-article-1',
+      },
+    ],
+    sourceRows,
+    targetArticles,
+    targetSummaryOptionValues: ['yes', 'no'],
+  })
+
+  expect(result.summary).toMatchObject({commentsAdded: 0, commentsReplaced: 1, importable: 0, sameValue: 1})
+  expect(result.skippedRows).toHaveLength(1)
+  expect(result.skippedRows[0]).toMatchObject({commentChange: 'replace', reason: 'same-value'})
 })

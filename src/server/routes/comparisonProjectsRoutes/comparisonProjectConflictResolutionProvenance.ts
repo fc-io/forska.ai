@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto'
 
 import {
   comparisonProjectConflictResolutionCommentMaxLength,
-  removeComparisonProjectConflictResolutionCommentControlCharacters,
+  getNormalizedComparisonProjectConflictComment,
 } from '../../../utils/comparisonProjectConflictResolutionComment.ts'
 import type {ComparisonProjectConflictResolutionProvenanceFilter} from '../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import {getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
@@ -111,7 +111,7 @@ const getTextWithinUtf16Length = (text: string, maxLength: number) => {
 }
 
 export const getImportedComparisonProjectConflictResolutionComment = (value: string | null | undefined) => {
-  const comment = getTrimmedText(removeComparisonProjectConflictResolutionCommentControlCharacters(value ?? ''))
+  const comment = getNormalizedComparisonProjectConflictComment(value)
 
   return comment
     ? getTextWithinUtf16Length(comment, comparisonProjectConflictResolutionCommentMaxLength).trim() || null

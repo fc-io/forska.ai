@@ -1,6 +1,7 @@
 import {type as arktype} from 'arktype'
 
 import type {HumanJudgmentMode} from '../../../db/schemaTypes.ts'
+import {getNormalizedComparisonProjectConflictComment} from '../../../utils/comparisonProjectConflictResolutionComment.ts'
 
 export const comparisonProjectConflictResolutionTransferFormat = 'forska.comparisonProject.conflictResolution.transfer'
 export const comparisonProjectConflictResolutionTransferVersion = 3
@@ -360,7 +361,9 @@ const getComparisonProjectConflictResolutionTransferRowBase = (
     ...(resolution && hasComparisonProjectConflictResolutionTransferProvenance(row)
       ? {provenance: getComparisonProjectConflictResolutionTransferProvenance(row)}
       : {}),
-    ...(hasComparisonProjectConflictResolutionTransferComment(row) ? {comment: getTrimmedText(row.comment)} : {}),
+    ...(hasComparisonProjectConflictResolutionTransferComment(row)
+      ? {comment: getNormalizedComparisonProjectConflictComment(row.comment)}
+      : {}),
   }
 }
 
@@ -473,7 +476,10 @@ const getIsCommentOnlyTransferRowValid = (
   artifact: ComparisonProjectConflictResolutionTransferArtifact,
   row: ComparisonProjectConflictResolutionTransferArtifact['rows'][number],
 ) => {
-  return row.resolution !== null || (artifact.version >= 3 && getTrimmedText(row.comment) !== null)
+  return (
+    row.resolution !== null
+    || (artifact.version >= 3 && getNormalizedComparisonProjectConflictComment(row.comment) !== null)
+  )
 }
 
 const assertCommentOnlyRowsAllowed = (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {

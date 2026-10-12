@@ -80,7 +80,7 @@ describe('compare project import resolutions helpers', () => {
         isAnalyzing: false,
         isCommitting: false,
       }),
-    ).toBe('Analyze found no importable rows.')
+    ).toBe('Analyze found no importable rows or comments.')
     expect(
       getCommitImportDisabledReason({
         analyzeSucceeded: true,
@@ -127,6 +127,9 @@ describe('compare project import resolutions helpers', () => {
         skippedUnsupportedMode: 0,
         sameValue: 1,
         overwriteCandidates: 1,
+        commentsAdded: 2,
+        commentsKept: 3,
+        commentsReplaced: 1,
       }).map((stat) => {
         return [stat.label, stat.value]
       }),
@@ -139,6 +142,9 @@ describe('compare project import resolutions helpers', () => {
       ['Same value', 1],
       ['Will overwrite', 1],
       ['Deduped', 1],
+      ['Comments added', 2],
+      ['Comments replaced', 1],
+      ['Comments kept', 3],
     ])
   })
 
@@ -161,6 +167,9 @@ describe('compare project import resolutions helpers', () => {
         skippedUnsupportedMode: 0,
         sameValue: 0,
         overwriteCandidates: 0,
+        commentsAdded: 1,
+        commentsKept: 0,
+        commentsReplaced: 0,
       }).map((stat) => {
         return [stat.label, stat.value]
       }),
@@ -168,6 +177,9 @@ describe('compare project import resolutions helpers', () => {
       ['Inserted', 1],
       ['Cleared', 0],
       ['Skipped', 2],
+      ['Comments added', 1],
+      ['Comments replaced', 0],
+      ['Comments kept', 0],
     ])
   })
 })

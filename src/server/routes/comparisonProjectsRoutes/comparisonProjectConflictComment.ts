@@ -1,15 +1,15 @@
 import {
   comparisonProjectConflictResolutionCommentMaxLength,
-  getHasComparisonProjectConflictResolutionCommentControlCharacter,
+  getNormalizedComparisonProjectConflictComment,
 } from '../../../utils/comparisonProjectConflictResolutionComment.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import type {DuckdbTransactionRunner} from '../../utils/duckdbService.ts'
 import {HttpError} from '../../utils/httpError.ts'
-import type {ComparisonProjectConflictResolutionImportOverwriteMode} from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportCommentChange} from './comparisonProjectConflictResolutionImport.ts'
 
 export const comparisonProjectConflictCommentTable = 'app.comparison_project_conflict_comment'
 
-export type ComparisonProjectConflictCommentAuthor = {displayName: string | null; userId: string}
+export type ComparisonProjectConflictCommentAuthor = {displayName: string | null; userId: string | null}
 
 export type ComparisonProjectConflictComment = {
   author: ComparisonProjectConflictCommentAuthor | null
@@ -33,12 +33,7 @@ export type ComparisonProjectConflictCommentWrite = {
   createdAt?: unknown
 }
 
-export type ComparisonProjectConflictCommentImport = {
-  articleId: string
-  authorDisplayName: string | null
-  authorUserId: string | null
-  comment: string | null
-}
+type ComparisonProjectConflictCommentQueryRunner = Pick<DuckdbTransactionRunner, 'queryJson'>
 
 type ComparisonProjectConflictCommentDeletedRow = {articleId: string; comment: string; createdAt: unknown}
 
@@ -60,20 +55,21 @@ const getCreatedAtSql = (value: unknown) => {
 }
 
 export const getValidatedComparisonProjectConflictComment = (comment: string | null) => {
-  const trimmedComment = comment?.trim() || null
+  const isRemoval = (comment?.trim() ?? '') === ''
+  const normalizedComment = getNormalizedComparisonProjectConflictComment(comment)
 
-  if (trimmedComment !== null && trimmedComment.length > comparisonProjectConflictResolutionCommentMaxLength) {
+  if (!isRemoval && normalizedComment === null) {
+    throw new HttpError(400, 'Conflict comments need text besides control characters')
+  }
+
+  if (normalizedComment !== null && normalizedComment.length > comparisonProjectConflictResolutionCommentMaxLength) {
     throw new HttpError(
       400,
       `Conflict comments are limited to ${comparisonProjectConflictResolutionCommentMaxLength} characters`,
     )
   }
 
-  if (trimmedComment !== null && getHasComparisonProjectConflictResolutionCommentControlCharacter(trimmedComment)) {
-    throw new HttpError(400, 'Conflict comments cannot contain control characters')
-  }
-
-  return trimmedComment
+  return normalizedComment
 }
 
 export const getComparisonProjectConflictCommentReadRowsSql = (
@@ -95,11 +91,19 @@ export const getComparisonProjectConflictCommentReadRowsSql = (
   `
 }
 
+const getComparisonProjectConflictCommentAuthor = (
+  row: Pick<ComparisonProjectConflictCommentReadRow, 'authorDisplayName' | 'authorUserId'>,
+): ComparisonProjectConflictCommentAuthor | null => {
+  const displayName = getTrimmedText(row.authorDisplayName)
+
+  return row.authorUserId || displayName ? {displayName, userId: row.authorUserId || null} : null
+}
+
 export const getComparisonProjectConflictComment = (
   row: ComparisonProjectConflictCommentReadRow,
 ): ComparisonProjectConflictComment => {
   return {
-    author: row.authorUserId ? {displayName: getTrimmedText(row.authorDisplayName), userId: row.authorUserId} : null,
+    author: getComparisonProjectConflictCommentAuthor(row),
     comment: row.comment,
     updatedAt: getDateValue(row.updatedAt),
   }
@@ -200,69 +204,73 @@ export const replaceComparisonProjectConflictComment = async (params: {
   return insertedRow ? getComparisonProjectConflictComment(insertedRow) : null
 }
 
-const getIsComparisonProjectConflictCommentImportChange = (
-  commentImport: ComparisonProjectConflictCommentImport,
-  existingCommentsByArticleId: ReadonlyMap<string, string>,
-  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
-) => {
-  const existingComment = existingCommentsByArticleId.get(commentImport.articleId) ?? null
+export const getComparisonProjectConflictCommentTextsByArticleId = async (params: {
+  articleIds: readonly string[]
+  comparisonProjectId: string
+  queryRunner: ComparisonProjectConflictCommentQueryRunner
+}) => {
+  const articleIds = Array.from(new Set(params.articleIds))
+  const rows =
+    articleIds.length === 0
+      ? []
+      : await params.queryRunner.queryJson<ComparisonProjectConflictCommentReadRow>(
+          getComparisonProjectConflictCommentReadRowsSql(params.comparisonProjectId, articleIds),
+        )
 
-  return overwriteMode === 'skip-existing'
-    ? existingComment === null && commentImport.comment !== null
-    : existingComment !== commentImport.comment
-}
-
-const getComparisonProjectConflictCommentsByArticleIdFromRows = (
-  rows: readonly {articleId: string; comment: string}[],
-) => {
   return rows.reduce<Map<string, string>>((commentMap, row) => {
     return commentMap.has(row.articleId) ? commentMap : commentMap.set(row.articleId, row.comment)
   }, new Map<string, string>())
 }
 
-export const importComparisonProjectConflictComments = async (params: {
+const getCreatedAtByArticleId = (rows: readonly ComparisonProjectConflictCommentDeletedRow[]) => {
+  const rowsByArticleId = rows.reduce<Map<string, ComparisonProjectConflictCommentDeletedRow[]>>((rowMap, row) => {
+    return rowMap.set(row.articleId, [...(rowMap.get(row.articleId) ?? []), row])
+  }, new Map<string, ComparisonProjectConflictCommentDeletedRow[]>())
+
+  return new Map(
+    Array.from(rowsByArticleId.entries()).map(([articleId, articleRows]) => {
+      return [articleId, getEarliestCreatedAt(articleRows)] as const
+    }),
+  )
+}
+
+export const writeComparisonProjectConflictCommentImportChanges = async (params: {
+  commentChanges: readonly ComparisonProjectConflictResolutionImportCommentChange[]
   comparisonProjectId: string
-  commentImports: readonly ComparisonProjectConflictCommentImport[]
-  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode
   tx: DuckdbTransactionRunner
 }) => {
-  const articleIds = params.commentImports.map((commentImport) => {
-    return commentImport.articleId
-  })
-  const existingRows =
-    articleIds.length === 0
-      ? []
-      : await params.tx.queryJson<ComparisonProjectConflictCommentReadRow>(
-          getComparisonProjectConflictCommentReadRowsSql(params.comparisonProjectId, articleIds),
-        )
-  const existingCommentsByArticleId = getComparisonProjectConflictCommentsByArticleIdFromRows(existingRows)
-  const changedImports = params.commentImports.filter((commentImport) => {
-    return getIsComparisonProjectConflictCommentImportChange(
-      commentImport,
-      existingCommentsByArticleId,
-      params.overwriteMode,
-    )
-  })
-  const insertedComments = changedImports.flatMap<ComparisonProjectConflictCommentWrite>((commentImport) => {
-    return commentImport.comment === null ? [] : [{...commentImport, comment: commentImport.comment}]
+  const commentWrites = params.commentChanges.filter((commentChange) => {
+    return commentChange.change !== 'keep'
   })
 
-  if (changedImports.length > 0) {
-    await params.tx.queryJson<ComparisonProjectConflictCommentDeletedRow>(
-      getDeleteComparisonProjectConflictCommentsSql(
-        params.comparisonProjectId,
-        changedImports.map((commentImport) => {
-          return commentImport.articleId
-        }),
-      ),
-    )
+  if (commentWrites.length === 0) {
+    return 0
   }
 
-  if (insertedComments.length > 0) {
-    await params.tx.queryJson<ComparisonProjectConflictCommentReadRow>(
-      getInsertComparisonProjectConflictCommentsSql(params.comparisonProjectId, insertedComments),
-    )
-  }
+  const deletedRows = await params.tx.queryJson<ComparisonProjectConflictCommentDeletedRow>(
+    getDeleteComparisonProjectConflictCommentsSql(
+      params.comparisonProjectId,
+      commentWrites.map((commentChange) => {
+        return commentChange.targetArticleId
+      }),
+    ),
+  )
+  const createdAtByArticleId = getCreatedAtByArticleId(deletedRows)
 
-  return changedImports.length
+  await params.tx.queryJson<ComparisonProjectConflictCommentReadRow>(
+    getInsertComparisonProjectConflictCommentsSql(
+      params.comparisonProjectId,
+      commentWrites.map((commentChange) => {
+        return {
+          articleId: commentChange.targetArticleId,
+          authorDisplayName: commentChange.authorDisplayName,
+          authorUserId: commentChange.authorUserId,
+          comment: commentChange.comment,
+          createdAt: createdAtByArticleId.get(commentChange.targetArticleId) ?? null,
+        }
+      }),
+    ),
+  )
+
+  return commentWrites.length
 }

@@ -194,8 +194,24 @@ export type ComparisonProjectConflictResolutionImportWarning = {
   values?: string[]
 }
 
+export type ComparisonProjectConflictResolutionImportCommentSource = {
+  authorDisplayName: string | null
+  authorUserId: string | null
+  comment: string
+  sourceRowId: string
+  targetArticleId: string
+}
+
+export type ComparisonProjectConflictResolutionImportCommentChangeKind = 'add' | 'keep' | 'replace'
+
+export type ComparisonProjectConflictResolutionImportCommentChange =
+  ComparisonProjectConflictResolutionImportCommentSource & {
+    change: ComparisonProjectConflictResolutionImportCommentChangeKind
+  }
+
 export type ComparisonProjectConflictResolutionImportPlan = {
   candidates: ComparisonProjectConflictResolutionImportCandidate[]
+  commentSources: ComparisonProjectConflictResolutionImportCommentSource[]
   dedupedCount: number
   errors: ComparisonProjectConflictResolutionImportError[]
   skipCounts: ComparisonProjectConflictResolutionImportSkipCounts
@@ -262,6 +278,9 @@ export type ComparisonProjectConflictResolutionImportAnalyzeSummary = {
   skippedInvalidValue: number
   sameValue: number
   overwriteCandidates: number
+  commentsAdded: number
+  commentsKept: number
+  commentsReplaced: number
 }
 
 export type ComparisonProjectConflictResolutionImportAnalyzeRowReason =
@@ -286,6 +305,7 @@ export type ComparisonProjectConflictResolutionImportAnalyzeRow = {
   matchKind: ComparisonProjectConflictResolutionImportMatchKind | null
   matchKey: string | null
   reason: ComparisonProjectConflictResolutionImportAnalyzeRowReason
+  commentChange?: ComparisonProjectConflictResolutionImportCommentChangeKind
 }
 
 export type ComparisonProjectConflictResolutionImportAnalyzeResult = {
@@ -2471,6 +2491,105 @@ const getDedupedCount = (candidates: readonly ComparisonProjectConflictResolutio
   }, 0)
 }
 
+const commentSourceSkipReasons = new Set<ComparisonProjectConflictResolutionImportSkipReason>([
+  'existing-target-resolution',
+  'same-value',
+])
+
+const getCommentSourceTargetArticleId = (result: ImportCandidateRowResult) => {
+  const skippedTargetArticles =
+    result.skippedRow && commentSourceSkipReasons.has(result.skippedRow.reason)
+      ? (result.detail?.targetArticles ?? [])
+      : []
+
+  return (
+    result.candidate?.targetArticleId
+    ?? (skippedTargetArticles.length === 1 ? (skippedTargetArticles[0]?.articleId ?? null) : null)
+  )
+}
+
+const getCommentSourceFromResult = (
+  result: ImportCandidateRowResult,
+): ComparisonProjectConflictResolutionImportCommentSource[] => {
+  const sourceRow = result.candidate?.sourceRow ?? result.detail?.sourceRow ?? null
+  const targetArticleId = getCommentSourceTargetArticleId(result)
+  const comment = getImportedComparisonProjectConflictResolutionComment(sourceRow?.sourceComment)
+
+  return sourceRow && targetArticleId && comment
+    ? [
+        {
+          authorDisplayName: sourceRow.sourceCommentAuthorDisplayName ?? null,
+          authorUserId: sourceRow.sourceCommentAuthorUserId ?? null,
+          comment,
+          sourceRowId: sourceRow.sourceRowId,
+          targetArticleId,
+        },
+      ]
+    : []
+}
+
+const getCommentSources = (candidateRowResults: readonly ImportCandidateRowResult[]) => {
+  return Array.from(
+    candidateRowResults
+      .flatMap(getCommentSourceFromResult)
+      .reduce<Map<string, ComparisonProjectConflictResolutionImportCommentSource>>((sourceMap, commentSource) => {
+        return sourceMap.has(commentSource.targetArticleId)
+          ? sourceMap
+          : sourceMap.set(commentSource.targetArticleId, commentSource)
+      }, new Map<string, ComparisonProjectConflictResolutionImportCommentSource>())
+      .values(),
+  )
+}
+
+const getCommentChangeKind = (params: {
+  comment: string
+  existingComment: string | null
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode
+}): ComparisonProjectConflictResolutionImportCommentChangeKind | null => {
+  return params.existingComment === null
+    ? 'add'
+    : params.existingComment === params.comment
+      ? null
+      : params.overwriteMode === 'overwrite-different'
+        ? 'replace'
+        : 'keep'
+}
+
+export const getComparisonProjectConflictResolutionImportCommentChanges = (params: {
+  commentSources: readonly ComparisonProjectConflictResolutionImportCommentSource[]
+  existingCommentsByArticleId: ReadonlyMap<string, string>
+  overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode
+}): ComparisonProjectConflictResolutionImportCommentChange[] => {
+  return params.commentSources.flatMap((commentSource) => {
+    const change = getCommentChangeKind({
+      comment: commentSource.comment,
+      existingComment: params.existingCommentsByArticleId.get(commentSource.targetArticleId) ?? null,
+      overwriteMode: params.overwriteMode,
+    })
+
+    return change ? [{...commentSource, change}] : []
+  })
+}
+
+const getCommentChangeCount = (
+  commentChanges: readonly ComparisonProjectConflictResolutionImportCommentChange[],
+  change: ComparisonProjectConflictResolutionImportCommentChangeKind,
+) => {
+  return commentChanges.filter((commentChange) => {
+    return commentChange.change === change
+  }).length
+}
+
+export const getComparisonProjectConflictResolutionImportCommentChangeCounts = (
+  commentChanges: readonly ComparisonProjectConflictResolutionImportCommentChange[],
+) => {
+  return {
+    commentsAdded: getCommentChangeCount(commentChanges, 'add'),
+    commentsKept: getCommentChangeCount(commentChanges, 'keep'),
+    commentsReplaced: getCommentChangeCount(commentChanges, 'replace'),
+  }
+}
+
 const getComparisonProjectConflictResolutionImportPlanState = ({
   importMode = 'conflicting-only',
   overwriteMode = 'skip-existing',
@@ -2535,6 +2654,7 @@ export const getComparisonProjectConflictResolutionImportPlan = (
 
   return {
     candidates: planState.groupedImportCandidateResults.candidates,
+    commentSources: getCommentSources(planState.candidateRowResults),
     dedupedCount: getDedupedCount(planState.groupedImportCandidateResults.candidates),
     errors: [],
     skipCounts: getSkipCounts(planState.allSkippedRows),
@@ -2579,12 +2699,16 @@ const getAnalyzeTargetExternalArticleIds = (targetArticles: readonly NormalizedT
   )
 }
 
+type CommentChangeBySourceRowId = ReadonlyMap<string, ComparisonProjectConflictResolutionImportCommentChangeKind>
+
 const getAnalyzeRow = (params: {
+  commentChangeBySourceRowId: CommentChangeBySourceRowId
   detail: ImportRowMatchDetail
   reason: ComparisonProjectConflictResolutionImportAnalyzeRowReason
   selectedResolution: string
 }): ComparisonProjectConflictResolutionImportAnalyzeRow => {
   const firstTargetArticle = getFirstAnalyzeTargetArticle(params.detail.targetArticles)
+  const commentChange = params.commentChangeBySourceRowId.get(params.detail.sourceRow.sourceRowId)
 
   return {
     sourceTitle: params.detail.sourceRow.sourceArticleTitle ?? params.detail.sourceRow.title ?? null,
@@ -2603,13 +2727,16 @@ const getAnalyzeRow = (params: {
     matchKind: params.detail.matchKind,
     matchKey: params.detail.matchKey,
     reason: params.reason,
+    ...(commentChange ? {commentChange} : {}),
   }
 }
 
 const getAnalyzeRowFromCandidateRow = (
   candidateRow: ImportCandidateRow,
+  commentChangeBySourceRowId: CommentChangeBySourceRowId,
 ): ComparisonProjectConflictResolutionImportAnalyzeRow => {
   return getAnalyzeRow({
+    commentChangeBySourceRowId,
     detail: getImportRowMatchDetail({
       matchKey: candidateRow.matchKey,
       matchKind: candidateRow.matchKind,
@@ -2640,11 +2767,13 @@ const getCandidateRowsForCandidates = (params: {
 
 const getInitialAnalyzeSkippedRows = (
   candidateRowResults: readonly ImportCandidateRowResult[],
+  commentChangeBySourceRowId: CommentChangeBySourceRowId,
 ): ComparisonProjectConflictResolutionImportAnalyzeRow[] => {
   return candidateRowResults.flatMap((result) => {
     return result.skippedRow && result.detail
       ? [
           getAnalyzeRow({
+            commentChangeBySourceRowId,
             detail: result.detail,
             reason: result.skippedRow.reason,
             selectedResolution: result.detail.sourceRow.resolutionValue ?? '',
@@ -2657,6 +2786,7 @@ const getInitialAnalyzeSkippedRows = (
 const getInvalidValueAnalyzeSkippedRows = (
   candidateRows: readonly ImportCandidateRow[],
   skippedRows: readonly ComparisonProjectConflictResolutionImportSkippedRow[],
+  commentChangeBySourceRowId: CommentChangeBySourceRowId,
 ): ComparisonProjectConflictResolutionImportAnalyzeRow[] => {
   const skippedSourceRowIds = new Set(
     skippedRows.map((skippedRow) => {
@@ -2669,13 +2799,17 @@ const getInvalidValueAnalyzeSkippedRows = (
       return skippedSourceRowIds.has(candidateRow.sourceRowId)
     })
     .map((candidateRow) => {
-      return {...getAnalyzeRowFromCandidateRow(candidateRow), reason: 'invalid-target-resolution-value' as const}
+      return {
+        ...getAnalyzeRowFromCandidateRow(candidateRow, commentChangeBySourceRowId),
+        reason: 'invalid-target-resolution-value' as const,
+      }
     })
 }
 
 const getConflictingAnalyzeSkippedRows = (
   candidateRows: readonly ImportCandidateRow[],
   skippedRows: readonly ComparisonProjectConflictResolutionImportSkippedRow[],
+  commentChangeBySourceRowId: CommentChangeBySourceRowId,
 ): ComparisonProjectConflictResolutionImportAnalyzeRow[] => {
   const skippedSourceRowIds = new Set(
     skippedRows.map((skippedRow) => {
@@ -2688,11 +2822,15 @@ const getConflictingAnalyzeSkippedRows = (
       return skippedSourceRowIds.has(candidateRow.sourceRowId)
     })
     .map((candidateRow) => {
-      return {...getAnalyzeRowFromCandidateRow(candidateRow), reason: 'conflicting-resolution-values' as const}
+      return {
+        ...getAnalyzeRowFromCandidateRow(candidateRow, commentChangeBySourceRowId),
+        reason: 'conflicting-resolution-values' as const,
+      }
     })
 }
 
 const getAnalyzeSummary = (params: {
+  commentChanges: readonly ComparisonProjectConflictResolutionImportCommentChange[]
   importableCount: number
   plan: ComparisonProjectConflictResolutionImportPlan
   scannedCount: number
@@ -2727,11 +2865,23 @@ const getAnalyzeSummary = (params: {
     skippedInvalidValue: params.plan.skipCounts.invalidValue,
     sameValue: params.plan.skipCounts.sameValue,
     overwriteCandidates: 0,
+    ...getComparisonProjectConflictResolutionImportCommentChangeCounts(params.commentChanges),
   }
+}
+
+const getCommentChangeBySourceRowId = (
+  commentChanges: readonly ComparisonProjectConflictResolutionImportCommentChange[],
+): CommentChangeBySourceRowId => {
+  return new Map(
+    commentChanges.map((commentChange) => {
+      return [commentChange.sourceRowId, commentChange.change] as const
+    }),
+  )
 }
 
 export const getComparisonProjectConflictResolutionImportAnalyzeResult = (params: {
   artifact: ComparisonProjectConflictResolutionTransferArtifact
+  commentChanges?: readonly ComparisonProjectConflictResolutionImportCommentChange[]
   importMode?: ComparisonProjectConflictResolutionImportMode
   overwriteMode?: ComparisonProjectConflictResolutionImportOverwriteMode
   sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
@@ -2752,31 +2902,42 @@ export const getComparisonProjectConflictResolutionImportAnalyzeResult = (params
     targetArticles: params.targetArticles,
     targetSummaryOptionValues: params.targetSummaryOptionValues,
   })
+  const commentChanges = params.commentChanges ?? []
+  const commentChangeBySourceRowId = getCommentChangeBySourceRowId(commentChanges)
   const importableCandidateRows = getCandidateRowsForCandidates({
     candidates: plan.candidates,
     candidateRows: planState.targetResolvedCandidateRowResults.candidateRows,
   })
   const skippedRows = [
-    ...getInitialAnalyzeSkippedRows(planState.candidateRowResults),
+    ...getInitialAnalyzeSkippedRows(planState.candidateRowResults, commentChangeBySourceRowId),
     ...getInvalidValueAnalyzeSkippedRows(
       planState.candidateRows,
       planState.targetResolvedCandidateRowResults.skippedRows,
+      commentChangeBySourceRowId,
     ),
     ...getConflictingAnalyzeSkippedRows(
       planState.targetResolvedCandidateRowResults.candidateRows,
       planState.groupedImportCandidateResults.skippedRows,
+      commentChangeBySourceRowId,
     ),
   ]
 
   return {
     source: getAnalyzeSource(params.artifact),
     summary: {
-      ...getAnalyzeSummary({importableCount: plan.candidates.length, plan, scannedCount: params.sourceRows.length}),
+      ...getAnalyzeSummary({
+        commentChanges,
+        importableCount: plan.candidates.length,
+        plan,
+        scannedCount: params.sourceRows.length,
+      }),
       overwriteCandidates: importableCandidateRows.filter((candidateRow) => {
         return candidateRow.isOverwrite
       }).length,
     },
-    importableRows: importableCandidateRows.map(getAnalyzeRowFromCandidateRow),
+    importableRows: importableCandidateRows.map((candidateRow) => {
+      return getAnalyzeRowFromCandidateRow(candidateRow, commentChangeBySourceRowId)
+    }),
     skippedRows,
     warnings: plan.warnings,
   }

@@ -59,6 +59,9 @@ const mockState = vi.hoisted(() => {
       skippedUnsupportedMode: 0,
       sameValue: 0,
       overwriteCandidates: 0,
+      commentsAdded: 0,
+      commentsKept: 0,
+      commentsReplaced: 0,
     },
     warnings: [],
   }
@@ -351,6 +354,60 @@ describe('CompareProjectImportResolutionsPage', () => {
           'comparison-project-1',
           {artifact: mockState.transferArtifact, importMode: 'conflicting-only', overwriteMode: 'overwrite-different'},
         )
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows comment changes in the preview and says comments are never removed', async () => {
+    mockState.analyzeComparisonProjectConflictResolutionImport.mockResolvedValueOnce({
+      ...mockState.analyzePreview,
+      importableRows: [
+        {
+          commentChange: 'add',
+          matchKey: 'external-1',
+          matchKind: 'article-id',
+          reason: 'importable',
+          selectedResolution: '',
+          sourceArticleRowId: 'article-1',
+          sourceComparisonProjectId: 'source-comparison-project-1',
+          sourceComparisonProjectName: 'Source comparison',
+          sourceExternalArticleId: 'external-1',
+          sourceResolutionId: 'comment-1',
+          sourceTitle: 'Article 1',
+          targetArticleId: 'article-1',
+          targetArticleIds: ['article-1'],
+          targetExternalArticleId: 'external-1',
+          targetExternalArticleIds: ['external-1'],
+          targetTitle: 'Article 1',
+        },
+      ],
+      summary: {...mockState.analyzePreview.summary, commentsAdded: 1, commentsKept: 1, importable: 1},
+    } as never)
+
+    const {container, dispose} = await renderImportResolutionsPage()
+
+    try {
+      const input = container.querySelector('[data-testid="conflict-resolution-import-file"]')
+      const file = new File([JSON.stringify(mockState.transferArtifact)], 'conflict-resolutions.json', {
+        type: 'application/json',
+      })
+
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error('Import file input not found')
+      }
+
+      Object.defineProperty(input, 'files', {configurable: true, value: getFileList(file)})
+      input.dispatchEvent(new Event('change', {bubbles: true}))
+
+      await waitForCondition(() => {
+        expect(container.querySelector('[data-comment-change="add"]')?.textContent).toBe('Adds comment')
+        expect(container.textContent).toContain('Comment only')
+        expect(container.textContent).toContain('Comments added')
+        expect(container.textContent).toContain('1 comment')
+        expect(container.textContent).toContain('Comments are only added or replaced by different text, never removed.')
       })
     } finally {
       dispose()

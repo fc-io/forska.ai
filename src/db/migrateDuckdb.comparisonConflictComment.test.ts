@@ -1,10 +1,11 @@
-import {readFileSync} from 'node:fs'
+import {existsSync, readFileSync} from 'node:fs'
 import {resolve} from 'node:path'
 
 import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import type {getAppDatabaseService} from '../server/services/appDatabaseService.ts'
 import {createTempRuntimeRoot} from '../server/test/createTempRuntimeRoot.ts'
+import {duckdbEngineCompatibilityOptions, duckdbExpectedEngineIdentity} from '../server/utils/duckdbEngineContract.ts'
 
 setDefaultTimeout(120_000)
 
@@ -48,6 +49,28 @@ const getTableColumns = (tableName: string) => {
 
 const getEpochSeconds = (value: string) => {
   return String(Date.parse(value) / 1000)
+}
+
+const runDuckdbProcess = <T>(script: string): T => {
+  const initializerPath = resolve(import.meta.dir, '../server/utils/createDuckdbInstance.ts')
+  const result = globalThis.Bun.spawnSync(
+    [
+      process.execPath,
+      '-e',
+      `
+      const {DuckDBInstance} = await import('@duckdb/node-api')
+      const {createDuckdbInstance} = await import(${JSON.stringify(initializerPath)})
+      const db = await createDuckdbInstance({create: DuckDBInstance.create.bind(DuckDBInstance), databasePath: ${JSON.stringify(tempRuntimeRoot.duckdbPath)}, options: {...${JSON.stringify(duckdbEngineCompatibilityOptions)}, memory_limit: '256MiB'}, expectedEngine: ${JSON.stringify(duckdbExpectedEngineIdentity)}})
+      const connection = await db.connect()
+      const read = async (sql) => (await connection.runAndReadAll(sql)).getRowObjectsJson()
+      ${script}
+    `,
+    ],
+    {cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe', timeout: 60_000},
+  )
+
+  expect(result.exitCode, result.stderr.toString() || result.stdout.toString()).toBe(0)
+  return JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as T
 }
 
 beforeAll(async () => {
@@ -98,7 +121,9 @@ test('comments move to the comment table and the resolution columns are dropped'
         TIMESTAMPTZ '2026-10-03T09:00:00Z', TIMESTAMPTZ '2026-10-03T10:00:00Z',
         'Newer duplicate', TIMESTAMPTZ '2026-10-04T10:00:00Z'),
       ('resolution-4', 'comparison-2', 'article-2', 'no', 'reviewer-2', NULL, NULL,
-        TIMESTAMPTZ '2026-10-05T09:00:00Z', TIMESTAMPTZ '2026-10-05T10:00:00Z', '', TIMESTAMPTZ '2026-10-05T10:00:00Z');
+        TIMESTAMPTZ '2026-10-05T09:00:00Z', TIMESTAMPTZ '2026-10-05T10:00:00Z', '', TIMESTAMPTZ '2026-10-05T10:00:00Z'),
+      ('resolution-5', 'comparison-3', 'article-1', 'maybe', NULL, 'Dr Imported', 'file-import',
+        TIMESTAMPTZ '2026-10-06T09:00:00Z', TIMESTAMPTZ '2026-10-06T10:00:00Z', 'Imported before tracking', NULL);
   `)
 
   await getMigrateDuckdb()()
@@ -167,6 +192,16 @@ test('comments move to the comment table and the resolution columns are dropped'
       idLength: '36',
       updatedAtEpoch: getEpochSeconds('2026-10-04T10:00:00Z'),
     },
+    {
+      articleId: 'article-1',
+      authorDisplayName: 'Dr Imported',
+      authorUserId: null,
+      comment: 'Imported before tracking',
+      comparisonProjectId: 'comparison-3',
+      createdAtEpoch: getEpochSeconds('2026-10-06T10:00:00Z'),
+      idLength: '36',
+      updatedAtEpoch: getEpochSeconds('2026-10-06T10:00:00Z'),
+    },
   ])
   expect(
     await getDatabase().queryJson(`
@@ -204,6 +239,12 @@ test('comments move to the comment table and the resolution columns are dropped'
       id: 'resolution-4',
       reviewerUserId: 'reviewer-2',
       updatedAtEpoch: getEpochSeconds('2026-10-05T10:00:00Z'),
+    },
+    {
+      answerValue: 'maybe',
+      id: 'resolution-5',
+      reviewerUserId: null,
+      updatedAtEpoch: getEpochSeconds('2026-10-06T10:00:00Z'),
     },
   ])
   expect(
@@ -260,7 +301,7 @@ test('both tables accept the save shapes after a checkpoint and a rerun is a no-
         (SELECT comment FROM app.comparison_project_conflict_comment WHERE comparison_project_id = 'comparison-1') AS comment,
         (SELECT COUNT(*) FROM app.comparison_project_conflict_comment) AS commentCount
     `),
-  ).toEqual([{answerValue: 'no', comment: 'Edited', commentCount: '2'}])
+  ).toEqual([{answerValue: 'no', comment: 'Edited', commentCount: '3'}])
 
   await getMigrateDuckdb()()
 
@@ -273,5 +314,52 @@ test('both tables accept the save shapes after a checkpoint and a rerun is a no-
   ).toEqual([{name: migrationFileName}])
   expect(
     await getDatabase().queryJson(`SELECT COUNT(*) AS commentCount FROM app.comparison_project_conflict_comment`),
-  ).toEqual([{commentCount: '2'}])
+  ).toEqual([{commentCount: '3'}])
+})
+
+test('writes on both tables survive a crash before the checkpoint, a WAL replay, a rewrite and a reopen', async () => {
+  await getDatabase().close()
+  database = null
+
+  runDuckdbProcess(`
+    await connection.run("INSERT INTO app.comparison_project_conflict_resolution (id, comparison_project_id, article_id, answer_value, origin) VALUES ('crash-resolution', 'comparison-crash', 'article-1', 'yes', 'ui')")
+    await connection.run("INSERT INTO app.comparison_project_conflict_comment (id, comparison_project_id, article_id, comment) VALUES ('crash-comment', 'comparison-crash', 'article-1', 'Before the crash')")
+    console.log('{}')
+    process.exit(0)
+  `)
+
+  expect(existsSync(`${tempRuntimeRoot.duckdbPath}.wal`)).toBe(true)
+
+  const replayed = runDuckdbProcess<{after: unknown[]; before: unknown[]}>(`
+    const before = await read("SELECT (SELECT answer_value FROM app.comparison_project_conflict_resolution WHERE comparison_project_id = 'comparison-crash') AS answerValue, (SELECT comment FROM app.comparison_project_conflict_comment WHERE comparison_project_id = 'comparison-crash') AS comment")
+    await connection.run('BEGIN')
+    await connection.run("DELETE FROM app.comparison_project_conflict_resolution WHERE comparison_project_id = 'comparison-crash' AND article_id = 'article-1'")
+    await connection.run("INSERT INTO app.comparison_project_conflict_resolution (id, comparison_project_id, article_id, answer_value, origin) VALUES ('crash-resolution-2', 'comparison-crash', 'article-1', 'no', 'ui')")
+    await connection.run("DELETE FROM app.comparison_project_conflict_comment WHERE comparison_project_id = 'comparison-crash' AND article_id = 'article-1'")
+    await connection.run("INSERT INTO app.comparison_project_conflict_comment (id, comparison_project_id, article_id, comment) VALUES ('crash-comment-2', 'comparison-crash', 'article-1', 'After the replay')")
+    await connection.run('COMMIT')
+    await connection.run('CHECKPOINT')
+    const after = await read("SELECT COUNT(*) AS rowCount FROM app.comparison_project_conflict_comment")
+    connection.closeSync()
+    db.closeSync()
+    console.log(JSON.stringify({after, before}))
+  `)
+
+  expect(replayed.before).toEqual([{answerValue: 'yes', comment: 'Before the crash'}])
+  expect(replayed.after).toEqual([{rowCount: '4'}])
+
+  const reopened = runDuckdbProcess<{columns: unknown[]; comments: unknown[]; resolutions: unknown[]}>(`
+    const resolutions = await read("SELECT id, answer_value AS answerValue FROM app.comparison_project_conflict_resolution WHERE comparison_project_id = 'comparison-crash'")
+    const comments = await read("SELECT id, comment FROM app.comparison_project_conflict_comment WHERE comparison_project_id = 'comparison-crash'")
+    const columns = await read("SELECT column_name FROM duckdb_columns() WHERE schema_name = 'app' AND table_name = 'comparison_project_conflict_resolution' AND column_name LIKE 'comment%'")
+    connection.closeSync()
+    db.closeSync()
+    console.log(JSON.stringify({columns, comments, resolutions}))
+  `)
+
+  expect(reopened).toEqual({
+    columns: [],
+    comments: [{comment: 'After the replay', id: 'crash-comment-2'}],
+    resolutions: [{answerValue: 'no', id: 'crash-resolution-2'}],
+  })
 })

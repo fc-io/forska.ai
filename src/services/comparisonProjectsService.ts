@@ -334,7 +334,7 @@ export type ComparisonProjectConflictResolutionValue = {
 }
 
 export type ComparisonProjectConflictCommentValue = {
-  author: {displayName: string | null; userId: string} | null
+  author: {displayName: string | null; userId: string | null} | null
   comment: string
   updatedAt: Date | string | null
 }
@@ -675,7 +675,11 @@ export type ComparisonProjectConflictResolutionImportAnalyzeSummary = {
   skippedInvalidValue: number
   sameValue: number
   overwriteCandidates: number
+  commentsAdded: number
+  commentsKept: number
+  commentsReplaced: number
 }
+export type ComparisonProjectConflictResolutionImportCommentChange = 'add' | 'keep' | 'replace'
 export type ComparisonProjectConflictResolutionImportAnalyzeRowBase = {
   sourceTitle: string | null
   sourceArticleRowId: string
@@ -691,6 +695,7 @@ export type ComparisonProjectConflictResolutionImportAnalyzeRowBase = {
   selectedResolution: string
   matchKind: ComparisonProjectConflictResolutionTransferMatchKind | null
   matchKey: string | null
+  commentChange?: ComparisonProjectConflictResolutionImportCommentChange
 }
 export type ComparisonProjectConflictResolutionImportImportableRow =
   ComparisonProjectConflictResolutionImportAnalyzeRowBase & {
