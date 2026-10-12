@@ -323,8 +323,6 @@ export type ComparisonProjectConflictResolutionReviewer = {displayName: string |
 
 export type ComparisonProjectConflictResolutionValue = {
   articleId: string
-  comment: string | null
-  commentUpdatedAt: Date | string | null
   label: string
   provenance: ComparisonProjectConflictResolutionProvenance | null
   provenanceMatchesCurrent: boolean | null
@@ -333,6 +331,17 @@ export type ComparisonProjectConflictResolutionValue = {
   reviewerUserId: string | null
   setAt: Date | string | null
   value: string
+}
+
+export type ComparisonProjectConflictCommentValue = {
+  author: {displayName: string | null; userId: string} | null
+  comment: string
+  updatedAt: Date | string | null
+}
+
+export type ComparisonProjectConflictCommentSaveResult = {
+  articleId: string
+  conflictComment: ComparisonProjectConflictCommentValue | null
 }
 
 export type ComparisonProjectJudgmentsMetadata = {
@@ -384,6 +393,7 @@ export type ComparisonProjectJudgmentsRow = {
   canonicalArticleId: string
   cells: Record<string, string | null>
   hasConflict: boolean
+  conflictComment: ComparisonProjectConflictCommentValue | null
   conflictResolution: ComparisonProjectConflictResolutionValue | null
 }
 
@@ -540,7 +550,7 @@ export type ComparisonProjectConflictResolutionTransferResolution = {
   label: string
 }
 export type ComparisonProjectConflictResolutionTransferRow = {
-  sourceResolutionId: string
+  sourceResolutionId: string | null
   sourceArticleRowId: string
   externalArticleId: string | null
   title: string | null
@@ -551,8 +561,9 @@ export type ComparisonProjectConflictResolutionTransferRow = {
   medrxivId?: string | null
   url?: string | null
   identifiers: ComparisonProjectConflictResolutionTransferIdentifier[]
+  comment?: string | null
   provenance?: ComparisonProjectConflictResolutionTransferProvenance | null
-  resolution: ComparisonProjectConflictResolutionTransferResolution
+  resolution: ComparisonProjectConflictResolutionTransferResolution | null
 }
 export type ComparisonProjectConflictResolutionTransferProvenance = {
   contextId: string | null
@@ -567,7 +578,7 @@ export type ComparisonProjectConflictResolutionTransferSource = {
 }
 export type ComparisonProjectConflictResolutionTransferArtifact = {
   format: 'forska.comparisonProject.conflictResolution.transfer'
-  version: 1 | 2
+  version: 1 | 2 | 3
   exportedAt: string
   judgmentContexts?: Array<{context: Record<string, unknown>; id: string}>
   source: ComparisonProjectConflictResolutionTransferSource
@@ -1136,15 +1147,13 @@ export const setComparisonProjectConflictResolution = async (
   return getResponseData<ComparisonProjectConflictResolutionValue>(response, 'Failed to save conflict resolution')
 }
 
-export const setComparisonProjectConflictResolutionComment = async (
+export const setComparisonProjectConflictComment = async (
   comparisonProjectId: string,
   input: {articleId: string; comment: string | null},
 ) => {
-  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})[
-    'conflict-resolution'
-  ].comment.post(input)
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})['conflict-comment'].post(input)
 
-  return getResponseData<ComparisonProjectConflictResolutionValue>(response, 'Failed to save resolution comment')
+  return getResponseData<ComparisonProjectConflictCommentSaveResult>(response, 'Failed to save conflict comment')
 }
 
 export const resetComparisonProjectConflictResolution = async (

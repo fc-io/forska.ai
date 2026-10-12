@@ -29,7 +29,7 @@ const mockState = vi.hoisted(() => {
       return Promise.resolve()
     }),
     search: {} as Record<string, unknown>,
-    setComparisonProjectConflictResolutionComment: vi.fn(),
+    setComparisonProjectConflictComment: vi.fn(),
   }
 })
 
@@ -96,7 +96,7 @@ vi.mock('../../../../services/comparisonProjectsService.ts', async (importOrigin
     fetchComparisonProjectJudgmentsMetadata: mockState.fetchComparisonProjectJudgmentsMetadata,
     fetchComparisonProjectJudgmentsPage: mockState.fetchComparisonProjectJudgmentsPage,
     fetchComparisonProjectStats: mockState.fetchComparisonProjectStats,
-    setComparisonProjectConflictResolutionComment: mockState.setComparisonProjectConflictResolutionComment,
+    setComparisonProjectConflictComment: mockState.setComparisonProjectConflictComment,
   }
 })
 
@@ -203,11 +203,10 @@ const getRow = (articleId: string, contextId: string): ComparisonProjectJudgment
     articleTitle: articleId,
     canonicalArticleId: articleId,
     cells: {'human:summary': 'yes', 'llm:model-1:summary': 'no'},
+    conflictComment: null,
     conflictResolution: {
       articleId,
       label: 'yes',
-      comment: null,
-      commentUpdatedAt: null,
       provenance: {contextId, generation: 1, origin: 'ui', setAt: '2026-10-10T10:00:00.000Z'},
       provenanceMatchesCurrent: contextId === 'context-current',
       reviewer: {displayName: 'Fredrik', userId: 'local-1'},
@@ -274,9 +273,7 @@ const renderComparePage = async () => {
 }
 
 const getCommentButton = (container: HTMLElement) => {
-  return container.querySelector<HTMLButtonElement>(
-    'button[aria-label$="comment on the conflict resolution for article-current"]',
-  )
+  return container.querySelector<HTMLButtonElement>('button[aria-label$="comment on the conflict for article-current"]')
 }
 
 const getCommentTextarea = () => {
@@ -302,7 +299,7 @@ const typeCommentAndSave = async (container: HTMLElement, comment: string) => {
   const textarea = getCommentTextarea()
 
   if (!textarea) {
-    throw new Error('Missing resolution comment textarea')
+    throw new Error('Missing conflict comment textarea')
   }
 
   textarea.value = comment
@@ -440,15 +437,32 @@ describe('Compare project judgments page', () => {
     }
   })
 
-  test('saves a resolution comment optimistically and replaces the row from the response without refetching', async () => {
+  test('saves a comment on a row without a resolution optimistically and replaces it from the response without refetching', async () => {
     mockState.search = {}
-    const savedResolution = {
-      ...getRow('article-current', 'context-current').conflictResolution,
-      comment: 'Server note',
-      commentUpdatedAt: '2026-10-10T12:00:00.000Z',
+    mockState.fetchComparisonProjectJudgmentsPage.mockImplementation(async () => {
+      return {
+        activeGeneration: 1,
+        data: [{...getRow('article-current', 'context-current'), conflictResolution: null}],
+        isServingReady: true,
+        limit: 50,
+        nextCursor: null,
+        page: 1,
+        servingStatus: 'ready',
+        servingUpdatedAt: null,
+        totalCount: null,
+        totalPages: null,
+      }
+    })
+    const savedComment = {
+      articleId: 'article-current',
+      conflictComment: {
+        author: {displayName: 'Fredrik', userId: 'local-1'},
+        comment: 'Server note',
+        updatedAt: '2026-10-10T12:00:00.000Z',
+      },
     }
-    const pendingSave: {resolve: (value: typeof savedResolution) => void} = {resolve: () => {}}
-    mockState.setComparisonProjectConflictResolutionComment.mockImplementation(() => {
+    const pendingSave: {resolve: (value: typeof savedComment) => void} = {resolve: () => {}}
+    mockState.setComparisonProjectConflictComment.mockImplementation(() => {
       return new Promise((resolve) => {
         pendingSave.resolve = resolve
       })
@@ -468,19 +482,19 @@ describe('Compare project judgments page', () => {
       await typeCommentAndSave(container, '  Typed note  ')
 
       await waitForCondition(() => {
-        expect(getCommentButton(container)?.title).toMatch(/^Typed note\nComment set /)
+        expect(getCommentButton(container)?.title).toMatch(/^Typed note\nComment, /)
         expect(getCommentButton(container)?.disabled).toBe(true)
       })
-      expect(mockState.setComparisonProjectConflictResolutionComment).toHaveBeenCalledWith('comparison-project-1', {
+      expect(mockState.setComparisonProjectConflictComment).toHaveBeenCalledWith('comparison-project-1', {
         articleId: 'article-current',
         comment: 'Typed note',
       })
 
-      pendingSave.resolve(savedResolution)
+      pendingSave.resolve(savedComment)
 
       await waitForCondition(() => {
         expect(getCommentButton(container)?.title).toBe(
-          `Server note\nComment set ${format(new Date('2026-10-10T12:00:00.000Z'), 'yyyy-MM-dd HH:mm')}`,
+          `Server note\nComment by Fredrik, ${format(new Date('2026-10-10T12:00:00.000Z'), 'yyyy-MM-dd HH:mm')}`,
         )
         expect(getCommentButton(container)?.disabled).toBe(false)
       })
@@ -489,6 +503,13 @@ describe('Compare project judgments page', () => {
       expect(mockState.fetchComparisonProjectJudgmentsCount.mock.calls.length).toBe(countCallCount)
       expect(getPageQueryHashes(queryClient)).toEqual(pageQueryKeys)
       expect(getCommentButton(container)?.dataset.hasDraft).toBe('false')
+      expect(
+        queryClient
+          .getQueryData<{pages: Array<{data: ComparisonProjectJudgmentsRow[]}>}>(getPageQueryKeyForTest())
+          ?.pages[0]?.data.find((row) => {
+            return row.canonicalArticleId === 'article-current'
+          }),
+      ).toMatchObject({conflictComment: {comment: 'Server note'}, conflictResolution: null})
     } finally {
       dispose()
       queryClient.clear()
@@ -497,8 +518,8 @@ describe('Compare project judgments page', () => {
 
   test('rolls a failed comment save back, shows the error and keeps the draft in the open editor', async () => {
     mockState.search = {}
-    mockState.setComparisonProjectConflictResolutionComment.mockImplementation(async () => {
-      throw new Error('Conflict resolution comments cannot contain control characters')
+    mockState.setComparisonProjectConflictComment.mockImplementation(async () => {
+      throw new Error('Conflict comments cannot contain control characters')
     })
     const {container, dispose, queryClient} = await renderComparePage()
 
@@ -510,7 +531,7 @@ describe('Compare project judgments page', () => {
       await typeCommentAndSave(container, 'Rejected note')
 
       await waitForCondition(() => {
-        expect(container.textContent).toContain('Conflict resolution comments cannot contain control characters')
+        expect(container.textContent).toContain('Conflict comments cannot contain control characters')
         expect(getCommentButton(container)?.disabled).toBe(false)
         expect(getCommentButton(container)?.title).toBe('Add comment\nUnsaved draft')
       })
@@ -525,7 +546,7 @@ describe('Compare project judgments page', () => {
           .getQueryData<{pages: Array<{data: ComparisonProjectJudgmentsRow[]}>}>(getPageQueryKeyForTest())
           ?.pages[0]?.data.find((row) => {
             return row.canonicalArticleId === 'article-current'
-          })?.conflictResolution?.comment,
+          })?.conflictComment,
       ).toBeNull()
     } finally {
       dispose()

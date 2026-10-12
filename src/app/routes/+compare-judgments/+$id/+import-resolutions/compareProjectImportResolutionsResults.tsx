@@ -99,7 +99,9 @@ const ImportableRowsTable = (props: {rows: ComparisonProjectConflictResolutionIm
                     <td class={tableCellClass}>
                       <ImportResolutionTargetCell row={row} />
                     </td>
-                    <td class={`${tableCellClass} font-medium text-gray-900`}>{row.selectedResolution}</td>
+                    <td class={`${tableCellClass} font-medium text-gray-900`}>
+                      {row.selectedResolution || 'Comment only'}
+                    </td>
                     <td class={tableCellClass}>
                       <ImportResolutionMatchCell row={row} />
                     </td>
@@ -139,7 +141,9 @@ const SkippedRowsTable = (props: {rows: ComparisonProjectConflictResolutionImpor
                     <td class={tableCellClass}>
                       <ImportResolutionTargetCell row={row} />
                     </td>
-                    <td class={`${tableCellClass} font-medium text-gray-900`}>{row.selectedResolution}</td>
+                    <td class={`${tableCellClass} font-medium text-gray-900`}>
+                      {row.selectedResolution || 'Comment only'}
+                    </td>
                     <td class={tableCellClass}>
                       <ImportResolutionMatchCell row={row} />
                     </td>

@@ -1,22 +1,18 @@
-import type {ComparisonProjectConflictResolutionValue} from '../../../../../services/comparisonProjectsService.ts'
-
-const getStringOrNull = (value: unknown) => {
-  return typeof value === 'string' ? value : null
-}
+import type {
+  ComparisonProjectConflictCommentValue,
+  ComparisonProjectConflictResolutionValue,
+} from '../../../../../services/comparisonProjectsService.ts'
 
 export const getCompareProjectOptimisticConflictResolution = (params: {
   activeGeneration: number | null
   articleId: string
   judgmentContextId: string | null
   label: string
-  previousConflictResolution: ComparisonProjectConflictResolutionValue | null
   setAt: Date
   value: string
 }): ComparisonProjectConflictResolutionValue => {
   return {
     articleId: params.articleId,
-    comment: getStringOrNull(params.previousConflictResolution?.comment),
-    commentUpdatedAt: params.previousConflictResolution?.commentUpdatedAt ?? null,
     label: params.label,
     provenance: {
       contextId: params.judgmentContextId,
@@ -33,14 +29,16 @@ export const getCompareProjectOptimisticConflictResolution = (params: {
   }
 }
 
-export const getCompareProjectOptimisticConflictResolutionComment = (params: {
+export const getCompareProjectOptimisticConflictComment = (params: {
   comment: string | null
-  commentUpdatedAt: Date
-  conflictResolution: ComparisonProjectConflictResolutionValue
-}): ComparisonProjectConflictResolutionValue => {
-  return {
-    ...params.conflictResolution,
-    comment: params.comment,
-    commentUpdatedAt: params.commentUpdatedAt.toISOString(),
-  }
+  previousConflictComment: ComparisonProjectConflictCommentValue | null
+  updatedAt: Date
+}): ComparisonProjectConflictCommentValue | null => {
+  return params.comment === null
+    ? null
+    : {
+        author: params.previousConflictComment?.author ?? null,
+        comment: params.comment,
+        updatedAt: params.updatedAt.toISOString(),
+      }
 }

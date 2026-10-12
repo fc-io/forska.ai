@@ -1,22 +1,23 @@
 import {createSignal, Show, splitProps} from 'solid-js'
 
-import type {ComparisonProjectConflictResolutionValue} from '../../../services/comparisonProjectsService.ts'
+import type {ComparisonProjectConflictCommentValue} from '../../../services/comparisonProjectsService.ts'
 import {cn} from '../../../utils/cn.ts'
 import {comparisonProjectConflictResolutionCommentMaxLength} from '../../../utils/comparisonProjectConflictResolutionComment.ts'
 import {Popover, PopoverContent, PopoverTrigger} from '../../ui/popover.tsx'
 import {
-  getConflictResolutionCommentButtonLabel,
-  getConflictResolutionCommentButtonTitle,
-  getHasUnsavedConflictResolutionCommentDraft,
-  getIsConflictResolutionCommentSaveShortcut,
-  getNormalizedConflictResolutionComment,
-  getSavedConflictResolutionComment,
+  getConflictCommentButtonLabel,
+  getConflictCommentButtonTitle,
+  getHasUnsavedConflictCommentDraft,
+  getIsConflictCommentSaveShortcut,
+  getNormalizedConflictComment,
+  getSavedConflictComment,
 } from './comparisonProjectConflictResolutionComment/comparisonProjectConflictResolutionCommentText.ts'
 
 export type ComparisonProjectConflictResolutionCommentSaveResult = boolean | undefined
 
 type ComparisonProjectConflictResolutionCommentProps = {
   articleTitle: string
+  conflictComment: ComparisonProjectConflictCommentValue | null
   disabled: boolean
   draft: string | null
   onDraftChange?: (draft: string | null) => void
@@ -25,32 +26,31 @@ type ComparisonProjectConflictResolutionCommentProps = {
   ) =>
     | ComparisonProjectConflictResolutionCommentSaveResult
     | Promise<ComparisonProjectConflictResolutionCommentSaveResult>
-  resolution: ComparisonProjectConflictResolutionValue | null
 }
 
 const secondaryButtonClass =
   'rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-700 shadow-sm hover:bg-gray-100 disabled:opacity-60'
 
 export const ComparisonProjectConflictResolutionComment = (props: ComparisonProjectConflictResolutionCommentProps) => {
-  const [local] = splitProps(props, ['articleTitle', 'disabled', 'draft', 'onDraftChange', 'onSave', 'resolution'])
+  const [local] = splitProps(props, ['articleTitle', 'conflictComment', 'disabled', 'draft', 'onDraftChange', 'onSave'])
   const [isOpen, setIsOpen] = createSignal(false)
   const [isSaving, setIsSaving] = createSignal(false)
   let textareaRef: HTMLTextAreaElement | undefined
 
   const savedComment = () => {
-    return getSavedConflictResolutionComment(local.resolution)
+    return getSavedConflictComment(local.conflictComment)
   }
   const hasComment = () => {
     return savedComment() !== null
   }
   const hasUnsavedDraft = () => {
-    return getHasUnsavedConflictResolutionCommentDraft(local.draft, local.resolution)
+    return getHasUnsavedConflictCommentDraft(local.draft, local.conflictComment)
   }
   const editorText = () => {
     return local.draft ?? savedComment() ?? ''
   }
   const areControlsDisabled = () => {
-    return local.disabled || isSaving() || !local.resolution
+    return local.disabled || isSaving()
   }
   const updateDraft = (value: string) => {
     local.onDraftChange?.(value === (savedComment() ?? '') ? null : value)
@@ -74,7 +74,7 @@ export const ComparisonProjectConflictResolutionComment = (props: ComparisonProj
     }
   }
   const saveEditorText = () => {
-    const comment = getNormalizedConflictResolutionComment(editorText())
+    const comment = getNormalizedConflictComment(editorText())
 
     if (comment === savedComment()) {
       discardDraft()
@@ -91,11 +91,11 @@ export const ComparisonProjectConflictResolutionComment = (props: ComparisonProj
           'relative inline-flex size-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60',
           hasComment() && 'border-blue-300 bg-blue-50 text-blue-700 hover:border-blue-400 hover:bg-blue-100',
         )}
-        title={getConflictResolutionCommentButtonTitle(local.resolution, hasUnsavedDraft())}
-        aria-label={getConflictResolutionCommentButtonLabel(hasComment(), local.articleTitle)}
+        title={getConflictCommentButtonTitle(local.conflictComment, hasUnsavedDraft())}
+        aria-label={getConflictCommentButtonLabel(hasComment(), local.articleTitle)}
         data-has-comment={hasComment() ? 'true' : 'false'}
         data-has-draft={hasUnsavedDraft() ? 'true' : 'false'}
-        disabled={local.disabled || !local.resolution}
+        disabled={local.disabled}
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -115,7 +115,7 @@ export const ComparisonProjectConflictResolutionComment = (props: ComparisonProj
       </PopoverTrigger>
       <PopoverContent
         class="space-y-2"
-        aria-label={`Comment on the conflict resolution for ${local.articleTitle}`}
+        aria-label={`Comment on the conflict for ${local.articleTitle}`}
         onOpenAutoFocus={(event) => {
           // The popover mounts at the page's top-left corner and is positioned next to the trigger a tick
           // later, so a scrolling focus (or the native autofocus attribute) jumps the page to the top.
@@ -131,13 +131,13 @@ export const ComparisonProjectConflictResolutionComment = (props: ComparisonProj
           value={editorText()}
           disabled={areControlsDisabled()}
           aria-label={`Comment for ${local.articleTitle}`}
-          placeholder="Why this resolution?"
+          placeholder="Notes on this conflict"
           class="block w-full resize-y rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-900 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
           onInput={(event) => {
             updateDraft(event.currentTarget.value)
           }}
           onKeyDown={(event) => {
-            if (getIsConflictResolutionCommentSaveShortcut(event) && !areControlsDisabled()) {
+            if (getIsConflictCommentSaveShortcut(event) && !areControlsDisabled()) {
               event.preventDefault()
               saveEditorText()
             }

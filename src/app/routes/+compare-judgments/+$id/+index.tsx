@@ -19,8 +19,8 @@ import {
   fetchComparisonProjectStats,
   getComparisonProjectServingRefetchInterval,
   resetComparisonProjectConflictResolution,
+  setComparisonProjectConflictComment,
   setComparisonProjectConflictResolution,
-  setComparisonProjectConflictResolutionComment,
 } from '../../../../services/comparisonProjectsService'
 import {
   getComparisonJudgmentContextIds,
@@ -71,8 +71,8 @@ import {
   getInitialCompareProjectJudgmentsUrlState,
 } from './+index/compareProjectJudgmentsUrlState.ts'
 import {
+  getCompareProjectOptimisticConflictComment,
   getCompareProjectOptimisticConflictResolution,
-  getCompareProjectOptimisticConflictResolutionComment,
 } from './+index/compareProjectOptimisticConflictResolution.ts'
 import {CompareProjectResolutionTransferActions} from './+index/compareProjectResolutionTransferActions.tsx'
 import {ComparisonProjectServingProgress} from './+index/comparisonProjectServingProgress.tsx'
@@ -600,14 +600,14 @@ const CompareProjectJudgmentsPage = () => {
       || hasActiveConflictResolutionFilters()
     )
   })
-  const updateCurrentJudgmentsPageConflictResolution = (
+  const updateCurrentJudgmentsPageRow = (
     articleId: string,
-    conflictResolution: ComparisonProjectJudgmentsPage['data'][number]['conflictResolution'],
+    rowUpdate: Partial<Pick<ComparisonProjectJudgmentsPage['data'][number], 'conflictComment' | 'conflictResolution'>>,
   ) => {
     const currentRow = visibleJudgmentRows().find((row) => {
       return row.canonicalArticleId === articleId
     })
-    const updatedRow = currentRow ? {...currentRow, conflictResolution} : null
+    const updatedRow = currentRow ? {...currentRow, ...rowUpdate} : null
 
     if (updatedRow && hasActiveConflictResolutionFilters()) {
       setRetainedConflictResolutionRowsByArticleId((currentRows) => {
@@ -625,7 +625,7 @@ const CompareProjectJudgmentsPage = () => {
                 return {
                   ...page,
                   data: page.data.map((row) => {
-                    return row.canonicalArticleId === articleId ? {...row, conflictResolution} : row
+                    return row.canonicalArticleId === articleId ? {...row, ...rowUpdate} : row
                   }),
                 }
               }),
@@ -640,11 +640,7 @@ const CompareProjectJudgmentsPage = () => {
   const shouldDeferCurrentJudgmentsPageRefetch = () => {
     return hasActiveConflictResolutionFilters()
   }
-  const getOptimisticConflictResolution = (
-    articleId: string,
-    value: string,
-    previousConflictResolution: ComparisonProjectJudgmentsPage['data'][number]['conflictResolution'],
-  ) => {
+  const getOptimisticConflictResolution = (articleId: string, value: string) => {
     const option = conflictResolutionOptions().find((candidate) => {
       return candidate.value === value
     })
@@ -654,7 +650,6 @@ const CompareProjectJudgmentsPage = () => {
       articleId,
       judgmentContextId: comparisonProjectQuery.data?.judgmentContextId ?? null,
       label: option?.label ?? value,
-      previousConflictResolution,
       setAt: new Date(),
       value,
     })
@@ -752,53 +747,47 @@ const CompareProjectJudgmentsPage = () => {
       visibleJudgmentRows().find((row) => {
         return row.canonicalArticleId === articleId
       })?.conflictResolution ?? null
-    updateCurrentJudgmentsPageConflictResolution(
-      articleId,
-      getOptimisticConflictResolution(articleId, value, previousConflictResolution),
-    )
+    updateCurrentJudgmentsPageRow(articleId, {conflictResolution: getOptimisticConflictResolution(articleId, value)})
 
     try {
       const conflictResolution = await setComparisonProjectConflictResolution(comparisonProjectId(), {articleId, value})
-      updateCurrentJudgmentsPageConflictResolution(articleId, conflictResolution)
+      updateCurrentJudgmentsPageRow(articleId, {conflictResolution})
       refreshConflictResolutionQueries()
     } catch (error) {
-      updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
+      updateCurrentJudgmentsPageRow(articleId, {conflictResolution: previousConflictResolution})
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save conflict resolution')
     } finally {
       setConflictResolutionArticlePending(articleId, false)
     }
   }
-  const handleConflictResolutionCommentSave = async (articleId: string, comment: string | null) => {
-    const previousConflictResolution =
-      visibleJudgmentRows().find((row) => {
-        return row.canonicalArticleId === articleId
-      })?.conflictResolution ?? null
+  const handleConflictCommentSave = async (articleId: string, comment: string | null) => {
+    const currentRow = visibleJudgmentRows().find((row) => {
+      return row.canonicalArticleId === articleId
+    })
 
-    if (!previousConflictResolution) {
+    if (!currentRow) {
       return false
     }
 
+    const previousConflictComment = currentRow.conflictComment ?? null
+
     setConflictResolutionArticlePending(articleId, true)
     setConflictResolutionError(null)
-    updateCurrentJudgmentsPageConflictResolution(
-      articleId,
-      getCompareProjectOptimisticConflictResolutionComment({
+    updateCurrentJudgmentsPageRow(articleId, {
+      conflictComment: getCompareProjectOptimisticConflictComment({
         comment,
-        commentUpdatedAt: new Date(),
-        conflictResolution: previousConflictResolution,
+        previousConflictComment,
+        updatedAt: new Date(),
       }),
-    )
+    })
 
     try {
-      const conflictResolution = await setComparisonProjectConflictResolutionComment(comparisonProjectId(), {
-        articleId,
-        comment,
-      })
-      updateCurrentJudgmentsPageConflictResolution(articleId, conflictResolution)
+      const savedComment = await setComparisonProjectConflictComment(comparisonProjectId(), {articleId, comment})
+      updateCurrentJudgmentsPageRow(articleId, {conflictComment: savedComment.conflictComment})
       return true
     } catch (error) {
-      updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
-      setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save resolution comment')
+      updateCurrentJudgmentsPageRow(articleId, {conflictComment: previousConflictComment})
+      setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save conflict comment')
       return false
     } finally {
       setConflictResolutionArticlePending(articleId, false)
@@ -811,14 +800,14 @@ const CompareProjectJudgmentsPage = () => {
       visibleJudgmentRows().find((row) => {
         return row.canonicalArticleId === articleId
       })?.conflictResolution ?? null
-    updateCurrentJudgmentsPageConflictResolution(articleId, null)
+    updateCurrentJudgmentsPageRow(articleId, {conflictResolution: null})
 
     try {
       await resetComparisonProjectConflictResolution(comparisonProjectId(), {articleId})
-      updateCurrentJudgmentsPageConflictResolution(articleId, null)
+      updateCurrentJudgmentsPageRow(articleId, {conflictResolution: null})
       refreshConflictResolutionQueries()
     } catch (error) {
-      updateCurrentJudgmentsPageConflictResolution(articleId, previousConflictResolution)
+      updateCurrentJudgmentsPageRow(articleId, {conflictResolution: previousConflictResolution})
       setConflictResolutionError(error instanceof Error ? error.message : 'Failed to reset conflict resolution')
     } finally {
       setConflictResolutionArticlePending(articleId, false)
@@ -1114,7 +1103,7 @@ const CompareProjectJudgmentsPage = () => {
                         conflictResolutionOptions={conflictResolutionOptions()}
                         currentJudgmentContext={comparisonProject().judgmentContext}
                         judgmentContextsById={judgmentContextsById()}
-                        onConflictResolutionCommentSave={handleConflictResolutionCommentSave}
+                        onConflictResolutionCommentSave={handleConflictCommentSave}
                         onConflictResolutionReset={handleConflictResolutionReset}
                         onConflictResolutionSelect={handleConflictResolutionSelect}
                         rows={visibleJudgmentRows()}

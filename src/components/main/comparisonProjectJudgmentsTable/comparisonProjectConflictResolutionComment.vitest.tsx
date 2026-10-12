@@ -6,7 +6,7 @@ import {afterEach, describe, expect, test, vi} from 'vitest'
 
 import {
   fetchComparisonProjectJudgmentsPage,
-  setComparisonProjectConflictResolutionComment,
+  setComparisonProjectConflictComment,
 } from '../../../services/comparisonProjectsService.ts'
 import {ComparisonProjectJudgmentsTable} from './comparisonProjectJudgmentsTable.tsx'
 
@@ -22,10 +22,14 @@ vi.mock('@tanstack/solid-router', () => {
   }
 })
 
+const conflictComment = {
+  author: {displayName: '10/10/2026', userId: 'local-1'},
+  comment: '2026-10-10',
+  updatedAt: '2026-10-10T09:30:00.000Z',
+}
+
 const resolution = {
   articleId: 'article-dated',
-  comment: '2026-10-10',
-  commentUpdatedAt: '2026-10-10T09:30:00.000Z',
   label: 'yes',
   provenance: {contextId: null, generation: 1, origin: 'ui', setAt: '2026-10-10T09:00:00.000Z'},
   provenanceMatchesCurrent: null,
@@ -46,6 +50,7 @@ const page = {
       articleTitle: '10/10/2026',
       canonicalArticleId: 'article-dated',
       cells: {'llm:model-1:prompt-1': 'yes', 'llm:model-2:prompt-1': 'no'},
+      conflictComment,
       conflictResolution: resolution,
       hasConflict: true,
       id: 'article-dated',
@@ -80,7 +85,7 @@ const columns = [
   },
 ]
 
-describe('resolution comments through the real API client', () => {
+describe('conflict comments through the real API client', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     document.body.innerHTML = ''
@@ -96,11 +101,12 @@ describe('resolution comments through the real API client', () => {
     const fetchedPage = await fetchComparisonProjectJudgmentsPage('comparison-project-1', 50, [], [], [], [], '')
     const [row] = fetchedPage.data
 
-    expect(row?.conflictResolution?.comment).toBe('2026-10-10')
+    expect(row?.conflictComment?.comment).toBe('2026-10-10')
+    expect(row?.conflictComment?.author?.displayName).toBe('10/10/2026')
     expect(row?.articleTitle).toBe('10/10/2026')
     expect(row?.conflictResolution?.reviewerDisplayName).toBe('10/10/2026')
     expect(row?.conflictResolution?.setAt).toEqual(new Date('2026-10-10T09:00:00.000Z'))
-    expect(row?.conflictResolution?.commentUpdatedAt).toEqual(new Date('2026-10-10T09:30:00.000Z'))
+    expect(row?.conflictComment?.updatedAt).toEqual(new Date('2026-10-10T09:30:00.000Z'))
 
     const container = document.createElement('div')
     document.body.appendChild(container)
@@ -122,6 +128,7 @@ describe('resolution comments through the real API client', () => {
       expect(container.textContent).toContain('10/10/2026')
       expect(button?.dataset.hasComment).toBe('true')
       expect(button?.title.split('\n')[0]).toBe('2026-10-10')
+      expect(button?.title.split('\n')[1]).toMatch(/^Comment by 10\/10\/2026, 2026-10-1\d \d{2}:30$/)
 
       button?.click()
       await new Promise<void>((resolve) => {
@@ -138,16 +145,19 @@ describe('resolution comments through the real API client', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
-        return getJsonResponse({...resolution, comment: '2026-10-10T12:00:00.000Z'})
+        return getJsonResponse({
+          articleId: 'article-dated',
+          conflictComment: {...conflictComment, comment: '2026-10-10T12:00:00.000Z'},
+        })
       }),
     )
 
-    const saved = await setComparisonProjectConflictResolutionComment('comparison-project-1', {
+    const saved = await setComparisonProjectConflictComment('comparison-project-1', {
       articleId: 'article-dated',
       comment: '2026-10-10T12:00:00.000Z',
     })
 
-    expect(saved.comment).toBe('2026-10-10T12:00:00.000Z')
-    expect(saved.commentUpdatedAt).toEqual(new Date('2026-10-10T09:30:00.000Z'))
+    expect(saved.conflictComment?.comment).toBe('2026-10-10T12:00:00.000Z')
+    expect(saved.conflictComment?.updatedAt).toEqual(new Date('2026-10-10T09:30:00.000Z'))
   })
 })
