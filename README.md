@@ -23,10 +23,10 @@ Then pick **one** of the two versions below. They are alternatives, not steps: c
 
 ### Option A: Stable release (recommended)
 
-The current stable release is the Git tag `stable-2026-09-15`. Pick this if you want a version that is known to work.
+The current stable release is the Git tag `win-2026-10-12`. Pick this if you want a version that is known to work.
 
 ```bash
-git clone --branch stable-2026-09-15 https://github.com/fc-io/forska.ai.git
+git clone --branch win-2026-10-12 https://github.com/fc-io/forska.ai.git
 cd forska.ai
 bun install
 ```
@@ -47,7 +47,7 @@ From an existing checkout, move to the stable release:
 
 ```bash
 git fetch origin --tags
-git switch --detach stable-2026-09-15
+git switch --detach win-2026-10-12
 bun install
 ```
 
