@@ -6,7 +6,7 @@ import {
 import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import type {
   ComparisonProjectConflictResolutionTransferArtifact,
-  ComparisonProjectConflictResolutionTransferRowV2,
+  ComparisonProjectConflictResolutionTransferRowV3,
 } from './comparisonProjectConflictResolutionFileTransfer.ts'
 import {
   getImportedComparisonProjectConflictResolutionComment,
@@ -58,7 +58,7 @@ export type ComparisonProjectConflictResolutionImportSourceRow = {
   identifiers?: readonly ComparisonProjectConflictResolutionImportIdentifier[] | null
   pubmedId?: string | null
   resolutionMode?: HumanJudgmentMode | null
-  resolutionValue: string
+  resolutionValue: string | null
   sourceArticleId: string
   sourceArticleTitle?: string | null
   sourceComment?: string | null
@@ -104,7 +104,7 @@ export type ComparisonProjectConflictResolutionImportCandidateSource = {
 }
 
 export type ComparisonProjectConflictResolutionImportCandidate = {
-  resolutionValue: string
+  resolutionValue: string | null
   sourceRows: ComparisonProjectConflictResolutionImportCandidateSource[]
   targetArticleId: string
 }
@@ -313,7 +313,7 @@ type NormalizedSourceRow = Omit<
   identifierKeys: NormalizedIdentifierKey[]
   idTitleKey: string | null
   resolutionMode: HumanJudgmentMode
-  resolutionValue: string
+  resolutionValue: string | null
   titleKey: string | null
 }
 
@@ -332,7 +332,7 @@ type ImportCandidateRow = {
   isOverwrite: boolean
   matchKey: string
   matchKind: ComparisonProjectConflictResolutionImportMatchKind
-  resolutionValue: string
+  resolutionValue: string | null
   sourceRow: NormalizedSourceRow
   sourceRowId: string
   targetArticle: NormalizedTargetArticle
@@ -605,6 +605,7 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
     source_comment AS (
       SELECT
         cc.comparison_project_id AS sourceComparisonProjectId,
+        cc.id AS sourceCommentId,
         cc.article_id AS sourceArticleId,
         cc.comment AS sourceComment,
         cc.author_user_id AS sourceCommentAuthorUserId,
@@ -616,6 +617,24 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
         PARTITION BY cc.comparison_project_id, cc.article_id
         ORDER BY cc.updated_at DESC, cc.id DESC
       ) = 1
+    ),
+    source_row AS (
+      SELECT
+        COALESCE(source_resolution.sourceComparisonProjectId, source_comment.sourceComparisonProjectId) AS sourceComparisonProjectId,
+        COALESCE(source_resolution.sourceResolutionId, source_comment.sourceCommentId) AS sourceResolutionId,
+        COALESCE(source_resolution.sourceRowId, source_comment.sourceCommentId) AS sourceRowId,
+        COALESCE(source_resolution.sourceArticleId, source_comment.sourceArticleId) AS sourceArticleId,
+        source_resolution.resolutionValue AS resolutionValue,
+        source_resolution.sourceReviewerUserId AS sourceReviewerUserId,
+        source_resolution.sourceReviewerDisplayName AS sourceReviewerDisplayName,
+        source_resolution.sourceJudgmentContextId AS sourceJudgmentContextId,
+        source_comment.sourceComment AS sourceComment,
+        source_comment.sourceCommentAuthorUserId AS sourceCommentAuthorUserId,
+        source_comment.sourceCommentAuthorDisplayName AS sourceCommentAuthorDisplayName
+      FROM source_resolution
+      FULL OUTER JOIN source_comment
+        ON source_comment.sourceComparisonProjectId = source_resolution.sourceComparisonProjectId
+       AND source_comment.sourceArticleId = source_resolution.sourceArticleId
     ),
     doi_identifier AS (
       SELECT
@@ -634,20 +653,20 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       GROUP BY article_id
     )
     SELECT
-      source_resolution.sourceComparisonProjectId AS sourceComparisonProjectId,
+      source_row.sourceComparisonProjectId AS sourceComparisonProjectId,
       source_comparison_project.name AS sourceComparisonProjectName,
-      source_resolution.sourceResolutionId AS sourceResolutionId,
-      source_resolution.sourceRowId AS sourceRowId,
-      source_resolution.sourceArticleId AS sourceArticleId,
+      source_row.sourceResolutionId AS sourceResolutionId,
+      source_row.sourceRowId AS sourceRowId,
+      source_row.sourceArticleId AS sourceArticleId,
       source_article.article_id AS sourceExternalArticleId,
       source_article.article_title AS sourceArticleTitle,
-      source_resolution.resolutionValue AS resolutionValue,
-      source_resolution.sourceReviewerUserId AS sourceReviewerUserId,
-      source_resolution.sourceReviewerDisplayName AS sourceReviewerDisplayName,
-      source_resolution.sourceJudgmentContextId AS sourceJudgmentContextId,
-      source_comment.sourceComment AS sourceComment,
-      source_comment.sourceCommentAuthorUserId AS sourceCommentAuthorUserId,
-      source_comment.sourceCommentAuthorDisplayName AS sourceCommentAuthorDisplayName,
+      source_row.resolutionValue AS resolutionValue,
+      source_row.sourceReviewerUserId AS sourceReviewerUserId,
+      source_row.sourceReviewerDisplayName AS sourceReviewerDisplayName,
+      source_row.sourceJudgmentContextId AS sourceJudgmentContextId,
+      source_row.sourceComment AS sourceComment,
+      source_row.sourceCommentAuthorUserId AS sourceCommentAuthorUserId,
+      source_row.sourceCommentAuthorDisplayName AS sourceCommentAuthorDisplayName,
       'summary' AS resolutionMode,
       doi_identifier.doiKeys AS doiKeys,
       strong_identifier.identifierKeys AS identifierKeys,
@@ -656,16 +675,13 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       source_article.arxiv_id AS arxivId,
       source_article.article_id AS externalArticleId,
       source_article.article_title AS title
-    FROM source_resolution
+    FROM source_row
     INNER JOIN ${params.comparisonProjectTable} source_comparison_project
-      ON source_comparison_project.id = source_resolution.sourceComparisonProjectId
-    INNER JOIN ${params.articleTable} source_article ON source_article.id = source_resolution.sourceArticleId
-    LEFT JOIN source_comment
-      ON source_comment.sourceComparisonProjectId = source_resolution.sourceComparisonProjectId
-     AND source_comment.sourceArticleId = source_resolution.sourceArticleId
+      ON source_comparison_project.id = source_row.sourceComparisonProjectId
+    INNER JOIN ${params.articleTable} source_article ON source_article.id = source_row.sourceArticleId
     LEFT JOIN doi_identifier ON doi_identifier.articleId = source_article.id
     LEFT JOIN strong_identifier ON strong_identifier.articleId = source_article.id
-    ORDER BY source_resolution.sourceRowId ASC
+    ORDER BY source_row.sourceRowId ASC
   `
 }
 
@@ -1066,7 +1082,7 @@ const getComparisonProjectConflictResolutionImportContextId = (value: string | n
 }
 
 const getComparisonProjectConflictResolutionImportTransferRowProvenance = (
-  row: ComparisonProjectConflictResolutionTransferRowV2,
+  row: ComparisonProjectConflictResolutionTransferRowV3,
 ): ComparisonProjectConflictResolutionImportSourceProvenance | null => {
   return row.provenance
     ? {
@@ -1078,14 +1094,15 @@ const getComparisonProjectConflictResolutionImportTransferRowProvenance = (
 }
 
 export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferRows = (params: {
-  rows: readonly ComparisonProjectConflictResolutionTransferRowV2[]
+  rows: readonly ComparisonProjectConflictResolutionTransferRowV3[]
   sourceComparisonProjectId: string
   sourceComparisonProjectName: string
 }): ComparisonProjectConflictResolutionImportSourceRow[] => {
   return params.rows.map((row, rowIndex) => {
     const generatedSourceRowId = `${params.sourceComparisonProjectId}:transfer-row-${String(rowIndex + 1).padStart(6, '0')}`
     const sourceArticleId = row.sourceArticleRowId ?? `${generatedSourceRowId}:article`
-    const sourceResolutionId = row.sourceResolutionId ?? `${generatedSourceRowId}:resolution`
+    const sourceResolutionId =
+      row.sourceResolutionId ?? `${generatedSourceRowId}:${row.resolution ? 'resolution' : 'comment'}`
 
     return {
       arxivId: row.arxivId ?? null,
@@ -1095,8 +1112,8 @@ export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferR
         return {kind: identifier.kind, normalizedValue: identifier.normalizedValue}
       }),
       pubmedId: row.pubmedId ?? null,
-      resolutionMode: row.resolution.mode,
-      resolutionValue: row.resolution.value,
+      resolutionMode: row.resolution?.mode ?? null,
+      resolutionValue: row.resolution?.value ?? null,
       sourceArticleId,
       sourceArticleTitle: row.title,
       ...(row.comment === undefined
@@ -1105,7 +1122,7 @@ export const getComparisonProjectConflictResolutionImportSourceRowsFromTransferR
       sourceComparisonProjectId: params.sourceComparisonProjectId,
       sourceComparisonProjectName: params.sourceComparisonProjectName,
       sourceExternalArticleId: row.externalArticleId,
-      ...(row.provenance
+      ...(row.resolution && row.provenance
         ? {sourceProvenance: getComparisonProjectConflictResolutionImportTransferRowProvenance(row)}
         : {}),
       sourceResolutionId,
@@ -1436,7 +1453,7 @@ const getNormalizedSourceRows = (
       identifierKeys: getNormalizedIdentifierKeys(row),
       idTitleKey: getComparisonProjectConflictResolutionImportIdTitleKey(row),
       resolutionMode: row.resolutionMode ?? 'summary',
-      resolutionValue: getNormalizedResolutionValue(row.resolutionValue),
+      resolutionValue: row.resolutionValue === null ? null : getNormalizedResolutionValue(row.resolutionValue),
       titleKey: getComparisonProjectConflictResolutionImportTitleKey(row),
     }
   })
@@ -1568,7 +1585,7 @@ const getWarningSourceRow = (row: NormalizedSourceRow): ComparisonProjectConflic
     compareProjectId: row.sourceComparisonProjectId,
     compareProjectName: row.sourceComparisonProjectName,
     externalArticleId: row.sourceExternalArticleId ?? row.externalArticleId ?? null,
-    resolutionAnswer: row.resolutionValue,
+    resolutionAnswer: row.resolutionValue ?? '',
     sourceResolutionId: row.sourceResolutionId,
     sourceRowId: row.sourceRowId,
   }
@@ -1703,10 +1720,10 @@ const getTargetSummaryOptionValueMap = (targetSummaryOptionValues: readonly stri
 }
 
 const getCanonicalTargetSummaryOptionValue = (
-  row: ImportCandidateRow,
+  resolutionValue: string,
   targetSummaryOptionValueMap: Map<string, string[]>,
 ) => {
-  const normalizedValue = getNormalizedResolutionValue(row.resolutionValue)
+  const normalizedValue = getNormalizedResolutionValue(resolutionValue)
   const matchingOptionValues = targetSummaryOptionValueMap.get(normalizedValue) ?? []
 
   return matchingOptionValues.length === 1 ? matchingOptionValues[0] : null
@@ -1719,10 +1736,10 @@ const getInvalidTargetResolutionValueWarning = (
     code: 'invalid-target-resolution-value',
     matchKey: row.matchKey,
     matchKind: row.matchKind,
-    message: `Source resolution value does not map to exactly one target summary option: ${row.resolutionValue}`,
+    message: `Source resolution value does not map to exactly one target summary option: ${row.resolutionValue ?? ''}`,
     sourceRows: [getWarningSourceRow(row.sourceRow)],
     targetArticles: [getWarningTargetArticle(row.targetArticle)],
-    value: row.resolutionValue,
+    value: row.resolutionValue ?? '',
   }
 }
 
@@ -1784,7 +1801,7 @@ const getCandidateRow = (params: {
   targetArticle: NormalizedTargetArticle
 }): ImportCandidateRow => {
   return {
-    isOverwrite: params.targetArticle.hasExistingResolution === true,
+    isOverwrite: params.row.resolutionValue !== null && params.targetArticle.hasExistingResolution === true,
     matchKey: params.matchKey,
     matchKind: params.matchKind,
     resolutionValue: params.row.resolutionValue,
@@ -1819,7 +1836,7 @@ const getExistingTargetResolutionResult = (
   selectedMatch: ImportTargetArticleMatch,
   overwriteMode: ComparisonProjectConflictResolutionImportOverwriteMode,
 ): ImportCandidateRowResult | null => {
-  if (!selectedMatch.targetArticle.hasExistingResolution) {
+  if (row.resolutionValue === null || !selectedMatch.targetArticle.hasExistingResolution) {
     return null
   }
 
@@ -2219,7 +2236,7 @@ const getImportCandidateRow = (
     ? getTitleImportCandidateRow(importMode, overwriteMode, row, targetArticleMaps)
     : null
 
-  return row.resolutionMode !== 'summary'
+  return row.resolutionValue !== null && row.resolutionMode !== 'summary'
     ? {
         candidate: null,
         detail: getPreferredSourceRowMatchDetail(row),
@@ -2306,9 +2323,12 @@ const getTargetResolvedCandidateRows = (
     warnings: ComparisonProjectConflictResolutionImportWarning[]
   }>(
     (result, row) => {
-      const targetResolutionValue = getCanonicalTargetSummaryOptionValue(row, targetSummaryOptionValueMap)
+      const targetResolutionValue =
+        row.resolutionValue === null
+          ? null
+          : (getCanonicalTargetSummaryOptionValue(row.resolutionValue, targetSummaryOptionValueMap) ?? null)
 
-      return targetResolutionValue
+      return row.resolutionValue === null || targetResolutionValue !== null
         ? {...result, candidateRows: [...result.candidateRows, {...row, resolutionValue: targetResolutionValue}]}
         : {
             candidateRows: result.candidateRows,
@@ -2331,10 +2351,21 @@ const getCandidateRowsByTargetArticleId = (candidateRows: readonly ImportCandida
 
 const getCandidateRowResolutionValues = (candidateRows: readonly ImportCandidateRow[]) => {
   return getUniqueStringValues(
-    candidateRows.map((row) => {
-      return row.resolutionValue
+    candidateRows.flatMap((row) => {
+      return row.resolutionValue === null ? [] : [row.resolutionValue]
     }),
   )
+}
+
+const getCandidateRowsWithResolutionsFirst = (candidateRows: readonly ImportCandidateRow[]) => {
+  return [
+    ...candidateRows.filter((row) => {
+      return row.resolutionValue !== null
+    }),
+    ...candidateRows.filter((row) => {
+      return row.resolutionValue === null
+    }),
+  ]
 }
 
 const getCandidateRowMatchKinds = (candidateRows: readonly ImportCandidateRow[]) => {
@@ -2395,12 +2426,13 @@ const getImportCandidateSourceRows = (candidateRows: readonly ImportCandidateRow
 const getImportCandidateFromCandidateRows = (
   candidateRows: readonly ImportCandidateRow[],
 ): ComparisonProjectConflictResolutionImportCandidate | null => {
-  const firstRow = candidateRows[0]
+  const orderedRows = getCandidateRowsWithResolutionsFirst(candidateRows)
+  const firstRow = orderedRows[0]
 
   return firstRow
     ? {
         resolutionValue: firstRow.resolutionValue,
-        sourceRows: getImportCandidateSourceRows(candidateRows),
+        sourceRows: getImportCandidateSourceRows(orderedRows),
         targetArticleId: firstRow.targetArticleId,
       }
     : null
@@ -2414,7 +2446,7 @@ const getGroupedImportCandidates = (candidateRows: readonly ImportCandidateRow[]
   }>(
     (result, rows) => {
       const values = getCandidateRowResolutionValues(rows)
-      const candidate = values.length === 1 ? getImportCandidateFromCandidateRows(rows) : null
+      const candidate = values.length <= 1 ? getImportCandidateFromCandidateRows(rows) : null
 
       return candidate
         ? {...result, candidates: [...result.candidates, candidate]}
@@ -2585,7 +2617,7 @@ const getAnalyzeRowFromCandidateRow = (
       targetArticles: [candidateRow.targetArticle],
     }),
     reason: candidateRow.isOverwrite ? 'overwrite-candidate' : 'importable',
-    selectedResolution: candidateRow.resolutionValue,
+    selectedResolution: candidateRow.resolutionValue ?? '',
   })
 }
 
@@ -2615,7 +2647,7 @@ const getInitialAnalyzeSkippedRows = (
           getAnalyzeRow({
             detail: result.detail,
             reason: result.skippedRow.reason,
-            selectedResolution: result.detail.sourceRow.resolutionValue,
+            selectedResolution: result.detail.sourceRow.resolutionValue ?? '',
           }),
         ]
       : []

@@ -79,8 +79,8 @@ test('rejects invalid conflict resolution transfer artifacts', () => {
     })
   }).toThrow('Unexpected conflict resolution transfer artifact root fields: projectTransferSessionId')
   expect(() => {
-    validateComparisonProjectConflictResolutionTransferArtifact({...getArtifact(), version: 3})
-  }).toThrow('version must be 1 or 2')
+    validateComparisonProjectConflictResolutionTransferArtifact({...getArtifact(), version: 4})
+  }).toThrow('version must be 1, 2 or 3')
   expect(() => {
     validateComparisonProjectConflictResolutionTransferArtifact({
       ...getArtifact(),
@@ -89,14 +89,14 @@ test('rejects invalid conflict resolution transfer artifacts', () => {
   }).toThrow('provenance')
 })
 
-test('keeps version 1 artifacts importable next to version 2', () => {
+test('keeps version 1 artifacts importable next to version 3', () => {
   const versionOneArtifact = {...getArtifact(), version: 1 as const}
 
-  expect(comparisonProjectConflictResolutionTransferVersion).toBe(2)
+  expect(comparisonProjectConflictResolutionTransferVersion).toBe(3)
   expect(validateComparisonProjectConflictResolutionTransferArtifact(versionOneArtifact)).toEqual(versionOneArtifact)
 })
 
-test('version 2 artifacts carry per-row provenance and the judgment contexts once at the root', () => {
+test('version 3 artifacts carry per-row provenance and the judgment contexts once at the root', () => {
   const contextId = '2168ca3cc7e7cb3c3fa173f7aeeff04314ed31e83a9b2b201695446a6461922a'
   const rows = getComparisonProjectConflictResolutionTransferRows([
     {
@@ -137,7 +137,7 @@ test('version 2 artifacts carry per-row provenance and the judgment contexts onc
     },
   })
 
-  expect(artifact.version).toBe(2)
+  expect(artifact.version).toBe(3)
   expect(artifact.judgmentContexts).toEqual([{context: {v: 1}, id: contextId}])
   expect(
     artifact.rows.map((row) => {
@@ -152,7 +152,7 @@ test('version 2 artifacts carry per-row provenance and the judgment contexts onc
   )
 })
 
-test('version 2 rows carry the resolution comment when the source row selects it', () => {
+test('rows carry the conflict comment when the source row selects it', () => {
   const sourceRow = {
     sourceResolutionId: 'source-resolution-1',
     sourceArticleRowId: 'source-article-row-1',
@@ -190,6 +190,81 @@ test('version 2 rows carry the resolution comment when the source row selects it
       getArtifact({rows: [{...getTransferRow(), comment: 42} as never]}),
     )
   }).toThrow('comment')
+})
+
+test('comment-only rows have a null resolution and no provenance, and only version 3 accepts them', () => {
+  const rows = getComparisonProjectConflictResolutionTransferRows([
+    {
+      sourceResolutionId: null,
+      sourceArticleRowId: 'source-article-row-1',
+      externalArticleId: 'external-1',
+      title: 'Article title',
+      identifierKind: 'doi',
+      identifierNormalizedValue: '10.1000/one',
+      identifierSource: 'article_identifier',
+      sourceIdentifierId: 'identifier-1',
+      resolutionMode: 'summary',
+      resolutionValue: null,
+      resolutionLabel: null,
+      provenanceContextId: null,
+      provenanceOrigin: null,
+      provenanceReviewerDisplayName: null,
+      provenanceSetAt: null,
+      comment: '  Waiting for the full text  ',
+    },
+    {
+      sourceResolutionId: null,
+      sourceArticleRowId: 'source-article-row-1',
+      externalArticleId: 'external-1',
+      title: 'Article title',
+      identifierKind: 'pmid',
+      identifierNormalizedValue: '123',
+      identifierSource: 'article_identifier',
+      sourceIdentifierId: 'identifier-2',
+      resolutionMode: 'summary',
+      resolutionValue: null,
+      resolutionLabel: null,
+      comment: '  Waiting for the full text  ',
+    },
+  ])
+  const artifact = createComparisonProjectConflictResolutionTransferArtifact({
+    exportedAt: new Date('2026-10-10T10:00:00.000Z'),
+    rows,
+    source: {
+      comparisonProjectId: 'comparison-project-1',
+      comparisonProjectName: 'Source comparison',
+      comparisonProjectDescription: null,
+    },
+  })
+  const [commentOnlyRow] = artifact.rows
+
+  expect(artifact.rows).toHaveLength(1)
+  expect(commentOnlyRow).toMatchObject({
+    comment: 'Waiting for the full text',
+    resolution: null,
+    sourceArticleRowId: 'source-article-row-1',
+    sourceResolutionId: null,
+  })
+  expect(commentOnlyRow?.identifiers).toHaveLength(2)
+  expect(commentOnlyRow).not.toHaveProperty('provenance')
+  expect(validateComparisonProjectConflictResolutionTransferArtifact(JSON.parse(JSON.stringify(artifact)))).toEqual(
+    artifact,
+  )
+  expect(() => {
+    return validateComparisonProjectConflictResolutionTransferArtifact({...artifact, version: 2})
+  }).toThrow('has no resolution')
+  expect(() => {
+    return validateComparisonProjectConflictResolutionTransferArtifact({
+      ...artifact,
+      rows: [{...commentOnlyRow, comment: '   '}],
+    })
+  }).toThrow('has no resolution')
+  expect(() => {
+    return validateComparisonProjectConflictResolutionTransferArtifact({
+      ...artifact,
+      rows: [{...getTransferRow(), resolution: null}],
+    })
+  }).toThrow('row 1 has no resolution')
 })
 
 test('shapes joined source rows with all article identifiers', () => {

@@ -2379,6 +2379,17 @@ const getComparisonProjectConflictResolutionTransferReviewer = (
   return {displayName, userId: displayName ? getTransferReviewerUserId(displayName) : null}
 }
 
+type ComparisonProjectConflictResolutionImportResolutionCandidate =
+  ComparisonProjectConflictResolutionImportCandidate & {resolutionValue: string}
+
+const getComparisonProjectConflictResolutionImportResolutionCandidates = (
+  candidates: readonly ComparisonProjectConflictResolutionImportCandidate[],
+) => {
+  return candidates.filter((candidate): candidate is ComparisonProjectConflictResolutionImportResolutionCandidate => {
+    return candidate.resolutionValue !== null
+  })
+}
+
 const insertComparisonProjectConflictResolutionImportCandidates = async (params: {
   candidates: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>['candidates']
   comparisonProjectId: string
@@ -2387,12 +2398,14 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
   ) => ComparisonProjectConflictResolutionWriteProvenance
   tx: AppTx
 }) => {
-  if (params.candidates.length === 0) {
-    return 0
+  const resolutionCandidates = getComparisonProjectConflictResolutionImportResolutionCandidates(params.candidates)
+
+  if (resolutionCandidates.length === 0) {
+    return params.candidates.length
   }
 
   const targetArticleIds = getUniqueStringValues(
-    params.candidates.map((candidate) => {
+    resolutionCandidates.map((candidate) => {
       return candidate.targetArticleId
     }),
   )
@@ -2404,7 +2417,7 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
   `)
   await params.tx.run(`
     INSERT INTO ${comparisonProjectConflictResolutionTable} (${comparisonProjectConflictResolutionInsertColumnsSql})
-    VALUES ${params.candidates
+    VALUES ${resolutionCandidates
       .map((candidate) => {
         return getComparisonProjectConflictResolutionInsertValuesSql({
           answerValue: candidate.resolutionValue,
@@ -4774,8 +4787,11 @@ const getComparisonProjectConflictResolutionExportSourceRow = (
   optionByValue: Map<string, ComparisonProjectConflictResolutionOption>,
   row: ComparisonProjectConflictResolutionExportQueryRow,
 ): ComparisonProjectConflictResolutionTransferSourceRow => {
-  const resolutionValue = getComparisonProjectConflictResolutionExportResolutionValue(scope, row) ?? ''
-  const option = optionByValue.get(resolutionValue)
+  const resolutionValue =
+    row.sourceResolutionId === null
+      ? null
+      : (getComparisonProjectConflictResolutionExportResolutionValue(scope, row) ?? '')
+  const option = resolutionValue === null ? undefined : optionByValue.get(resolutionValue)
 
   return {
     ...row,
@@ -4808,9 +4824,39 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
     }
 
     const rows = await appDatabaseService.queryJson<ComparisonProjectConflictResolutionExportQueryRow>(`
+    WITH batch_resolution AS (
+      SELECT *
+      FROM ${comparisonProjectConflictResolutionTable} cr
+      WHERE cr.comparison_project_id = ${comparisonProjectLiteral}
+        AND cr.article_id IN (${getInClause(articleIds)})
+    ),
+    batch_comment AS (
+      SELECT id, article_id, comment, created_at
+      FROM ${comparisonProjectConflictCommentTable}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND article_id IN (${getInClause(articleIds)})
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY article_id ORDER BY updated_at DESC, id DESC) = 1
+    ),
+    batch_row AS (
+      SELECT
+        batch_resolution.id AS resolution_id,
+        batch_comment.id AS comment_id,
+        COALESCE(batch_resolution.article_id, batch_comment.article_id) AS article_id,
+        batch_resolution.prompt_id,
+        batch_resolution.answer_value,
+        batch_resolution.reviewer_user_id,
+        batch_resolution.reviewer_display_name,
+        batch_resolution.judgment_context_id,
+        batch_resolution.updated_at,
+        batch_resolution.origin,
+        COALESCE(batch_resolution.created_at, batch_comment.created_at) AS sort_created_at,
+        batch_comment.comment
+      FROM batch_resolution
+      FULL OUTER JOIN batch_comment ON batch_comment.article_id = batch_resolution.article_id
+    )
     SELECT
-      cr.id AS sourceResolutionId,
-      cr.article_id AS sourceArticleRowId,
+      br.resolution_id AS sourceResolutionId,
+      br.article_id AS sourceArticleRowId,
       a.article_external_id AS externalArticleId,
       a.article_title AS title,
       a.doi AS doi,
@@ -4824,35 +4870,26 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
       ai.normalized_value AS identifierNormalizedValue,
       ai.source AS identifierSource,
       ai.is_primary AS identifierIsPrimary,
-      cr.prompt_id AS promptId,
-      cr.answer_value AS answerValue,
-      COALESCE(NULLIF(TRIM(cr.reviewer_display_name), ''), NULLIF(TRIM(reviewer.name), '')) AS provenanceReviewerDisplayName,
-      cr.judgment_context_id AS provenanceContextId,
-      cr.updated_at AS provenanceSetAt,
-      cr.origin AS provenanceOrigin,
-      cc.comment AS comment
-    FROM ${comparisonProjectConflictResolutionTable} cr
-    LEFT JOIN app.user_config reviewer ON reviewer.id = cr.reviewer_user_id
-    LEFT JOIN (
-      SELECT article_id, comment
-      FROM ${comparisonProjectConflictCommentTable}
-      WHERE comparison_project_id = ${comparisonProjectLiteral}
-        AND article_id IN (${getInClause(articleIds)})
-      QUALIFY ROW_NUMBER() OVER (PARTITION BY article_id ORDER BY updated_at DESC, id DESC) = 1
-    ) cc ON cc.article_id = cr.article_id
+      br.prompt_id AS promptId,
+      br.answer_value AS answerValue,
+      COALESCE(NULLIF(TRIM(br.reviewer_display_name), ''), NULLIF(TRIM(reviewer.name), '')) AS provenanceReviewerDisplayName,
+      br.judgment_context_id AS provenanceContextId,
+      br.updated_at AS provenanceSetAt,
+      br.origin AS provenanceOrigin,
+      br.comment AS comment
+    FROM batch_row br
+    LEFT JOIN app.user_config reviewer ON reviewer.id = br.reviewer_user_id
     INNER JOIN mart.comparison_article_serving a
       ON a.comparison_project_id = ${comparisonProjectLiteral}
      AND a.generation = ${activeGenerationLiteral}
-     AND a.article_id = cr.article_id
+     AND a.article_id = br.article_id
     LEFT JOIN mart.comparison_article_identifier_serving ai
       ON ai.comparison_project_id = a.comparison_project_id
      AND ai.generation = a.generation
      AND ai.article_id = a.article_id
-    WHERE cr.comparison_project_id = ${comparisonProjectLiteral}
-      AND cr.article_id IN (${getInClause(articleIds)})
     ORDER BY
-      cr.created_at ASC,
-      cr.id ASC,
+      br.sort_created_at ASC,
+      COALESCE(br.resolution_id, br.comment_id) ASC,
       ai.is_primary DESC,
       ai.kind ASC,
       ai.normalized_value ASC,

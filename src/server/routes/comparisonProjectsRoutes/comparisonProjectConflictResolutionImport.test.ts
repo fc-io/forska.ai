@@ -155,9 +155,9 @@ test('import source row query starts from selected conflict-resolution rows', ()
   expect(sql).not.toContain('cr.comment')
   expect(sql).toContain('INNER JOIN app.comparison_project source_comparison_project')
   expect(sql).toContain('source_comparison_project.name AS sourceComparisonProjectName')
-  expect(sql).toContain(
-    'INNER JOIN app.article source_article ON source_article.id = source_resolution.sourceArticleId',
-  )
+  expect(sql).toContain('FULL OUTER JOIN source_comment')
+  expect(sql).toContain('COALESCE(source_resolution.sourceRowId, source_comment.sourceCommentId) AS sourceRowId')
+  expect(sql).toContain('INNER JOIN app.article source_article ON source_article.id = source_row.sourceArticleId')
   expect(sql).toContain('source_article.article_id AS sourceExternalArticleId')
   expect(sql).toContain('source_article.article_title AS sourceArticleTitle')
   expect(sql).toContain('LIST(DISTINCT normalized_value ORDER BY normalized_value) AS doiKeys')
@@ -732,7 +732,7 @@ test('analyzes transfer artifact rows with stable importable and skipped details
     exportedAt: '2026-06-10T10:00:00.000Z',
     format: comparisonProjectConflictResolutionTransferFormat,
     rowCount: 5,
-    version: 2,
+    version: 3,
   })
   expect(result.summary).toEqual({
     deduped: 0,
@@ -1829,4 +1829,102 @@ test('import plan can include target articles that are not conflict-resolution e
   expect(plan.skipCounts).toEqual(getSkipCounts())
   expect(plan.skippedRows).toEqual([])
   expect(plan.warnings).toEqual([])
+})
+
+test('comment-only rows become candidates without a resolution value', () => {
+  const commentOnlyRow = getSourceRow({
+    resolutionMode: null,
+    resolutionValue: null,
+    sourceComment: 'Waiting for the full text',
+    sourceResolutionId: 'comment-1',
+    sourceRowId: 'comment-1',
+  })
+  const existingResolutionPlan = getPlan({
+    sourceRows: [commentOnlyRow],
+    targetArticles: [getTargetArticle({existingResolutionValue: 'no', hasExistingResolution: true})],
+  })
+  const notConflictingPlan = getPlan({
+    importMode: 'conflicting-only',
+    sourceRows: [commentOnlyRow],
+    targetArticles: [getTargetArticle({isConflictResolutionEligible: false})],
+  })
+  const allMatchedPlan = getPlan({
+    importMode: 'all-matched',
+    sourceRows: [commentOnlyRow],
+    targetArticles: [getTargetArticle({isConflictResolutionEligible: false})],
+  })
+
+  expect(existingResolutionPlan.candidates).toEqual([
+    {
+      resolutionValue: null,
+      sourceRows: [{matchKey: expect.any(String) as string, matchKind: 'id-title', sourceRowId: 'comment-1'}],
+      targetArticleId: 'target-article-1',
+    },
+  ])
+  expect(existingResolutionPlan.skipCounts).toEqual(getSkipCounts())
+  expect(notConflictingPlan.candidates).toEqual([])
+  expect(notConflictingPlan.skipCounts).toEqual(getSkipCounts({notConflicting: 1}))
+  expect(allMatchedPlan.candidates).toHaveLength(1)
+})
+
+test('a comment-only row and a resolution row for the same target import the resolution first', () => {
+  const plan = getPlan({
+    sourceRows: [
+      getSourceRow({
+        resolutionValue: null,
+        sourceComment: 'Comment only',
+        sourceResolutionId: 'comment-1',
+        sourceRowId: 'comment-1',
+      }),
+      getSourceRow({
+        sourceArticleId: 'source-article-2',
+        sourceResolutionId: 'resolution-2',
+        sourceRowId: 'resolution-2',
+      }),
+    ],
+    targetArticles: [getTargetArticle()],
+  })
+
+  expect(plan.candidates).toHaveLength(1)
+  expect(plan.candidates[0]?.resolutionValue).toBe('yes')
+  expect(
+    plan.candidates[0]?.sourceRows.map((sourceRow) => {
+      return sourceRow.sourceRowId
+    }),
+  ).toEqual(['resolution-2', 'comment-1'])
+  expect(plan.dedupedCount).toBe(1)
+})
+
+test('version 3 comment-only transfer rows adapt to source rows without a resolution', () => {
+  const rows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact({
+    format: comparisonProjectConflictResolutionTransferFormat,
+    version: 3,
+    exportedAt: '2026-10-12T10:00:00.000Z',
+    source: {
+      comparisonProjectId: 'source-comparison-project-file',
+      comparisonProjectName: 'File source project',
+      comparisonProjectDescription: null,
+    },
+    rows: [
+      {
+        sourceResolutionId: null,
+        sourceArticleRowId: 'source-article-1',
+        externalArticleId: 'external-1',
+        title: 'Title',
+        identifiers: [],
+        resolution: null,
+        comment: '  Waiting for the full text  ',
+      },
+    ],
+  })
+
+  expect(rows).toEqual([
+    expect.objectContaining({
+      resolutionMode: null,
+      resolutionValue: null,
+      sourceComment: 'Waiting for the full text',
+      sourceResolutionId: 'source-comparison-project-file:transfer-row-000001:comment',
+    }) as ComparisonProjectConflictResolutionImportSourceRow,
+  ])
+  expect(rows[0]).not.toHaveProperty('sourceProvenance')
 })
