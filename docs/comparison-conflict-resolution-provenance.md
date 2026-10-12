@@ -62,7 +62,7 @@ Rules:
 - Imports never attribute rows to the importing local user. Before this change file imports and create-from-project imports did.
 - `transfer:*` reviewer rows are created with `ON CONFLICT(id) DO NOTHING`, so one name maps to one registry row. `transfer:*` and `pdf-import:*` rows are excluded wherever the local user is resolved (`getLocalUserConfigWhereClauseSql` in `userConfigQueryService.ts`, the background stack's memory-limit read).
 - The import uses the source context, not the target's: the source context is what that reviewer saw. A file import whose `judgmentContexts` entry validates and hashes to its id upserts that context, so it resolves locally. A context id without a matching entry (or a PDF context id) is stored as is; if the same configuration exists locally the id resolves, otherwise the lookup returns nothing.
-- Reset is unchanged (the row is deleted, and with it any comment, see Comments).
+- Reset is unchanged: the row is deleted. Comments live in their own table and are not touched (see Comments).
 - Existing rows: everything NULL, read as provenance unknown. The migration backfills `reviewer_display_name` from `app.user_config` where `reviewer_user_id` is set. No context is guessed for old rows.
 
 ## Where the context comes from
@@ -104,7 +104,7 @@ Until the row exists, saves record a NULL context (provenance unknown).
   - Comparisons without resolutions are unchanged.
 
   The response adds `conflictResolutionProvenanceScope: {requested: 'all' | 'current', applied: boolean, reason: 'no-active-context' | null}` and keeps `conflictResolutionProvenance` (the requested value) and `judgmentContextId`. With `current` and no active context yet, no provenance restriction is applied, the stats equal `all`, and the scope reads `{requested: 'current', applied: false, reason: 'no-active-context'}`. Otherwise `applied` is true. A scope parameter was chosen over new comparison kinds because it touches less code.
-- Conflict resolution export is artifact version 2: optional `rows[].provenance = {reviewerDisplayName, contextId, setAt, origin}` and an optional root `judgmentContexts: [{id, context}]` holding each referenced context once (a per-row copy would repeat the same few kilobytes on every row). The importer accepts versions 1 and 2, rejects an artifact with a context above 64 KB (400), and trims imported reviewer names (file and PDF) to 200 characters.
+- Conflict resolution export carries provenance since artifact version 2 (the current version is 3, see Comments): optional `rows[].provenance = {reviewerDisplayName, contextId, setAt, origin}` and an optional root `judgmentContexts: [{id, context}]` holding each referenced context once (a per-row copy would repeat the same few kilobytes on every row). The importer accepts versions 1, 2 and 3, rejects an artifact with a context above 64 KB (400), and trims imported reviewer names (file and PDF) to 200 characters.
 - PDF export puts `judgmentContextId` into the hidden `forska.import.comparisonProject` metadata. The reviewer name stays the only personal field; no reviewer id goes into the PDF.
 
 ## Compatibility
@@ -116,50 +116,60 @@ Until the row exists, saves record a NULL context (provenance unknown).
 
 ## Comments
 
-A reviewer can attach a free-text comment to a resolution, for example why it was resolved this way. Migration: `src/db/duckdbMigrations/0262_comparisonConflictResolutionComment.sql`.
+A reviewer can leave a free-text comment on an article of a comparison project, for example what is unclear about a conflict or why it was resolved one way. The comment belongs to the article within the comparison project, not to a resolution: it can be written before any resolution exists, survives setting, changing and resetting the resolution, and stays editable after a rebuild makes the article stop being a conflict.
 
 ### Stored
 
-Two nullable columns on `app.comparison_project_conflict_resolution`, no index, no backfill (existing rows have no comment):
+`app.comparison_project_conflict_comment` (migration `src/db/duckdbMigrations/0264_comparisonConflictComment.sql`):
 
 | column | meaning |
 | --- | --- |
-| `comment` | trimmed text, at most 4000 UTF-16 code units (an emoji counts 2; `comparisonProjectConflictResolutionCommentMaxLength` in `src/utils/comparisonProjectConflictResolutionComment.ts`), no control characters other than tab, newline and carriage return, NULL when there is none |
-| `comment_updated_at` | when the comment was last set or removed on this resolution; NULL when it was never touched |
+| `id` | primary key, a new UUID on every write |
+| `comparison_project_id`, `article_id` | the article within the comparison project |
+| `comment` | trimmed text, never empty, at most 4000 UTF-16 code units (an emoji counts 2; `comparisonProjectConflictResolutionCommentMaxLength` in `src/utils/comparisonProjectConflictResolutionComment.ts`), no control characters other than tab, newline and carriage return |
+| `author_user_id`, `author_display_name` | who wrote it: the local user (`getOrCreateUserConfig`) with the name snapshotted at save time; NULL for file imports, which carry no author |
+| `created_at` | first time a comment was written for the article (kept when the comment is edited) |
+| `updated_at` | last save |
 
-The comment belongs to the article's resolution, not to a reviewer. No comment author is tracked: the reviewer and `setAt` shown in the cell are those of the resolution, and the comment's own time is `comment_updated_at` (shown as "Comment set …" in the icon tooltip).
-
-- Re-selecting a value for the same article (the DELETE + INSERT save) carries `comment` and `comment_updated_at` over to the new row unconditionally, also when the previous resolution was made by another reviewer or imported. The DELETE returns them and the INSERT writes them, so there is still no extra read. When duplicate rows exist, the one with the latest `comment_updated_at` wins.
-- Reset deletes the row and with it the comment. The client asks for no extra confirmation.
-- A comment cannot exist without a resolution.
-- A comment does not change `updated_at`, so `setAt` and provenance stay those of the resolution itself.
+- One row per comparison project and article, kept by code like the resolution table (no UNIQUE, no secondary index): every write runs `DELETE … RETURNING created_at` for the article and then one `INSERT`. Readers take the newest row (`updated_at DESC, id DESC`) if duplicates ever exist.
+- Removing a comment deletes the row. There is no empty or NULL comment row.
+- Purging a comparison project deletes its comments with its resolutions.
+- Migration 0264 creates the table, copies every non-empty `comment` from `app.comparison_project_conflict_resolution` (one per article, the latest `comment_updated_at` wins; author = the resolution's `reviewer_user_id` / `reviewer_display_name`; `created_at` and `updated_at` = `comment_updated_at`, falling back to the resolution's `updated_at`), and then drops the `comment` and `comment_updated_at` columns that migration 0262 had added. The resolution table has no indexes or dependent views since migration 0230, so `DROP COLUMN` is clean; `src/db/migrateDuckdb.comparisonConflictComment.test.ts` pins the moved rows, the dropped columns and a DELETE + INSERT round on both tables after a checkpoint.
 
 ### API
 
-- `POST /api/comparison-projects/:id/conflict-resolution/comment` with `{articleId: string, comment: string | null}`. The comment is trimmed and an empty one is stored as NULL (that is how it is removed). More than 4000 code units, or a control character other than tab, newline and carriage return, is a 400. An article without a resolution (or whose stored value is no longer a valid option) is a 400 and nothing is written. Otherwise one in-place `UPDATE` sets `comment` and `comment_updated_at = current_timestamp`, and the response is the full `ComparisonProjectConflictResolution`, read in the same transaction with the listing query.
-- `ComparisonProjectConflictResolution` (listing rows, save response, comment response) has `comment: string | null` and `commentUpdatedAt: Date | null`.
-- Client parsing: the app's Eden client (`src/services/apiClient.ts`) parses successful JSON responses with `parseApiJsonResponse` (`src/services/utils/parseApiJsonResponse.ts`) instead of Eden's default date reviver. It revives only full ISO-8601 timestamps with a time zone (what `JSON.stringify(Date)` produces), and never values under free-text keys (keys ending in `comment`, `description`, `label`, `name`, `note`, `text` or `title`). A comment such as `2026-10-10` or `10/10/2026`, or a project named like a date, therefore stays a string. Error responses still go through Eden's default handling.
+- `POST /api/comparison-projects/:id/conflict-comment` with `{articleId: string, comment: string | null}` returns `{articleId, conflictComment}`.
+  - The comment is trimmed; an empty one or `null` deletes the row and returns `conflictComment: null`.
+  - More than 4000 code units, or a control character other than tab, newline and carriage return, is a 400 and nothing is written.
+  - The project must allow conflict resolution (400 otherwise), and the article must be part of the comparison project: a row of the active serving generation, or of the scoped rows when no generation is active (400 otherwise). Neither a resolution nor a current conflict is required.
+  - It schedules the same deferred checkpoint as a resolution save.
+- Each judgment row (listing, CSV and PDF export rows) carries `conflictComment: {comment, updatedAt, author: {userId, displayName} | null} | null`. The comments of a page are loaded with one query keyed by `comparison_project_id` and `article_id IN (…)`, next to the resolution query. `author.displayName` falls back to `app.user_config.name` when no name was snapshotted.
+- `ComparisonProjectConflictResolution` has no comment fields. The resolution save (`POST …/conflict-resolution`) and reset (`POST …/conflict-resolution/reset`) do not read or write comments and their responses are unchanged; the client keeps the row's `conflictComment` as is. The save path is still DELETE + INSERT with no extra read.
+- Client parsing: the app's Eden client (`src/services/apiClient.ts`) parses successful JSON responses with `parseApiJsonResponse` (`src/services/utils/parseApiJsonResponse.ts`) instead of Eden's default date reviver. It revives only full ISO-8601 timestamps with a time zone (what `JSON.stringify(Date)` produces), and never values under free-text keys (keys ending in `comment`, `description`, `label`, `name`, `note`, `text` or `title`). A comment such as `2026-10-10` or `10/10/2026`, or an author or project named like a date, therefore stays a string, while `conflictComment.updatedAt` becomes a `Date`.
 
 ### Export and import
 
-- Resolution export artifact version 2: each row carries `comment: string | null`. Version 1 files and v2 files exported before this feature have no `comment` field.
-- An import replaces or removes a target comment only when the source row actually carries a comment field:
-  - File import of a v2 row with `comment` (also `null`) and create-from-project imports: the imported row gets the source comment (trimmed, control characters removed, cut to 4000 code units without splitting a surrogate pair). `comment_updated_at` is the import time when a comment is stored, otherwise NULL. With `overwrite-different` this replaces the target's comment, or removes it when the source comment is `null`.
-  - v1 files, v2 files without the `comment` field and PDF imports: the target keeps its comment and `comment_updated_at` when the import replaces the resolution value (the import's DELETE returns them, like the UI save).
-  - Skipped rows (`same-value`, `skip-existing`) keep the target row and its comment untouched; a `same-value` row never imports a comment.
-  - PDF "clear undecided" deletes the row, so the comment goes with it, like reset.
-  - When several source rows collapse onto one target article, the first source row's comment is used. The source `comment_updated_at` is not exported.
-- Judgment CSV export: a `Resolution comment` column right after `Conflict Handling` (the resolution label), with the comment as is (CSV quoting keeps commas, quotes and line breaks).
+- Resolution export artifact version 3. Every row carries `comment: string | null` (the article's comment). An article with a comment but no resolution is exported as a comment-only row: `resolution: null`, `sourceResolutionId: null`, no `provenance`, and a non-empty `comment`. The export reads resolutions and comments of each article batch with a full outer join, so the export filters decide which articles appear; filters that need a resolution (for example the provenance filter) leave comment-only articles out.
+- The importer accepts versions 1, 2 and 3. A row without a resolution is a 400 unless the artifact is version 3 and the row carries a non-empty comment.
+- Comment-only rows are matched like other rows (article id, identifiers, id + title, title) and respect the import mode (`conflicting-only` needs a conflicting target). They never count as `same-value` or `existing-target-resolution`, write no resolution, and appear in the preview with an empty `selectedResolution` (the UI shows "Comment only"). When a comment-only row and a resolution row land on the same target article, the resolution row is used for the resolution and its provenance. `importable` and `inserted` count imported rows, comment-only rows included.
+- Which imported rows touch the target comment:
+  - Only rows that carry a comment field: v2 and v3 file rows with `comment` (also `null`) and create-from-project rows. v1 files, rows without the field and PDF imports never touch comments, and neither does PDF "clear undecided" (it deletes resolutions only).
+  - Only imported rows (resolution candidates and comment-only candidates). Skipped rows (`same-value`, `existing-target-resolution`, unmatched and so on) leave the target comment as it is; a `same-value` row never imports its comment.
+  - `skip-existing` writes the source comment only when the target article has no comment yet; it never replaces or removes one.
+  - `overwrite-different` replaces the target comment with the source comment, or removes it when the source comment is `null`. An identical text is left alone.
+  - When several source rows collapse onto one target article, the first of them that carries a comment field decides.
+- Imported comments are trimmed, stripped of control characters and cut to 4000 code units without splitting a surrogate pair. File imports store no author (`author_user_id` and `author_display_name` NULL) and `updated_at` = import time. Create-from-project imports read the source projects' resolutions and comments with a full outer join, so comment-only articles are copied too, with the source comment's author.
+- Judgment CSV export: a `Conflict comment` column right after `Conflict Handling` (the resolution label), filled from the article's comment whether or not it has a resolution (CSV quoting keeps commas, quotes and line breaks).
 - PDF export: unchanged, the PDF carries no comment.
 
 ### UI
 
-On the compare page the resolution cell has a speech-bubble icon next to the reset button, also in the read-only branch shown when options are unavailable. It is filled and blue when a comment exists. Its tooltip shows the comment and "Comment set <time>", else `Add comment`. Without a resolution it is disabled with the tooltip `Set a resolution first`. Clicking it opens a popover (`src/components/ui/popover.tsx`, Kobalte) with a textarea (focused, 4000 character limit with a counter), `Discard`, `Remove` and `Save`. Enter adds a new line, Cmd/Ctrl+Enter saves (not while an IME composes).
+On the compare page the conflict handling cell has a speech-bubble icon on every conflicting row: next to the select, next to the read-only resolution label when no options are available, and next to "No options available" when there is neither. A row that has a comment but no current conflict and no resolution shows the icon next to "No current conflict". The icon is filled and blue when a comment exists. Its tooltip shows the comment and "Comment by <name>, <time>" ("Comment, <time>" when the author is unknown, for example after a file import), otherwise `Add comment`. It is never disabled for lack of a resolution. Clicking it opens a popover (`src/components/ui/popover.tsx`, Kobalte) with a textarea (focused, 4000 character limit with a counter), `Discard`, `Remove` and `Save`. Enter adds a new line, Cmd/Ctrl+Enter saves (not while an IME composes).
 
 - Unsaved text is kept per article while the table is mounted: Esc or an outside click closes the editor and keeps the draft, reopening shows it, and the icon gets an amber dot plus "Unsaved draft" in its tooltip until the text is saved or `Discard` drops it. Saving text equal to the saved comment just closes.
-- A pending row disables the icon and the editor. A failed save rolls the optimistic row back, shows the page error and keeps the editor open with the draft.
-- The page updates the row optimistically and replaces it with the response; it does not refetch any query and changes no query key. Re-selecting a value keeps the comment in the optimistic row, like the server carry-over.
-- Component: `comparisonProjectJudgmentsTable/comparisonProjectConflictResolutionComment.tsx`; tooltip and label text in `comparisonProjectConflictResolutionComment/comparisonProjectConflictResolutionCommentText.ts`.
+- A pending row disables the icon and the editor. A failed save rolls the optimistic `conflictComment` back, shows the page error and keeps the editor open with the draft.
+- The page updates the row's `conflictComment` optimistically (keeping the previous author until the response arrives) and replaces it with the response; it does not refetch any query and changes no query key. Resolution saves and resets do not change `conflictComment`.
+- Component: `comparisonProjectJudgmentsTable/comparisonProjectConflictResolutionComment.tsx`; tooltip and label text in `comparisonProjectConflictResolutionComment/comparisonProjectConflictResolutionCommentText.ts`; optimistic helper `getCompareProjectOptimisticConflictComment` in `+compare-judgments/+$id/+index/compareProjectOptimisticConflictResolution.ts`.
 
 ## Client
 
