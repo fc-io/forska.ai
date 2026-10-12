@@ -92,7 +92,7 @@ test('existing resolutions keep their values and read as having no comment', asy
 
   expect(await getCommentColumns()).toEqual([])
 
-  await getMigrateDuckdb()()
+  await getMigrateDuckdb()({throughFileName: migrationFileName})
 
   expect(await getCommentColumns()).toEqual([
     {columnName: 'comment', dataType: 'VARCHAR', isNullable: true},
@@ -149,7 +149,7 @@ test('existing resolutions keep their values and read as having no comment', asy
     `),
   ).toEqual([])
 
-  await getMigrateDuckdb()()
+  await getMigrateDuckdb()({throughFileName: migrationFileName})
 
   expect(await getCommentColumns()).toHaveLength(2)
   expect(

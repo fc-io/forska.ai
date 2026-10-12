@@ -21,10 +21,6 @@ import {
 } from '../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../utils/comparisonProjectColumnOrder.ts'
 import {
-  comparisonProjectConflictResolutionCommentMaxLength,
-  getHasComparisonProjectConflictResolutionCommentControlCharacter,
-} from '../../utils/comparisonProjectConflictResolutionComment.ts'
-import {
   getNormalizedComparisonProjectConflictResolutionFilters,
   getNormalizedComparisonProjectConflictResolutionProvenanceFilters,
 } from '../../utils/comparisonProjectConflictResolutionFilter.ts'
@@ -85,6 +81,17 @@ import {getRuntimeBuildInfo} from '../utils/runtimeBuildInfo.ts'
 import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
 import {SimplePdfDocument} from '../utils/simplePdf.ts'
 import {
+  type ComparisonProjectConflictComment,
+  type ComparisonProjectConflictCommentImport,
+  type ComparisonProjectConflictCommentReadRow,
+  comparisonProjectConflictCommentTable,
+  getComparisonProjectConflictCommentReadRowsSql,
+  getComparisonProjectConflictCommentsByArticleId,
+  getValidatedComparisonProjectConflictComment,
+  importComparisonProjectConflictComments,
+  replaceComparisonProjectConflictComment,
+} from './comparisonProjectsRoutes/comparisonProjectConflictComment.ts'
+import {
   type ComparisonProjectConflictResolutionTransferArtifact,
   type ComparisonProjectConflictResolutionTransferJudgmentContextV2,
   type ComparisonProjectConflictResolutionTransferSourceRow,
@@ -137,7 +144,6 @@ import {
   type ComparisonProjectConflictResolutionProvenanceFilter,
   type ComparisonProjectConflictResolutionProvenanceRow,
   type ComparisonProjectConflictResolutionReviewer,
-  type ComparisonProjectConflictResolutionWriteComment,
   type ComparisonProjectConflictResolutionWriteProvenance,
   getComparisonProjectConflictResolutionInsertValuesSql,
   getComparisonProjectConflictResolutionOriginRef,
@@ -286,8 +292,6 @@ type ComparisonProjectLlmRow = ComparisonProjectJudgmentLlmRow
 type ComparisonProjectHumanRow = ComparisonProjectJudgmentHumanRow
 type ComparisonProjectConflictResolution = {
   articleId: string
-  comment: string | null
-  commentUpdatedAt: Date | null
   label: string
   provenance: ComparisonProjectConflictResolutionProvenance | null
   provenanceMatchesCurrent: boolean | null
@@ -303,6 +307,7 @@ type ComparisonProjectConflictResolutionExportQueryRow = Omit<
   'resolutionLabel' | 'resolutionMode' | 'resolutionValue'
 > & {answerValue: string | null; promptId: string | null}
 type ComparisonProjectExportRow = ComparisonProjectJudgmentRow & {
+  conflictComment?: ComparisonProjectConflictComment | null
   conflictResolution?: ComparisonProjectConflictResolution | null
 }
 type ComparisonProjectExportFormat = 'csv' | 'pdf'
@@ -637,8 +642,6 @@ type ConflictResolutionSaveBaseDiagnostic = {
 
 type ComparisonProjectConflictResolutionSavedRow = {
   articleId: string
-  comment?: string | null
-  commentUpdatedAt?: unknown
   replacedExistingResolution: boolean
   reviewerDisplayName: string | null
   reviewerUserId: string | null
@@ -921,6 +924,10 @@ const purgeArchivedComparisonProjectTx = async (tx: AppTx, comparisonProjectId: 
   `)
   await tx.run(`
     DELETE FROM ${comparisonProjectConflictResolutionTable}
+    WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+  `)
+  await tx.run(`
+    DELETE FROM ${comparisonProjectConflictCommentTable}
     WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
   `)
   await tx.run(`
@@ -1887,6 +1894,7 @@ const getConflictResolutionImportSourceRows = async (
     getComparisonProjectConflictResolutionImportSourceRowsSql({
       articleIdentifierTable,
       articleTable,
+      comparisonProjectConflictCommentTable,
       comparisonProjectTable,
       comparisonProjectConflictResolutionTable,
       sourceComparisonProjectIds,
@@ -2317,72 +2325,41 @@ const getComparisonProjectConflictResolutionImportProvenanceResolver = (params: 
   }
 }
 
-type ComparisonProjectConflictResolutionDeletedRow = {
-  articleId: string
-  comment?: string | null
-  commentUpdatedAt?: string | null
-}
-
-const getCommentUpdatedAtTime = (row: ComparisonProjectConflictResolutionDeletedRow) => {
-  return getDateValue(row.commentUpdatedAt)?.getTime() ?? Number.NEGATIVE_INFINITY
-}
-
-const getCarriedOverComparisonProjectConflictResolutionComment = (
-  deletedRows: readonly ComparisonProjectConflictResolutionDeletedRow[],
-): ComparisonProjectConflictResolutionWriteComment | null => {
-  const latestCommentedRow = deletedRows.reduce<ComparisonProjectConflictResolutionDeletedRow | null>(
-    (latestRow, row) => {
-      return getCommentUpdatedAtTime(row) > (latestRow ? getCommentUpdatedAtTime(latestRow) : Number.NEGATIVE_INFINITY)
-        ? row
-        : latestRow
-    },
-    null,
-  )
-  const carriedRow = latestCommentedRow ?? deletedRows[0] ?? null
-
-  return carriedRow ? {text: carriedRow.comment ?? null, updatedAt: carriedRow.commentUpdatedAt ?? null} : null
-}
-
-const getCarriedOverComparisonProjectConflictResolutionCommentsByArticleId = (
-  deletedRows: readonly ComparisonProjectConflictResolutionDeletedRow[],
+const getComparisonProjectConflictResolutionImportCommentSourceRow = (
+  candidate: ComparisonProjectConflictResolutionImportCandidate,
+  sourceRowsById: ReadonlyMap<string, ComparisonProjectConflictResolutionImportSourceRow>,
 ) => {
-  const deletedRowsByArticleId = deletedRows.reduce<Map<string, ComparisonProjectConflictResolutionDeletedRow[]>>(
-    (rowMap, row) => {
-      return rowMap.set(row.articleId, [...(rowMap.get(row.articleId) ?? []), row])
-    },
-    new Map<string, ComparisonProjectConflictResolutionDeletedRow[]>(),
-  )
-
-  return new Map(
-    Array.from(deletedRowsByArticleId.entries()).map(([articleId, rows]) => {
-      return [articleId, getCarriedOverComparisonProjectConflictResolutionComment(rows)] as const
-    }),
+  return (
+    candidate.sourceRows
+      .map((candidateSourceRow) => {
+        return sourceRowsById.get(candidateSourceRow.sourceRowId) ?? null
+      })
+      .find((sourceRow): sourceRow is ComparisonProjectConflictResolutionImportSourceRow => {
+        return sourceRow?.sourceComment !== undefined
+      }) ?? null
   )
 }
 
-const getComparisonProjectConflictResolutionImportSourceComment = (
-  sourceComment: string | null,
-  importedAt: Date,
-): ComparisonProjectConflictResolutionWriteComment => {
-  return {text: sourceComment, updatedAt: sourceComment ? importedAt : null}
-}
+const getComparisonProjectConflictCommentImports = (params: {
+  candidates: readonly ComparisonProjectConflictResolutionImportCandidate[]
+  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[]
+}) => {
+  const sourceRowsById = getComparisonProjectConflictResolutionImportSourceRowsById(params.sourceRows)
 
-const getComparisonProjectConflictResolutionImportCommentResolver = (
-  sourceRows: readonly ComparisonProjectConflictResolutionImportSourceRow[],
-) => {
-  const sourceRowsById = getComparisonProjectConflictResolutionImportSourceRowsById(sourceRows)
-  const importedAt = new Date()
+  return params.candidates.flatMap<ComparisonProjectConflictCommentImport>((candidate) => {
+    const sourceRow = getComparisonProjectConflictResolutionImportCommentSourceRow(candidate, sourceRowsById)
 
-  return (candidate: ComparisonProjectConflictResolutionImportCandidate) => {
-    const sourceComment = getComparisonProjectConflictResolutionImportCandidateSourceRow(
-      candidate,
-      sourceRowsById,
-    )?.sourceComment
-
-    return sourceComment === undefined
-      ? undefined
-      : getComparisonProjectConflictResolutionImportSourceComment(sourceComment, importedAt)
-  }
+    return sourceRow
+      ? [
+          {
+            articleId: candidate.targetArticleId,
+            authorDisplayName: sourceRow.sourceCommentAuthorDisplayName ?? null,
+            authorUserId: sourceRow.sourceCommentAuthorUserId ?? null,
+            comment: sourceRow.sourceComment ?? null,
+          },
+        ]
+      : []
+  })
 }
 
 const getComparisonProjectConflictResolutionSourceReviewer = (
@@ -2405,9 +2382,6 @@ const getComparisonProjectConflictResolutionTransferReviewer = (
 const insertComparisonProjectConflictResolutionImportCandidates = async (params: {
   candidates: ReturnType<typeof getComparisonProjectConflictResolutionImportPlan>['candidates']
   comparisonProjectId: string
-  getComment?: (
-    candidate: ComparisonProjectConflictResolutionImportCandidate,
-  ) => ComparisonProjectConflictResolutionWriteComment | undefined
   getProvenance: (
     candidate: ComparisonProjectConflictResolutionImportCandidate,
   ) => ComparisonProjectConflictResolutionWriteProvenance
@@ -2423,14 +2397,11 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
     }),
   )
 
-  const deletedRows = await params.tx.queryJson<ComparisonProjectConflictResolutionDeletedRow>(`
+  await params.tx.run(`
     DELETE FROM ${comparisonProjectConflictResolutionTable}
     WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
       AND article_id IN (${getQuotedStringList(targetArticleIds).join(', ')})
-    RETURNING article_id AS articleId, comment, comment_updated_at AS commentUpdatedAt
   `)
-  const targetCommentsByArticleId = getCarriedOverComparisonProjectConflictResolutionCommentsByArticleId(deletedRows)
-
   await params.tx.run(`
     INSERT INTO ${comparisonProjectConflictResolutionTable} (${comparisonProjectConflictResolutionInsertColumnsSql})
     VALUES ${params.candidates
@@ -2438,7 +2409,6 @@ const insertComparisonProjectConflictResolutionImportCandidates = async (params:
         return getComparisonProjectConflictResolutionInsertValuesSql({
           answerValue: candidate.resolutionValue,
           articleId: candidate.targetArticleId,
-          comment: params.getComment?.(candidate) ?? targetCommentsByArticleId.get(candidate.targetArticleId) ?? null,
           comparisonProjectId: params.comparisonProjectId,
           id: crypto.randomUUID(),
           promptId: null,
@@ -2539,12 +2509,17 @@ const importComparisonProjectConflictResolutions = async (params: {
   const importedCount = await insertComparisonProjectConflictResolutionImportCandidates({
     candidates: plan.candidates,
     comparisonProjectId: params.comparisonProjectId,
-    getComment: getComparisonProjectConflictResolutionImportCommentResolver(sourceRows),
     getProvenance: getComparisonProjectConflictResolutionImportProvenanceResolver({
       origin: 'project-import',
       reviewer: getComparisonProjectConflictResolutionSourceReviewer,
       sourceRows,
     }),
+    tx: params.tx,
+  })
+  await importComparisonProjectConflictComments({
+    commentImports: getComparisonProjectConflictCommentImports({candidates: plan.candidates, sourceRows}),
+    comparisonProjectId: params.comparisonProjectId,
+    overwriteMode: 'skip-existing',
     tx: params.tx,
   })
 
@@ -2876,7 +2851,7 @@ const getConflictResolutionArtifactImportAnalysis = async (params: {
     targetSummaryOptionValues,
   })
 
-  return {analyzeResult, artifact, plan, sourceRows}
+  return {analyzeResult, artifact, overwriteMode, plan, sourceRows}
 }
 
 const getComparisonProjectConflictResolutionImportCandidateSourceRows = (params: {
@@ -2946,11 +2921,8 @@ const upsertComparisonProjectConflictResolutionTransferJudgmentContexts = async 
 
 const commitComparisonProjectConflictResolutionImport = async (scope: ComparisonProjectScope, body: unknown) => {
   return appDatabaseService.transaction(async (tx) => {
-    const {analyzeResult, artifact, plan, sourceRows} = await getConflictResolutionArtifactImportAnalysis({
-      body,
-      scope,
-      tx,
-    })
+    const {analyzeResult, artifact, overwriteMode, plan, sourceRows} =
+      await getConflictResolutionArtifactImportAnalysis({body, scope, tx})
     const candidateSourceRows = getComparisonProjectConflictResolutionImportCandidateSourceRows({
       candidates: plan.candidates,
       sourceRows,
@@ -2965,12 +2937,17 @@ const commitComparisonProjectConflictResolutionImport = async (scope: Comparison
     const inserted = await insertComparisonProjectConflictResolutionImportCandidates({
       candidates: plan.candidates,
       comparisonProjectId: scope.id,
-      getComment: getComparisonProjectConflictResolutionImportCommentResolver(sourceRows),
       getProvenance: getComparisonProjectConflictResolutionImportProvenanceResolver({
         origin: 'file-import',
         reviewer: getComparisonProjectConflictResolutionTransferReviewer,
         sourceRows,
       }),
+      tx,
+    })
+    await importComparisonProjectConflictComments({
+      commentImports: getComparisonProjectConflictCommentImports({candidates: plan.candidates, sourceRows}),
+      comparisonProjectId: scope.id,
+      overwriteMode,
       tx,
     })
 
@@ -4321,8 +4298,6 @@ const getComparisonProjectRowsForArticles = async (
 type ComparisonProjectConflictResolutionReadRow = ComparisonProjectConflictResolutionProvenanceRow & {
   answerValue: string | null
   articleId: string
-  comment: string | null
-  commentUpdatedAt: unknown
   promptId: string | null
 }
 
@@ -4337,9 +4312,7 @@ const getComparisonProjectConflictResolutionReadRowsSql = (comparisonProjectId: 
       cr.judgment_context_id AS judgmentContextId,
       cr.serving_generation AS servingGeneration,
       cr.origin AS origin,
-      cr.updated_at AS setAt,
-      cr.comment AS comment,
-      cr.comment_updated_at AS commentUpdatedAt
+      cr.updated_at AS setAt
     FROM ${comparisonProjectConflictResolutionTable} cr
     LEFT JOIN app.user_config reviewer ON reviewer.id = cr.reviewer_user_id
     WHERE cr.comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
@@ -4363,8 +4336,6 @@ const getComparisonProjectConflictResolutionsByArticleId = (
 
     resolutionMap.set(row.articleId, {
       articleId: row.articleId,
-      comment: row.comment ?? null,
-      commentUpdatedAt: getDateValue(row.commentUpdatedAt),
       label: option.label,
       provenance: getComparisonProjectConflictResolutionProvenance(row),
       provenanceMatchesCurrent: getComparisonProjectConflictResolutionProvenanceMatchesCurrent(
@@ -4381,14 +4352,13 @@ const getComparisonProjectConflictResolutionsByArticleId = (
   }, new Map<string, ComparisonProjectConflictResolution>())
 }
 
-const getComparisonProjectConflictResolutions = async (
-  scope: ComparisonProjectScope,
-  rows: ComparisonProjectJudgmentRow[],
-) => {
-  const articleIds = rows.map((row) => {
+const getComparisonProjectRowArticleIds = (rows: readonly ComparisonProjectJudgmentRow[]) => {
+  return rows.map((row) => {
     return row.canonicalArticleId
   })
+}
 
+const getComparisonProjectConflictResolutions = async (scope: ComparisonProjectScope, articleIds: string[]) => {
   if (!scope.allowConflictResolution || articleIds.length === 0) {
     return new Map<string, ComparisonProjectConflictResolution>()
   }
@@ -4400,14 +4370,34 @@ const getComparisonProjectConflictResolutions = async (
   return getComparisonProjectConflictResolutionsByArticleId(scope, resolutionRows)
 }
 
+const getComparisonProjectConflictComments = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+  if (!scope.allowConflictResolution || articleIds.length === 0) {
+    return new Map<string, ComparisonProjectConflictComment>()
+  }
+
+  const commentRows = await appDatabaseService.queryJson<ComparisonProjectConflictCommentReadRow>(
+    getComparisonProjectConflictCommentReadRowsSql(scope.id, articleIds),
+  )
+
+  return getComparisonProjectConflictCommentsByArticleId(commentRows)
+}
+
 const getComparisonProjectRowsWithConflictResolutions = async (
   scope: ComparisonProjectScope,
   rows: ComparisonProjectJudgmentRow[],
 ) => {
-  const conflictResolutions = await getComparisonProjectConflictResolutions(scope, rows)
+  const articleIds = getComparisonProjectRowArticleIds(rows)
+  const [conflictResolutions, conflictComments] = await Promise.all([
+    getComparisonProjectConflictResolutions(scope, articleIds),
+    getComparisonProjectConflictComments(scope, articleIds),
+  ])
 
   return rows.map((row) => {
-    return {...row, conflictResolution: conflictResolutions.get(row.canonicalArticleId) ?? null}
+    return {
+      ...row,
+      conflictComment: conflictComments.get(row.canonicalArticleId) ?? null,
+      conflictResolution: conflictResolutions.get(row.canonicalArticleId) ?? null,
+    }
   })
 }
 
@@ -4590,8 +4580,6 @@ const getSavedComparisonProjectConflictResolution = (params: {
 
   return {
     articleId: params.resolutionRow.articleId,
-    comment: params.resolutionRow.comment ?? null,
-    commentUpdatedAt: getDateValue(params.resolutionRow.commentUpdatedAt),
     label: params.option.label,
     provenance: getComparisonProjectConflictResolutionProvenance(provenanceRow),
     provenanceMatchesCurrent: getComparisonProjectConflictResolutionProvenanceMatchesCurrent(
@@ -4647,18 +4635,16 @@ const setComparisonProjectConflictResolution = async (params: {
     logConflictResolutionSavePhase('resolution-replace:start', baseDiagnostic, {reviewerUserId: reviewer.id})
     const resolutionRow = await appDatabaseService.transaction<ComparisonProjectConflictResolutionSavedRow>(
       async (tx): Promise<ComparisonProjectConflictResolutionSavedRow> => {
-        const deletedRows = await tx.queryJson<ComparisonProjectConflictResolutionDeletedRow>(
+        const deletedRows = await tx.queryJson<{articleId: string}>(
           `
           DELETE FROM ${comparisonProjectConflictResolutionTable}
           WHERE comparison_project_id = ${getSqlLiteral(params.scope.id)}
             AND article_id = ${getSqlLiteral(params.articleId)}
-          RETURNING article_id AS articleId, comment, comment_updated_at AS commentUpdatedAt
+          RETURNING article_id AS articleId
         `,
         )
         const [insertedRow] = await tx.queryJson<{
           articleId: string
-          comment?: string | null
-          commentUpdatedAt?: unknown
           reviewerDisplayName: string | null
           reviewerUserId: string | null
           setAt?: unknown
@@ -4667,7 +4653,6 @@ const setComparisonProjectConflictResolution = async (params: {
           VALUES ${getComparisonProjectConflictResolutionInsertValuesSql({
             answerValue: isSummaryMode ? option.value : null,
             articleId: params.articleId,
-            comment: getCarriedOverComparisonProjectConflictResolutionComment(deletedRows),
             comparisonProjectId: params.scope.id,
             id: crypto.randomUUID(),
             promptId: isSummaryMode ? null : option.value,
@@ -4677,9 +4662,7 @@ const setComparisonProjectConflictResolution = async (params: {
             article_id AS articleId,
             reviewer_user_id AS reviewerUserId,
             reviewer_display_name AS reviewerDisplayName,
-            updated_at AS setAt,
-            comment,
-            comment_updated_at AS commentUpdatedAt
+            updated_at AS setAt
         `)
 
         if (!insertedRow) {
@@ -4739,62 +4722,44 @@ const resetComparisonProjectConflictResolution = async (params: {articleId: stri
   return {articleId: params.articleId}
 }
 
-const comparisonProjectConflictResolutionCommentMissingResolutionMessage =
-  'Set a conflict resolution before commenting on it'
-
-const getValidatedComparisonProjectConflictResolutionComment = (comment: string | null) => {
-  const trimmedComment = comment?.trim() || null
-
-  if (trimmedComment !== null && trimmedComment.length > comparisonProjectConflictResolutionCommentMaxLength) {
-    throw new HttpError(
-      400,
-      `Conflict resolution comments are limited to ${comparisonProjectConflictResolutionCommentMaxLength} characters`,
-    )
+const getComparisonProjectConflictCommentTargetRow = async (scope: ComparisonProjectScope, articleId: string) => {
+  if (!scope.allowConflictResolution) {
+    throw new HttpError(400, 'Conflict resolution is not enabled for this comparison project')
   }
 
-  if (trimmedComment !== null && getHasComparisonProjectConflictResolutionCommentControlCharacter(trimmedComment)) {
-    throw new HttpError(400, 'Conflict resolution comments cannot contain control characters')
+  const targetRow =
+    scope.activeGeneration === null
+      ? await getComparisonProjectConflictResolutionScopedTargetRow(scope, articleId)
+      : await getComparisonProjectConflictResolutionServingTargetRow(scope, articleId)
+
+  if (!targetRow) {
+    throw new HttpError(400, 'Conflict comments are only available for articles in this comparison project')
   }
 
-  return trimmedComment
+  return targetRow
 }
 
-const setComparisonProjectConflictResolutionComment = async (params: {
+const setComparisonProjectConflictComment = async (params: {
   articleId: string
   comment: string | null
   scope: ComparisonProjectScope
 }) => {
-  if (!params.scope.allowConflictResolution) {
-    throw new HttpError(400, 'Conflict resolution is not enabled for this comparison project')
-  }
+  const comment = getValidatedComparisonProjectConflictComment(params.comment)
 
-  const comment = getValidatedComparisonProjectConflictResolutionComment(params.comment)
+  await getComparisonProjectConflictCommentTargetRow(params.scope, params.articleId)
 
-  return appDatabaseService.transaction(async (tx): Promise<ComparisonProjectConflictResolution> => {
-    const updatedRows = await tx.queryJson<{articleId: string}>(`
-      UPDATE ${comparisonProjectConflictResolutionTable}
-      SET comment = ${getSqlLiteral(comment)},
-        comment_updated_at = current_timestamp
-      WHERE comparison_project_id = ${getSqlLiteral(params.scope.id)}
-        AND article_id = ${getSqlLiteral(params.articleId)}
-      RETURNING article_id AS articleId
-    `)
-    const resolutionRows =
-      updatedRows.length === 0
-        ? []
-        : await tx.queryJson<ComparisonProjectConflictResolutionReadRow>(
-            getComparisonProjectConflictResolutionReadRowsSql(params.scope.id, [params.articleId]),
-          )
-    const resolution = getComparisonProjectConflictResolutionsByArticleId(params.scope, resolutionRows).get(
-      params.articleId,
-    )
+  const author = comment === null ? null : await getUserConfigQueryService().getOrCreateUserConfig()
+  const conflictComment = await appDatabaseService.transaction(async (tx) => {
+    return replaceComparisonProjectConflictComment({
+      articleId: params.articleId,
+      author,
+      comment,
+      comparisonProjectId: params.scope.id,
+      tx,
+    })
+  }, getMaintenanceDuckdbWorkloadContext('comparisonProjectConflictComment.save'))
 
-    if (!resolution) {
-      throw new HttpError(400, comparisonProjectConflictResolutionCommentMissingResolutionMessage)
-    }
-
-    return resolution
-  }, getMaintenanceDuckdbWorkloadContext('comparisonProjectConflictResolution.comment'))
+  return {articleId: params.articleId, conflictComment}
 }
 
 const getComparisonProjectConflictResolutionExportResolutionValue = (
@@ -4865,9 +4830,16 @@ const getComparisonProjectConflictResolutionExportSourceRows = async (
       cr.judgment_context_id AS provenanceContextId,
       cr.updated_at AS provenanceSetAt,
       cr.origin AS provenanceOrigin,
-      cr.comment AS comment
+      cc.comment AS comment
     FROM ${comparisonProjectConflictResolutionTable} cr
     LEFT JOIN app.user_config reviewer ON reviewer.id = cr.reviewer_user_id
+    LEFT JOIN (
+      SELECT article_id, comment
+      FROM ${comparisonProjectConflictCommentTable}
+      WHERE comparison_project_id = ${comparisonProjectLiteral}
+        AND article_id IN (${getInClause(articleIds)})
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY article_id ORDER BY updated_at DESC, id DESC) = 1
+    ) cc ON cc.article_id = cr.article_id
     INNER JOIN mart.comparison_article_serving a
       ON a.comparison_project_id = ${comparisonProjectLiteral}
      AND a.generation = ${activeGenerationLiteral}
@@ -5014,7 +4986,7 @@ const getComparisonProjectExportHeaders = (
     'Title',
     'Abstract/Summary',
     'Date added',
-    ...(includeConflictResolution ? ['Conflict Handling', 'Resolution comment'] : []),
+    ...(includeConflictResolution ? ['Conflict Handling', 'Conflict comment'] : []),
     ...columns.map((column) => {
       return getComparisonProjectExportColumnHeader(column)
     }),
@@ -5035,7 +5007,7 @@ const getComparisonProjectExportRowValues = (
     row.articleSummary ?? '',
     getComparisonProjectExportDateValue(row.articleCreatedAt),
     ...(includeConflictResolution
-      ? [getComparisonProjectExportConflictResolutionValue(row), row.conflictResolution?.comment ?? '']
+      ? [getComparisonProjectExportConflictResolutionValue(row), row.conflictComment?.comment ?? '']
       : []),
     ...columns.map((column) => {
       return getComparisonProjectExportCellValue(row.cells[column.id])
@@ -6634,7 +6606,7 @@ export const comparisonProjectsRoutes = new Elysia()
     {body: t.Object({articleId: t.String(), value: t.String()})},
   )
   .post(
-    '/api/comparison-projects/:id/conflict-resolution/comment',
+    '/api/comparison-projects/:id/conflict-comment',
     async (context) => {
       const {params, body, set} = context
       const scope = await getComparisonProjectScope(params.id)
@@ -6644,11 +6616,7 @@ export const comparisonProjectsRoutes = new Elysia()
         return {data: null, error: 'Comparison project not found'}
       }
 
-      const data = await setComparisonProjectConflictResolutionComment({
-        articleId: body.articleId,
-        comment: body.comment,
-        scope,
-      })
+      const data = await setComparisonProjectConflictComment({articleId: body.articleId, comment: body.comment, scope})
       scheduleComparisonProjectConflictResolutionCheckpoint({
         activeGeneration: scope.activeGeneration,
         articleId: body.articleId,

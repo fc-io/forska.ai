@@ -62,6 +62,8 @@ export type ComparisonProjectConflictResolutionImportSourceRow = {
   sourceArticleId: string
   sourceArticleTitle?: string | null
   sourceComment?: string | null
+  sourceCommentAuthorDisplayName?: string | null
+  sourceCommentAuthorUserId?: string | null
   sourceComparisonProjectId: string
   sourceComparisonProjectName: string
   sourceExternalArticleId?: string | null
@@ -571,9 +573,16 @@ export const getComparisonProjectConflictResolutionImportSourceRowValue = ({
   }
 }
 
+const getSourceComparisonProjectWhereSql = (alias: string, sourceComparisonProjectIds: string[]) => {
+  return sourceComparisonProjectIds.length > 0
+    ? `WHERE ${alias}.comparison_project_id IN (${getInClause(sourceComparisonProjectIds)})`
+    : 'WHERE FALSE'
+}
+
 export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params: {
   articleIdentifierTable: string
   articleTable: string
+  comparisonProjectConflictCommentTable: string
   comparisonProjectTable: string
   comparisonProjectConflictResolutionTable: string
   sourceComparisonProjectIds: string[]
@@ -588,11 +597,25 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
         COALESCE(cr.answer_value, cr.prompt_id, '') AS resolutionValue,
         cr.reviewer_user_id AS sourceReviewerUserId,
         COALESCE(NULLIF(TRIM(cr.reviewer_display_name), ''), NULLIF(TRIM(source_reviewer.name), '')) AS sourceReviewerDisplayName,
-        cr.judgment_context_id AS sourceJudgmentContextId,
-        cr.comment AS sourceComment
+        cr.judgment_context_id AS sourceJudgmentContextId
       FROM ${params.comparisonProjectConflictResolutionTable} cr
       LEFT JOIN app.user_config source_reviewer ON source_reviewer.id = cr.reviewer_user_id
-      ${params.sourceComparisonProjectIds.length > 0 ? `WHERE cr.comparison_project_id IN (${getInClause(params.sourceComparisonProjectIds)})` : 'WHERE FALSE'}
+      ${getSourceComparisonProjectWhereSql('cr', params.sourceComparisonProjectIds)}
+    ),
+    source_comment AS (
+      SELECT
+        cc.comparison_project_id AS sourceComparisonProjectId,
+        cc.article_id AS sourceArticleId,
+        cc.comment AS sourceComment,
+        cc.author_user_id AS sourceCommentAuthorUserId,
+        COALESCE(NULLIF(TRIM(cc.author_display_name), ''), NULLIF(TRIM(source_comment_author.name), '')) AS sourceCommentAuthorDisplayName
+      FROM ${params.comparisonProjectConflictCommentTable} cc
+      LEFT JOIN app.user_config source_comment_author ON source_comment_author.id = cc.author_user_id
+      ${getSourceComparisonProjectWhereSql('cc', params.sourceComparisonProjectIds)}
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY cc.comparison_project_id, cc.article_id
+        ORDER BY cc.updated_at DESC, cc.id DESC
+      ) = 1
     ),
     doi_identifier AS (
       SELECT
@@ -622,7 +645,9 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       source_resolution.sourceReviewerUserId AS sourceReviewerUserId,
       source_resolution.sourceReviewerDisplayName AS sourceReviewerDisplayName,
       source_resolution.sourceJudgmentContextId AS sourceJudgmentContextId,
-      source_resolution.sourceComment AS sourceComment,
+      source_comment.sourceComment AS sourceComment,
+      source_comment.sourceCommentAuthorUserId AS sourceCommentAuthorUserId,
+      source_comment.sourceCommentAuthorDisplayName AS sourceCommentAuthorDisplayName,
       'summary' AS resolutionMode,
       doi_identifier.doiKeys AS doiKeys,
       strong_identifier.identifierKeys AS identifierKeys,
@@ -635,6 +660,9 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
     INNER JOIN ${params.comparisonProjectTable} source_comparison_project
       ON source_comparison_project.id = source_resolution.sourceComparisonProjectId
     INNER JOIN ${params.articleTable} source_article ON source_article.id = source_resolution.sourceArticleId
+    LEFT JOIN source_comment
+      ON source_comment.sourceComparisonProjectId = source_resolution.sourceComparisonProjectId
+     AND source_comment.sourceArticleId = source_resolution.sourceArticleId
     LEFT JOIN doi_identifier ON doi_identifier.articleId = source_article.id
     LEFT JOIN strong_identifier ON strong_identifier.articleId = source_article.id
     ORDER BY source_resolution.sourceRowId ASC

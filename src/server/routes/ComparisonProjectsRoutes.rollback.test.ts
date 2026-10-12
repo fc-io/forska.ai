@@ -138,6 +138,7 @@ type MockDatabaseState = {
   cleanedServingProjectIds: string[]
   createdComparisonProjectIds: string[]
   deletedComparisonProjectIds: string[]
+  conflictCommentRows?: MockConflictCommentRow[]
   conflictResolutionImportSourceRows: MockConflictResolutionImportSourceRow[]
   conflictResolutionRows: Array<{
     answerValue: string | null
@@ -170,6 +171,7 @@ type MockDatabaseState = {
   failSelectableModelValidation?: boolean
   includeSingleAnswerArticle: boolean
   isInTransaction: boolean
+  lastConflictCommentInsertStatement?: string | null
   lastConflictResolutionInsertStatement: string | null
   lastUserConfigInsertStatement: string | null
   lastPromptInsertStatement: string | null
@@ -726,6 +728,91 @@ const getMockConflictResolutionInsertRows = (statement: string) => {
       ...(comment && comment !== 'NULL' ? {comment: getSqlNullableStringLiteralValue(comment)} : {}),
     }
   })
+}
+
+type MockConflictCommentRow = {
+  articleId: string
+  authorDisplayName?: string | null
+  authorUserId?: string | null
+  comment: string
+  comparisonProjectId: string
+  updatedAt?: Date
+}
+
+const getMockConflictCommentStatementTarget = (statement: string) => {
+  const comparisonProjectId =
+    statement.match(/comparison_project_id\s*=\s*'((?:''|[^'])*)'/)?.[1]?.replaceAll("''", "'") ?? null
+  const articleIds = Array.from(statement.matchAll(/article_id\s+IN\s*\(([^)]*)\)/g)).flatMap((inMatch) => {
+    return Array.from((inMatch[1] ?? '').matchAll(/'((?:''|[^'])*)'/g)).map((literalMatch) => {
+      return (literalMatch[1] ?? '').replaceAll("''", "'")
+    })
+  })
+
+  return {articleIds: new Set(articleIds), comparisonProjectId}
+}
+
+const getIsMockConflictCommentStatementTarget = (row: MockConflictCommentRow, statement: string) => {
+  const target = getMockConflictCommentStatementTarget(statement)
+
+  return (
+    (target.comparisonProjectId === null || row.comparisonProjectId === target.comparisonProjectId)
+    && (target.articleIds.size === 0 || target.articleIds.has(row.articleId))
+  )
+}
+
+const getMockConflictCommentReadRows = (statement: string) => {
+  return (getMockDatabaseState().conflictCommentRows ?? [])
+    .filter((row) => {
+      return getIsMockConflictCommentStatementTarget(row, statement)
+    })
+    .map((row) => {
+      return {
+        articleId: row.articleId,
+        authorDisplayName: row.authorDisplayName ?? null,
+        authorUserId: row.authorUserId ?? null,
+        comment: row.comment,
+        updatedAt: row.updatedAt ?? new Date('2026-04-04T00:00:00.000Z'),
+      }
+    })
+}
+
+const deleteMockConflictCommentRows = (statement: string) => {
+  const state = getMockDatabaseState()
+  const rows = state.conflictCommentRows ?? []
+  const deletedRows = rows.filter((row) => {
+    return getIsMockConflictCommentStatementTarget(row, statement)
+  })
+
+  state.conflictCommentRows = rows.filter((row) => {
+    return !deletedRows.includes(row)
+  })
+
+  return deletedRows.map((row) => {
+    return {articleId: row.articleId, comment: row.comment, createdAt: null}
+  })
+}
+
+const insertMockConflictCommentRows = (statement: string) => {
+  const state = getMockDatabaseState()
+  const insertedRows = Array.from(
+    statement.matchAll(
+      /\(\s*'(?:''|[^'])*'\s*,\s*('(?:''|[^'])*')\s*,\s*('(?:''|[^'])*')\s*,\s*('(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*,\s*(NULL|'(?:''|[^'])*')\s*,/g,
+    ),
+  ).map(([, comparisonProjectId, articleId, comment, authorUserId, authorDisplayName]) => {
+    return {
+      articleId: getSqlNullableStringLiteralValue(articleId) ?? '',
+      authorDisplayName: getSqlNullableStringLiteralValue(authorDisplayName),
+      authorUserId: getSqlNullableStringLiteralValue(authorUserId),
+      comment: getSqlNullableStringLiteralValue(comment) ?? '',
+      comparisonProjectId: getSqlNullableStringLiteralValue(comparisonProjectId) ?? '',
+      updatedAt: new Date('2026-04-05T00:00:00.000Z'),
+    }
+  })
+
+  state.lastConflictCommentInsertStatement = statement
+  state.conflictCommentRows = [...(state.conflictCommentRows ?? []), ...insertedRows]
+
+  return insertedRows
 }
 
 type MockServingRow = {
@@ -1661,6 +1748,10 @@ const queryJson = async (
     includeSingleAnswerArticle: boolean
   },
 ) => {
+  if (statement.includes('cc.author_user_id AS authorUserId')) {
+    return getMockConflictCommentReadRows(statement)
+  }
+
   if (
     statement.includes('FROM app.comparison_project cp')
     && statement.includes('INNER JOIN app.comparison_project_conflict_resolution cr')
@@ -2111,6 +2202,8 @@ const queryJson = async (
           sourceArticleId,
           sourceArticleTitle,
           sourceComment: row.comment ?? null,
+          sourceCommentAuthorDisplayName: row.comment ? 'Source author' : null,
+          sourceCommentAuthorUserId: row.comment ? 'source-author' : null,
           sourceComparisonProjectId,
           sourceComparisonProjectName: sourceComparisonProject?.name ?? 'Import source',
           sourceExternalArticleId,
@@ -2496,6 +2589,14 @@ const registerModuleMocks = () => {
             const result = await work({
               queryJson: async <R>(statement: string) => {
                 getMockDatabaseState().queryStatements.push(statement)
+                if (statement.includes('DELETE FROM app.comparison_project_conflict_comment')) {
+                  return deleteMockConflictCommentRows(statement) as R[]
+                }
+
+                if (statement.includes('INSERT INTO app.comparison_project_conflict_comment')) {
+                  return insertMockConflictCommentRows(statement) as R[]
+                }
+
                 if (
                   statement.includes('DELETE FROM app.comparison_project')
                   && !statement.includes('DELETE FROM app.comparison_project_conflict_resolution')
@@ -2613,6 +2714,11 @@ const registerModuleMocks = () => {
                 }
 
                 if (statement.includes('DELETE FROM app.comparison_project_serving_generation')) {
+                  return
+                }
+
+                if (statement.includes('DELETE FROM app.comparison_project_conflict_comment')) {
+                  deleteMockConflictCommentRows(statement)
                   return
                 }
 
@@ -3574,11 +3680,20 @@ test('comparison project create-from-project imports selected conflict resolutio
   expect(insertedResolution).toMatchObject({
     answerValue: 'yes',
     articleId: 'article-1',
-    comment: 'Source reviewer note',
     comparisonProjectId: 'comparison-project-created',
     promptId: null,
   })
-  expect(state.lastConflictResolutionInsertStatement ?? '').toMatch(/'Source reviewer note',\s*TIMESTAMPTZ '/)
+  expect(insertedResolution).not.toHaveProperty('comment')
+  expect(state.lastConflictResolutionInsertStatement ?? '').not.toContain('Source reviewer note')
+  expect(state.conflictCommentRows).toMatchObject([
+    {
+      articleId: 'article-1',
+      authorDisplayName: 'Source author',
+      authorUserId: 'source-author',
+      comment: 'Source reviewer note',
+      comparisonProjectId: 'comparison-project-created',
+    },
+  ])
   expect(state.createdComparisonProjectIds).toEqual(['comparison-project-created'])
   expect(state.staleServingIds).toEqual(['comparison-project-created'])
   expect(state.rootQueryStatementsDuringTransaction).toEqual([])
@@ -5986,6 +6101,10 @@ test('comparison project purge cleans serving state and deletes archived compari
       modelIds: ['model-1'],
       summarySourceProjectId: null,
     },
+    conflictCommentRows: [
+      {articleId: 'article-1', comment: 'Purged with the project', comparisonProjectId: 'comparison-project-1'},
+      {articleId: 'article-1', comment: 'Other project', comparisonProjectId: 'comparison-project-2'},
+    ],
     conflictResolutionRows: [{answerValue: 'yes', articleId: 'article-1', promptId: null}],
     failPromptInsert: false,
     sourceProjectLinks: [{id: 'comparison-project-source-1', sourceProjectId: 'prompt-project-1'}],
@@ -6004,6 +6123,9 @@ test('comparison project purge cleans serving state and deletes archived compari
   expect(state.cleanedServingProjectIds).toEqual(['comparison-project-1'])
   expect(state.deletedComparisonProjectIds).toEqual(['comparison-project-1'])
   expect(state.conflictResolutionRows).toEqual([])
+  expect(state.conflictCommentRows).toEqual([
+    {articleId: 'article-1', comment: 'Other project', comparisonProjectId: 'comparison-project-2'},
+  ])
   expect(state.promptLinks).toEqual([])
   expect(state.routeLinks).toEqual([])
   expect(state.sourceProjectLinks).toEqual([])
@@ -6903,6 +7025,17 @@ test('comparison judgments hydrate conflict resolutions only for returned servin
         setAt: new Date('2026-10-09T08:00:00.000Z'),
       },
     ],
+    conflictCommentRows: [
+      {
+        articleId: 'article-1',
+        authorDisplayName: 'Dr Comment',
+        authorUserId: 'comment-author',
+        comment: 'Needs a second look',
+        comparisonProjectId: 'comparison-project-1',
+        updatedAt: new Date('2026-10-09T09:00:00.000Z'),
+      },
+      {articleId: 'article-2', comment: 'Filtered out of this page', comparisonProjectId: 'comparison-project-1'},
+    ],
     failPromptInsert: false,
     promptLinks: [
       {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
@@ -6927,6 +7060,7 @@ test('comparison judgments hydrate conflict resolutions only for returned servin
   const body = (await response.json()) as {
     data: {
       data: Array<{
+        conflictComment: unknown
         conflictResolution: {
           articleId: string
           label: string
@@ -6943,14 +7077,17 @@ test('comparison judgments hydrate conflict resolutions only for returned servin
   expect(response.status).toBe(200)
   expect(
     body.data.data.map((row) => {
-      return {conflictResolution: row.conflictResolution, id: row.id}
+      return {conflictComment: row.conflictComment, conflictResolution: row.conflictResolution, id: row.id}
     }),
   ).toEqual([
     {
+      conflictComment: {
+        author: {displayName: 'Dr Comment', userId: 'comment-author'},
+        comment: 'Needs a second look',
+        updatedAt: '2026-10-09T09:00:00.000Z',
+      },
       conflictResolution: {
         articleId: 'article-1',
-        comment: null,
-        commentUpdatedAt: null,
         label: 'Prompt 2',
         provenance: {contextId: 'context-old', generation: 3, origin: 'ui', setAt: '2026-10-09T08:00:00.000Z'},
         provenanceMatchesCurrent: false,
@@ -6971,6 +7108,12 @@ test('comparison judgments hydrate conflict resolutions only for returned servin
       )
     }),
   ).toBe(true)
+  const commentReadStatements = state.queryStatements.filter((statement) => {
+    return statement.includes('FROM app.comparison_project_conflict_comment cc')
+  })
+
+  expect(commentReadStatements).toHaveLength(1)
+  expect(commentReadStatements[0]).toContain("cc.article_id IN ('article-1')")
 })
 
 test('summary comparison judgments apply rowFilter modes to shown summary columns', async () => {
@@ -7705,9 +7848,10 @@ test('comparison project export streams ordered csv rows with article context an
       modelIds: ['model-1', 'model-2'],
       summarySourceProjectId: null,
     },
-    conflictResolutionRows: [
-      {answerValue: null, articleId: 'article-1', comment: 'Checked full text, "twice"', promptId: 'prompt-2'},
+    conflictCommentRows: [
+      {articleId: 'article-1', comment: 'Checked full text, "twice"', comparisonProjectId: 'comparison-project-1'},
     ],
+    conflictResolutionRows: [{answerValue: null, articleId: 'article-1', promptId: 'prompt-2'}],
     extraLlmRows: [
       {
         ...getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-1', modelId: 'model-1', promptId: 'prompt-1'}),
@@ -7738,7 +7882,7 @@ test('comparison project export streams ordered csv rows with article context an
       'Abstract/Summary',
       'Date added',
       'Conflict Handling',
-      'Resolution comment',
+      'Conflict comment',
       'Prompt 1 - LLM - Model 1 - Article Title and Abstract',
       'Prompt 1 - LLM - Model 2 - Article Title and Abstract',
       'Prompt 1 - Human answer',

@@ -138,6 +138,7 @@ test('import source row query starts from selected conflict-resolution rows', ()
   const sql = getComparisonProjectConflictResolutionImportSourceRowsSql({
     articleIdentifierTable: 'app.article_identifier',
     articleTable: 'app.article',
+    comparisonProjectConflictCommentTable: 'app.comparison_project_conflict_comment',
     comparisonProjectTable: 'app.comparison_project',
     comparisonProjectConflictResolutionTable: 'app.comparison_project_conflict_resolution',
     sourceComparisonProjectIds: ['comparison-source-1', 'comparison-source-2'],
@@ -148,6 +149,10 @@ test('import source row query starts from selected conflict-resolution rows', ()
   expect(sql).toContain('cr.comparison_project_id AS sourceComparisonProjectId')
   expect(sql).toContain('cr.id AS sourceResolutionId')
   expect(sql).toContain("WHERE cr.comparison_project_id IN ('comparison-source-1', 'comparison-source-2')")
+  expect(sql).toContain('FROM app.comparison_project_conflict_comment cc')
+  expect(sql).toContain("WHERE cc.comparison_project_id IN ('comparison-source-1', 'comparison-source-2')")
+  expect(sql).toContain('source_comment.sourceComment AS sourceComment')
+  expect(sql).not.toContain('cr.comment')
   expect(sql).toContain('INNER JOIN app.comparison_project source_comparison_project')
   expect(sql).toContain('source_comparison_project.name AS sourceComparisonProjectName')
   expect(sql).toContain(

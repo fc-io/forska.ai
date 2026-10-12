@@ -29,6 +29,10 @@ export const verifyPersistedConflictReplacement = (input: {
     resolve(import.meta.dir, '../../../db/duckdbMigrations/0262_comparisonConflictResolutionComment.sql'),
     'utf8',
   )
+  const commentTableMigration = readFileSync(
+    resolve(import.meta.dir, '../../../db/duckdbMigrations/0264_comparisonConflictComment.sql'),
+    'utf8',
+  )
   const tableSql = migration.match(/CREATE TABLE app\.comparison_project_conflict_resolution \([\s\S]*?\n\);/)?.[0]
   const getAddColumnSql = (migrationSql: string) => {
     return (
@@ -38,9 +42,14 @@ export const verifyPersistedConflictReplacement = (input: {
   }
   const provenanceColumnSql = getAddColumnSql(provenanceMigration)
   const commentColumnSql = getAddColumnSql(commentMigration)
+  const dropCommentColumnSql = (
+    commentTableMigration.match(/ALTER TABLE app\.comparison_project_conflict_resolution DROP COLUMN IF EXISTS [^;]+;/g)
+    ?? []
+  ).join('\n')
   expect(tableSql).toBeDefined()
   expect(provenanceColumnSql.match(/ADD COLUMN/g)).toHaveLength(5)
   expect(commentColumnSql.match(/ADD COLUMN/g)).toHaveLength(2)
+  expect(dropCommentColumnSql.match(/DROP COLUMN/g)).toHaveLength(2)
   const initializerPath = resolve(import.meta.dir, '../../utils/createDuckdbInstance.ts')
   const run = (script: string) => {
     const result = globalThis.Bun.spawnSync(
@@ -60,7 +69,8 @@ export const verifyPersistedConflictReplacement = (input: {
     expect(result.exitCode, result.stderr.toString() || result.stdout.toString()).toBe(0)
     expect(result.stderr.toString()).not.toContain('recover')
     return JSON.parse(result.stdout.toString().trim().split('\n').at(-1) ?? '{}') as {
-      deleted: {articleId: string; comment?: string | null; commentUpdatedAt?: string | null}[]
+      columns: {column_name: string}[]
+      deleted: {articleId: string}[]
       duplicateError: string
       rows: {article_id: string; answer_value: string | null; prompt_id: string | null}[]
       constraints: {constraint_type: string}[]
@@ -76,6 +86,7 @@ export const verifyPersistedConflictReplacement = (input: {
       await connection.run(${JSON.stringify(noIndexMigration)})
       await connection.run(${JSON.stringify(provenanceColumnSql)})
       await connection.run(${JSON.stringify(commentColumnSql)})
+      await connection.run(${JSON.stringify(dropCommentColumnSql)})
       await connection.run('CHECKPOINT')
       console.log('{}')
     `)
@@ -90,18 +101,20 @@ export const verifyPersistedConflictReplacement = (input: {
       await connection.run('CHECKPOINT')
       console.log(JSON.stringify({deleted}))
     `)
-    expect(mutation.deleted).toEqual([{articleId: 'article-1', comment: null, commentUpdatedAt: null}])
+    expect(mutation.deleted).toEqual([{articleId: 'article-1'}])
     const result = run(`
       const rows = (await connection.runAndReadAll('SELECT article_id, answer_value, prompt_id FROM app.comparison_project_conflict_resolution ORDER BY article_id')).getRowObjectsJson()
       const constraints = (await connection.runAndReadAll("SELECT constraint_type FROM duckdb_constraints() WHERE schema_name='app' AND table_name='comparison_project_conflict_resolution' AND constraint_type IN ('PRIMARY KEY','UNIQUE') ORDER BY constraint_type")).getRowObjectsJson()
       const indexes = (await connection.runAndReadAll("SELECT index_name FROM duckdb_indexes() WHERE schema_name='app' AND table_name='comparison_project_conflict_resolution' ORDER BY index_name")).getRowObjectsJson()
-      console.log(JSON.stringify({rows, constraints, indexes}))
+      const columns = (await connection.runAndReadAll("SELECT column_name FROM duckdb_columns() WHERE schema_name='app' AND table_name='comparison_project_conflict_resolution' AND column_name LIKE 'comment%'")).getRowObjectsJson()
+      console.log(JSON.stringify({rows, constraints, indexes, columns}))
     `)
     expect(result.rows).toHaveLength(2)
     expect(result.rows[0]?.answer_value ?? result.rows[0]?.prompt_id).toBe(input.expectedValue)
     expect(result.rows[1]).toEqual({article_id: 'article-2', answer_value: 'no', prompt_id: null})
     expect(result.constraints).toEqual([])
     expect(result.indexes).toEqual([])
+    expect(result.columns).toEqual([])
   } finally {
     rmSync(root, {recursive: true, force: true})
   }
