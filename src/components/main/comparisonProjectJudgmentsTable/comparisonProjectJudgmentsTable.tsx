@@ -221,7 +221,10 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                       <Show
                         when={row()?.hasConflict || row()?.conflictResolution}
                         fallback={
-                          <Show when={row()?.conflictComment} fallback={<span class="text-gray-400">No conflict</span>}>
+                          <Show
+                            when={row()?.conflictComment || getIsConflictResolutionPending(rowArticleId())}
+                            fallback={<span class="text-gray-400">No conflict</span>}
+                          >
                             <div class="flex items-start gap-2">
                               <span class="min-w-0 flex-1 leading-5 text-gray-400">No current conflict</span>
                               {conflictCommentEditor()}

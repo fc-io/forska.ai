@@ -807,6 +807,89 @@ describe('ComparisonProjectJudgmentsTable conflict comment', () => {
     }
   })
 
+  test('keeps the editor of a comment-only row open while its removal is pending and after it fails', async () => {
+    const commentOnlyRow = getConflictRow({
+      cells: {'llm:model-1:prompt-1': 'no', 'llm:model-2:prompt-1': 'no'},
+      conflictComment: getConflictComment('Agreed after the rebuild'),
+      hasConflict: false,
+    })
+    const [rows, setRows] = createSignal<ComparisonProjectJudgmentsRow[]>([commentOnlyRow])
+    const [pendingArticleIds, setPendingArticleIds] = createSignal<string[]>([])
+    const pendingRemove: {reject: () => void} = {reject: () => {}}
+    const onConflictResolutionCommentSave = vi.fn(async () => {
+      setPendingArticleIds(['article-chinese-1'])
+      setRows([{...commentOnlyRow, conflictComment: null}])
+      await new Promise<void>((_resolve, reject) => {
+        pendingRemove.reject = () => {
+          reject(new Error('Remove failed'))
+        }
+      }).catch(() => {
+        setRows([commentOnlyRow])
+        setPendingArticleIds([])
+      })
+      return false
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const dispose = render(() => {
+      return (
+        <ComparisonProjectJudgmentsTable
+          columns={columns}
+          conflictResolutionEnabled={true}
+          conflictResolutionOptions={conflictResolutionOptions}
+          conflictResolutionPendingArticleIds={pendingArticleIds()}
+          rows={rows()}
+          onConflictResolutionCommentSave={onConflictResolutionCommentSave}
+        />
+      )
+    }, container)
+
+    try {
+      await Promise.resolve()
+      await openCommentPopover(container)
+      getPopoverButton('Remove').click()
+      await waitForUpdates()
+
+      expect(onConflictResolutionCommentSave).toHaveBeenCalledWith('article-chinese-1', null)
+      expect(container.textContent).toContain('No current conflict')
+      expect(getIsCommentPopoverOpen(container)).toBe(true)
+      expect(getCommentButton(container).disabled).toBe(true)
+
+      pendingRemove.reject()
+      await waitForUpdates()
+
+      expect(getIsCommentPopoverOpen(container)).toBe(true)
+      expect(getCommentButton(container).disabled).toBe(false)
+      expect(getCommentButton(container).dataset.hasComment).toBe('true')
+      expect(getCommentTextarea().value).toBe('Agreed after the rebuild')
+    } finally {
+      dispose()
+    }
+  })
+
+  test('shows the author name of a comment without an author user id', async () => {
+    const {container, dispose} = renderTable({
+      rows: [
+        getConflictRow({
+          conflictComment: getConflictComment('Imported note', {
+            author: {displayName: 'Dr Import', userId: null},
+            updatedAt: '2026-10-10T09:30:00.000Z',
+          }),
+        }),
+      ],
+    })
+
+    try {
+      await Promise.resolve()
+
+      expect(getCommentButton(container).title).toBe(
+        `Imported note\nComment by Dr Import, ${format(new Date('2026-10-10T09:30:00.000Z'), 'yyyy-MM-dd HH:mm')}`,
+      )
+    } finally {
+      dispose()
+    }
+  })
+
   test('marks the icon when a comment exists and shows it as the tooltip', async () => {
     const {container, dispose} = renderTable({
       rows: [

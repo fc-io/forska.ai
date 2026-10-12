@@ -19,3 +19,7 @@ export const removeComparisonProjectConflictResolutionCommentControlCharacters =
     })
     .join('')
 }
+
+export const getNormalizedComparisonProjectConflictComment = (value: string | null | undefined) => {
+  return removeComparisonProjectConflictResolutionCommentControlCharacters(value ?? '').trim() || null
+}

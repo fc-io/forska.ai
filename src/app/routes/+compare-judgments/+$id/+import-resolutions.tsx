@@ -24,6 +24,8 @@ import {
   getCommitImportDisabledReason,
   getCommitSummaryStats,
   getConflictResolutionImportFileKind,
+  getImportCommentChangeCount,
+  getImportSummaryStatValueLabel,
   getResolutionCountLabel,
   readConflictResolutionImportFile,
 } from './+import-resolutions/compareProjectImportResolutionsHelpers.ts'
@@ -68,12 +70,14 @@ const conflictResolutionImportOverwriteModeOptions: Array<{
   value: ComparisonProjectConflictResolutionImportOverwriteMode
 }> = [
   {
-    description: 'Keep existing target decisions and import only empty target rows.',
+    description:
+      'Keep existing target decisions and import only empty target rows. Comments are only added where the target has none, never removed.',
     label: 'Skip existing target resolutions',
     value: 'skip-existing',
   },
   {
-    description: 'Replace existing target decisions when the imported selection is different.',
+    description:
+      'Replace existing target decisions when the imported selection is different. Comments are only added or replaced by different text, never removed.',
     label: 'Overwrite existing target resolutions',
     value: 'overwrite-different',
   },
@@ -340,7 +344,13 @@ export const CompareProjectImportResolutionsPage = () => {
   const shouldShowOverwriteMode = () => {
     const summary = analyzePreview()?.summary
 
-    return Boolean(summary && (summary.skippedExisting > 0 || summary.overwriteCandidates > 0))
+    return Boolean(
+      summary
+      && (summary.skippedExisting > 0
+        || summary.overwriteCandidates > 0
+        || summary.commentsKept > 0
+        || summary.commentsReplaced > 0),
+    )
   }
   const shouldShowPdfUndecidedMode = () => {
     return selectedFileKind() === 'pdf' && (analyzePreview()?.source.pdfUndecidedRowCount ?? 0) > 0
@@ -357,7 +367,9 @@ export const CompareProjectImportResolutionsPage = () => {
       analyzeSucceeded: Boolean(analyzePreview()),
       hasArtifact: hasImportFile(),
       hasCommitted: Boolean(commitResult()),
-      importableCount: analyzePreview()?.summary.importable ?? 0,
+      importableCount:
+        (analyzePreview()?.summary.importable ?? 0)
+        + getImportCommentChangeCount(analyzePreview()?.summary ?? {commentsAdded: 0, commentsReplaced: 0}),
       isAnalyzing: analyzeMutation.isPending,
       isCommitting: commitMutation.isPending,
     })
@@ -630,7 +642,7 @@ export const CompareProjectImportResolutionsPage = () => {
                             return (
                               <span class="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-white/80 px-3 py-1.5">
                                 <span class="font-medium text-emerald-950">{stat.label}</span>
-                                <span>{getResolutionCountLabel(stat.value)}</span>
+                                <span>{getImportSummaryStatValueLabel(stat)}</span>
                               </span>
                             )
                           }}

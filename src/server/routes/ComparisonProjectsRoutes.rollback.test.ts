@@ -3931,6 +3931,9 @@ test('comparison project conflict resolution import analyze returns row details 
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 1,
     sameValue: 0,
+    commentsAdded: 0,
+    commentsKept: 0,
+    commentsReplaced: 0,
     overwriteCandidates: 0,
   })
   expect(body.data.importableRows).toMatchObject([
@@ -4547,6 +4550,9 @@ test('comparison project conflict resolution import commit writes safe rows and 
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
     sameValue: 0,
+    commentsAdded: 0,
+    commentsKept: 0,
+    commentsReplaced: 0,
     overwriteCandidates: 0,
   })
   expect(body.data.importableRows).toMatchObject([
@@ -4667,6 +4673,9 @@ test('comparison project conflict resolution import commit can include non-confl
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
     sameValue: 0,
+    commentsAdded: 0,
+    commentsKept: 0,
+    commentsReplaced: 0,
     overwriteCandidates: 0,
   })
   expect(body.data.importableRows).toMatchObject([
@@ -4785,6 +4794,9 @@ test('comparison project conflict resolution import commit skips rows that becam
     skippedNotConflicting: 0,
     skippedUnsupportedMode: 0,
     sameValue: 0,
+    commentsAdded: 0,
+    commentsKept: 0,
+    commentsReplaced: 0,
     overwriteCandidates: 0,
   })
   expect(commitBody.data.importableRows).toEqual([])

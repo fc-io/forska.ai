@@ -7,7 +7,9 @@ import {
 } from '../../../../../services/comparisonProjectsService.ts'
 import {
   getArticleIdListLabel,
+  getImportCommentChangeLabel,
   getImportSummaryStats,
+  getImportSummaryStatValueLabel,
   getMatchKeyLabel,
   getMatchKindLabel,
   getOptionalImportValueLabel,
@@ -71,6 +73,26 @@ const ImportResolutionMatchCell = (props: ImportResolutionMatchCellProps) => {
   )
 }
 
+const ImportResolutionSelectionCell = (props: ImportResolutionSourceCellProps) => {
+  return (
+    <div class="space-y-1">
+      <p>{props.row.selectedResolution || 'Comment only'}</p>
+      <Show when={props.row.commentChange}>
+        {(commentChange) => {
+          return (
+            <span
+              class="inline-flex rounded-md bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-800"
+              data-comment-change={commentChange()}
+            >
+              {getImportCommentChangeLabel(commentChange())}
+            </span>
+          )
+        }}
+      </Show>
+    </div>
+  )
+}
+
 const EmptyImportRows = (props: {children: string}) => {
   return <div class="rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">{props.children}</div>
 }
@@ -100,7 +122,7 @@ const ImportableRowsTable = (props: {rows: ComparisonProjectConflictResolutionIm
                       <ImportResolutionTargetCell row={row} />
                     </td>
                     <td class={`${tableCellClass} font-medium text-gray-900`}>
-                      {row.selectedResolution || 'Comment only'}
+                      <ImportResolutionSelectionCell row={row} />
                     </td>
                     <td class={tableCellClass}>
                       <ImportResolutionMatchCell row={row} />
@@ -142,7 +164,7 @@ const SkippedRowsTable = (props: {rows: ComparisonProjectConflictResolutionImpor
                       <ImportResolutionTargetCell row={row} />
                     </td>
                     <td class={`${tableCellClass} font-medium text-gray-900`}>
-                      {row.selectedResolution || 'Comment only'}
+                      <ImportResolutionSelectionCell row={row} />
                     </td>
                     <td class={tableCellClass}>
                       <ImportResolutionMatchCell row={row} />
@@ -193,7 +215,7 @@ export const CompareProjectImportResolutionsResults = (props: CompareProjectImpo
               return (
                 <div class="rounded-md border border-gray-200 bg-gray-50 p-3">
                   <p class="text-xs font-medium uppercase tracking-wide text-gray-500">{stat.label}</p>
-                  <p class="mt-1 text-lg font-semibold text-gray-900">{getResolutionCountLabel(stat.value)}</p>
+                  <p class="mt-1 text-lg font-semibold text-gray-900">{getImportSummaryStatValueLabel(stat)}</p>
                   <p class="mt-1 text-xs text-gray-600">{stat.description}</p>
                 </div>
               )
