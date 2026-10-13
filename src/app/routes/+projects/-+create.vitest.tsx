@@ -16,10 +16,22 @@ type MockModel = {
   version: string | null
 }
 
+type MockImportRoute = {name: string | null; route: string}
+
+type MockPrompt = {
+  createdAt: string | null
+  id: string
+  originalText: string
+  promptHeading: string | null
+  type: string | null
+}
+
 const mockState = vi.hoisted(() => {
   return {
     createPayloads: [] as unknown[],
+    importRoutes: [] as MockImportRoute[],
     models: [] as MockModel[],
+    prompts: [] as MockPrompt[],
     providerConnectionsPayload: {
       catalog: [],
       connections: [],
@@ -86,12 +98,20 @@ const getMetadataCheckbox = (container: HTMLElement) => {
   return label?.querySelector<HTMLInputElement>('input[type="checkbox"]') ?? null
 }
 
+const getDetailsBySummaryText = (container: HTMLElement, text: string) => {
+  return (
+    Array.from(container.querySelectorAll<HTMLDetailsElement>('details')).find((element) => {
+      return element.querySelector('summary')?.textContent?.includes(text)
+    }) ?? null
+  )
+}
+
 const seedCreateRouteQueries = (queryClient: QueryClient) => {
   queryClient.setQueryData(['backend-availability'], {ready: true})
-  queryClient.setQueryData(['import-routes'], [])
+  queryClient.setQueryData(['import-routes'], mockState.importRoutes)
   queryClient.setQueryData(['models'], mockState.models)
   queryClient.setQueryData(['provider-connections', 'project-create'], mockState.providerConnectionsPayload)
-  queryClient.setQueryData(['prompts'], [])
+  queryClient.setQueryData(['prompts'], mockState.prompts)
 }
 
 const loadFreshRouteContext = async () => {
@@ -176,7 +196,7 @@ vi.mock('../../../services/apiClient.ts', () => {
       api: {
         'import-routes': {
           get: async () => {
-            return {data: {data: []}}
+            return {data: {data: mockState.importRoutes}}
           },
         },
         'provider-connections': {
@@ -197,7 +217,7 @@ vi.mock('../../../services/apiClient.ts', () => {
         },
         prompts: {
           get: async () => {
-            return {data: {data: []}}
+            return {data: {data: mockState.prompts}}
           },
         },
         runtime: {
@@ -216,7 +236,9 @@ describe('project create route content flags', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
     mockState.createPayloads = []
+    mockState.importRoutes = []
     mockState.models = buildModels()
+    mockState.prompts = []
   })
 
   afterEach(() => {
@@ -292,4 +314,104 @@ describe('project create route content flags', () => {
       container.remove()
     }
   })
+
+  test('groups import routes under collapsed headings and submits the selected route', async () => {
+    mockState.importRoutes = [
+      {name: '/api/datasources/import/pubmed', route: '/api/datasources/import/pubmed'},
+      {name: 'cov 6 | 3', route: 'covidence:route-1'},
+      {name: 'cov 6 | 2', route: 'covidence:route-2'},
+      {name: 'Uploaded file', route: 'imported-file:Uploaded file'},
+    ]
+    const browserFailures = createBrowserFailureAssertions(window)
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      const dataSourceGroup = getDetailsBySummaryText(container, 'Data source imports')
+      const covidenceGroup = getDetailsBySummaryText(container, 'Covidence imports')
+      const fileGroup = getDetailsBySummaryText(container, 'File imports')
+      const covidenceSummary = covidenceGroup?.querySelector('summary')
+      const covidenceCheckbox = covidenceGroup?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+
+      expect(container.textContent).not.toContain('Other imports')
+      expect(dataSourceGroup?.hasAttribute('open')).toBe(false)
+      expect(covidenceGroup?.hasAttribute('open')).toBe(false)
+      expect(fileGroup?.hasAttribute('open')).toBe(false)
+      expect(dataSourceGroup?.querySelector('summary')?.textContent).toContain('0 of 1 selected')
+      expect(covidenceSummary?.textContent).toContain('0 of 2 selected')
+      expect(covidenceGroup?.textContent).toContain('covidence:route-1')
+      expect(fileGroup?.textContent).not.toContain('imported-file:')
+
+      covidenceCheckbox?.click()
+      await waitForUpdates()
+
+      expect(covidenceCheckbox?.checked).toBe(true)
+      expect(covidenceSummary?.textContent).toContain('1 of 2 selected')
+      expect(covidenceGroup?.hasAttribute('open')).toBe(false)
+
+      await submitCreateForm(container)
+
+      const payload = mockState.createPayloads[0] as Record<string, unknown>
+
+      expect(mockState.createPayloads).toHaveLength(1)
+      expect(payload.importRoutes).toEqual(['covidence:route-1'])
+      browserFailures.assertNoFailures()
+    } finally {
+      browserFailures.dispose()
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+
+  test('keeps existing prompts collapsed until they are included', async () => {
+    mockState.prompts = [
+      {
+        createdAt: '2026-10-01T00:00:00.000Z',
+        id: 'prompt-1',
+        originalText: 'First prompt text',
+        promptHeading: 'First heading',
+        type: 'inclusion',
+      },
+      {
+        createdAt: '2026-09-01T00:00:00.000Z',
+        id: 'prompt-2',
+        originalText: 'Second prompt text',
+        promptHeading: 'Second heading',
+        type: null,
+      },
+    ]
+    const browserFailures = createBrowserFailureAssertions(window)
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      const firstPrompt = getDetailsBySummaryText(container, 'First heading')
+      const secondPrompt = getDetailsBySummaryText(container, 'Second heading')
+      const includeCheckbox = firstPrompt?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+
+      expect(firstPrompt?.hasAttribute('open')).toBe(false)
+      expect(secondPrompt?.hasAttribute('open')).toBe(false)
+      expect(firstPrompt?.textContent).toContain('First prompt text')
+      expect(container.textContent).toContain('0 of 2 selected')
+
+      includeCheckbox?.click()
+      await waitForUpdates()
+
+      expect(includeCheckbox?.checked).toBe(true)
+      expect(firstPrompt?.hasAttribute('open')).toBe(true)
+      expect(secondPrompt?.hasAttribute('open')).toBe(false)
+      expect(firstPrompt?.querySelector('summary')?.textContent).toContain('Selected')
+      expect(container.textContent).toContain('1 of 2 selected')
+
+      includeCheckbox?.click()
+      await waitForUpdates()
+
+      expect(firstPrompt?.hasAttribute('open')).toBe(false)
+      browserFailures.assertNoFailures()
+    } finally {
+      browserFailures.dispose()
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
 })
