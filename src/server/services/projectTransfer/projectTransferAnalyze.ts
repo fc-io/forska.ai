@@ -722,6 +722,7 @@ const getCompactJudgmentAnalysisRecord = (record: Record<string, unknown>): Proj
     sourceJudgmentId: record.sourceJudgmentId,
     sourceModelId: record.sourceModelId,
     sourcePromptId: record.sourcePromptId,
+    ...getOptionalAnalysisField(record, 'systemPromptVariant'),
   } as unknown as ProjectTransferPayloadRecord
 }
 

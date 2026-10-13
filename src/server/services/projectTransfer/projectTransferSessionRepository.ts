@@ -151,6 +151,7 @@ type ReopenProjectTransferCommitSessionParams = {
   now?: Date
   ownerToken: string
   planSummary: ProjectTransferPlanSummary
+  progress?: ProjectTransferProgressPayload | null
   runner?: ProjectTransferSessionRunner
   sessionId: string
 }
@@ -778,6 +779,7 @@ const reopenProjectTransferCommitSession = async (params: ReopenProjectTransferC
       state = 'awaiting_resolution',
       plan_revision = plan_revision + 1,
       plan_summary_json = ${getJsonLiteral(params.planSummary)},
+      ${Object.hasOwn(params, 'progress') ? `progress_json = ${getJsonLiteral(params.progress ?? null)},` : ''}
       owner_token = NULL,
       commit_id = NULL,
       updated_at = ${getTimestampLiteral(currentNow)}

@@ -1044,16 +1044,7 @@ export const revalidateProjectTransferCommitPlan = async ({
       : getCommitRevalidationResult(getPlanWithCommitRevalidationContext({context, plan}), false)
   }
 
-  return repositories?.analyzeTargetRunner === undefined
-    ? withProjectTransferOperationTables({
-        ...runtimeOptions,
-        layout,
-        operationId: `commit_revalidation_${plan.planRevision}_${nextPlanRevision}`,
-        work: ({runner}) => {
-          return revalidate(runner)
-        },
-      })
-    : revalidate()
+  return revalidate()
 }
 
 const getCommitProgress = ({
@@ -1233,17 +1224,29 @@ const persistPostClaimStalePlan = async ({
   runtimeOptions: RuntimePathOptions
   session: ProjectTransferSessionRecord
 }) => {
+  const progress = getCommitProgress({
+    artifacts,
+    includeBytes: false,
+    includeRows: false,
+    message: 'Import plan changed; review the updated plan',
+    now: new Date(),
+    phase: 'revalidation',
+    planRevision: nextPlan.planRevision,
+    status: 'completed',
+  })
   const reopened = await repositories.sessionRepository.reopenProjectTransferCommitSession({
     commitId,
     expectedPlanRevision: session.planRevision,
     now,
     ownerToken,
     planSummary: nextPlan.summary,
+    progress,
     sessionId: session.id,
   })
 
   if (reopened !== null) {
     await writePlanArtifact({layout: artifacts.layout, plan: nextPlan, runtimeOptions})
+    await writeCommitProgressArtifact({progress, runtimeOptions, sessionId: session.id})
   }
 
   return reopened
@@ -1269,13 +1272,33 @@ const getPostClaimRevalidationResult = async ({
   runtimeOptions: RuntimePathOptions
 }) => {
   const postClaimRevalidationMeasurement = await measureProjectTransferPhase('revalidation', () => {
-    return repositories.revalidate({
-      ...runtimeOptions,
-      analysis: artifacts.analysis,
-      layout: artifacts.layout,
-      nextPlanRevision: claimed.planRevision + 1,
-      plan: artifacts.plan,
-      repositories: inputRepositories,
+    return runClaimedCommitHeartbeatOperation({
+      getProgress: () => {
+        return getCommitProgress({
+          artifacts,
+          includeBytes: false,
+          includeRows: false,
+          message: 'Commit revalidation running',
+          now,
+          phase: 'revalidation',
+          planRevision: claimed.planRevision,
+          status: 'running',
+        })
+      },
+      operation: () => {
+        return repositories.revalidate({
+          ...runtimeOptions,
+          analysis: artifacts.analysis,
+          layout: artifacts.layout,
+          nextPlanRevision: claimed.planRevision + 1,
+          plan: artifacts.plan,
+          repositories: inputRepositories,
+        })
+      },
+      ownerToken,
+      repositories,
+      runtimeOptions,
+      sessionId: claimed.id,
     })
   })
   const postClaimRevalidation = postClaimRevalidationMeasurement.value
@@ -1454,9 +1477,9 @@ const runProjectTransferCommitAppTableWrites = async ({
       getCommitProgress({
         artifacts,
         includeBytes: false,
-        message: 'Waiting for DuckDB maintenance work to pause',
+        message: 'Writing imported project data',
         now: new Date(),
-        phase: 'commit',
+        phase: 'app_table_writes',
         planRevision: artifacts.plan.planRevision,
         status: 'running',
       }),

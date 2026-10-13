@@ -594,6 +594,7 @@ const getImportSessionStateFromProgress = (
   }
 
   return progress.phase === 'commit'
+    || progress.phase === 'revalidation'
     || progress.phase === 'app_table_writes'
     || progress.phase === 'asset_promotion'
     || progress.phase === 'history_write'

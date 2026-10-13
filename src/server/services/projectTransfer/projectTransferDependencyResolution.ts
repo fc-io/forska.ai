@@ -1711,7 +1711,7 @@ export const resolveProjectTransferDependencies = async (
           cwd: input.cwd,
           envValues: input.envValues,
           layout: input.layout,
-          operationId: `dependency_${input.request.planRevision}_${input.nextPlanRevision}`,
+          runner: getAppDatabaseService(),
           work: async ({runner, tables}) => {
             const payloads = await readDependencyPayloadsFromOperationTables({runner, tables})
 
