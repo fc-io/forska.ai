@@ -7,6 +7,7 @@ import {
 } from '../../../../../services/comparisonProjectsService.ts'
 import {
   getArticleIdListLabel,
+  getEmptyImportableRowsLabel,
   getImportCommentChangeLabel,
   getImportSummaryStats,
   getImportSummaryStatValueLabel,
@@ -97,9 +98,15 @@ const EmptyImportRows = (props: {children: string}) => {
   return <div class="rounded-md border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">{props.children}</div>
 }
 
-const ImportableRowsTable = (props: {rows: ComparisonProjectConflictResolutionImportImportableRow[]}) => {
+const ImportableRowsTable = (props: {
+  rows: ComparisonProjectConflictResolutionImportImportableRow[]
+  summary: ComparisonProjectConflictResolutionImportAnalyzePreview['summary']
+}) => {
   return (
-    <Show when={props.rows.length > 0} fallback={<EmptyImportRows>No rows will be imported.</EmptyImportRows>}>
+    <Show
+      when={props.rows.length > 0}
+      fallback={<EmptyImportRows>{getEmptyImportableRowsLabel(props.summary)}</EmptyImportRows>}
+    >
       <div class="overflow-x-auto rounded-md border border-gray-200">
         <table class="min-w-full divide-y divide-gray-200">
           <thead class="bg-gray-50">
@@ -242,7 +249,7 @@ export const CompareProjectImportResolutionsResults = (props: CompareProjectImpo
           These saved conflict-resolution decisions matched importable target comparison rows.
         </p>
         <div class="mt-4">
-          <ImportableRowsTable rows={props.preview.importableRows} />
+          <ImportableRowsTable rows={props.preview.importableRows} summary={props.preview.summary} />
         </div>
       </div>
 
@@ -250,7 +257,7 @@ export const CompareProjectImportResolutionsResults = (props: CompareProjectImpo
         <h2 class="text-lg font-semibold">Rows that will not be imported</h2>
         <p class="mt-1 text-sm text-gray-600">
           Skipped rows are shown with their source details, attempted target details when known, match metadata, and
-          reason.
+          reason. A skipped row marked "Adds comment" or "Replaces comment" still writes its comment.
         </p>
         <div class="mt-4">
           <SkippedRowsTable rows={props.preview.skippedRows} />

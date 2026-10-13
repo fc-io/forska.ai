@@ -415,6 +415,68 @@ describe('CompareProjectImportResolutionsPage', () => {
     }
   })
 
+  test('says comments are still written when only skipped not-conflicting rows bring comments', async () => {
+    mockState.analyzeComparisonProjectConflictResolutionImport.mockResolvedValueOnce({
+      ...mockState.analyzePreview,
+      importableRows: [],
+      skippedRows: [
+        {
+          commentChange: 'add',
+          matchKey: 'article-3',
+          matchKind: 'article-id',
+          reason: 'not-conflicting',
+          selectedResolution: '',
+          sourceArticleRowId: 'article-3',
+          sourceComparisonProjectId: 'source-comparison-project-1',
+          sourceComparisonProjectName: 'Source comparison',
+          sourceExternalArticleId: 'external-3',
+          sourceResolutionId: 'comment-3',
+          sourceTitle: 'Article 3',
+          targetArticleId: 'article-3',
+          targetArticleIds: ['article-3'],
+          targetExternalArticleId: 'external-3',
+          targetExternalArticleIds: ['external-3'],
+          targetTitle: 'Article 3',
+        },
+      ],
+      summary: {
+        ...mockState.analyzePreview.summary,
+        commentsAdded: 1,
+        importable: 0,
+        skipped: 1,
+        skippedNotConflicting: 1,
+      },
+    } as never)
+
+    const {container, dispose} = await renderImportResolutionsPage()
+
+    try {
+      const input = container.querySelector('[data-testid="conflict-resolution-import-file"]')
+      const file = new File([JSON.stringify(mockState.transferArtifact)], 'conflict-resolutions.json', {
+        type: 'application/json',
+      })
+
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error('Import file input not found')
+      }
+
+      Object.defineProperty(input, 'files', {configurable: true, value: getFileList(file)})
+      input.dispatchEvent(new Event('change', {bubbles: true}))
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain(
+          'No resolutions will be imported. 1 comment will still be added or replaced',
+        )
+        expect(container.textContent).not.toContain('No rows will be imported.')
+        expect(container.querySelector('[data-comment-change="add"]')?.textContent).toBe('Adds comment')
+        expect(container.textContent).toContain('still writes its comment')
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('shows comment changes from a PDF import with the PDF reviewer', async () => {
     mockState.analyzeComparisonProjectConflictResolutionPdfImport.mockResolvedValueOnce({
       ...mockState.analyzePreview,
