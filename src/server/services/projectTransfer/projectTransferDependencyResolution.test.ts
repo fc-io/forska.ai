@@ -17,6 +17,15 @@ import {
 } from './projectTransferAnalyzeTarget.ts'
 import {resolveProjectTransferDependencies} from './projectTransferDependencyResolution.ts'
 import {
+  getProjectTransferImportedModelSnapshotFingerprint,
+  getProjectTransferImportedProviderSnapshotFingerprint,
+  getProjectTransferImportedSnapshotJson,
+  getProjectTransferImportedSnapshotMarker,
+  getProjectTransferImportedSnapshotRemoteModelId,
+  getProjectTransferImportedSnapshotSourceModel,
+  getProjectTransferImportedSnapshotSourceProvider,
+} from './projectTransferImportedSnapshotReuse.ts'
+import {
   getProjectTransferPayloadFixtureMap,
   type ProjectTransferPayloadByKey,
   serializeProjectTransferPayload,
@@ -126,8 +135,8 @@ const getTargetConnection = (
           snapshotFingerprint: getProjectTransferProviderSnapshotFingerprint({
             authMode: connection.authMode,
             baseURL: connection.baseURL,
+            configJson: connection.config,
             providerKind: connection.providerKind,
-            targetConfig: connection.config,
           }),
           sourceProviderConnectionId: 'provider-connection-1',
         }
@@ -557,29 +566,31 @@ test('project transfer dependency resolution reuses hidden imported snapshot row
                 {
                   authMode: targetConnection.authMode,
                   baseURL: targetConnection.baseURL,
-                  config: targetConnection.config,
-                  enabled: targetConnection.enabled,
+                  configJson: targetConnection.config,
                   id: targetConnection.id,
-                  label: targetConnection.label,
-                  maxInflightRequests: targetConnection.maxInflightRequests,
                   providerKind: targetConnection.providerKind,
-                  secretRef: targetConnection.secretRef,
                 },
               ] as T[]
             }
 
             if (statement.includes('FROM app.model model')) {
-              expect(statement).toContain('$.discovery.identity.modelName')
+              expect(statement).not.toContain('$.discovery.identity.modelName')
               expect(statement).not.toContain('model.model_name')
               expect(statement).not.toContain('model.base_url')
 
               return [
                 {
-                  ...targetModel,
+                  displayName: targetModel.displayName,
+                  id: targetModel.id,
+                  metadataJson: targetModel.metadataJson,
+                  name: targetModel.name,
                   providerAuthMode: targetConnection.authMode,
                   providerBaseURL: targetConnection.baseURL,
-                  providerConfig: targetConnection.config,
+                  providerConfigJson: targetConnection.config,
                   providerKind: targetConnection.providerKind,
+                  remoteModelId: targetModel.remoteModelId,
+                  variant: targetModel.variant,
+                  version: targetModel.version,
                 },
               ] as T[]
             }
@@ -641,6 +652,218 @@ test('project transfer dependency resolution reuses hidden imported snapshot row
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
+})
+
+const getMaterializedHiddenSnapshotRows = ({
+  modelId,
+  payloads,
+  providerId,
+}: {
+  modelId: string
+  payloads: ProjectTransferPayloadByKey
+  providerId: string
+}) => {
+  const [providerRecord] = payloads.providerConnections
+  const [modelRecord] = payloads.models
+
+  if (!providerRecord || !modelRecord) {
+    throw new Error('Expected provider and model fixtures')
+  }
+
+  const sourceProvider = getProjectTransferImportedSnapshotSourceProvider(providerRecord)
+  const sourceModel = getProjectTransferImportedSnapshotSourceModel(modelRecord)
+  const providerRow = {
+    authMode: sourceProvider.authMode,
+    baseURL: sourceProvider.baseURL,
+    configJson: getProjectTransferImportedSnapshotJson(sourceProvider.configJson, {
+      snapshotFingerprint: getProjectTransferImportedProviderSnapshotFingerprint(sourceProvider),
+      sourceProviderConnectionId: sourceProvider.sourceProviderConnectionId,
+    }),
+    id: providerId,
+    providerKind: sourceProvider.providerKind,
+  }
+  const modelRow = {
+    displayName: sourceModel.displayName,
+    id: modelId,
+    metadataJson: getProjectTransferImportedSnapshotJson(sourceModel.metadataJson, {
+      snapshotFingerprint: getProjectTransferImportedModelSnapshotFingerprint({
+        model: sourceModel,
+        provider: sourceProvider,
+      }),
+      sourceModelId: sourceModel.sourceModelId,
+      sourceProviderConnectionId: sourceProvider.sourceProviderConnectionId,
+    }),
+    name: sourceModel.name,
+    providerAuthMode: providerRow.authMode,
+    providerBaseURL: providerRow.baseURL,
+    providerConfigJson: providerRow.configJson,
+    providerKind: providerRow.providerKind,
+    remoteModelId: getProjectTransferImportedSnapshotRemoteModelId(sourceModel),
+    variant: sourceModel.variant,
+    version: sourceModel.version,
+  }
+
+  return {modelRow, providerRow}
+}
+
+const resolveWithHiddenSnapshotRows = async ({
+  modelRows,
+  payloads,
+  providerRows,
+}: {
+  modelRows: unknown[]
+  payloads: ProjectTransferPayloadByKey
+  providerRows: unknown[]
+}) => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        analyzeTargetRunner: {
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            return (
+              statement.includes('FROM app.provider_connection\n')
+                ? providerRows
+                : statement.includes('FROM app.model model')
+                  ? modelRows
+                  : []
+            ) as T[]
+          },
+        },
+        listProviderConnections: async () => {
+          return []
+        },
+      },
+      request: {planRevision: 1},
+    })
+    const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as {
+      dependencyResolution: {
+        modelTargetBySourceId: Record<string, string>
+        providerTargetBySourceId: Record<string, string>
+      }
+    }
+
+    return {
+      dependencyStatuses: result.status === 'ok' ? result.planSummary.dependencyStatuses : {},
+      modelTargetBySourceId: persistedPlan.dependencyResolution.modelTargetBySourceId,
+      providerTargetBySourceId: persistedPlan.dependencyResolution.providerTargetBySourceId,
+      status: result.status,
+    }
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+}
+
+const getRawSnapshotPayloads = ({
+  model,
+  provider,
+}: {
+  model: Record<string, unknown>
+  provider: Record<string, unknown>
+}): ProjectTransferPayloadByKey => {
+  const payloads = getProjectTransferPayloadFixtureMap()
+
+  return {
+    ...payloads,
+    models: payloads.models.map((record) => {
+      return {...record, ...model}
+    }),
+    providerConnections: payloads.providerConnections.map((record) => {
+      return {...record, ...provider}
+    }),
+  }
+}
+
+test('project transfer dependency resolution reuses hidden snapshots stored with raw config and no discovery identity', async () => {
+  const cases = [
+    {model: {metadataJson: {thinking: 'medium'}}, provider: {configJson: {}, providerKind: 'openai'}},
+    {
+      model: {
+        displayName: 'Local Llama 8B',
+        metadataJson: {},
+        modelName: 'llama-3.1-8b-instruct',
+        name: 'Local Llama 8B',
+        remoteModelId: 'llama-3.1-8b-instruct',
+        source: 'manual',
+      },
+      provider: {authMode: null, baseURL: 'http://127.0.0.1:30000/v1', configJson: {}, providerKind: 'sglang'},
+    },
+    {
+      model: {
+        displayName: 'Local Llama 8B',
+        metadataJson: null,
+        modelName: 'Local Llama 8B',
+        name: 'Local Llama 8B',
+        remoteModelId: null,
+        source: 'manual',
+        variant: '',
+        version: ' ',
+      },
+      provider: {configJson: null, providerKind: 'vllm'},
+    },
+  ]
+  const snapshotRows = cases.map((fixture) => {
+    const payloads = getRawSnapshotPayloads(fixture)
+
+    return {
+      payloads,
+      ...getMaterializedHiddenSnapshotRows({
+        modelId: 'hidden-snapshot-model',
+        payloads,
+        providerId: 'hidden-snapshot-provider',
+      }),
+    }
+  })
+  const results = await Promise.all(
+    snapshotRows.map(({modelRow, payloads, providerRow}) => {
+      return resolveWithHiddenSnapshotRows({modelRows: [modelRow], payloads, providerRows: [providerRow]})
+    }),
+  )
+
+  expect(
+    snapshotRows.map(({providerRow}) => {
+      return {
+        storedWorkerUrlMode: (providerRow.configJson as Record<string, unknown>).workerUrlMode ?? null,
+        snapshotFingerprint: getProjectTransferImportedSnapshotMarker(providerRow.configJson)?.snapshotFingerprint,
+      }
+    }),
+  ).toMatchObject([
+    {snapshotFingerprint: {runtimeMode: {workerUrlMode: 'manual'}}, storedWorkerUrlMode: null},
+    {snapshotFingerprint: {runtimeMode: {workerUrlMode: 'runtime'}}, storedWorkerUrlMode: null},
+    {snapshotFingerprint: {runtimeMode: {workerUrlMode: 'runtime'}}, storedWorkerUrlMode: null},
+  ])
+  expect(results).toEqual(
+    cases.map(() => {
+      return {
+        dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'},
+        modelTargetBySourceId: {'model-1': 'hidden-snapshot-model'},
+        providerTargetBySourceId: {'provider-connection-1': 'hidden-snapshot-provider'},
+        status: 'ok',
+      }
+    }),
+  )
+})
+
+test('project transfer dependency resolution plans a new model under a reused hidden provider snapshot', async () => {
+  const payloads = getRawSnapshotPayloads({model: {}, provider: {configJson: {}, providerKind: 'codex'}})
+  const {providerRow} = getMaterializedHiddenSnapshotRows({
+    modelId: 'hidden-snapshot-model',
+    payloads,
+    providerId: 'hidden-snapshot-provider',
+  })
+  const result = await resolveWithHiddenSnapshotRows({modelRows: [], payloads, providerRows: [providerRow]})
+
+  expect(result).toEqual({
+    dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'},
+    modelTargetBySourceId: {'model-1': 'new:model:model-1'},
+    providerTargetBySourceId: {'provider-connection-1': 'hidden-snapshot-provider'},
+    status: 'ok',
+  })
 })
 
 test('project transfer dependency resolution does not reuse source-model current rows for imported placeholders', async () => {

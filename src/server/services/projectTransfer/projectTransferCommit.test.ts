@@ -2919,6 +2919,356 @@ test('project transfer commit writer blocks commit when a reused imported model 
   expect(result.projectCount).toBe(1)
 })
 
+test('project transfer dependency resolution and commit writer make the same snapshot reuse decisions', () => {
+  const result = runCommitWriterScript<{
+    outcomes: {
+      key: string
+      resolverModelTarget: string | null
+      resolverProviderTarget: string | null
+      snapshotModelId: string
+      snapshotProviderId: string
+      writerModelTarget: string | null
+      writerProviderTarget: string | null
+    }[]
+  }>(`
+    const {revalidateProjectTransferResolvedDependencies} = await import('./src/server/services/projectTransfer/projectTransferDependencyResolution.ts')
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const fixtures = [
+      {key: 'normalized-config', model: {metadataJson: {options: {thinking: 'medium'}}}, provider: {configJson: {workerUrlMode: 'manual'}, providerKind: 'openai'}},
+      {key: 'raw-config', model: {}, provider: {configJson: {}, providerKind: 'openai'}},
+      {key: 'runtime-default', model: {metadataJson: {discovery: {identity: {modelName: 'other-discovered-name'}}}}, provider: {authMode: null, baseURL: 'http://127.0.0.1:30000/v1', configJson: null, providerKind: 'sglang'}},
+      {key: 'manual-name', model: {displayName: 'Local Llama 8B', modelName: 'llama-3.1-8b-instruct', name: 'Local Llama 8B', remoteModelId: 'llama-3.1-8b-instruct', source: 'manual'}, provider: {configJson: {}, providerKind: 'vllm'}},
+      {key: 'null-remote', model: {modelName: 'Local Llama', name: 'Local Llama', remoteModelId: null}, provider: {configJson: {}, providerKind: 'openai'}},
+      {key: 'blank-variant', model: {variant: '', version: ' '}, provider: {configJson: {}, providerKind: 'openai'}},
+      {key: 'variant-version', model: {variant: 'reasoning', version: '2026-06-01'}, provider: {configJson: {}, providerKind: 'openai'}},
+      {driftWorkerUrlMode: 'manual', key: 'drifted-provider', model: {}, provider: {configJson: {}, providerKind: 'sglang'}},
+    ]
+    const getFixtureIds = (fixture) => ({
+      sourceModelId: 'source-model-' + fixture.key,
+      sourceProviderConnectionId: 'source-provider-' + fixture.key,
+    })
+    const getFixturePayloads = (fixture) => {
+      const {sourceModelId, sourceProviderConnectionId} = getFixtureIds(fixture)
+
+      return {
+        models: [{...getModelPayload(), provenance: {sourceModelId, sourceProviderConnectionId}, sourceModelId, sourceProviderConnectionId, ...fixture.model}],
+        project: getProjectPayload(settings),
+        providerConnections: [{authMode: 'apiKey', baseURL: null, enabled: true, label: 'Parity Provider', maxInflightRequests: 4, secretRef: null, sourceProviderConnectionId, ...fixture.provider}],
+      }
+    }
+    const getPlaceholderResolution = (fixture) => {
+      const {sourceModelId, sourceProviderConnectionId} = getFixtureIds(fixture)
+
+      return {
+        modelTargetBySourceId: {[sourceModelId]: 'new:model:' + sourceModelId},
+        providerTargetBySourceId: {[sourceProviderConnectionId]: 'new:provider:' + sourceProviderConnectionId},
+      }
+    }
+    const write = (commitId, fixture) => {
+      return writeProjectTransferCommitAppTables({
+        commitId,
+        now,
+        payloads: getFixturePayloads(fixture),
+        plan: getBasePlan({}, getPlaceholderResolution(fixture)),
+        promotion: {
+          articleCreates: [],
+          articleFieldFills: [],
+          manifest: {createdAt: now.toISOString(), promotions: [], sessionId: commitId, updatedAt: now.toISOString()},
+          promotionPathByPackagePath: {},
+        },
+        schemaVersion: 1,
+        sessionId: commitId,
+      })
+    }
+    const outcomes = []
+
+    for (const fixture of fixtures) {
+      const {sourceModelId, sourceProviderConnectionId} = getFixtureIds(fixture)
+      const firstWrite = await write('commit-parity-first-' + fixture.key, fixture)
+      const snapshotProviderId = firstWrite.commitIdMaps.providerConnectionIdBySourceId[sourceProviderConnectionId]
+      const snapshotModelId = firstWrite.commitIdMaps.modelIdBySourceId[sourceModelId]
+
+      if (fixture.driftWorkerUrlMode) {
+        await database.run("UPDATE app.provider_connection SET config_json = json_merge_patch(config_json, CAST('" + JSON.stringify({workerUrlMode: fixture.driftWorkerUrlMode}) + "' AS JSON)) WHERE id = '" + snapshotProviderId + "'")
+      }
+
+      const resolverResult = await revalidateProjectTransferResolvedDependencies({
+        nextPlanRevision: 2,
+        payloads: {...getFixturePayloads(fixture), judgments: []},
+        plan: getBasePlan({}, {}),
+        repositories: {analyzeTargetRunner: database, listProviderConnections: async () => []},
+        request: {autoResolve: true, planRevision: 1},
+      })
+
+      if (resolverResult.status !== 'ok') {
+        throw new Error(resolverResult.error)
+      }
+
+      const secondWrite = await write('commit-parity-second-' + fixture.key, fixture)
+
+      outcomes.push({
+        key: fixture.key,
+        resolverModelTarget: resolverResult.plan.dependencyResolution.modelTargetBySourceId[sourceModelId] ?? null,
+        resolverProviderTarget: resolverResult.plan.dependencyResolution.providerTargetBySourceId[sourceProviderConnectionId] ?? null,
+        snapshotModelId,
+        snapshotProviderId,
+        writerModelTarget: secondWrite.commitIdMaps.modelIdBySourceId[sourceModelId] ?? null,
+        writerProviderTarget: secondWrite.commitIdMaps.providerConnectionIdBySourceId[sourceProviderConnectionId] ?? null,
+      })
+    }
+
+    console.log(JSON.stringify({outcomes}))
+  `)
+  const decisions = result.outcomes.map((outcome) => {
+    return {
+      key: outcome.key,
+      resolver: {
+        model: outcome.resolverModelTarget === outcome.snapshotModelId,
+        provider: outcome.resolverProviderTarget === outcome.snapshotProviderId,
+      },
+      writer: {
+        model: outcome.writerModelTarget === outcome.snapshotModelId,
+        provider: outcome.writerProviderTarget === outcome.snapshotProviderId,
+      },
+    }
+  })
+  const reused = {model: true, provider: true}
+  const notReused = {model: false, provider: false}
+
+  expect(decisions).toEqual([
+    {key: 'normalized-config', resolver: reused, writer: reused},
+    {key: 'raw-config', resolver: reused, writer: reused},
+    {key: 'runtime-default', resolver: reused, writer: reused},
+    {key: 'manual-name', resolver: reused, writer: reused},
+    {key: 'null-remote', resolver: reused, writer: reused},
+    {key: 'blank-variant', resolver: reused, writer: reused},
+    {key: 'variant-version', resolver: reused, writer: reused},
+    {key: 'drifted-provider', resolver: notReused, writer: notReused},
+  ])
+  expect(
+    result.outcomes
+      .filter((outcome) => {
+        return outcome.key === 'drifted-provider'
+      })
+      .map((outcome) => {
+        return [outcome.resolverProviderTarget, outcome.resolverModelTarget]
+      }),
+  ).toEqual([['new:provider:source-provider-drifted-provider', 'new:model:source-model-drifted-provider']])
+})
+
+test('project transfer commit writer rejects placeholder plans that would reuse an earlier import snapshot', () => {
+  const result = runCommitWriterScript<{
+    firstJudgmentId: string
+    judgmentCount: number
+    modelGuardError: string | null
+    modelSnapshotCount: number
+    physicalKeyError: string | null
+    projectCount: number
+    providerGuardError: string | null
+    providerSnapshotCount: number
+    snapshotModelId: string
+    snapshotProviderId: string
+  }>(`
+    const promptHash = computePromptContentHash('Snapshot prompt?', null, 'Snapshot', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-snapshot-prompt', 'Snapshot prompt?', NULL, 'Snapshot', 'system', '" + promptHash + "', FALSE)")
+    await database.run("INSERT INTO app.article (id, article_title) VALUES ('target-snapshot-article', 'Snapshot Article')")
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const getTargetPlan = (targetModelId) => ({
+      articleMatches: [
+        {
+          action: 'reuse',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: null,
+          selectedTargetArticleId: 'target-snapshot-article',
+          sourceArticleId: 'source-snapshot-article',
+        },
+      ],
+      judgmentPlan: [
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          physicalKey: 'snapshot-physical',
+          provenanceKind: 'currentReviewRows',
+          reviewVisibleKey: 'snapshot-visible',
+          sourceJudgmentId: 'source-snapshot-judgment',
+          targetArticleId: 'target-snapshot-article',
+          targetJudgmentId: 'new:judgment:source-snapshot-judgment',
+          targetModelId,
+          targetPromptId: 'target-snapshot-prompt',
+        },
+      ],
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 0,
+          sourceProjectPromptId: 'source-snapshot-project-prompt',
+          sourcePromptId: 'source-snapshot-prompt',
+          targetPromptId: 'target-snapshot-prompt',
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'reuse',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-snapshot-prompt',
+          targetPromptId: 'target-snapshot-prompt',
+        },
+      ],
+    })
+    const payloads = {
+      articles: [
+        {
+          articleTitle: 'Snapshot Article',
+          identifierInputs: [],
+          provenance: {sourceArticleId: 'source-snapshot-article'},
+          signature: {identifierKeys: [], title: 'Snapshot Article'},
+          sourceArticleId: 'source-snapshot-article',
+        },
+      ],
+      judgments: [
+        {
+          answeredOriginal: 'include',
+          answeredOriginalAsArray: ['include'],
+          confidenceOriginal: 80,
+          contentSettings: settings,
+          deleteGeneration: 0,
+          explanation: 'Imported explanation',
+          isAnswered: true,
+          judgmentInputSignature: {},
+          judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+          provenance: {sourceArticleId: 'source-snapshot-article', sourceModelId: 'source-model', sourcePromptId: 'source-snapshot-prompt'},
+          quotes: [],
+          signature: {},
+          sourceArticleId: 'source-snapshot-article',
+          sourceJudgmentId: 'source-snapshot-judgment',
+          sourceModelId: 'source-model',
+          sourcePromptId: 'source-snapshot-prompt',
+        },
+      ],
+      models: [getModelPayload()],
+      project: getProjectPayload(settings),
+      projectPrompts: [
+        {
+          archived: false,
+          enabled: true,
+          order: 0,
+          provenance: {sourceProjectId: 'source-project', sourcePromptId: 'source-snapshot-prompt'},
+          signature: {},
+          sourceProjectId: 'source-project',
+          sourceProjectPromptId: 'source-snapshot-project-prompt',
+          sourcePromptId: 'source-snapshot-prompt',
+        },
+      ],
+      prompts: [
+        {
+          archived: false,
+          contentHash: promptHash,
+          originalText: 'Snapshot prompt?',
+          promptHeading: 'Snapshot',
+          provenance: {sourcePromptId: 'source-snapshot-prompt'},
+          signature: {},
+          sourcePromptId: 'source-snapshot-prompt',
+          transformedText: null,
+          type: 'system',
+        },
+      ],
+      providerConnections: [
+        {
+          authMode: 'apiKey',
+          baseURL: null,
+          configJson: {},
+          enabled: true,
+          label: 'Imported Provider',
+          maxInflightRequests: 4,
+          providerKind: 'openai',
+          secretRef: null,
+          sourceProviderConnectionId: 'source-provider',
+        },
+      ],
+    }
+    const placeholderResolution = {
+      modelTargetBySourceId: {'source-model': 'new:model:source-model'},
+      providerTargetBySourceId: {'source-provider': 'new:provider:source-provider'},
+    }
+    const write = (commitId, plan) => {
+      return writeProjectTransferCommitAppTables({
+        commitId,
+        now,
+        payloads,
+        plan,
+        promotion: {
+          articleCreates: [],
+          articleFieldFills: [],
+          manifest: {createdAt: now.toISOString(), promotions: [], sessionId: commitId, updatedAt: now.toISOString()},
+          promotionPathByPackagePath: {},
+        },
+        schemaVersion: 1,
+        sessionId: commitId,
+      })
+    }
+    const firstWrite = await write('commit-snapshot-guard-1', getBasePlan(getTargetPlan('new:model:source-model'), placeholderResolution))
+    const snapshotProviderId = firstWrite.commitIdMaps.providerConnectionIdBySourceId['source-provider']
+    const snapshotModelId = firstWrite.commitIdMaps.modelIdBySourceId['source-model']
+    const providerGuardError = await catchMessage(() => {
+      return write('commit-snapshot-guard-2', getBasePlan(getTargetPlan('new:model:source-model'), placeholderResolution))
+    })
+    const modelGuardError = await catchMessage(() => {
+      return write(
+        'commit-snapshot-guard-3',
+        getBasePlan(getTargetPlan('new:model:source-model'), {
+          modelTargetBySourceId: {'source-model': 'new:model:source-model'},
+          providerTargetBySourceId: {'source-provider': snapshotProviderId},
+        }),
+      )
+    })
+    const physicalKeyError = await catchMessage(() => {
+      return write(
+        'commit-snapshot-guard-4',
+        getBasePlan(getTargetPlan(snapshotModelId), {
+          modelTargetBySourceId: {'source-model': snapshotModelId},
+          providerTargetBySourceId: {'source-provider': snapshotProviderId},
+        }),
+      )
+    })
+    const [judgmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment WHERE article_id = 'target-snapshot-article'")
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [providerSnapshotCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.provider_connection WHERE json_extract_string(config_json, '$.projectTransferImportedSnapshot.sourceProviderConnectionId') = 'source-provider'")
+    const [modelSnapshotCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.model WHERE json_extract_string(metadata_json, '$.projectTransferImportedSnapshot.sourceModelId') = 'source-model'")
+
+    console.log(JSON.stringify({
+      firstJudgmentId: firstWrite.commitIdMaps.judgmentIdBySourceId['source-snapshot-judgment'],
+      judgmentCount: judgmentCount.count,
+      modelGuardError,
+      modelSnapshotCount: modelSnapshotCount.count,
+      physicalKeyError,
+      projectCount: projectCount.count,
+      providerGuardError,
+      providerSnapshotCount: providerSnapshotCount.count,
+      snapshotModelId,
+      snapshotProviderId,
+    }))
+  `)
+
+  expect(result.providerGuardError).toBe(
+    `Project transfer commit writer: import plan would create a new provider connection for package provider "Imported Provider" (source-provider), but existing provider snapshot ${result.snapshotProviderId} already matches it, most likely created by an earlier import of this package; 1 planned judgment was checked against new models instead of that snapshot's models and could duplicate judgments already stored there. Rerun the import analysis before committing.`,
+  )
+  expect(result.modelGuardError).toBe(
+    `Project transfer commit writer: import plan would create a new model for package model "target-model-name" (source-model), but existing model snapshot ${result.snapshotModelId} on provider connection ${result.snapshotProviderId} already matches it, most likely created by an earlier import of this package; 1 planned judgment was checked against a new model instead of it and could duplicate judgments already stored for it. Rerun the import analysis before committing.`,
+  )
+  expect(result.physicalKeyError).toBe(
+    `Project transfer commit writer: target judgment physical key already exists for source-snapshot-judgment: existing judgment ${result.firstJudgmentId} has the same article target-snapshot-article (existing row reused by this import), prompt target-snapshot-prompt (existing row reused by this import), model ${result.snapshotModelId} (existing row reused by this import for package model source-model), content flags, system prompt variant and delete generation, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step.`,
+  )
+  expect(result.judgmentCount).toBe(1)
+  expect(result.projectCount).toBe(1)
+  expect(result.providerSnapshotCount).toBe(1)
+  expect(result.modelSnapshotCount).toBe(1)
+})
+
 test('project transfer commit writer blocks target article_id conflicts before insert', () => {
   const result = runCommitWriterScript<{articleCount: number; errorMessage: string | null; projectCount: number}>(`
     await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
@@ -4208,7 +4558,189 @@ test('project transfer commit writer blocks active judgment review-visible confl
     console.log(JSON.stringify({errorMessage, judgmentCount: judgmentCount.count, projectCount: projectCount.count}))
   `)
 
-  expect(result.errorMessage).toContain('target judgment review-visible key already exists')
+  expect(result.errorMessage).toBe(
+    "Project transfer commit writer: target judgment review-visible key already exists for source-conflict-judgment: existing active judgment target-visible-conflict is review-visible for the same article target-conflict-article (existing row reused by this import), prompt target-prompt-conflict (existing row reused by this import), model target-model (existing row reused by this import for package model source-model), content flags and system prompt variant, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step.",
+  )
+  expect(result.projectCount).toBe(0)
+  expect(result.judgmentCount).toBe(1)
+})
+
+test('project transfer set-based commit writer explains existing judgment physical key conflicts', () => {
+  const result = runCommitWriterScript<{errorMessage: string | null; judgmentCount: number; projectCount: number}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Set conflict prompt?', null, 'Set conflict', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-set-prompt', 'Set conflict prompt?', NULL, 'Set conflict', 'system', '" + promptHash + "', FALSE)")
+    await database.run("INSERT INTO app.article (id, article_title) VALUES ('target-set-article', 'Set Conflict Article')")
+    await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, is_answered, answered_original, answered_original_as_array, confidence_original, explanation, quotes, delete_generation, deleted_at) VALUES ('target-set-existing-judgment', 'target-set-article', 'target-set-prompt', 'target-model', TRUE, TRUE, FALSE, FALSE, FALSE, TRUE, 'existing', ['existing'], 50, 'Existing', CAST('[]' AS JSON), 0, NULL)")
+    const escapeSql = (value) => String(value).replaceAll("'", "''")
+    const jsonLiteral = (value) => "CAST('" + escapeSql(JSON.stringify(value)) + "' AS JSON)"
+    const operationDatabase = (tx) => ({
+      queryJson: tx.queryJson,
+      run: tx.run,
+      transaction: (work) => Promise.resolve(work(tx)),
+    })
+    const createOperationPayloadTable = (tx, tableName, rows) => {
+      return tx.run(\`
+        CREATE TEMP TABLE \${tableName} AS
+        SELECT
+          row_number() OVER () - 1 AS row_index,
+          row_json AS payload_json
+        FROM UNNEST(json_extract(\${jsonLiteral(rows)}, '$[*]')) AS rows(row_json)
+      \`)
+    }
+    const settings = {humanJudgmentMode: 'prompt', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+    const article = {
+      articleTitle: 'Set Conflict Article',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-set-article'},
+      signature: {identifierKeys: [], title: 'Set Conflict Article'},
+      sourceArticleId: 'source-set-article',
+    }
+    const judgmentPayload = {
+      answeredOriginal: 'new',
+      answeredOriginalAsArray: ['new'],
+      chunkingStrategy: null,
+      confidenceOriginal: 60,
+      contentSettings: settings,
+      createdAt: '2026-05-02T00:00:00.000Z',
+      deleteGeneration: 0,
+      deletedAt: null,
+      explanation: 'New',
+      isAnswered: true,
+      judgmentInputSignature: {},
+      judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      provenance: {sourceArticleId: 'source-set-article', sourceModelId: 'source-model', sourcePromptId: 'source-set-prompt'},
+      quotes: [],
+      signature: {},
+      snapshotProjectId: 'source-project',
+      snapshotProjectModelName: null,
+      sourceArticleId: 'source-set-article',
+      sourceJudgmentId: 'source-set-judgment',
+      sourceModelId: 'source-model',
+      sourceProjectId: 'source-project',
+      sourcePromptId: 'source-set-prompt',
+      updatedAt: '2026-05-03T00:00:00.000Z',
+    }
+    const targetPlan = {
+      articleMatches: [
+        {
+          action: 'reuse',
+          candidates: [],
+          conflicts: [],
+          identifierKeys: [],
+          packageArticleId: null,
+          selectedTargetArticleId: 'target-set-article',
+          sourceArticleId: 'source-set-article',
+        },
+      ],
+      judgmentAssessmentPlan: [],
+      judgmentPlan: [
+        {
+          action: 'insert',
+          conflictCodes: [],
+          inputSignatureMatches: true,
+          physicalKey: 'set-physical',
+          provenanceKind: 'currentReviewRows',
+          reviewVisibleKey: 'set-visible',
+          sourceJudgmentId: 'source-set-judgment',
+          targetArticleId: 'target-set-article',
+          targetJudgmentId: 'new:judgment:source-set-judgment',
+          targetModelId: 'target-model',
+          targetPromptId: 'target-set-prompt',
+        },
+      ],
+      humanReviewPlan: [],
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 0,
+          sourceProjectPromptId: 'source-set-project-prompt',
+          sourcePromptId: 'source-set-prompt',
+          targetPromptId: 'target-set-prompt',
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'reuse',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-set-prompt',
+          targetPromptId: 'target-set-prompt',
+        },
+      ],
+    }
+    const payloads = {
+      articles: [article],
+      judgments: [{sourceJudgmentId: 'source-set-judgment'}],
+      models: [getModelPayload()],
+      project: getProjectPayload(settings),
+      projectPrompts: [
+        {
+          archived: false,
+          enabled: true,
+          order: 0,
+          provenance: {sourceProjectId: 'source-project', sourcePromptId: 'source-set-prompt'},
+          signature: {},
+          sourceProjectId: 'source-project',
+          sourceProjectPromptId: 'source-set-project-prompt',
+          sourcePromptId: 'source-set-prompt',
+        },
+      ],
+      prompts: [
+        {
+          archived: false,
+          contentHash: promptHash,
+          originalText: 'Set conflict prompt?',
+          promptHeading: 'Set conflict',
+          provenance: {sourcePromptId: 'source-set-prompt'},
+          signature: {},
+          sourcePromptId: 'source-set-prompt',
+          transformedText: null,
+          type: 'system',
+        },
+      ],
+    }
+    const operationTables = getProjectTransferOperationTableNames('commit_set_conflict')
+    const errorMessage = await catchMessage(() => {
+      return database.transaction(async (tx) => {
+        await createOperationPayloadTable(tx, operationTables.tableNames.articles, [article])
+        await createOperationPayloadTable(tx, operationTables.tableNames.articleImportRoutes, [])
+        await createOperationPayloadTable(tx, operationTables.tableNames.projectArticles, [])
+        await createOperationPayloadTable(tx, operationTables.tableNames.judgments, [judgmentPayload])
+        await createOperationPayloadTable(tx, operationTables.tableNames.judgmentAssessments, [])
+        await createOperationPayloadTable(tx, operationTables.tableNames.humanJudgments, [])
+        await createOperationPayloadTable(tx, operationTables.tableNames.humanJudgmentSummaries, [])
+        await createOperationPayloadTable(tx, operationTables.tableNames.reviews, [])
+
+        return writeProjectTransferCommitAppTables({
+          commitId: 'commit-set-conflict',
+          database: operationDatabase(tx),
+          now,
+          operationTables,
+          payloads,
+          plan: getBasePlan(targetPlan, dependencyResolution),
+          promotion: {
+            articleCreates: [],
+            articleFieldFills: [],
+            manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-set-conflict', updatedAt: now.toISOString()},
+            promotionPathByPackagePath: {},
+          },
+          schemaVersion: 1,
+          sessionId: 'session-set-conflict',
+        })
+      })
+    })
+    const [projectCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.project WHERE name = 'Imported Writer Project'")
+    const [judgmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment WHERE article_id = 'target-set-article'")
+
+    console.log(JSON.stringify({errorMessage, judgmentCount: judgmentCount.count, projectCount: projectCount.count}))
+  `)
+
+  expect(result.errorMessage).toBe(
+    "Project transfer commit writer: target judgment physical key already exists for source-set-judgment: existing judgment target-set-existing-judgment has the same article target-set-article (existing row reused by this import), prompt target-set-prompt (existing row reused by this import), model target-model (existing row reused by this import for package model source-model), content flags, system prompt variant and delete generation, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step.",
+  )
   expect(result.projectCount).toBe(0)
   expect(result.judgmentCount).toBe(1)
 })

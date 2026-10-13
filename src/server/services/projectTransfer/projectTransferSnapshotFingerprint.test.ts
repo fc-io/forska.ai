@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {getProviderConnectionConfigFromJson} from '../../providers/providerDbUtils.ts'
 import {
   getProjectTransferModelSnapshotFingerprint,
   getProjectTransferProviderSnapshotFingerprint,
@@ -51,12 +52,12 @@ test('provider snapshot fingerprints include runtime config identity', () => {
 test('provider snapshot fingerprints ignore imported markers in target config', () => {
   const snapshotFingerprint = getProjectTransferProviderSnapshotFingerprint(getProviderInput())
   const withoutMarker = getProjectTransferProviderSnapshotFingerprint(
-    getProviderInput({configJson: undefined, targetConfig: {manualWorkerUrls: [], workerUrlMode: 'manual'}}),
+    getProviderInput({configJson: {llamaCppMode: 'server', manualWorkerUrls: [], workerUrlMode: 'manual'}}),
   )
   const withMarker = getProjectTransferProviderSnapshotFingerprint(
     getProviderInput({
-      configJson: undefined,
-      targetConfig: {
+      configJson: {
+        llamaCppMode: 'server',
         manualWorkerUrls: [],
         projectTransferImportedSnapshot: {snapshotFingerprint, sourceProviderConnectionId: 'source-provider'},
         workerUrlMode: 'manual',
@@ -65,6 +66,42 @@ test('provider snapshot fingerprints ignore imported markers in target config', 
   )
 
   expect(projectTransferSnapshotFingerprintsEqual(withoutMarker, withMarker)).toBe(true)
+})
+
+test('provider snapshot fingerprints default a missing worker URL mode like normalized connection config', () => {
+  const providerKinds = ['openai', 'codex', 'llamacpp', 'sglang', 'vllm']
+  const results = providerKinds.map((providerKind) => {
+    const normalizedConfig = getProviderConnectionConfigFromJson({providerKind, value: {}})
+    const raw = getProjectTransferProviderSnapshotFingerprint(getProviderInput({configJson: {}, providerKind}))
+    const rawJsonText = getProjectTransferProviderSnapshotFingerprint(
+      getProviderInput({configJson: '{}', providerKind}),
+    )
+    const missing = getProjectTransferProviderSnapshotFingerprint(getProviderInput({configJson: null, providerKind}))
+    const normalized = getProjectTransferProviderSnapshotFingerprint(
+      getProviderInput({configJson: normalizedConfig, providerKind}),
+    )
+
+    return {
+      normalizedWorkerUrlMode: normalizedConfig.workerUrlMode,
+      providerKind,
+      rawJsonTextMatches: projectTransferSnapshotFingerprintsEqual(rawJsonText, normalized),
+      rawMatches: projectTransferSnapshotFingerprintsEqual(raw, normalized),
+      rawWorkerUrlMode: raw.runtimeMode.workerUrlMode,
+      missingMatches: projectTransferSnapshotFingerprintsEqual(missing, normalized),
+    }
+  })
+
+  expect(
+    results.every((result) => {
+      return (
+        result.rawMatches
+        && result.rawJsonTextMatches
+        && result.missingMatches
+        && result.rawWorkerUrlMode !== null
+        && result.rawWorkerUrlMode === result.normalizedWorkerUrlMode
+      )
+    }),
+  ).toBe(true)
 })
 
 test('snapshot fingerprints do not include enabled state', () => {

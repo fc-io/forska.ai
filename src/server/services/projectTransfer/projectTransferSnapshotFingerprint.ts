@@ -7,7 +7,7 @@ import {
   getProviderModelMetadataPromptTokenLimit,
 } from '../../providers/providerModelMetadata.ts'
 import {getProviderRegistryEntry} from '../../providers/providerRegistry.ts'
-import type {ProviderConnectionForAdmin, ProviderTransportFamily} from '../../providers/providerTypes.ts'
+import type {ProviderTransportFamily} from '../../providers/providerTypes.ts'
 import {getDefaultWorkerUrlMode} from '../../providers/providerWorkerUtils.ts'
 import {getJsonValue} from '../appQueryHelpers.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
@@ -18,7 +18,6 @@ export type ProjectTransferProviderSnapshotFingerprintInput = {
   baseURL: string | null
   configJson?: unknown
   providerKind: string
-  targetConfig?: ProviderConnectionForAdmin['config']
 }
 
 export type ProjectTransferModelSnapshotFingerprintInput = {
@@ -114,7 +113,7 @@ const getEndpointIdentity = ({baseURL, providerKind}: {baseURL: string | null; p
   }
 }
 
-const getSourceConfigSignature = ({providerKind, value}: {providerKind: string; value: unknown}) => {
+const getConfigSignature = ({providerKind, value}: {providerKind: string; value: unknown}) => {
   const record = getConfigRecord(value)
 
   return {
@@ -124,17 +123,10 @@ const getSourceConfigSignature = ({providerKind, value}: {providerKind: string; 
   }
 }
 
-const getTargetConfigSignature = (config: ProviderConnectionForAdmin['config']) => {
-  return {llamaCppMode: getStringValue(config.llamaCppMode), workerUrlMode: getStringValue(config.workerUrlMode)}
-}
-
 export const getProjectTransferProviderSnapshotFingerprint = (
   provider: ProjectTransferProviderSnapshotFingerprintInput,
 ): ProjectTransferProviderSnapshotFingerprint => {
-  const configSignature =
-    provider.targetConfig === undefined
-      ? getSourceConfigSignature({providerKind: provider.providerKind, value: provider.configJson})
-      : getTargetConfigSignature(provider.targetConfig)
+  const configSignature = getConfigSignature({providerKind: provider.providerKind, value: provider.configJson})
 
   return {
     authMode: getAuthModeIdentity(provider.authMode),

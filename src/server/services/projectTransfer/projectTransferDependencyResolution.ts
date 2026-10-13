@@ -28,6 +28,20 @@ import {
 } from './projectTransferFidelityValidation.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {
+  getProjectTransferImportedSnapshotMarker,
+  getProjectTransferImportedSnapshotSourceModel,
+  getProjectTransferImportedSnapshotSourceProvider,
+  getProjectTransferReusableImportedModelSnapshot,
+  getProjectTransferReusableImportedProviderSnapshot,
+  projectTransferImportedModelSnapshotMatches,
+  projectTransferImportedProviderSnapshotMatches,
+  type ProjectTransferImportedSnapshotLookup,
+  type ProjectTransferImportedSnapshotModelRow,
+  type ProjectTransferImportedSnapshotProviderRow,
+  type ProjectTransferImportedSnapshotSourceModel,
+  type ProjectTransferImportedSnapshotSourceProvider,
+} from './projectTransferImportedSnapshotReuse.ts'
+import {
   type ProjectTransferOperationTableRunner,
   type ProjectTransferOperationTableSet,
   withProjectTransferOperationTables,
@@ -41,11 +55,6 @@ import {
 } from './projectTransferPayloadSchemas.ts'
 import {projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
-import {
-  getProjectTransferModelSnapshotFingerprint,
-  getProjectTransferProviderSnapshotFingerprint,
-  projectTransferSnapshotFingerprintsEqual,
-} from './projectTransferSnapshotFingerprint.ts'
 
 type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
 
@@ -163,6 +172,7 @@ type ImportedProviderConnection = ProjectTransferPayloadRecord & {
   enabled: boolean
   label: string
   providerKind: string
+  snapshotSource: ProjectTransferImportedSnapshotSourceProvider
   sourceProviderConnectionId: string
 }
 
@@ -173,6 +183,7 @@ type ImportedModel = ProjectTransferPayloadRecord & {
   modelName: string
   name: string
   remoteModelId: string | null
+  snapshotSource: ProjectTransferImportedSnapshotSourceModel
   sourceModelId: string
   sourceProviderConnectionId: string
   variant: string | null
@@ -186,7 +197,6 @@ type DependencyBlockerInput = {code: string; message: string; scope: string}
 const defaultJudgmentModelContext = 32768
 const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 const dependencyScopePrefix = 'dependencies.'
-const importedSnapshotMarker = 'projectTransferImportedSnapshot'
 const dependencyPayloadKeys = [
   'articles',
   'humanJudgmentSummaries',
@@ -226,10 +236,6 @@ const getNullableStringValue = (value: unknown): string | null => {
   return value === null ? null : getStringValue(value)
 }
 
-const getSqlLiteral = (value: string) => {
-  return `'${value.replaceAll("'", "''")}'`
-}
-
 const getBooleanValue = (value: unknown): boolean => {
   return typeof value === 'boolean' ? value : false
 }
@@ -240,31 +246,6 @@ const normalizeComparableString = (value: unknown): string | null => {
   return normalized === null ? null : normalized.toLocaleLowerCase('en-US')
 }
 
-const getConfigRecord = (value: unknown): Record<string, unknown> => {
-  const parsed = getJsonValue(value)
-
-  return isRecord(parsed) ? parsed : {}
-}
-
-const getImportedSnapshotMarker = (value: unknown) => {
-  const record = getConfigRecord(value)
-  const marker = record[importedSnapshotMarker]
-
-  return isRecord(marker) ? marker : null
-}
-
-const providerHasImportedSnapshotMarker = ({
-  sourceProviderConnectionId,
-  targetProvider,
-}: {
-  sourceProviderConnectionId: string
-  targetProvider: ProviderConnectionForAdmin | ProviderConnectionRecord
-}) => {
-  const marker = getImportedSnapshotMarker(targetProvider.config)
-
-  return marker?.sourceProviderConnectionId === sourceProviderConnectionId
-}
-
 const modelHasImportedSnapshotMarker = ({
   sourceModelId,
   targetModel,
@@ -272,53 +253,49 @@ const modelHasImportedSnapshotMarker = ({
   sourceModelId: string
   targetModel: ProviderModelRecord
 }) => {
-  const marker = getImportedSnapshotMarker(targetModel.metadataJson)
-
-  return marker?.sourceModelId === sourceModelId
+  return getProjectTransferImportedSnapshotMarker(targetModel.metadataJson)?.sourceModelId === sourceModelId
 }
 
-const importedSnapshotMarkerFingerprintMatches = ({fingerprint, marker}: {fingerprint: unknown; marker: unknown}) => {
-  return isRecord(marker) && projectTransferSnapshotFingerprintsEqual(marker.snapshotFingerprint, fingerprint)
+const getSnapshotProviderRow = (connection: ProviderConnectionForAdmin): ProjectTransferImportedSnapshotProviderRow => {
+  return {
+    authMode: connection.authMode,
+    baseURL: connection.baseURL,
+    configJson: connection.config,
+    id: connection.id,
+    providerKind: connection.providerKind,
+  }
 }
 
-const getProviderFingerprint = (provider: ImportedProviderConnection | ProviderConnectionForAdmin) => {
-  const importedSignature =
-    'sourceProviderConnectionId' in provider && isRecord(provider.signature) ? provider.signature : null
-  const providerKind = getStringValue(importedSignature?.providerKind) ?? provider.providerKind
-  const baseURL =
-    'sourceProviderConnectionId' in provider
-      ? (getNullableStringValue(importedSignature?.baseURL) ?? provider.baseURL)
-      : provider.baseURL
-
-  return getProjectTransferProviderSnapshotFingerprint({
-    authMode:
-      'sourceProviderConnectionId' in provider ? (importedSignature?.authMode ?? provider.authMode) : provider.authMode,
-    baseURL,
-    configJson:
-      'sourceProviderConnectionId' in provider
-        ? (importedSignature?.configSignature ?? provider.configJson)
-        : undefined,
-    providerKind,
-    targetConfig: 'sourceProviderConnectionId' in provider ? undefined : provider.config,
-  })
+const getSnapshotModelRow = ({
+  model,
+  provider,
+}: {
+  model: ProviderModelRecord
+  provider: ProviderConnectionForAdmin
+}): ProjectTransferImportedSnapshotModelRow => {
+  return {
+    displayName: model.displayName,
+    id: model.id,
+    metadataJson: model.metadataJson,
+    name: model.name,
+    providerAuthMode: provider.authMode,
+    providerBaseURL: provider.baseURL,
+    providerConfigJson: provider.config,
+    providerKind: provider.providerKind,
+    remoteModelId: model.remoteModelId,
+    variant: model.variant,
+    version: model.version,
+  }
 }
 
 const providerFingerprintsMatch = (
   sourceProvider: ImportedProviderConnection,
   targetProvider: ProviderConnectionForAdmin,
 ) => {
-  const marker = getImportedSnapshotMarker(targetProvider.config)
-  const sourceFingerprint = getProviderFingerprint(sourceProvider)
-  const targetFingerprint = getProviderFingerprint(targetProvider)
-
-  return (
-    providerHasImportedSnapshotMarker({
-      sourceProviderConnectionId: sourceProvider.sourceProviderConnectionId,
-      targetProvider,
-    })
-    && importedSnapshotMarkerFingerprintMatches({fingerprint: targetFingerprint, marker})
-    && projectTransferSnapshotFingerprintsEqual(sourceFingerprint, targetFingerprint)
-  )
+  return projectTransferImportedProviderSnapshotMatches({
+    row: getSnapshotProviderRow(targetProvider),
+    sourceProvider: sourceProvider.snapshotSource,
+  })
 }
 
 const getPayloadPath = (layout: ProjectTransferImportTempLayout, key: keyof ProjectTransferPayloadByKey) => {
@@ -424,6 +401,7 @@ const getImportedProviderConnection = (record: ProjectTransferPayloadRecord): Im
     enabled: getBooleanValue(record.enabled),
     label: getStringValue(record.label) ?? 'Imported provider',
     providerKind: getStringValue(record.providerKind) ?? 'unknown',
+    snapshotSource: getProjectTransferImportedSnapshotSourceProvider(record),
     sourceProviderConnectionId: getStringValue(record.sourceProviderConnectionId) ?? '',
   }
 }
@@ -437,6 +415,7 @@ const getImportedModel = (record: ProjectTransferPayloadRecord): ImportedModel =
     modelName: getStringValue(record.modelName) ?? '',
     name: getStringValue(record.name) ?? '',
     remoteModelId: getNullableStringValue(record.remoteModelId),
+    snapshotSource: getProjectTransferImportedSnapshotSourceModel(record),
     sourceModelId: getStringValue(record.sourceModelId) ?? '',
     sourceProviderConnectionId: getStringValue(record.sourceProviderConnectionId) ?? '',
     variant: normalizeProjectTransferModelVariant(record.variant),
@@ -693,58 +672,6 @@ const nullableRemoteModelMatches = (source: ImportedModel, target: ProviderModel
   )
 }
 
-const getSourceModelFingerprint = ({
-  sourceModel,
-  sourceProvider,
-}: {
-  sourceModel: ImportedModel
-  sourceProvider: ImportedProviderConnection
-}) => {
-  const importedSignature = isRecord(sourceProvider.signature) ? sourceProvider.signature : null
-  const providerKind = getStringValue(importedSignature?.providerKind) ?? sourceProvider.providerKind
-  const baseURL = getNullableStringValue(importedSignature?.baseURL) ?? sourceProvider.baseURL
-
-  return getProjectTransferModelSnapshotFingerprint({
-    displayName: sourceModel.displayName,
-    metadataJson: sourceModel.metadataJson,
-    modelName: sourceModel.modelName,
-    name: sourceModel.name,
-    provider: {
-      authMode: importedSignature?.authMode ?? sourceProvider.authMode,
-      baseURL,
-      configJson: importedSignature?.configSignature ?? sourceProvider.configJson,
-      providerKind,
-    },
-    remoteModelId: sourceModel.remoteModelId,
-    variant: sourceModel.variant,
-    version: sourceModel.version,
-  })
-}
-
-const getTargetModelFingerprint = ({
-  targetModel,
-  targetProvider,
-}: {
-  targetModel: ProviderModelRecord
-  targetProvider: ProviderConnectionForAdmin
-}) => {
-  return getProjectTransferModelSnapshotFingerprint({
-    displayName: targetModel.displayName,
-    metadataJson: targetModel.metadataJson,
-    modelName: targetModel.modelName,
-    name: targetModel.name,
-    provider: {
-      authMode: targetProvider.authMode,
-      baseURL: targetProvider.baseURL,
-      providerKind: targetProvider.providerKind,
-      targetConfig: targetProvider.config,
-    },
-    remoteModelId: targetModel.remoteModelId,
-    variant: targetModel.variant,
-    version: targetModel.version,
-  })
-}
-
 const getSourceModelIdentityCandidates = (source: ImportedModel, connection: ProviderConnectionForAdmin) => {
   return getSelectableConnectionModels(connection).filter((target) => {
     return remoteModelMatches(source, target) || nullableRemoteModelMatches(source, target)
@@ -795,16 +722,13 @@ const targetModelEquivalentForImportedJudgments = ({
   targetProvider: ProviderConnectionForAdmin
   targetModel: ProviderModelRecord
 }) => {
-  const targetFingerprint = getTargetModelFingerprint({targetModel, targetProvider})
-  const marker = getImportedSnapshotMarker(targetModel.metadataJson)
-
   return (
     (remoteModelMatches(sourceModel, targetModel) || nullableRemoteModelMatches(sourceModel, targetModel))
-    && importedSnapshotMarkerFingerprintMatches({fingerprint: targetFingerprint, marker})
-    && projectTransferSnapshotFingerprintsEqual(
-      getSourceModelFingerprint({sourceModel, sourceProvider}),
-      targetFingerprint,
-    )
+    && projectTransferImportedModelSnapshotMatches({
+      row: getSnapshotModelRow({model: targetModel, provider: targetProvider}),
+      sourceModel: sourceModel.snapshotSource,
+      sourceProvider: sourceProvider.snapshotSource,
+    })
     && targetModelRequestMatches(judgmentModelSignaturesBySourceId[sourceModel.sourceModelId] ?? [], targetModel)
   )
 }
@@ -853,65 +777,6 @@ const getUniqueEquivalentTargetProviderConnection = ({
   return candidates.length === 1 ? candidates[0] : null
 }
 
-type ImportedSnapshotProviderTargetRow = {
-  authMode: string | null
-  baseURL: string | null
-  config: unknown
-  enabled?: boolean | null
-  id: string
-  label?: string | null
-  maxInflightRequests?: number | null
-  providerKind: ProviderConnectionForAdmin['providerKind']
-  secretRef?: string | null
-}
-
-type ImportedSnapshotModelTargetRow = ProviderModelRecord & {
-  providerAuthMode: string | null
-  providerBaseURL: string | null
-  providerConfig: unknown
-  providerKind: ProviderConnectionForAdmin['providerKind']
-}
-
-const getProviderConnectionFromSnapshotRow = (row: ImportedSnapshotProviderTargetRow): ProviderConnectionForAdmin => {
-  return {
-    authMode: row.authMode,
-    baseURL: row.baseURL,
-    config: getConfigRecord(row.config) as ProviderConnectionForAdmin['config'],
-    createdAt: null,
-    enabled: row.enabled ?? false,
-    hasSecret: row.secretRef !== null && row.secretRef !== undefined,
-    id: row.id,
-    label: row.label ?? row.id,
-    lastCheckedAt: null,
-    lastError: null,
-    maxInflightRequests: row.maxInflightRequests ?? null,
-    models: [],
-    providerKind: row.providerKind,
-    secretRef: row.secretRef ?? null,
-    updatedAt: null,
-  }
-}
-
-const getProviderConnectionFromModelSnapshotRow = (row: ImportedSnapshotModelTargetRow): ProviderConnectionForAdmin => {
-  return {
-    authMode: row.providerAuthMode,
-    baseURL: row.providerBaseURL,
-    config: getConfigRecord(row.providerConfig) as ProviderConnectionForAdmin['config'],
-    createdAt: null,
-    enabled: false,
-    hasSecret: false,
-    id: row.providerConnectionId ?? '',
-    label: row.providerConnectionId ?? '',
-    lastCheckedAt: null,
-    lastError: null,
-    maxInflightRequests: null,
-    models: [],
-    providerKind: row.providerKind,
-    secretRef: null,
-    updatedAt: null,
-  }
-}
-
 const getReusableImportedSnapshotProviderConnectionId = async ({
   importedProvider,
   runner,
@@ -919,34 +784,18 @@ const getReusableImportedSnapshotProviderConnectionId = async ({
   importedProvider: ImportedProviderConnection
   runner: ProjectTransferAnalyzeTargetRunner | null
 }) => {
-  if (runner === null) {
-    return null
-  }
+  const lookup =
+    runner === null
+      ? null
+      : await getProjectTransferReusableImportedProviderSnapshot({
+          runner,
+          sourceProvider: importedProvider.snapshotSource,
+        })
 
-  const rows = await runner.queryJson<ImportedSnapshotProviderTargetRow>(`
-    SELECT
-      id,
-      provider_kind AS providerKind,
-      label,
-      COALESCE(enabled, FALSE) AS enabled,
-      auth_mode AS authMode,
-      base_url AS baseURL,
-      max_inflight_requests AS maxInflightRequests,
-      TO_JSON(config_json) AS config,
-      secret_ref AS secretRef
-    FROM app.provider_connection
-    WHERE json_extract_string(config_json, '$.${importedSnapshotMarker}.sourceProviderConnectionId')
-      = ${getSqlLiteral(importedProvider.sourceProviderConnectionId)}
-    ORDER BY created_at ASC, id ASC
-  `)
-  const candidates = rows.map(getProviderConnectionFromSnapshotRow).filter((connection) => {
-    return providerFingerprintsMatch(importedProvider, connection)
-  })
-
-  return candidates.length === 1 ? (candidates[0]?.id ?? null) : null
+  return lookup?.reusableId ?? null
 }
 
-const getReusableImportedSnapshotModelId = async ({
+const getImportedSnapshotModelLookup = async ({
   importedModel,
   importedProvider,
   providerConnectionId,
@@ -957,47 +806,32 @@ const getReusableImportedSnapshotModelId = async ({
   providerConnectionId: string
   runner: ProjectTransferAnalyzeTargetRunner | null
 }) => {
-  if (runner === null || isImportedTargetProviderConnectionId(providerConnectionId)) {
-    return null
-  }
+  return runner === null || isImportedTargetProviderConnectionId(providerConnectionId)
+    ? null
+    : getProjectTransferReusableImportedModelSnapshot({
+        providerConnectionId,
+        runner,
+        sourceModel: importedModel.snapshotSource,
+        sourceProvider: importedProvider.snapshotSource,
+      })
+}
 
-  const rows = await runner.queryJson<ImportedSnapshotModelTargetRow>(`
-    SELECT
-      model.id,
-      provider.id AS providerConnectionId,
-      model.name,
-      json_extract_string(model.metadata_json, '$.discovery.identity.modelName') AS modelName,
-      model.remote_model_id AS remoteModelId,
-      model.display_name AS displayName,
-      model.variant,
-      json_extract_string(model.metadata_json, '$.${importedSnapshotMarker}.snapshotFingerprint.model.version')
-        AS version,
-      COALESCE(model.enabled, FALSE) AS enabled,
-      model.source,
-      provider.provider_kind AS provider,
-      NULL AS baseURL,
-      TO_JSON(model.metadata_json) AS metadataJson,
-      provider.provider_kind AS providerKind,
-      provider.auth_mode AS providerAuthMode,
-      provider.base_url AS providerBaseURL,
-      TO_JSON(provider.config_json) AS providerConfig
-    FROM app.model model
-    INNER JOIN app.provider_connection provider ON provider.id = model.provider_connection_id
-    WHERE model.provider_connection_id = ${getSqlLiteral(providerConnectionId)}
-      AND json_extract_string(model.metadata_json, '$.${importedSnapshotMarker}.sourceModelId')
-        = ${getSqlLiteral(importedModel.sourceModelId)}
-    ORDER BY model.created_at ASC, model.id ASC
-  `)
-  const candidates = rows.filter((row) => {
-    return hiddenImportedSnapshotModelMatches({
-      importedModel,
-      importedProvider,
-      targetModel: row,
-      targetProvider: getProviderConnectionFromModelSnapshotRow(row),
-    })
-  })
+const getHiddenProviderModelTargetId = ({
+  hiddenResolvedProviderTargetIds,
+  snapshotModelLookup,
+  sourceModelId,
+  targetProviderConnectionId,
+}: {
+  hiddenResolvedProviderTargetIds: Set<string>
+  snapshotModelLookup: ProjectTransferImportedSnapshotLookup | null
+  sourceModelId: string
+  targetProviderConnectionId: string
+}) => {
+  const createsModelUnderHiddenProvider =
+    hiddenResolvedProviderTargetIds.has(targetProviderConnectionId) && snapshotModelLookup?.rowCount === 0
+  const fallbackTargetId = createsModelUnderHiddenProvider ? getImportedTargetModelId(sourceModelId) : null
 
-  return candidates.length === 1 ? (candidates[0]?.id ?? null) : null
+  return snapshotModelLookup?.reusableId ?? fallbackTargetId
 }
 
 const validateExplicitProviderSelections = async ({
@@ -1080,6 +914,7 @@ const getResolvedProviderMappings = ({
 const getResolvedModelMappings = ({
   connectionById,
   hiddenResolvedModelTargetIds,
+  hiddenResolvedProviderTargetIds,
   importedModels,
   importedProvidersBySourceId,
   judgmentModelSignaturesBySourceId,
@@ -1089,6 +924,7 @@ const getResolvedModelMappings = ({
 }: {
   connectionById: Record<string, ProviderConnectionForAdmin>
   hiddenResolvedModelTargetIds: Set<string>
+  hiddenResolvedProviderTargetIds: Set<string>
   importedModels: ImportedModel[]
   importedProvidersBySourceId: Record<string, ImportedProviderConnection>
   judgmentModelSignaturesBySourceId: Record<string, unknown[]>
@@ -1118,15 +954,16 @@ const getResolvedModelMappings = ({
             sourceProvider: importedProvider,
           })
         : null
-    const reusableSnapshotModelId =
+    const snapshotModelLookup =
       targetProviderConnectionId !== undefined && importedProvider !== null
-        ? await getReusableImportedSnapshotModelId({
+        ? await getImportedSnapshotModelLookup({
             importedModel,
             importedProvider,
             providerConnectionId: targetProviderConnectionId,
             runner,
           })
         : null
+    const reusableSnapshotModelId = snapshotModelLookup?.reusableId ?? null
     const reusableExistingTargetId =
       existingTargetModel !== null
       && existingTargetProvider !== null
@@ -1152,7 +989,12 @@ const getResolvedModelMappings = ({
           : isImportedTargetProviderConnectionId(targetProviderConnectionId)
             ? getImportedTargetModelId(sourceModelId)
             : connection === null
-              ? (reusableSnapshotModelId ?? null)
+              ? getHiddenProviderModelTargetId({
+                  hiddenResolvedProviderTargetIds,
+                  snapshotModelLookup,
+                  sourceModelId,
+                  targetProviderConnectionId,
+                })
               : importedProvider === null
                 ? getImportedTargetModelId(sourceModelId)
                 : (reusableSnapshotModelId ?? equivalentTargetModel?.id ?? getImportedTargetModelId(sourceModelId))
@@ -1285,34 +1127,6 @@ const getModelStatus = ({
   }
 
   return 'blocked'
-}
-
-const hiddenImportedSnapshotModelMatches = ({
-  importedModel,
-  importedProvider,
-  targetModel,
-  targetProvider,
-}: {
-  importedModel: ImportedModel
-  importedProvider: ImportedProviderConnection
-  targetModel: ProviderModelRecord
-  targetProvider: ProviderConnectionForAdmin
-}) => {
-  const targetFingerprint = getTargetModelFingerprint({targetModel, targetProvider})
-  const marker = getImportedSnapshotMarker(targetModel.metadataJson)
-
-  return (
-    modelHasImportedSnapshotMarker({sourceModelId: importedModel.sourceModelId, targetModel})
-    && targetModel.name === importedModel.name
-    && targetModel.remoteModelId === (importedModel.remoteModelId ?? importedModel.modelName)
-    && targetModel.displayName === importedModel.displayName
-    && modelVariantMatches(importedModel, targetModel)
-    && importedSnapshotMarkerFingerprintMatches({fingerprint: targetFingerprint, marker})
-    && projectTransferSnapshotFingerprintsEqual(
-      getSourceModelFingerprint({sourceModel: importedModel, sourceProvider: importedProvider}),
-      targetFingerprint,
-    )
-  )
 }
 
 const getModelStatusesAndBlockers = ({
@@ -1773,6 +1587,7 @@ export const revalidateProjectTransferResolvedDependencies = async (
   const modelTargetBySourceId = await getResolvedModelMappings({
     connectionById,
     hiddenResolvedModelTargetIds,
+    hiddenResolvedProviderTargetIds,
     importedModels,
     importedProvidersBySourceId,
     judgmentModelSignaturesBySourceId,
