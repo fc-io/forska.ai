@@ -23,8 +23,7 @@ import {
   type ComparisonProjectRowFilter,
   getNormalizedComparisonProjectRowFilters,
 } from '../../../../../utils/comparisonProjectRowFilter.ts'
-import {comparisonProjectSearchTextMaxLength} from '../../../../../utils/comparisonProjectSearchText.ts'
-import {compareProjectJudgmentsSearchPlaceholder} from '../+index/compareProjectJudgmentsSearchForm.tsx'
+import {getCompareProjectExportCountLabel} from './compareProjectExportCountLabel.ts'
 
 type CompareProjectExportDifferenceFilterOption = {label: string; value: ComparisonProjectDifferenceFilter}
 
@@ -39,6 +38,7 @@ type CompareProjectExportFiltersProps = {
   differenceFilters: readonly ComparisonProjectDifferenceFilter[]
   differenceFilterDisabled: boolean
   differenceFilterOptions: CompareProjectExportDifferenceFilterOption[]
+  exportCount: number | null
   isExportingCsv: boolean
   isExportingPdf: boolean
   rowFilterOptions: MultiSelectOption[]
@@ -51,31 +51,19 @@ type CompareProjectExportFiltersProps = {
   onExportCsv: () => void
   onExportPdf: () => void
   onRowFiltersChange: (values: ComparisonProjectRowFilter[]) => void
-  onSearchTextChange: (value: string) => void
   rowFilters: readonly ComparisonProjectRowFilter[]
-  searchText: string
 }
 
 export const CompareProjectExportFilters = (props: CompareProjectExportFiltersProps) => {
   return (
     <div class="rounded-lg bg-white p-6 shadow">
-      <div class="mb-4">
+      <div class="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 class="text-lg font-semibold">Export Filters</h2>
+        <span class="text-sm text-gray-600" aria-live="polite">
+          {getCompareProjectExportCountLabel(props.exportCount)}
+        </span>
       </div>
       <div class="space-y-4">
-        <label class="flex flex-col text-sm font-medium gap-1 w-full max-w-xl">
-          <span>Search title</span>
-          <input
-            type="text"
-            value={props.searchText}
-            maxLength={comparisonProjectSearchTextMaxLength}
-            onInput={(event) => {
-              props.onSearchTextChange(event.currentTarget.value)
-            }}
-            placeholder={compareProjectJudgmentsSearchPlaceholder}
-            class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-          />
-        </label>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div class="flex flex-col gap-2">
             <label class="font-medium text-sm truncate">Row filter:</label>

@@ -5,13 +5,16 @@ import {afterEach, describe, expect, test, vi} from 'vitest'
 
 import {CompareProjectExportFilters} from './compareProjectExportFilters.tsx'
 
-const renderFilters = (showArticleCategoryFilter: boolean, options: {showConflictResolutionFilter?: boolean} = {}) => {
+type RenderFiltersOptions = {exportCount?: number | null; showConflictResolutionFilter?: boolean}
+
+const renderFilters = (showArticleCategoryFilter: boolean, options: RenderFiltersOptions = {}) => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const dispose = render(() => {
     return (
       <CompareProjectExportFilters
         articleCategoryFilters={['non_chinese']}
+        exportCount={options.exportCount === undefined ? 1234 : options.exportCount}
         conflictResolutionFilters={['not-set', 'yes']}
         conflictResolutionFilterOptions={[
           {label: 'Not set', value: 'not-set'},
@@ -35,9 +38,7 @@ const renderFilters = (showArticleCategoryFilter: boolean, options: {showConflic
         onExportCsv={vi.fn()}
         onExportPdf={vi.fn()}
         onRowFiltersChange={vi.fn()}
-        onSearchTextChange={vi.fn()}
         rowFilters={[]}
-        searchText="metformin"
       />
     )
   }, container)
@@ -80,12 +81,25 @@ describe('CompareProjectExportFilters', () => {
     }
   })
 
-  test('shows the title search above the selectors with the applied search text', () => {
+  test('has no title search and shows the filtered article count next to the title', () => {
     const {container, dispose} = renderFilters(true)
 
     try {
-      expect(getTriggerLabels(container)[0]).toBe('Search title')
-      expect((container.querySelector('input[type="text"]') as HTMLInputElement).value).toBe('metformin')
+      expect(container.querySelector('input[type="text"]')).toBeNull()
+      expect(container.textContent).not.toContain('Search title')
+      expect(container.querySelector('h2')?.parentElement?.textContent).toBe(
+        `Export Filters${(1234).toLocaleString()} articles`,
+      )
+    } finally {
+      dispose()
+    }
+  })
+
+  test('shows a counting state next to the title while the filtered count is unknown', () => {
+    const {container, dispose} = renderFilters(true, {exportCount: null})
+
+    try {
+      expect(container.querySelector('h2')?.parentElement?.textContent).toBe('Export FiltersCounting articles…')
     } finally {
       dispose()
     }
@@ -95,7 +109,7 @@ describe('CompareProjectExportFilters', () => {
     const {container, dispose} = renderFilters(true)
 
     try {
-      expect(getTriggerLabels(container).slice(1, 6)).toEqual([
+      expect(getTriggerLabels(container).slice(0, 5)).toEqual([
         'Row filter:',
         'Difference filter:',
         'Conflict resolutions:',
