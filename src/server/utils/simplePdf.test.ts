@@ -219,3 +219,20 @@ test('simple PDF keeps printable ASCII text field values literal and writes othe
   expect(getTextFieldDictionary(output, 'emoji')).toContain('/V <FEFF004F006B0020D83DDC4D>')
   expect(output).not.toContain('(Oklart ?')
 })
+
+test('simple PDF moves a labelled text field to the next page when the label gap would push it below the margin', () => {
+  const pdf = new SimplePdfDocument()
+  pdf.addGap(842 - 42 - 110)
+  pdf.addTextField({fieldName: 'comment', label: 'Comment (optional)', lines: 4, multiline: true, value: ''})
+
+  const output = pdf.toBuffer().toString('latin1')
+  const [, bottomY] =
+    /\/Rect \[(\d+\.\d+) (\d+\.\d+)/
+      .exec(getTextFieldDictionary(output, 'comment') ?? '')
+      ?.slice(1)
+      .map(Number) ?? []
+
+  expect(output).toContain('/Count 2')
+  expect(bottomY).toBeGreaterThanOrEqual(42)
+  expect(output).toContain(`BT /F2 10 Tf 48.00 800.00 Td (Comment \\(optional\\)) Tj ET`)
+})

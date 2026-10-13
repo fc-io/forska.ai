@@ -3,6 +3,7 @@ import {describe, expect, test} from 'bun:test'
 import {SimplePdfDocument} from '../../utils/simplePdf.ts'
 import {
   getComparisonProjectConflictResolutionTransferArtifactFromPdfImport,
+  getParsedPdfConflictResolutionImportArticleCount,
   parsePdfConflictResolutionImport,
   pdfConflictResolutionNotSetValue,
 } from './comparisonProjectConflictResolutionPdfImport.ts'
@@ -789,5 +790,152 @@ endobj`
         fieldName: getCommentFieldName('article-1'),
       },
     ])
+  })
+
+  test('decodes strings without a BOM as PDFDocEncoding, keeping other Latin-1 bytes and dropping undefined ones', () => {
+    const pdf = appendViewerFieldUpdates(
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: null},
+        {articleId: 'article-2', exportedComment: null},
+        {articleId: 'article-3', exportedComment: null},
+      ]),
+      [
+        {fieldName: getCommentFieldName('article-1'), valueToken: '(it\\220s \\205 5 \\240 \\200 \\215ok\\216)'},
+        {
+          fieldName: getCommentFieldName('article-2'),
+          valueToken: '(\\225ukasz \\226uvre \\223le \\030\\037 Gr\\374\\337e)',
+        },
+        {fieldName: getCommentFieldName('article-3'), valueToken: '(a\\177b\\237c\\255d)'},
+        {fieldName: 'forska.reviewer.displayName', valueToken: '(O\\220Brien)'},
+      ],
+    )
+    const parsedImport = parsePdfConflictResolutionImport(pdf)
+
+    expect(parsedImport.reviewer.displayName).toBe('O\u2019Brien')
+    expect(
+      parsedImport.commentOnlyRows.map((row) => {
+        return row.comment
+      }),
+    ).toEqual([
+      'it\u2019s \u2013 5 \u20ac \u2022 \u201cok\u201d',
+      '\u0141ukasz \u0152uvre \ufb01le \u02d8\u02dc Gr\u00fc\u00dfe',
+      'abcd',
+    ])
+  })
+
+  test('an untouched prefilled comment that a viewer re-encoded as PDFDocEncoding does not count as changed', () => {
+    const pdf = appendViewerFieldUpdates(
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: 'Patient\u2019s age \u2013 unclear', radio: 'yes'},
+        {articleId: 'article-2', exportedComment: '\u201cQuoted\u201d \u2026 \u20ac5', radio: null},
+      ]),
+      [
+        {fieldName: getCommentFieldName('article-1'), valueToken: '(Patient\\220s age \\205 unclear)'},
+        {fieldName: getCommentFieldName('article-2'), valueToken: '(\\215Quoted\\216 \\203 \\2405)'},
+      ],
+    )
+    const parsedImport = parsePdfConflictResolutionImport(pdf)
+
+    expect(parsedImport.rows).toMatchObject([{canonicalArticleId: 'article-1', comment: null, resolutionValue: 'yes'}])
+    expect(parsedImport.commentOnlyRows).toEqual([])
+  })
+
+  test('decodes a UTF-16LE BOM', () => {
+    const pdf = appendViewerFieldUpdates(createCommentReviewPdf([{articleId: 'article-1', exportedComment: null}]), [
+      {fieldName: getCommentFieldName('article-1'), valueToken: '<FFFE 4100 E500 0D00 0A00 4200>'},
+    ])
+
+    expect(parsePdfConflictResolutionImport(pdf).commentOnlyRows).toMatchObject([{comment: 'A\u00e5\nB'}])
+  })
+
+  test('a literal value containing >> stream and a raw line break does not hide later fields', () => {
+    const edited = appendViewerFieldUpdates(
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: null},
+        {articleId: 'article-3', exportedComment: null},
+      ]),
+      [
+        {fieldName: getCommentFieldName('article-1'), valueToken: '(see >> stream\nline)'},
+        {fieldName: getCommentFieldName('article-3'), valueToken: '(Third)'},
+      ],
+    )
+    const withAppearanceStream = Buffer.concat([
+      edited,
+      Buffer.from(
+        '90 0 obj\n<< /Type /XObject /Subtype /Form /Length 9 >>\nstream\nq BT ET Q\nendstream\nendobj\n',
+        'latin1',
+      ),
+    ])
+
+    expect(
+      parsePdfConflictResolutionImport(withAppearanceStream).commentOnlyRows.map((row) => {
+        return [row.canonicalArticleId, row.comment]
+      }),
+    ).toEqual([
+      ['article-1', 'see >> stream\nline'],
+      ['article-3', 'Third'],
+    ])
+  })
+
+  test('skips stream data by its direct length even when the data contains endstream and field-like text', () => {
+    const streamData =
+      'BT (endstream) Tj ET\nendstream\n<< /FT /Tx /T (comparison.comparison-project-1.article.article-2.comment) /V (Fake) >>\n'
+    const withStream = Buffer.concat([
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: null, value: 'Real note'},
+        {articleId: 'article-2', exportedComment: null},
+      ]),
+      Buffer.from(`91 0 obj\n<< /Length ${streamData.length} >>\nstream\n${streamData}\nendstream\nendobj\n`, 'latin1'),
+    ])
+
+    expect(
+      parsePdfConflictResolutionImport(withStream).commentOnlyRows.map((row) => {
+        return [row.canonicalArticleId, row.comment]
+      }),
+    ).toEqual([['article-1', 'Real note']])
+  })
+
+  test('resolves an indirect value that points at a plain string object and warns about other indirect values', () => {
+    const withObjects = Buffer.concat([
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: null},
+        {articleId: 'article-2', exportedComment: 'Old'},
+      ]),
+      Buffer.from(
+        '40 0 obj\n(Stale indirect note)\nendobj\n40 0 obj\n<FEFF0049006E0064006900720065006B0074>\nendobj\n',
+        'latin1',
+      ),
+      Buffer.from('41 0 obj\n<< /Length 4 >>\nstream\nText\nendstream\nendobj\n', 'latin1'),
+    ])
+    const parsedImport = parsePdfConflictResolutionImport(
+      appendViewerFieldUpdates(withObjects, [
+        {fieldName: getCommentFieldName('article-1'), valueToken: ' 40 0 R'},
+        {fieldName: getCommentFieldName('article-2'), valueToken: ' 41 0 R'},
+      ]),
+    )
+
+    expect(
+      parsedImport.commentOnlyRows.map((row) => {
+        return [row.canonicalArticleId, row.comment]
+      }),
+    ).toEqual([['article-1', 'Indirekt']])
+    expect(parsedImport.warnings).toContain(
+      `PDF field ${getCommentFieldName('article-2')} has an indirect value that is not a plain string object and was ignored.`,
+    )
+  })
+
+  test('counts an article with an Undecided radio and a changed comment once', () => {
+    const parsedImport = parsePdfConflictResolutionImport(
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: null, radio: pdfConflictResolutionNotSetValue, value: 'Note'},
+        {articleId: 'article-2', exportedComment: null, radio: 'yes', value: 'Other'},
+        {articleId: 'article-3', exportedComment: null, radio: null, value: 'Third'},
+      ]),
+    )
+
+    expect(parsedImport.undecidedRows).toHaveLength(1)
+    expect(parsedImport.commentOnlyRows).toHaveLength(2)
+    expect(parsedImport.rows).toHaveLength(1)
+    expect(getParsedPdfConflictResolutionImportArticleCount(parsedImport)).toBe(3)
   })
 })
