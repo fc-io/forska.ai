@@ -23,10 +23,10 @@ Then pick **one** of the two versions below. They are alternatives, not steps: c
 
 ### Option A: Stable release (recommended)
 
-The current stable release is the Git tag `win-2026-10-12`. Pick this if you want a version that is known to work.
+The current stable release is the Git branch and tag `win-2026-10-13`. Pick this if you want a version that is known to work.
 
 ```bash
-git clone --branch win-2026-10-12 https://github.com/fc-io/forska.ai.git
+git clone --branch win-2026-10-13 https://github.com/fc-io/forska.ai.git
 cd forska.ai
 bun install
 ```
@@ -43,12 +43,16 @@ bun install
 
 ### Switching between them later
 
-From an existing checkout, move to the stable release:
+From an existing checkout, move to (or update) the stable release. `git reset --hard` discards any local edits in the checkout, which is what you want for a plain install:
 
 ```bash
+# go to the forska.ai folder
 git fetch origin --tags
-git switch --detach win-2026-10-12
+git reset --hard
+git switch win-2026-10-13
+git pull
 bun install
+bun run dev:start
 ```
 
 Or back to the dev build:
