@@ -234,14 +234,20 @@ const getCreatedAtByArticleId = (rows: readonly ComparisonProjectConflictComment
   )
 }
 
+export const getComparisonProjectConflictCommentImportWrites = (
+  commentChanges: readonly ComparisonProjectConflictResolutionImportCommentChange[],
+) => {
+  return commentChanges.filter((commentChange) => {
+    return commentChange.change !== 'keep'
+  })
+}
+
 export const writeComparisonProjectConflictCommentImportChanges = async (params: {
   commentChanges: readonly ComparisonProjectConflictResolutionImportCommentChange[]
   comparisonProjectId: string
   tx: DuckdbTransactionRunner
 }) => {
-  const commentWrites = params.commentChanges.filter((commentChange) => {
-    return commentChange.change !== 'keep'
-  })
+  const commentWrites = getComparisonProjectConflictCommentImportWrites(params.commentChanges)
 
   if (commentWrites.length === 0) {
     return 0

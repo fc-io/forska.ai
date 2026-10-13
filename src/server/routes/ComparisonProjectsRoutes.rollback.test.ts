@@ -7981,9 +7981,9 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).toContain('forska.ai conflict resolutions review')
   expect(pdf).not.toContain('Forska.ai comparison review PDF')
   expect(pdf).toContain('Use this PDF to assess review conflicts offline')
-  expect(pdf).toContain('conflict resolution radio buttons')
+  expect(pdf).toContain('conflict resolution radio buttons and')
   expect(pdf).toContain(
-    "articles you've reviewed. This PDF can then be imported into a forska.ai project to compare results.",
+    "comments for the articles you've reviewed. This PDF can then be imported into a forska.ai project to compare",
   )
   expect(pdf).not.toContain('Use this PDF to review comparison-project conflicts offline')
   expect(pdf).toContain('Project')
@@ -8005,7 +8005,7 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).not.toContain('If a filled PDF is imported more than once')
   expect(pdf).toContain('For more information about forska.ai, visit https://github.com/fc-io/forska.ai.')
   expect(pdf).not.toContain('Reviewer identity for import')
-  expect(pdf).toContain('Enter the name that should be attached to imported conflict resolutions')
+  expect(pdf).toContain('Enter the name that should be attached to imported conflict resolutions and comments.')
   expect(pdf).toContain('Optional, but helps distinguish different reviewers.')
   expect(pdf).not.toContain('Forska.ai creates a separate reviewer ID during import')
   expect(pdf).toContain('/FT /Tx')
@@ -8063,6 +8063,10 @@ test('comparison project export can render a readable pdf with matching filters 
   expect(pdf).toContain('/Ff 49152')
   expect(pdf).toContain('/T (comparison.comparison-project-1.article.article-1.resolution)')
   expect(pdf).toContain('/T (comparison.comparison-project-1.article.article-1.metadata)')
+  expect(pdf).toContain('(Comment \\(optional\\))')
+  expect(pdf).toMatch(
+    /\/T \(comparison\.comparison-project-1\.article\.article-1\.comment\) \/Rect \[[^\]]+\] \/Ff 4096 \/MaxLen 4000 \/V \(\) \/DV \(\)/,
+  )
   expect(pdf).toContain('(Undecided)')
   expect(pdf).not.toContain('(Not set)')
   expect(pdf).toContain('/V /Off')
