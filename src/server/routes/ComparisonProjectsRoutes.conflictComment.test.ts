@@ -846,11 +846,13 @@ test('several source rows on one target take the first non-empty comment, whiche
   await clearComparisonProject(targetComparisonProjectId)
 })
 
-test('creating a comparison project from a project copies comments, also comment-only ones, with their authors', async () => {
+test('creating a comparison project from a project copies comments, also comment-only ones and ones on non-conflicting articles, with their authors', async () => {
+  await postComment('comment-article-3', 'Not a conflict in the new project')
   const sourceComments = await getCommentRows(sourceComparisonProjectId)
   const response = await postJson('/api/comparison-projects/from-project', {
     allowConflictResolution: true,
     compareWithHumans: true,
+    conflictResolutionImportMode: 'conflicting-only',
     conflictResolutionImportSourceComparisonProjectIds: [sourceComparisonProjectId],
     description: null,
     humanJudgmentMode: 'summary',
@@ -878,7 +880,12 @@ test('creating a comparison project from a project copies comments, also comment
       return [row.articleId, row.comment, row.authorUserId, row.authorDisplayName]
     }),
   )
-  expect(sourceComments).toHaveLength(2)
+  expect(
+    sourceComments.map((row) => {
+      return row.articleId
+    }),
+  ).toEqual(['comment-article-1', 'comment-article-2', 'comment-article-3'])
+  await postComment('comment-article-3', null)
 })
 
 test('PDF imports without comment fields leave comments alone, also when clearing an undecided article', async () => {
