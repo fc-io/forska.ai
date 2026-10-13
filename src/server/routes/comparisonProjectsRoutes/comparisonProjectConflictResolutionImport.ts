@@ -1851,6 +1851,23 @@ const getHasConflictingIdentifierMatches = (matches: readonly ImportTargetArticl
   return targetArticleIds.length > 1 && matchKeys.length > 1
 }
 
+const getSelectedIdentifierMatch = (row: NormalizedSourceRow, matches: readonly ImportTargetArticleMatch[]) => {
+  const tieBreakerMatches = getHasConflictingIdentifierMatches(matches)
+    ? []
+    : getIdentifierTieBreakerMatches(row, matches)
+
+  return matches.length === 1 ? matches[0] : tieBreakerMatches.length === 1 ? tieBreakerMatches[0] : null
+}
+
+const getNotConflictingIdentifierDetailMatches = (
+  row: NormalizedSourceRow,
+  targetMatches: readonly ImportTargetArticleMatch[],
+) => {
+  const selectedMatch = getSelectedIdentifierMatch(row, targetMatches)
+
+  return selectedMatch ? [selectedMatch] : targetMatches
+}
+
 const getExistingTargetResolutionResult = (
   row: NormalizedSourceRow,
   selectedMatch: ImportTargetArticleMatch,
@@ -1898,9 +1915,9 @@ const getIdentifierImportCandidateRowForTier = (
   )
   const eligibleMatches = getEligibleTargetMatches(targetMatches, importMode)
   const hasConflictingIdentifiers = getHasConflictingIdentifierMatches(eligibleMatches)
-  const tieBreakerMatches = hasConflictingIdentifiers ? [] : getIdentifierTieBreakerMatches(row, eligibleMatches)
-  const selectedMatch =
-    eligibleMatches.length === 1 ? eligibleMatches[0] : tieBreakerMatches.length === 1 ? tieBreakerMatches[0] : null
+  const selectedMatch = getSelectedIdentifierMatch(row, eligibleMatches)
+  const detailMatches =
+    eligibleMatches.length > 0 ? eligibleMatches : getNotConflictingIdentifierDetailMatches(row, targetMatches)
   const skipReason =
     targetMatches.length === 0
       ? null
@@ -1933,12 +1950,10 @@ const getIdentifierImportCandidateRowForTier = (
         ? {
             candidate: null,
             detail: getImportRowMatchDetail({
-              matchKey: getAmbiguousMatchKey(eligibleMatches.length > 0 ? eligibleMatches : targetMatches),
-              matchKind: getAmbiguousMatchKind(eligibleMatches.length > 0 ? eligibleMatches : targetMatches),
+              matchKey: getAmbiguousMatchKey(detailMatches),
+              matchKind: getAmbiguousMatchKind(detailMatches),
               sourceRow: row,
-              targetArticles: getTargetArticlesFromMatches(
-                eligibleMatches.length > 0 ? eligibleMatches : targetMatches,
-              ),
+              targetArticles: getTargetArticlesFromMatches(detailMatches),
             }),
             skippedRow: getSkippedRow(row.sourceRowId, skipReason),
             warnings:

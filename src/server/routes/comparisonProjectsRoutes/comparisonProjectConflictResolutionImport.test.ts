@@ -2070,6 +2070,51 @@ test('rows skipped as not-conflicting still bring their comment when they match 
   ])
 })
 
+test('a not-conflicting row resolves shared-DOI targets with the ID/title tie-breaker like all-matched', () => {
+  const getTieBreakerPlan = (importMode: 'all-matched' | 'conflicting-only') => {
+    return getPlan({
+      importMode,
+      sourceRows: [
+        getSourceRow({
+          doi: '10.1000/shared',
+          externalArticleId: 'source-ext-b',
+          sourceComment: 'Tie-broken note',
+          title: 'Source title B',
+        }),
+      ],
+      targetArticles: [
+        getTargetArticle({
+          articleId: 'target-a',
+          doi: '10.1000/shared',
+          externalArticleId: 'source-ext-a',
+          isConflictResolutionEligible: false,
+          title: 'Source title A',
+        }),
+        getTargetArticle({
+          articleId: 'target-b',
+          doi: 'doi:10.1000/shared',
+          externalArticleId: 'source-ext-b',
+          isConflictResolutionEligible: false,
+          title: 'Source title B',
+        }),
+      ],
+    })
+  }
+  const getCommentTargets = (plan: ReturnType<typeof getPlan>) => {
+    return plan.commentSources.map((commentSource) => {
+      return [commentSource.targetArticleId, commentSource.comment]
+    })
+  }
+  const allMatchedPlan = getTieBreakerPlan('all-matched')
+  const conflictingOnlyPlan = getTieBreakerPlan('conflicting-only')
+
+  expect(allMatchedPlan.candidates).toMatchObject([{targetArticleId: 'target-b'}])
+  expect(conflictingOnlyPlan.candidates).toEqual([])
+  expect(conflictingOnlyPlan.skippedRows).toEqual([{reason: 'not-conflicting', sourceRowId: 'source-row-1'}])
+  expect(getCommentTargets(conflictingOnlyPlan)).toEqual([['target-b', 'Tie-broken note']])
+  expect(getCommentTargets(allMatchedPlan)).toEqual(getCommentTargets(conflictingOnlyPlan))
+})
+
 test('comment changes add to empty targets, replace only different text when overwriting and never remove', () => {
   const commentSources = [
     {authorDisplayName: null, authorUserId: null, comment: 'New', sourceRowId: 'row-1', targetArticleId: 'empty'},
