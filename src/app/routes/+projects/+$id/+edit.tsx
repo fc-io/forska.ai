@@ -909,7 +909,6 @@ const EditProject = (): JSX.Element => {
                 </div>
 
                 <div>
-                  <p class="block text-sm font-medium mb-2">Import Routes</p>
                   <Show when={importRoutesQuery.isLoading}>
                     <p class="text-sm text-muted-foreground">Loading import routes...</p>
                   </Show>

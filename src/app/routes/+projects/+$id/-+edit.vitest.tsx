@@ -530,7 +530,7 @@ describe('project edit route regressions', () => {
     }
   })
 
-  test('project edit groups import routes under collapsed headings with the selected count', async () => {
+  test('project edit groups import routes under headings with the data source group open', async () => {
     const projectId = 'project-route-groups-test'
     const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
     const queryClient = routeContext.appQueryClient
@@ -564,7 +564,8 @@ describe('project edit route regressions', () => {
       })
       const covidenceCheckbox = covidenceGroup?.querySelector<HTMLInputElement>('input[type="checkbox"]')
 
-      expect(dataSourceGroup?.hasAttribute('open')).toBe(false)
+      expect(container.textContent).not.toContain('Import Routes')
+      expect(dataSourceGroup?.hasAttribute('open')).toBe(true)
       expect(covidenceGroup?.hasAttribute('open')).toBe(false)
       expect(dataSourceGroup?.querySelector('summary')?.textContent).toContain('0 of 1 selected')
       expect(covidenceGroup?.querySelector('summary')?.textContent).toContain('1 of 1 selected')

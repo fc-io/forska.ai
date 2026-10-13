@@ -8,6 +8,7 @@ import {withErrorHandler} from '../../utils/routeErrorHandler.ts'
 type PromptListRow = Pick<PromptRecord, 'id' | 'originalText' | 'promptHeading' | 'type'> & {
   archived: boolean
   createdAt: unknown
+  linkedToCovidenceProject: boolean
   updatedAt: unknown
 }
 
@@ -15,19 +16,29 @@ const normalizePromptListRow = <TRow extends Record<string, unknown>>(row: TRow)
   return {...row, createdAt: getDateValue(row['createdAt']), updatedAt: getDateValue(row['updatedAt'])}
 }
 
+// linkedToCovidenceProject: Covidence imports link a 'covidence:<id>' route to the project (see getImportRouteGroupKey).
+// Keep the SQL free of prose: the read-only helper rejects statements containing words like "import".
 const getPromptRows = async (archived: boolean) => {
   return getApiReadOnlyAppDatabaseService().queryJson<PromptListRow>(`
     SELECT
-      id,
-      original_text AS originalText,
-      prompt_heading AS promptHeading,
-      type,
-      created_at AS createdAt,
-      updated_at AS updatedAt,
-      archived
-    FROM app.prompt
-    WHERE archived = ${archived ? 'TRUE' : 'FALSE'}
-    ORDER BY created_at DESC
+      p.id,
+      p.original_text AS originalText,
+      p.prompt_heading AS promptHeading,
+      p.type,
+      p.created_at AS createdAt,
+      p.updated_at AS updatedAt,
+      p.archived,
+      EXISTS (
+        SELECT 1
+        FROM app.project_prompt pp
+        INNER JOIN app.project_import_route pir ON pir.project_id = pp.project_id
+        INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
+        WHERE pp.prompt_id = p.id
+          AND ir.route LIKE 'covidence:%'
+      ) AS linkedToCovidenceProject
+    FROM app.prompt p
+    WHERE p.archived = ${archived ? 'TRUE' : 'FALSE'}
+    ORDER BY p.created_at DESC
   `)
 }
 
