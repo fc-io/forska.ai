@@ -56,6 +56,18 @@ import type {ProjectTransferImportCompletionPayload} from './projectTransferCont
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
 import {getProjectTransferNormalizedArticleIdentifiers} from './projectTransferIdentifierNormalization.ts'
+import {
+  getProjectTransferImportedModelSnapshotFingerprint,
+  getProjectTransferImportedProviderSnapshotFingerprint,
+  getProjectTransferImportedSnapshotJson,
+  getProjectTransferImportedSnapshotRemoteModelId,
+  getProjectTransferImportedSnapshotSourceModel,
+  getProjectTransferImportedSnapshotSourceProvider,
+  getProjectTransferReusableImportedModelSnapshot,
+  getProjectTransferReusableImportedProviderSnapshot,
+  type ProjectTransferImportedSnapshotSourceModel,
+  type ProjectTransferImportedSnapshotSourceProvider,
+} from './projectTransferImportedSnapshotReuse.ts'
 import type {ProjectTransferOperationTableSet} from './projectTransferOperationTables.ts'
 import type {
   ProjectTransferArticlePayloadRecord,
@@ -70,10 +82,6 @@ import {
   type ProjectTransferPerformanceMetrics,
 } from './projectTransferPerformanceMetrics.ts'
 import type {ProjectTransferPackageWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
-import {
-  getProjectTransferModelSnapshotFingerprint,
-  getProjectTransferProviderSnapshotFingerprint,
-} from './projectTransferSnapshotFingerprint.ts'
 import {
   getProjectTransferTargetStateDirtyTokenService,
   type ProjectTransferTargetStateSafetySurface,
@@ -122,52 +130,22 @@ type DependencyResolutionState = {
   providerTargetBySourceId?: Record<string, string>
 }
 
-type ImportedProviderConnectionCommitRow = {
-  authMode: string | null
-  baseURL: string | null
-  configJson: unknown
+type ImportedProviderConnectionCommitRow = ProjectTransferImportedSnapshotSourceProvider & {
   enabled: boolean
   label: string
   maxInflightRequests: number | null
-  providerKind: string
   secretRef: string | null
-  sourceProviderConnectionId: string
 }
 
-type ImportedModelCommitRow = {
-  displayName: string | null
+type ImportedModelCommitRow = ProjectTransferImportedSnapshotSourceModel & {
   enabled: boolean
-  metadataJson: unknown
-  modelName: string | null
-  name: string
-  remoteModelId: string | null
   source: string | null
-  sourceModelId: string
   sourceProviderConnectionId: string
-  variant: string | null
-  version: string | null
 }
 
-type ImportedProviderSnapshotTargetRow = {
-  authMode: string | null
-  baseURL: string | null
-  configJson: unknown
-  id: string
-  providerKind: string
-}
-
-type ImportedModelSnapshotTargetRow = {
-  displayName: string | null
-  id: string
-  metadataJson: unknown
-  name: string
-  providerAuthMode: string | null
-  providerBaseURL: string | null
-  providerConfigJson: unknown
-  providerKind: string
-  remoteModelId: string | null
-  variant: string | null
-  version: string | null
+type PlaceholderJudgmentCounts = {
+  bySourceModelId: Record<string, number>
+  bySourceProviderConnectionId: Record<string, number>
 }
 
 type ArticleField = keyof typeof articleColumnByPayloadField
@@ -248,6 +226,14 @@ type JudgmentCommitRow = {
   useMetadata: boolean
   useTitle: boolean
 }
+type JudgmentTargetConflict = {
+  articleId: string
+  existingJudgmentId: string
+  modelId: string
+  promptId: string
+  sourceJudgmentId: string
+}
+type JudgmentTargetConflictText = {conflict: JudgmentTargetConflict; targets: string}
 type ProjectTransferInsertedJudgmentDeltaRow = {
   articleId: string
   id: string
@@ -422,7 +408,6 @@ const projectTransferCreatedArticleReviewServingFields = Object.values(articleRe
   },
 )
 const commitWriterInsertBatchSize = 500
-const importedSnapshotMarker = 'projectTransferImportedSnapshot'
 const commitWriterSetBasedTableSuffixes = [
   'articleCreates',
   'articleFieldFills',
@@ -665,141 +650,6 @@ const getJsonLiteral = (value: unknown) => {
   return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
 }
 
-const getImportedSnapshotJson = (value: unknown, snapshot: Record<string, unknown>) => {
-  const parsed = getJsonValue(value)
-  const record = isRecord(parsed) ? parsed : {}
-
-  return {...record, [importedSnapshotMarker]: snapshot}
-}
-
-const getImportedSnapshotMarker = (value: unknown) => {
-  const parsed = getJsonValue(value)
-  const marker = isRecord(parsed) ? parsed[importedSnapshotMarker] : null
-
-  return isRecord(marker) ? marker : null
-}
-
-const importedSnapshotMarkerFingerprintMatches = ({fingerprint, marker}: {fingerprint: unknown; marker: unknown}) => {
-  return (
-    isRecord(marker)
-    && getProjectTransferCanonicalJson(marker.snapshotFingerprint) === getProjectTransferCanonicalJson(fingerprint)
-  )
-}
-
-const getImportedProviderSnapshotFingerprint = (importedProvider: ImportedProviderConnectionCommitRow) => {
-  return getProjectTransferProviderSnapshotFingerprint({
-    authMode: importedProvider.authMode,
-    baseURL: importedProvider.baseURL,
-    configJson: importedProvider.configJson,
-    providerKind: importedProvider.providerKind,
-  })
-}
-
-const getTargetProviderSnapshotFingerprint = (targetProvider: ImportedProviderSnapshotTargetRow) => {
-  return getProjectTransferProviderSnapshotFingerprint({
-    authMode: targetProvider.authMode,
-    baseURL: targetProvider.baseURL,
-    configJson: targetProvider.configJson,
-    providerKind: targetProvider.providerKind,
-  })
-}
-
-const getImportedModelSnapshotFingerprint = ({
-  importedModel,
-  importedProvider,
-}: {
-  importedModel: ImportedModelCommitRow
-  importedProvider: ImportedProviderConnectionCommitRow
-}) => {
-  return getProjectTransferModelSnapshotFingerprint({
-    displayName: importedModel.displayName,
-    metadataJson: importedModel.metadataJson,
-    modelName: importedModel.modelName,
-    name: importedModel.name,
-    provider: {
-      authMode: importedProvider.authMode,
-      baseURL: importedProvider.baseURL,
-      configJson: importedProvider.configJson,
-      providerKind: importedProvider.providerKind,
-    },
-    remoteModelId: importedModel.remoteModelId,
-    variant: importedModel.variant,
-    version: importedModel.version,
-  })
-}
-
-const getTargetModelSnapshotFingerprint = ({
-  importedModel,
-  targetModel,
-}: {
-  importedModel: ImportedModelCommitRow
-  targetModel: ImportedModelSnapshotTargetRow
-}) => {
-  return getProjectTransferModelSnapshotFingerprint({
-    displayName: targetModel.displayName,
-    metadataJson: targetModel.metadataJson,
-    modelName: importedModel.modelName,
-    name: targetModel.name,
-    provider: {
-      authMode: targetModel.providerAuthMode,
-      baseURL: targetModel.providerBaseURL,
-      configJson: targetModel.providerConfigJson,
-      providerKind: targetModel.providerKind,
-    },
-    remoteModelId: targetModel.remoteModelId,
-    variant: targetModel.variant,
-    version: targetModel.version,
-  })
-}
-
-const targetModelIdentityMatches = ({
-  importedModel,
-  targetModel,
-}: {
-  importedModel: ImportedModelCommitRow
-  targetModel: ImportedModelSnapshotTargetRow
-}) => {
-  return (
-    targetModel.name === importedModel.name
-    && targetModel.remoteModelId === (importedModel.remoteModelId ?? importedModel.modelName)
-    && targetModel.displayName === importedModel.displayName
-    && targetModel.variant === importedModel.variant
-    && targetModel.version === importedModel.version
-  )
-}
-
-const getReusableImportedProviderConnectionId = async ({
-  importedProvider,
-  tx,
-}: {
-  importedProvider: ImportedProviderConnectionCommitRow
-  tx: ProjectTransferCommitWriterTx
-}) => {
-  const sourceFingerprint = getImportedProviderSnapshotFingerprint(importedProvider)
-  const rows = await tx.queryJson<ImportedProviderSnapshotTargetRow>(`
-    SELECT
-      id,
-      provider_kind AS providerKind,
-      auth_mode AS authMode,
-      base_url AS baseURL,
-      TO_JSON(config_json) AS configJson
-    FROM app.provider_connection
-    WHERE json_extract_string(config_json, '$.${importedSnapshotMarker}.sourceProviderConnectionId') = ${getSqlLiteral(importedProvider.sourceProviderConnectionId)}
-    ORDER BY created_at ASC, id ASC
-  `)
-  const matchingRows = rows.filter((row) => {
-    const marker = getImportedSnapshotMarker(row.configJson)
-    const targetFingerprint = getTargetProviderSnapshotFingerprint(row)
-
-    return (
-      importedSnapshotMarkerFingerprintMatches({fingerprint: sourceFingerprint, marker})
-      && getProjectTransferCanonicalJson(targetFingerprint) === getProjectTransferCanonicalJson(sourceFingerprint)
-    )
-  })
-
-  return matchingRows.length === 1 ? (matchingRows[0]?.id ?? null) : null
-}
-
 const disableImportedProviderConnectionSnapshot = async ({
   providerConnectionId,
   tx,
@@ -825,44 +675,20 @@ const getReusableImportedModelId = async ({
   providerConnectionId: string
   tx: ProjectTransferCommitWriterTx
 }) => {
-  const sourceFingerprint = getImportedModelSnapshotFingerprint({importedModel, importedProvider})
-  const rows = await tx.queryJson<ImportedModelSnapshotTargetRow>(`
-    SELECT
-      model.id,
-      model.name,
-      model.remote_model_id AS remoteModelId,
-      model.display_name AS displayName,
-      model.variant,
-      json_extract_string(model.metadata_json, '$.${importedSnapshotMarker}.snapshotFingerprint.model.version') AS version,
-      TO_JSON(model.metadata_json) AS metadataJson,
-      provider.provider_kind AS providerKind,
-      provider.auth_mode AS providerAuthMode,
-      provider.base_url AS providerBaseURL,
-      TO_JSON(provider.config_json) AS providerConfigJson
-    FROM app.model model
-    INNER JOIN app.provider_connection provider ON provider.id = model.provider_connection_id
-    WHERE model.provider_connection_id = ${getSqlLiteral(providerConnectionId)}
-      AND json_extract_string(model.metadata_json, '$.${importedSnapshotMarker}.sourceModelId') = ${getSqlLiteral(importedModel.sourceModelId)}
-    ORDER BY model.created_at ASC, model.id ASC
-  `)
-  const matchingRows = rows.filter((row) => {
-    const marker = getImportedSnapshotMarker(row.metadataJson)
-    const targetFingerprint = getTargetModelSnapshotFingerprint({importedModel, targetModel: row})
-
-    return (
-      targetModelIdentityMatches({importedModel, targetModel: row})
-      && importedSnapshotMarkerFingerprintMatches({fingerprint: sourceFingerprint, marker})
-      && getProjectTransferCanonicalJson(targetFingerprint) === getProjectTransferCanonicalJson(sourceFingerprint)
-    )
+  const lookup = await getProjectTransferReusableImportedModelSnapshot({
+    providerConnectionId,
+    runner: tx,
+    sourceModel: importedModel,
+    sourceProvider: importedProvider,
   })
 
-  if (rows.length > 0 && matchingRows.length === 0) {
+  if (lookup.rowCount > 0 && lookup.matchingCount === 0) {
     failCommitWriter(
       `imported model snapshot ${importedModel.sourceModelId} no longer matches its materialized target; rerun import analysis before commit`,
     )
   }
 
-  return matchingRows.length === 1 ? (matchingRows[0]?.id ?? null) : null
+  return lookup.reusableId
 }
 
 const disableImportedModelSnapshot = async ({modelId, tx}: {modelId: string; tx: ProjectTransferCommitWriterTx}) => {
@@ -948,9 +774,7 @@ const isImportedTargetModelId = (targetModelId: string) => {
 
 const getImportedProviderConnection = (record: ProjectTransferPayloadRecord): ImportedProviderConnectionCommitRow => {
   return {
-    authMode: getNullableString(getRecordField(record, 'authMode')),
-    baseURL: getNullableString(getRecordField(record, 'baseURL')),
-    configJson: getRecordField(record, 'configJson'),
+    ...getProjectTransferImportedSnapshotSourceProvider(record),
     enabled: getBoolean(getRecordField(record, 'enabled'), true),
     label: getRequiredString(getRecordField(record, 'label'), 'providerConnections.label'),
     maxInflightRequests: getNullableNumber(getRecordField(record, 'maxInflightRequests')),
@@ -965,20 +789,15 @@ const getImportedProviderConnection = (record: ProjectTransferPayloadRecord): Im
 
 const getImportedModel = (record: ProjectTransferPayloadRecord): ImportedModelCommitRow => {
   return {
-    displayName: getNullableString(getRecordField(record, 'displayName')),
+    ...getProjectTransferImportedSnapshotSourceModel(record),
     enabled: getBoolean(getRecordField(record, 'enabled'), true),
-    metadataJson: getRecordField(record, 'metadataJson'),
-    modelName: getNullableString(getRecordField(record, 'modelName')),
     name: getRequiredString(getRecordField(record, 'name'), 'models.name'),
-    remoteModelId: getNullableString(getRecordField(record, 'remoteModelId')),
     source: getNullableString(getRecordField(record, 'source')),
     sourceModelId: getRequiredString(getRecordField(record, 'sourceModelId'), 'models.sourceModelId'),
     sourceProviderConnectionId: getRequiredString(
       getRecordField(record, 'sourceProviderConnectionId'),
       'models.sourceProviderConnectionId',
     ),
-    variant: getNullableString(getRecordField(record, 'variant')),
-    version: getNullableString(getRecordField(record, 'version')),
   }
 }
 
@@ -1002,14 +821,83 @@ const getImportedModelBySourceId = (models: readonly ProjectTransferPayloadRecor
   }, {})
 }
 
+const getPlaceholderJudgmentCounts = ({
+  importedModelBySourceId,
+  judgmentPlan,
+}: {
+  importedModelBySourceId: Record<string, ImportedModelCommitRow>
+  judgmentPlan: readonly JudgmentPlanEntry[]
+}): PlaceholderJudgmentCounts => {
+  const countByTargetModelId = judgmentPlan.reduce<Record<string, number>>((counts, entry) => {
+    if (entry.targetModelId !== null && isImportedTargetModelId(entry.targetModelId)) {
+      counts[entry.targetModelId] = (counts[entry.targetModelId] ?? 0) + 1
+    }
+
+    return counts
+  }, {})
+
+  return Object.values(importedModelBySourceId).reduce<PlaceholderJudgmentCounts>(
+    (counts, importedModel) => {
+      const count = countByTargetModelId[getImportedTargetModelId(importedModel.sourceModelId)] ?? 0
+      const providerId = importedModel.sourceProviderConnectionId
+
+      counts.bySourceModelId[importedModel.sourceModelId] = count
+      counts.bySourceProviderConnectionId[providerId] = (counts.bySourceProviderConnectionId[providerId] ?? 0) + count
+
+      return counts
+    },
+    {bySourceModelId: {}, bySourceProviderConnectionId: {}},
+  )
+}
+
+const getPlannedJudgmentCountLabel = (count: number) => {
+  return count === 1 ? '1 planned judgment was' : `${count} planned judgments were`
+}
+
+const assertImportedProviderPlaceholderNotReused = ({
+  existingProviderConnectionId,
+  importedProvider,
+  plannedJudgmentCount,
+}: {
+  existingProviderConnectionId: string | null
+  importedProvider: ImportedProviderConnectionCommitRow
+  plannedJudgmentCount: number
+}) => {
+  return existingProviderConnectionId !== null && plannedJudgmentCount > 0
+    ? failCommitWriter(
+        `import plan would create a new provider connection for package provider "${importedProvider.label}" (${importedProvider.sourceProviderConnectionId}), but existing provider snapshot ${existingProviderConnectionId} already matches it, most likely created by an earlier import of this package; ${getPlannedJudgmentCountLabel(plannedJudgmentCount)} checked against new models instead of that snapshot's models and could duplicate judgments already stored there. Rerun the import analysis before committing.`,
+      )
+    : undefined
+}
+
+const assertImportedModelPlaceholderNotReused = ({
+  existingModelId,
+  importedModel,
+  plannedJudgmentCount,
+  providerConnectionId,
+}: {
+  existingModelId: string | null
+  importedModel: ImportedModelCommitRow
+  plannedJudgmentCount: number
+  providerConnectionId: string
+}) => {
+  return existingModelId !== null && plannedJudgmentCount > 0
+    ? failCommitWriter(
+        `import plan would create a new model for package model "${importedModel.name}" (${importedModel.sourceModelId}), but existing model snapshot ${existingModelId} on provider connection ${providerConnectionId} already matches it, most likely created by an earlier import of this package; ${getPlannedJudgmentCountLabel(plannedJudgmentCount)} checked against a new model instead of it and could duplicate judgments already stored for it. Rerun the import analysis before committing.`,
+      )
+    : undefined
+}
+
 const getResolvedProviderTargetBySourceId = async ({
   commitIdMaps,
   importedProviderBySourceId,
+  placeholderJudgmentCounts,
   providerTargetBySourceId,
   tx,
 }: {
   commitIdMaps: ProjectTransferCommitIdMaps
   importedProviderBySourceId: Record<string, ImportedProviderConnectionCommitRow>
+  placeholderJudgmentCounts: PlaceholderJudgmentCounts
   providerTargetBySourceId: Record<string, string>
   tx: ProjectTransferCommitWriterTx
 }) => {
@@ -1026,7 +914,16 @@ const getResolvedProviderTargetBySourceId = async ({
     const importedProvider =
       importedProviderBySourceId[sourceProviderConnectionId]
       ?? failCommitWriter(`missing imported provider for ${sourceProviderConnectionId}`)
-    const existingProviderConnectionId = await getReusableImportedProviderConnectionId({importedProvider, tx})
+    const {reusableId: existingProviderConnectionId} = await getProjectTransferReusableImportedProviderSnapshot({
+      runner: tx,
+      sourceProvider: importedProvider,
+    })
+
+    assertImportedProviderPlaceholderNotReused({
+      existingProviderConnectionId,
+      importedProvider,
+      plannedJudgmentCount: placeholderJudgmentCounts.bySourceProviderConnectionId[sourceProviderConnectionId] ?? 0,
+    })
 
     if (existingProviderConnectionId !== null) {
       mapped[sourceProviderConnectionId] = existingProviderConnectionId
@@ -1104,8 +1001,8 @@ const materializeImportedProviderConnectionSnapshots = async ({
         ${getSqlLiteral(importedProvider.baseURL)},
         ${getSqlLiteral(importedProvider.maxInflightRequests)},
         ${getJsonLiteral(
-          getImportedSnapshotJson(importedProvider.configJson, {
-            snapshotFingerprint: getImportedProviderSnapshotFingerprint(importedProvider),
+          getProjectTransferImportedSnapshotJson(importedProvider.configJson, {
+            snapshotFingerprint: getProjectTransferImportedProviderSnapshotFingerprint(importedProvider),
             sourceProviderConnectionId: importedProvider.sourceProviderConnectionId,
           }),
         )},
@@ -1122,6 +1019,7 @@ const getResolvedModelTargetBySourceId = async ({
   importedProviderBySourceId,
   importedModelBySourceId,
   modelTargetBySourceId,
+  placeholderJudgmentCounts,
   providerTargetBySourceId,
   tx,
 }: {
@@ -1129,6 +1027,7 @@ const getResolvedModelTargetBySourceId = async ({
   importedProviderBySourceId: Record<string, ImportedProviderConnectionCommitRow>
   importedModelBySourceId: Record<string, ImportedModelCommitRow>
   modelTargetBySourceId: Record<string, string>
+  placeholderJudgmentCounts: PlaceholderJudgmentCounts
   providerTargetBySourceId: Record<string, string>
   tx: ProjectTransferCommitWriterTx
 }) => {
@@ -1157,6 +1056,13 @@ const getResolvedModelTargetBySourceId = async ({
       importedProvider,
       providerConnectionId,
       tx,
+    })
+
+    assertImportedModelPlaceholderNotReused({
+      existingModelId,
+      importedModel,
+      plannedJudgmentCount: placeholderJudgmentCounts.bySourceModelId[sourceModelId] ?? 0,
+      providerConnectionId,
     })
 
     if (existingModelId !== null) {
@@ -1241,14 +1147,17 @@ const materializeImportedModelSnapshots = async ({
         ${getSqlLiteral(materializedModelId)},
         ${getSqlLiteral(providerConnectionId)},
         ${getSqlLiteral(importedModel.name)},
-        ${getSqlLiteral(importedModel.remoteModelId ?? importedModel.modelName)},
+        ${getSqlLiteral(getProjectTransferImportedSnapshotRemoteModelId(importedModel))},
         ${getSqlLiteral(importedModel.displayName)},
         ${getSqlLiteral(importedModel.variant)},
         ${getSqlLiteral(importedModel.source ?? 'manual')},
         FALSE,
         ${getJsonLiteral(
-          getImportedSnapshotJson(importedModel.metadataJson, {
-            snapshotFingerprint: getImportedModelSnapshotFingerprint({importedModel, importedProvider}),
+          getProjectTransferImportedSnapshotJson(importedModel.metadataJson, {
+            snapshotFingerprint: getProjectTransferImportedModelSnapshotFingerprint({
+              model: importedModel,
+              provider: importedProvider,
+            }),
             sourceModelId: importedModel.sourceModelId,
             sourceProviderConnectionId: importedModel.sourceProviderConnectionId,
           }),
@@ -1276,9 +1185,14 @@ const getPlanWithMaterializedImportedDependencies = async ({
   const modelTargetBySourceId = dependencyResolution.modelTargetBySourceId ?? {}
   const importedProviderBySourceId = getImportedProviderConnectionBySourceId(payloads.providerConnections ?? [])
   const importedModelBySourceId = getImportedModelBySourceId(payloads.models ?? [])
+  const placeholderJudgmentCounts = getPlaceholderJudgmentCounts({
+    importedModelBySourceId,
+    judgmentPlan: plan.targetPlan.judgmentPlan ?? [],
+  })
   const materializedProviderTargetBySourceId = await getResolvedProviderTargetBySourceId({
     commitIdMaps,
     importedProviderBySourceId,
+    placeholderJudgmentCounts,
     providerTargetBySourceId,
     tx,
   })
@@ -1287,6 +1201,7 @@ const getPlanWithMaterializedImportedDependencies = async ({
     importedProviderBySourceId,
     importedModelBySourceId,
     modelTargetBySourceId,
+    placeholderJudgmentCounts,
     providerTargetBySourceId: materializedProviderTargetBySourceId,
     tx,
   })
@@ -4356,10 +4271,93 @@ const assertNoDuplicateJudgmentRows = (rows: readonly JudgmentCommitRow[]) => {
   )
 }
 
+const judgmentTargetConflictGuidance =
+  "Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step."
+
+const getCommitTargetOrigin = ({generatedIds, id}: {generatedIds: readonly string[] | undefined; id: string}) => {
+  return (generatedIds ?? []).includes(id) ? 'created by this import' : 'existing row reused by this import'
+}
+
+const getPackageModelSuffix = ({
+  commitIdMaps,
+  modelId,
+}: {
+  commitIdMaps: ProjectTransferCommitIdMaps
+  modelId: string
+}) => {
+  const sourceModelIds = Object.entries(commitIdMaps.modelIdBySourceId)
+    .filter(([, targetModelId]) => {
+      return targetModelId === modelId
+    })
+    .map(([sourceModelId]) => {
+      return sourceModelId
+    })
+
+  return sourceModelIds.length === 0 ? '' : ` for package model ${sourceModelIds.join(', ')}`
+}
+
+const getJudgmentTargetConflictTargets = ({
+  commitIdMaps,
+  conflict,
+}: {
+  commitIdMaps: ProjectTransferCommitIdMaps
+  conflict: JudgmentTargetConflict
+}) => {
+  const generatedIds = commitIdMaps.generatedTargetIds
+  const articleOrigin = getCommitTargetOrigin({generatedIds: generatedIds.article, id: conflict.articleId})
+  const promptOrigin = getCommitTargetOrigin({generatedIds: generatedIds.prompt, id: conflict.promptId})
+  const modelOrigin = getCommitTargetOrigin({generatedIds: generatedIds.model, id: conflict.modelId})
+  const packageModelSuffix = getPackageModelSuffix({commitIdMaps, modelId: conflict.modelId})
+
+  return `article ${conflict.articleId} (${articleOrigin}), prompt ${conflict.promptId} (${promptOrigin}), model ${conflict.modelId} (${modelOrigin}${packageModelSuffix})`
+}
+
+const getPhysicalKeyConflictText = ({conflict, targets}: JudgmentTargetConflictText) => {
+  return `target judgment physical key already exists for ${conflict.sourceJudgmentId}: existing judgment ${conflict.existingJudgmentId} has the same ${targets}, content flags, system prompt variant and delete generation`
+}
+
+const getReviewVisibleKeyConflictText = ({conflict, targets}: JudgmentTargetConflictText) => {
+  return `target judgment review-visible key already exists for ${conflict.sourceJudgmentId}: existing active judgment ${conflict.existingJudgmentId} is review-visible for the same ${targets}, content flags and system prompt variant`
+}
+
+const getJudgmentTargetConflictMessage = ({
+  commitIdMaps,
+  conflict,
+  keyKind,
+}: {
+  commitIdMaps: ProjectTransferCommitIdMaps
+  conflict: JudgmentTargetConflict
+  keyKind: 'physical' | 'reviewVisible'
+}) => {
+  const textInput = {conflict, targets: getJudgmentTargetConflictTargets({commitIdMaps, conflict})}
+  const existing =
+    keyKind === 'physical' ? getPhysicalKeyConflictText(textInput) : getReviewVisibleKeyConflictText(textInput)
+
+  return `${existing}, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). ${judgmentTargetConflictGuidance}`
+}
+
+const getRowJudgmentTargetConflict = ({
+  row,
+  target,
+}: {
+  row: JudgmentCommitRow
+  target: TargetJudgmentRow
+}): JudgmentTargetConflict => {
+  return {
+    articleId: row.articleId,
+    existingJudgmentId: target.id,
+    modelId: row.modelId,
+    promptId: row.promptId,
+    sourceJudgmentId: row.sourceJudgmentId,
+  }
+}
+
 const assertJudgmentTargetsCommitSafe = async ({
+  commitIdMaps,
   rows,
   tx,
 }: {
+  commitIdMaps: ProjectTransferCommitIdMaps
   rows: readonly JudgmentCommitRow[]
   tx: ProjectTransferCommitWriterTx
 }) => {
@@ -4395,12 +4393,27 @@ const assertJudgmentTargetsCommitSafe = async ({
       return targetRow.id !== row.id
     })
 
-    if (row.action === 'insert' && physicalTargets.length > 0) {
-      return failCommitWriter(`target judgment physical key already exists for ${row.sourceJudgmentId}`)
+    const [physicalTarget] = physicalTargets
+    const [visibleTarget] = visibleTargets
+
+    if (row.action === 'insert' && physicalTarget !== undefined) {
+      return failCommitWriter(
+        getJudgmentTargetConflictMessage({
+          commitIdMaps,
+          conflict: getRowJudgmentTargetConflict({row, target: physicalTarget}),
+          keyKind: 'physical',
+        }),
+      )
     }
 
-    if (row.action === 'insert' && visibleTargets.length > 0) {
-      return failCommitWriter(`target judgment review-visible key already exists for ${row.sourceJudgmentId}`)
+    if (row.action === 'insert' && visibleTarget !== undefined) {
+      return failCommitWriter(
+        getJudgmentTargetConflictMessage({
+          commitIdMaps,
+          conflict: getRowJudgmentTargetConflict({row, target: visibleTarget}),
+          keyKind: 'reviewVisible',
+        }),
+      )
     }
 
     if (row.action === 'reuse' && target === undefined) {
@@ -4642,16 +4655,23 @@ const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
 }
 
 const assertSetBasedJudgmentTargetsCommitSafe = async ({
+  commitIdMaps,
   rowsSql,
   tx,
 }: {
+  commitIdMaps: ProjectTransferCommitIdMaps
   rowsSql: string
   tx: ProjectTransferCommitWriterTx
 }) => {
   await assertSetBasedJudgmentRowsDoNotDuplicate({rowsSql, tx})
 
-  const [physicalConflict] = await tx.queryJson<{sourceJudgmentId: string}>(`
-    SELECT rows.source_judgment_id AS sourceJudgmentId
+  const [physicalConflict] = await tx.queryJson<JudgmentTargetConflict>(`
+    SELECT
+      rows.source_judgment_id AS sourceJudgmentId,
+      target.id AS existingJudgmentId,
+      rows.article_id AS articleId,
+      rows.prompt_id AS promptId,
+      rows.model_id AS modelId
     FROM (${rowsSql}) rows
     INNER JOIN app.judgment target
       ON target.deleted_at IS NULL
@@ -4669,8 +4689,13 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
     ORDER BY rows.source_judgment_id ASC
     LIMIT 1
   `)
-  const [visibleConflict] = await tx.queryJson<{sourceJudgmentId: string}>(`
-    SELECT rows.source_judgment_id AS sourceJudgmentId
+  const [visibleConflict] = await tx.queryJson<JudgmentTargetConflict>(`
+    SELECT
+      rows.source_judgment_id AS sourceJudgmentId,
+      target.id AS existingJudgmentId,
+      rows.article_id AS articleId,
+      rows.prompt_id AS promptId,
+      rows.model_id AS modelId
     FROM (${rowsSql}) rows
     INNER JOIN app.judgment target
       ON target.deleted_at IS NULL
@@ -4746,11 +4771,15 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
   `)
 
   if (physicalConflict) {
-    return failCommitWriter(`target judgment physical key already exists for ${physicalConflict.sourceJudgmentId}`)
+    return failCommitWriter(
+      getJudgmentTargetConflictMessage({commitIdMaps, conflict: physicalConflict, keyKind: 'physical'}),
+    )
   }
 
   if (visibleConflict) {
-    return failCommitWriter(`target judgment review-visible key already exists for ${visibleConflict.sourceJudgmentId}`)
+    return failCommitWriter(
+      getJudgmentTargetConflictMessage({commitIdMaps, conflict: visibleConflict, keyKind: 'reviewVisible'}),
+    )
   }
 
   if (missingReuse) {
@@ -4947,11 +4976,13 @@ const appendProjectTransferHumanSummaryDeltas = async ({
 }
 
 const insertJudgmentRowsSetBased = async ({
+  commitIdMaps,
   context,
   now,
   projectId,
   tx,
 }: {
+  commitIdMaps: ProjectTransferCommitIdMaps
   context: ProjectTransferCommitWriterSetBasedContext
   now: Date
   projectId: string
@@ -4966,7 +4997,7 @@ const insertJudgmentRowsSetBased = async ({
     return undefined
   }
 
-  await assertSetBasedJudgmentTargetsCommitSafe({rowsSql, tx})
+  await assertSetBasedJudgmentTargetsCommitSafe({commitIdMaps, rowsSql, tx})
 
   const expectedInsertCount = await getTableCount({sql: `SELECT id FROM (${rowsSql}) rows WHERE action = 'insert'`, tx})
 
@@ -5041,12 +5072,14 @@ const insertJudgmentRowsSetBased = async ({
 }
 
 const insertJudgmentRows = async ({
+  commitIdMaps,
   context,
   now,
   projectId,
   rows,
   tx,
 }: {
+  commitIdMaps: ProjectTransferCommitIdMaps
   context: ProjectTransferCommitWriterSetBasedContext | null
   now: Date
   projectId: string
@@ -5054,10 +5087,10 @@ const insertJudgmentRows = async ({
   tx: ProjectTransferCommitWriterTx
 }) => {
   if (context !== null) {
-    return rows.length === 0 ? undefined : insertJudgmentRowsSetBased({context, now, projectId, tx})
+    return rows.length === 0 ? undefined : insertJudgmentRowsSetBased({commitIdMaps, context, now, projectId, tx})
   }
 
-  await assertJudgmentTargetsCommitSafe({rows, tx})
+  await assertJudgmentTargetsCommitSafe({commitIdMaps, rows, tx})
 
   const insertRows = rows.filter((row) => {
     return row.action === 'insert'
@@ -5199,7 +5232,7 @@ const writeSetBasedJudgments = async ({
   projectId: string
   tx: ProjectTransferCommitWriterTx
 }) => {
-  await insertJudgmentRowsSetBased({context, now, projectId, tx})
+  await insertJudgmentRowsSetBased({commitIdMaps, context, now, projectId, tx})
 
   return getSetBasedJudgmentIdBySourceId({commitIdMaps, judgmentPlan})
 }
@@ -5234,7 +5267,7 @@ const writeMaterializedJudgments = async ({
     plan,
     promptIdBySourceId,
   })
-  await insertJudgmentRows({context: null, now, projectId, rows, tx})
+  await insertJudgmentRows({commitIdMaps, context: null, now, projectId, rows, tx})
 
   return getJudgmentIdBySourceId(rows)
 }

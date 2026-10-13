@@ -62,7 +62,7 @@ test('project transfer set-based judgment commit never materializes full app-sid
   const materializedWrite = getFunctionSource('writeMaterializedJudgments', 'getAssessmentSignature')
   const setBasedIdMap = getFunctionSource('getSetBasedJudgmentIdBySourceId', 'writeSetBasedJudgments')
 
-  expect(setBasedWrite).toContain('await insertJudgmentRowsSetBased({context, now, projectId, tx})')
+  expect(setBasedWrite).toContain('await insertJudgmentRowsSetBased({commitIdMaps, context, now, projectId, tx})')
   expect(setBasedWrite).toContain('getSetBasedJudgmentIdBySourceId({commitIdMaps, judgmentPlan})')
   expect(setBasedWrite).not.toContain('getJudgmentRows')
   expect(setBasedWrite).not.toContain('judgments.length')
