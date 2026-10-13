@@ -49,6 +49,7 @@ import {
   validateProjectTransferPlanReadyToCommit,
 } from './projectTransferContracts.ts'
 import {
+  projectTransferCommitRevalidationScope,
   type ProjectTransferDependencyResolutionRepositories,
   type ProjectTransferDependencyResolutionRequest,
   type ProjectTransferDependencyResolutionState,
@@ -775,7 +776,12 @@ const targetPlanRevalidationChanged = ({
 }
 
 const getCommitBlocker = ({code, message}: {code: string; message: string}): ProjectTransferPlanBlocker => {
-  return {code, message, resolutionKind: 'requires_new_package_or_target_changes', scope: 'commit.revalidation'}
+  return {
+    code,
+    message,
+    resolutionKind: 'requires_new_package_or_target_changes',
+    scope: projectTransferCommitRevalidationScope,
+  }
 }
 
 const getPlanWithRevalidationBlocker = ({

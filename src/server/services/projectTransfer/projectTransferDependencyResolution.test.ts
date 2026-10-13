@@ -2027,3 +2027,309 @@ test('project transfer dependency resolution leaves nullable remote model descri
     rmSync(cwd, {force: true, recursive: true})
   }
 })
+
+const getHiddenSnapshotHandoffFixture = ({
+  modelTargetId,
+  providerTargetId,
+}: {
+  modelTargetId: string
+  providerTargetId: string
+}) => {
+  const payloads = getProjectTransferPayloadFixtureMap()
+  const [article] = payloads.articles
+  const [importedJudgment] = payloads.judgments
+
+  if (!article || !importedJudgment) {
+    throw new Error('Expected article and judgment fixtures')
+  }
+
+  const basePlan = getBasePlan()
+  const plan = {
+    ...basePlan,
+    dependencyResolution: {
+      acceptedSubstituteModelSourceIds: [],
+      codexSetupState: null,
+      modelMaterializationRequests: [],
+      modelTargetBySourceId: {'model-1': modelTargetId},
+      providerTargetBySourceId: {'provider-connection-1': providerTargetId},
+      unresolvedModelSourceIds: [],
+      unresolvedProviderSourceIds: [],
+    },
+    targetPlan: {
+      ...basePlan.targetPlan,
+      articleMatches: [
+        {
+          action: 'reuse' as const,
+          candidates: [
+            {
+              matchedIdentifiers: [],
+              targetArticle: {...article, targetArticleId: 'target-article-1'},
+              targetArticleId: 'target-article-1',
+            },
+          ],
+          conflicts: [],
+          identifierKeys: ['doi:10.1101/2024.01.01.123456'],
+          packageArticleId: null,
+          selectedTargetArticleId: 'target-article-1',
+          sourceArticleId: 'article-1',
+        },
+      ],
+      projectPromptPlan: basePlan.targetPlan.projectPromptPlan.map((projectPrompt) => {
+        return {...projectPrompt, targetPromptId: 'target-prompt-1'}
+      }),
+      promptPlan: basePlan.targetPlan.promptPlan.map((prompt) => {
+        return {...prompt, action: 'reuse' as const, targetPromptId: 'target-prompt-1'}
+      }),
+    },
+  }
+
+  return {importedJudgment, payloads, plan}
+}
+
+const getHiddenSnapshotRunner = ({
+  importedJudgment,
+  targetConnection,
+  targetModel,
+}: {
+  importedJudgment: Record<string, unknown>
+  targetConnection: ProviderConnectionForAdmin
+  targetModel: ProviderModelRecord | null
+}) => {
+  return {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      if (statement.includes('FROM app.provider_connection')) {
+        return [
+          {
+            authMode: targetConnection.authMode,
+            baseURL: targetConnection.baseURL,
+            configJson: targetConnection.config,
+            id: targetConnection.id,
+            providerKind: targetConnection.providerKind,
+          },
+        ] as T[]
+      }
+
+      if (statement.includes('FROM app.model model')) {
+        return targetModel === null
+          ? ([] as T[])
+          : ([
+              {
+                displayName: targetModel.displayName,
+                id: targetModel.id,
+                metadataJson: targetModel.metadataJson,
+                name: targetModel.name,
+                providerAuthMode: targetConnection.authMode,
+                providerBaseURL: targetConnection.baseURL,
+                providerConfigJson: targetConnection.config,
+                providerKind: targetConnection.providerKind,
+                remoteModelId: targetModel.remoteModelId,
+                variant: targetModel.variant,
+                version: targetModel.version,
+              },
+            ] as T[])
+      }
+
+      if (
+        targetModel !== null
+        && statement.includes('FROM app.judgment')
+        && !statement.includes('FROM app.judgment_assessment')
+      ) {
+        return [
+          {
+            answeredOriginal: importedJudgment.answeredOriginal,
+            answeredOriginalAsArray: JSON.stringify(importedJudgment.answeredOriginalAsArray ?? []),
+            confidenceOriginal: importedJudgment.confidenceOriginal,
+            deleteGeneration: Number(importedJudgment.deleteGeneration ?? 0),
+            explanation: importedJudgment.explanation,
+            isAnswered: importedJudgment.isAnswered,
+            quotes: JSON.stringify(importedJudgment.quotes ?? []),
+            targetArticleId: 'target-article-1',
+            targetJudgmentId: 'target-judgment-1',
+            targetModelId: targetModel.id,
+            targetPromptId: 'target-prompt-1',
+            useAbstract: true,
+            useFulltext: false,
+            useFulltextNoImages: false,
+            useTitle: true,
+          },
+        ] as T[]
+      }
+
+      return [] as T[]
+    },
+  }
+}
+
+type PersistedHandoffPlan = {
+  blockers: {code: string; scope: string}[]
+  dependencyResolution: {
+    modelTargetBySourceId: Record<string, string>
+    providerTargetBySourceId: Record<string, string>
+  }
+  targetPlan: {judgmentPlan: {action: string; targetJudgmentId: string | null; targetModelId: string | null}[]}
+}
+
+test('project transfer dependency resolution keeps a hidden snapshot handoff that listed connections omit when autoResolve is off', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const concreteReusableModelId = 'hidden-imported-snapshot-model-1'
+    const concreteReusableProviderId = 'hidden-imported-snapshot-provider-1'
+    const {importedJudgment, payloads, plan} = getHiddenSnapshotHandoffFixture({
+      modelTargetId: concreteReusableModelId,
+      providerTargetId: concreteReusableProviderId,
+    })
+    const targetModel = getTargetModel({
+      enabled: false,
+      id: concreteReusableModelId,
+      providerConnectionId: concreteReusableProviderId,
+    })
+    const targetConnection = getTargetConnection({enabled: false, id: concreteReusableProviderId}, [targetModel])
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        analyzeTargetRunner: getHiddenSnapshotRunner({importedJudgment, targetConnection, targetModel}),
+        listProviderConnections: async () => {
+          return []
+        },
+      },
+      request: {
+        autoResolve: false,
+        planRevision: 1,
+        selectedModels: [{sourceModelId: 'model-1', targetModelId: concreteReusableModelId}],
+        selectedProviderConnections: [
+          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: concreteReusableProviderId},
+        ],
+      },
+    })
+    const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as PersistedHandoffPlan
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(persistedPlan.dependencyResolution.providerTargetBySourceId).toEqual({
+      'provider-connection-1': concreteReusableProviderId,
+    })
+    expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': concreteReusableModelId})
+    expect(persistedPlan.targetPlan.judgmentPlan).toMatchObject([
+      {action: 'reuse', targetJudgmentId: 'target-judgment-1', targetModelId: concreteReusableModelId},
+    ])
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution keeps a new model under a hidden snapshot provider when autoResolve is off', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const concreteReusableProviderId = 'hidden-imported-snapshot-provider-1'
+    const {importedJudgment, payloads, plan} = getHiddenSnapshotHandoffFixture({
+      modelTargetId: 'new:model:model-1',
+      providerTargetId: concreteReusableProviderId,
+    })
+    const targetConnection = getTargetConnection({enabled: false, id: concreteReusableProviderId}, [])
+    const layout = await writeProjectTransferArtifacts({cwd, payloads, plan})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 2,
+      repositories: {
+        analyzeTargetRunner: getHiddenSnapshotRunner({importedJudgment, targetConnection, targetModel: null}),
+        listProviderConnections: async () => {
+          return []
+        },
+      },
+      request: {
+        autoResolve: false,
+        planRevision: 1,
+        selectedModels: [{sourceModelId: 'model-1', targetModelId: 'new:model:model-1'}],
+        selectedProviderConnections: [
+          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: concreteReusableProviderId},
+        ],
+      },
+    })
+    const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as PersistedHandoffPlan
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.planSummary.dependencyStatuses : {}).toEqual({
+      'model:model-1': 'resolved',
+      'provider:provider-connection-1': 'resolved',
+    })
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(persistedPlan.dependencyResolution.providerTargetBySourceId).toEqual({
+      'provider-connection-1': concreteReusableProviderId,
+    })
+    expect(persistedPlan.dependencyResolution.modelTargetBySourceId).toEqual({'model-1': 'new:model:model-1'})
+    expect(persistedPlan.targetPlan.judgmentPlan).toMatchObject([
+      {action: 'insert', targetModelId: 'new:model:model-1'},
+    ])
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer dependency resolution drops a stale commit revalidation verdict when dependencies are re-resolved', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const concreteReusableModelId = 'hidden-imported-snapshot-model-1'
+    const concreteReusableProviderId = 'hidden-imported-snapshot-provider-1'
+    const fixture = getHiddenSnapshotHandoffFixture({
+      modelTargetId: concreteReusableModelId,
+      providerTargetId: concreteReusableProviderId,
+    })
+    const staleBlocker = {
+      code: 'commit_dependency_plan_stale',
+      message: 'Provider, model, judgment, or human review assumptions changed since analysis',
+      resolutionKind: 'requires_new_package_or_target_changes' as const,
+      scope: 'commit.revalidation',
+    }
+    const plan = {
+      ...fixture.plan,
+      blockers: [staleBlocker],
+      canCommit: false,
+      summary: {...fixture.plan.summary, blockerCount: 1, blockers: [staleBlocker]},
+    }
+    const targetModel = getTargetModel({
+      enabled: false,
+      id: concreteReusableModelId,
+      providerConnectionId: concreteReusableProviderId,
+    })
+    const targetConnection = getTargetConnection({enabled: false, id: concreteReusableProviderId}, [targetModel])
+    const layout = await writeProjectTransferArtifacts({cwd, payloads: fixture.payloads, plan})
+
+    const result = await resolveProjectTransferDependencies({
+      cwd,
+      layout,
+      nextPlanRevision: 3,
+      repositories: {
+        analyzeTargetRunner: getHiddenSnapshotRunner({
+          importedJudgment: fixture.importedJudgment,
+          targetConnection,
+          targetModel,
+        }),
+        listProviderConnections: async () => {
+          return []
+        },
+      },
+      request: {planRevision: 1},
+    })
+    const persistedPlan = JSON.parse(await readFile(join(cwd, layout.planPath), 'utf8')) as PersistedHandoffPlan
+
+    expect(result.status).toBe('ok')
+    expect(result.status === 'ok' ? result.plan.blockers : [staleBlocker]).toEqual([])
+    expect(result.status === 'ok' ? result.plan.canCommit : false).toBe(true)
+    expect(persistedPlan.blockers).toEqual([])
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
