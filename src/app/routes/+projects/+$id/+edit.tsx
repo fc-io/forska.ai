@@ -4,6 +4,7 @@ import type {JSX} from 'solid-js'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {ImportRouteGroups} from '../../../../components/main/projects/importRouteGroups.tsx'
 import {invalidateReviewsWarningsQueries} from '../../../../components/main/reviews/reviewsWarningsQuery.ts'
 import {RuntimeModelNotice} from '../../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../../components/ui/button'
@@ -12,7 +13,6 @@ import {ensureSelectableModelId} from '../../../../services/ensureSelectableMode
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
-import {isImportedFileRoute} from '../../../../utils/importRouteUtils.ts'
 import {appQueryClient} from '../../../queryClient'
 import {createListMemo} from '../../../utils/createListMemo.ts'
 import {fetchProviderConnections} from '../../+admin/+models/providerConnectionsClient.ts'
@@ -932,36 +932,12 @@ const EditProject = (): JSX.Element => {
                       !importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0
                     }
                   >
-                    <div class="space-y-2">
-                      <For each={availableImportRoutes()}>
-                        {(r) => {
-                          const name = r.name?.trim() ?? ''
-                          const displayName = name ? name : r.route
-                          const showRouteHint = Boolean(name) && name !== r.route && !isImportedFileRoute(r.route)
-                          return (
-                            <label
-                              class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${canEditJudgmentConfig() ? 'border-input' : 'opacity-60'}`}
-                            >
-                              <input
-                                type="checkbox"
-                                class="mt-1"
-                                checked={selectedImportRoutes().includes(r.route)}
-                                onChange={() => {
-                                  return toggleImportRouteSelection(r.route)
-                                }}
-                                disabled={!canEditJudgmentConfig()}
-                              />
-                              <div class="flex-1">
-                                <p class="text-sm font-medium text-gray-900">{displayName}</p>
-                                <Show when={showRouteHint}>
-                                  <p class="text-xs text-gray-600 font-mono break-all">{r.route}</p>
-                                </Show>
-                              </div>
-                            </label>
-                          )
-                        }}
-                      </For>
-                    </div>
+                    <ImportRouteGroups
+                      disabled={!canEditJudgmentConfig()}
+                      routes={availableImportRoutes()}
+                      selectedRoutes={selectedImportRoutes()}
+                      onToggle={toggleImportRouteSelection}
+                    />
                   </Show>
                 </div>
                 <div>

@@ -530,6 +530,56 @@ describe('project edit route regressions', () => {
     }
   })
 
+  test('project edit groups import routes under collapsed headings with the selected count', async () => {
+    const projectId = 'project-route-groups-test'
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
+    const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
+    const browserFailures = createBrowserFailureAssertions(window)
+
+    mockState.importRoutes = [
+      {name: 'cov 6 | 3', route: 'covidence:route-1'},
+      {name: '/api/datasources/import/pubmed', route: '/api/datasources/import/pubmed'},
+    ]
+    mockState.projectDetailsById[projectId] = {...buildProjectDetails(projectId), importRoutes: ['covidence:route-1']}
+    queryClient.clear()
+    seedEditRouteQueries(queryClient, projectId)
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: `/projects/${projectId}/edit`,
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      const groups = Array.from(container.querySelectorAll<HTMLDetailsElement>('details'))
+      const dataSourceGroup = groups.find((element) => {
+        return element.querySelector('summary')?.textContent?.includes('Data source imports')
+      })
+      const covidenceGroup = groups.find((element) => {
+        return element.querySelector('summary')?.textContent?.includes('Covidence imports')
+      })
+      const covidenceCheckbox = covidenceGroup?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+
+      expect(dataSourceGroup?.hasAttribute('open')).toBe(false)
+      expect(covidenceGroup?.hasAttribute('open')).toBe(false)
+      expect(dataSourceGroup?.querySelector('summary')?.textContent).toContain('0 of 1 selected')
+      expect(covidenceGroup?.querySelector('summary')?.textContent).toContain('1 of 1 selected')
+      expect(covidenceCheckbox?.checked).toBe(true)
+      expect(covidenceCheckbox?.disabled).toBe(false)
+      browserFailures.assertNoFailures()
+    } finally {
+      browserFailures.dispose()
+      queryClient.clear()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
   test('project edit loads the article metadata flag into its checkbox', async () => {
     const projectId = 'project-metadata-load-test'
     const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})

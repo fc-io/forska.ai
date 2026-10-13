@@ -3,6 +3,7 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {ImportRouteGroups} from '../../../components/main/projects/importRouteGroups.tsx'
 import {RuntimeModelNotice} from '../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
@@ -10,7 +11,6 @@ import {ensureSelectableModelId} from '../../../services/ensureSelectableModelId
 import type {fetchProjects} from '../../../services/projectsService.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../utils/getSglangRuntimeModelNotice.ts'
-import {isImportedFileRoute} from '../../../utils/importRouteUtils.ts'
 import {fetchProviderConnections} from '../+admin/+models/providerConnectionsClient.ts'
 
 type PromptItem = {id: string; content: string; promptHeading: string; type: string}
@@ -585,33 +585,11 @@ const CreateProject = () => {
               <Show
                 when={!importRoutesQuery.isLoading && !importRoutesQuery.isError && availableImportRoutes().length > 0}
               >
-                <div class="space-y-2">
-                  <For each={availableImportRoutes()}>
-                    {(r) => {
-                      const name = r.name?.trim() ?? ''
-                      const displayName = name ? name : r.route
-                      const showRouteHint = Boolean(name) && name !== r.route && !isImportedFileRoute(r.route)
-                      return (
-                        <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            class="mt-1"
-                            checked={selectedImportRoutes().includes(r.route)}
-                            onChange={() => {
-                              return toggleImportRouteSelection(r.route)
-                            }}
-                          />
-                          <div class="flex-1">
-                            <p class="text-sm font-medium text-gray-900">{displayName}</p>
-                            <Show when={showRouteHint}>
-                              <p class="text-xs text-gray-600 font-mono break-all">{r.route}</p>
-                            </Show>
-                          </div>
-                        </label>
-                      )
-                    }}
-                  </For>
-                </div>
+                <ImportRouteGroups
+                  routes={availableImportRoutes()}
+                  selectedRoutes={selectedImportRoutes()}
+                  onToggle={toggleImportRouteSelection}
+                />
               </Show>
             </div>
 
@@ -776,11 +754,12 @@ const CreateProject = () => {
                   <For each={sortedExistingPrompts()}>
                     {(promptItem) => {
                       return (
-                        <div
-                          class="border rounded-lg p-4 bg-background"
+                        <details
+                          class="group border rounded-lg bg-background"
                           classList={{'opacity-40': !promptItem.enabled}}
+                          open={promptItem.enabled}
                         >
-                          <div class="flex justify-between items-start mb-3">
+                          <summary class="cursor-pointer list-none flex justify-between items-start gap-3 p-4">
                             <div class="flex items-center gap-2 flex-wrap">
                               <Show when={promptItem.promptHeading}>
                                 <span class="font-medium">{promptItem.promptHeading}</span>
@@ -801,20 +780,24 @@ const CreateProject = () => {
                                 </span>
                               </Show>
                             </div>
-                            <label class="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                class="mt-0.5"
-                                checked={promptItem.enabled}
-                                onChange={() => {
-                                  return toggleExistingPromptEnabled(promptItem.id)
-                                }}
-                              />
-                              <span class="text-sm">Include</span>
-                            </label>
-                          </div>
+                            <div class="flex items-center gap-3 shrink-0">
+                              <label class="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  class="mt-0.5"
+                                  checked={promptItem.enabled}
+                                  onChange={() => {
+                                    return toggleExistingPromptEnabled(promptItem.id)
+                                  }}
+                                />
+                                <span class="text-sm">Include</span>
+                              </label>
+                              <span class="text-xs text-muted-foreground group-open:hidden">Expand</span>
+                              <span class="text-xs text-muted-foreground hidden group-open:inline">Collapse</span>
+                            </div>
+                          </summary>
 
-                          <div class="space-y-3">
+                          <div class="px-4 pb-4 space-y-3">
                             <Show when={promptItem.promptHeading}>
                               <div>
                                 <label class="text-sm font-medium text-muted-foreground block mb-1">Heading</label>
@@ -836,7 +819,7 @@ const CreateProject = () => {
                               </div>
                             </div>
                           </div>
-                        </div>
+                        </details>
                       )
                     }}
                   </For>
