@@ -14,6 +14,9 @@ type PdfTextFieldOptions = {
   hidden?: boolean
   indent?: number
   label?: string
+  lines?: number
+  maxLength?: number
+  multiline?: boolean
   value?: string
   width?: number
 }
@@ -24,7 +27,10 @@ type PdfRadioGroup = {fieldName: string; fields: PdfRadioField[]; selectedValue?
 type PdfTextField = {
   fieldName: string
   fontSize: number
+  height: number
   hidden: boolean
+  maxLength: number | null
+  multiline: boolean
   pageIndex: number
   value: string
   width: number
@@ -61,6 +67,10 @@ const getPdfSafeAsciiText = (value: string) => {
     })
 }
 
+const getIsPrintableAsciiText = (value: string) => {
+  return /^[\x20-\x7E]*$/.test(value)
+}
+
 const getPdfSafeName = (value: string) => {
   const safe = value.replace(/[^a-zA-Z0-9_-]/g, '_')
 
@@ -85,6 +95,22 @@ const getUtf16BeHexText = (value: string) => {
   }
 
   return utf16le.toString('hex').toUpperCase()
+}
+
+const getPdfTextString = (value: string) => {
+  return getIsPrintableAsciiText(value) ? `(${getPdfSafeAsciiText(value)})` : `<FEFF${getUtf16BeHexText(value)}>`
+}
+
+const getPdfTextFieldHeight = (fontSize: number, lines: number) => {
+  return Math.max(fontSize + 8, 18) + (Math.max(Math.floor(lines), 1) - 1) * fontSize * lineHeightMultiplier
+}
+
+const getPdfTextFieldFlags = (field: PdfTextField) => {
+  return [field.multiline ? '/Ff 4096' : null, field.maxLength === null ? null : `/MaxLen ${field.maxLength}`].filter(
+    (flag): flag is string => {
+      return flag !== null
+    },
+  )
 }
 
 const getPdfTextCommand = (line: string, font: string, fontSize: number, x: number, y: number) => {
@@ -476,15 +502,20 @@ export class SimplePdfDocument {
   addTextField(options: PdfTextFieldOptions) {
     const fontSize = options.fontSize ?? 10
     const lineHeight = fontSize * lineHeightMultiplier
-    const fieldHeight = Math.max(fontSize + 8, 18)
+    const fieldHeight = getPdfTextFieldHeight(fontSize, options.lines ?? 1)
     const x = marginX + (options.indent ?? 0)
     const width = options.width ?? pageWidth - x - marginX
+    const maxLength = options.maxLength ?? null
+    const multiline = options.multiline ?? false
 
     if (options.hidden) {
       this.textFields.push({
         fieldName: options.fieldName,
         fontSize,
+        height: 0,
         hidden: true,
+        maxLength,
+        multiline,
         pageIndex: this.pages.length - 1,
         value: options.value ?? '',
         width: 0,
@@ -519,7 +550,10 @@ export class SimplePdfDocument {
     this.textFields.push({
       fieldName: options.fieldName,
       fontSize,
+      height: fieldHeight,
       hidden: false,
+      maxLength,
+      multiline,
       pageIndex,
       value: options.value ?? '',
       width,
@@ -691,18 +725,20 @@ export class SimplePdfDocument {
       return parentFieldId
     })
     const textFieldIds = this.textFields.map((field) => {
-      const bottomY = field.y - Math.max(field.fontSize + 8, 18)
+      const bottomY = field.y - field.height
       const rect = field.hidden
         ? '[0.00 0.00 0.00 0.00]'
         : `[${field.x.toFixed(2)} ${bottomY.toFixed(2)} ${(field.x + field.width).toFixed(2)} ${field.y.toFixed(2)}]`
       const flags = field.hidden ? '2' : '4'
+      const value = getPdfTextString(field.value)
 
       return addObject(
         [
           '<< /Type /Annot /Subtype /Widget /FT /Tx',
           `/T (${getPdfSafeAsciiText(field.fieldName)})`,
           `/Rect ${rect}`,
-          `/V (${getPdfSafeAsciiText(field.value)}) /DV (${getPdfSafeAsciiText(field.value)}) /F ${flags} /H /P`,
+          ...getPdfTextFieldFlags(field),
+          `/V ${value} /DV ${value} /F ${flags} /H /P`,
           `/DA (/F1 ${field.fontSize} Tf 0 0 0 rg)`,
           '/MK << /BC [0.45 0.52 0.60] /BG [1 1 1] >>',
           '/BS << /W 1 /S /S >>',
