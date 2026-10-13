@@ -116,6 +116,7 @@ describe('comparison project conflict-resolution PDF import', () => {
           },
         ],
         resolutionValue: 'yes',
+        comment: null,
       },
     ])
   })
@@ -202,6 +203,7 @@ endobj`
         title: null,
         identifiers: [],
         resolutionValue: 'yes',
+        comment: null,
       },
     ])
     expect(parsedImport.undecidedRows).toEqual([
@@ -285,6 +287,7 @@ endobj`
         title: null,
         identifiers: [],
         resolution: {mode: 'summary', value: 'no', label: 'No'},
+        comment: null,
       },
     ])
   })
@@ -362,5 +365,429 @@ endobj`
     expect(() => {
       parsePdfConflictResolutionImport('%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n')
     }).toThrow('no fillable form fields')
+  })
+})
+
+type CommentReviewArticle = {
+  articleId: string
+  exportedComment: string | null
+  radio?: string | null
+  value?: string
+  withMetadata?: boolean
+}
+
+const getCommentFieldName = (articleId: string) => {
+  return `comparison.comparison-project-1.article.${articleId}.comment`
+}
+
+const createCommentReviewPdf = (articles: CommentReviewArticle[], withProjectMetadata = true) => {
+  const pdf = new SimplePdfDocument()
+
+  if (withProjectMetadata) {
+    pdf.addTextField({
+      fieldName: 'forska.import.format',
+      hidden: true,
+      value: getMetadataValue({format: 'forska.comparisonProject.pdfConflictResolutionImport', version: 1}),
+    })
+    pdf.addTextField({
+      fieldName: 'forska.import.comparisonProject',
+      hidden: true,
+      value: getMetadataValue({
+        allowConflictResolution: true,
+        comparisonProjectId: 'comparison-project-1',
+        comparisonProjectName: 'Source comparison',
+        exportedAt: '2026-10-13T10:00:00.000Z',
+        humanJudgmentMode: 'summary',
+      }),
+    })
+  }
+
+  pdf.addTextField({fieldName: 'forska.reviewer.displayName', value: 'Dr Reviewer'})
+  articles.forEach((article) => {
+    if (article.withMetadata !== false) {
+      pdf.addTextField({
+        fieldName: `comparison.comparison-project-1.article.${article.articleId}.metadata`,
+        hidden: true,
+        value: getMetadataValue({
+          articleExternalId: `EXT-${article.articleId}`,
+          articleTitle: `Title ${article.articleId}`,
+          canonicalArticleId: article.articleId,
+          comparisonProjectId: 'comparison-project-1',
+          exportedComment: article.exportedComment,
+          hasConflict: true,
+        }),
+      })
+    }
+
+    if (article.radio !== undefined) {
+      pdf.addRadioRow(`comparison.comparison-project-1.article.${article.articleId}.resolution`, article.radio, [
+        {label: 'Undecided', value: pdfConflictResolutionNotSetValue},
+        {label: 'Yes', value: 'yes'},
+        {label: 'No', value: 'no'},
+      ])
+    }
+
+    pdf.addTextField({
+      fieldName: getCommentFieldName(article.articleId),
+      label: 'Comment (optional)',
+      lines: 4,
+      maxLength: 4000,
+      multiline: true,
+      value: article.value ?? article.exportedComment ?? '',
+    })
+  })
+
+  return pdf.toBuffer()
+}
+
+const getEscapedRegExpText = (value: string) => {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+const appendViewerFieldUpdates = (pdfBuffer: Buffer, updates: Array<{fieldName: string; valueToken: string}>) => {
+  const source = pdfBuffer.toString('latin1')
+  const previousXrefOffset = /startxref\n(\d+)\n%%EOF\n$/.exec(source)?.[1] ?? '0'
+  const size = /\/Size (\d+)/.exec(source)?.[1] ?? '0'
+  const objects = updates.map((update) => {
+    const objectNumber =
+      new RegExp(
+        `(\\d+) 0 obj\\n<< /Type /Annot /Subtype /Widget /FT /Tx /T \\(${getEscapedRegExpText(update.fieldName)}\\)`,
+      ).exec(source)?.[1] ?? '0'
+
+    return {
+      body: `${objectNumber} 0 obj\n<</DA(/F1 10 Tf 0 0 0 rg)/F 4/FT/Tx/Ff 4096/MaxLen 4000/T(${update.fieldName})/Type/Annot/Subtype/Widget/V${update.valueToken}>>\nendobj\n`,
+      objectNumber,
+    }
+  })
+  const chunks = objects.reduce<{offset: number; text: string; xref: string[]}>(
+    (state, object) => {
+      return {
+        offset: state.offset + Buffer.byteLength(object.body, 'latin1'),
+        text: `${state.text}${object.body}`,
+        xref: [...state.xref, `${object.objectNumber} 1\n${String(state.offset).padStart(10, '0')} 00000 n \n`],
+      }
+    },
+    {offset: pdfBuffer.length, text: '', xref: []},
+  )
+  const trailer = `xref\n${chunks.xref.join('')}trailer\n<< /Size ${size} /Root 1 0 R /Prev ${previousXrefOffset} >>\nstartxref\n${chunks.offset}\n%%EOF\n`
+
+  return Buffer.concat([pdfBuffer, Buffer.from(`${chunks.text}${trailer}`, 'latin1')])
+}
+
+const getUtf16BeHexToken = (value: string) => {
+  return `<FE FF ${Buffer.from(value, 'utf16le')
+    .swap16()
+    .toString('hex')
+    .toUpperCase()
+    .replace(/(.{4})/g, '$1 ')}>`
+}
+
+describe('comparison project conflict-resolution PDF import comments', () => {
+  test('decodes literal comment values with octal escapes, nested parentheses and line continuations', () => {
+    const pdf = appendViewerFieldUpdates(createCommentReviewPdf([{articleId: 'article-1', exportedComment: null}]), [
+      {
+        fieldName: getCommentFieldName('article-1'),
+        valueToken: '(Vuxna \\344r oklart (18+)? Se \\(protokoll\\) \\\nfortsatt\\tslut\\101)',
+      },
+    ])
+
+    expect(parsePdfConflictResolutionImport(pdf).commentOnlyRows).toMatchObject([
+      {comment: 'Vuxna är oklart (18+)? Se (protokoll) fortsatt\tslutA'},
+    ])
+  })
+
+  test('decodes UTF-16BE hex and literal values, UTF-8 BOM values and normalises CR and CRLF line breaks', () => {
+    const pdf = appendViewerFieldUpdates(
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: null},
+        {articleId: 'article-2', exportedComment: null},
+        {articleId: 'article-3', exportedComment: null},
+        {articleId: 'article-4', exportedComment: null},
+      ]),
+      [
+        {fieldName: getCommentFieldName('article-1'), valueToken: getUtf16BeHexToken('Skär\r\nrad två \u{1F44D}')},
+        {
+          fieldName: getCommentFieldName('article-2'),
+          valueToken: `(þÿ${Buffer.from('Åsa\rOk', 'utf16le')
+            .swap16()
+            .toString('latin1')
+            .replace(/[\\()]/g, '\\$&')
+            .replace(/\r/g, '\\r')})`,
+        },
+        {fieldName: getCommentFieldName('article-3'), valueToken: '<EFBBBF 536BC3A472>'},
+        {fieldName: getCommentFieldName('article-4'), valueToken: '(line one\r\nline two\\rline three\rline four)'},
+      ],
+    )
+
+    expect(
+      parsePdfConflictResolutionImport(pdf).commentOnlyRows.map((row) => {
+        return [row.canonicalArticleId, row.comment]
+      }),
+    ).toEqual([
+      ['article-1', 'Skär\nrad två \u{1F44D}'],
+      ['article-2', 'Åsa\nOk'],
+      ['article-3', 'Skär'],
+      ['article-4', 'line one\nline two\nline three\nline four'],
+    ])
+  })
+
+  test('ignores untouched prefilled comments, also when a viewer rewrote the line breaks', () => {
+    const pdf = appendViewerFieldUpdates(
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: 'Existing note', radio: 'yes'},
+        {articleId: 'article-2', exportedComment: 'Line one\r\nline two å', radio: null},
+      ]),
+      [{fieldName: getCommentFieldName('article-2'), valueToken: getUtf16BeHexToken('Line one\rline two å  ')}],
+    )
+    const parsedImport = parsePdfConflictResolutionImport(pdf)
+
+    expect(parsedImport.rows).toMatchObject([{canonicalArticleId: 'article-1', comment: null, resolutionValue: 'yes'}])
+    expect(parsedImport.commentOnlyRows).toEqual([])
+    expect(() => {
+      parsePdfConflictResolutionImport(
+        createCommentReviewPdf([{articleId: 'article-1', exportedComment: 'Existing note', radio: null}]),
+      )
+    }).toThrow('The selected PDF has no filled conflict-resolution radio fields and no changed comments.')
+  })
+
+  test('brings an edited comment on a decided row and comment-only rows for unset and undecided radios', () => {
+    const pdf = appendViewerFieldUpdates(
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: 'Old note', radio: 'no'},
+        {articleId: 'article-2', exportedComment: null, radio: null},
+        {articleId: 'article-3', exportedComment: 'Kept', radio: pdfConflictResolutionNotSetValue},
+        {articleId: 'article-4', exportedComment: null},
+      ]),
+      [
+        {fieldName: getCommentFieldName('article-1'), valueToken: '(New note)'},
+        {fieldName: getCommentFieldName('article-2'), valueToken: '(Unset radio note)'},
+        {fieldName: getCommentFieldName('article-3'), valueToken: '(Undecided note)'},
+        {fieldName: getCommentFieldName('article-4'), valueToken: '(  Radio-less note  )'},
+      ],
+    )
+    const parsedImport = parsePdfConflictResolutionImport(pdf)
+
+    expect(parsedImport.rows).toEqual([
+      {
+        fieldName: 'comparison.comparison-project-1.article.article-1.resolution',
+        sourceArticleRowId: 'article-1',
+        canonicalArticleId: 'article-1',
+        externalArticleId: 'EXT-article-1',
+        title: 'Title article-1',
+        identifiers: [],
+        resolutionValue: 'no',
+        comment: 'New note',
+      },
+    ])
+    expect(parsedImport.undecidedRows).toEqual([
+      {
+        fieldName: 'comparison.comparison-project-1.article.article-3.resolution',
+        sourceArticleRowId: 'article-3',
+        canonicalArticleId: 'article-3',
+        externalArticleId: 'EXT-article-3',
+        title: 'Title article-3',
+        identifiers: [],
+        resolutionValue: pdfConflictResolutionNotSetValue,
+      },
+    ])
+    expect(parsedImport.commentOnlyRows).toEqual([
+      {
+        fieldName: getCommentFieldName('article-2'),
+        sourceArticleRowId: 'article-2',
+        canonicalArticleId: 'article-2',
+        externalArticleId: 'EXT-article-2',
+        title: 'Title article-2',
+        identifiers: [],
+        resolutionValue: null,
+        comment: 'Unset radio note',
+      },
+      {
+        fieldName: getCommentFieldName('article-3'),
+        sourceArticleRowId: 'article-3',
+        canonicalArticleId: 'article-3',
+        externalArticleId: 'EXT-article-3',
+        title: 'Title article-3',
+        identifiers: [],
+        resolutionValue: null,
+        comment: 'Undecided note',
+      },
+      {
+        fieldName: getCommentFieldName('article-4'),
+        sourceArticleRowId: 'article-4',
+        canonicalArticleId: 'article-4',
+        externalArticleId: 'EXT-article-4',
+        title: 'Title article-4',
+        identifiers: [],
+        resolutionValue: null,
+        comment: 'Radio-less note',
+      },
+    ])
+  })
+
+  test('a cleared or control-character-only comment brings nothing', () => {
+    const pdf = appendViewerFieldUpdates(
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: 'Old note', radio: 'yes'},
+        {articleId: 'article-2', exportedComment: 'Other note', radio: null},
+        {articleId: 'article-3', exportedComment: null, radio: null},
+      ]),
+      [
+        {fieldName: getCommentFieldName('article-1'), valueToken: '()'},
+        {fieldName: getCommentFieldName('article-2'), valueToken: '(   )'},
+        {fieldName: getCommentFieldName('article-3'), valueToken: '(\\007\\000)'},
+      ],
+    )
+    const parsedImport = parsePdfConflictResolutionImport(pdf)
+
+    expect(parsedImport.rows).toMatchObject([{canonicalArticleId: 'article-1', comment: null}])
+    expect(parsedImport.commentOnlyRows).toEqual([])
+  })
+
+  test('parses a PDF with only changed comments and builds version 3 artifact rows', () => {
+    const commentOnlyPdf = createCommentReviewPdf([
+      {articleId: 'article-2', exportedComment: null, value: 'Only a note'},
+    ])
+    const commentOnlyImport = parsePdfConflictResolutionImport(commentOnlyPdf)
+
+    expect(commentOnlyImport.rows).toEqual([])
+    expect(commentOnlyImport.undecidedRows).toEqual([])
+    expect(commentOnlyImport.commentOnlyRows).toMatchObject([{canonicalArticleId: 'article-2', comment: 'Only a note'}])
+
+    const artifact = getComparisonProjectConflictResolutionTransferArtifactFromPdfImport(
+      parsePdfConflictResolutionImport(
+        createCommentReviewPdf([
+          {articleId: 'article-1', exportedComment: null, radio: 'yes', value: 'Resolution note'},
+          {articleId: 'article-2', exportedComment: null, radio: null, value: 'Comment-only note'},
+          {articleId: 'article-3', exportedComment: 'Untouched', radio: 'no'},
+          {articleId: 'article-4', exportedComment: 'Untouched', radio: pdfConflictResolutionNotSetValue},
+        ]),
+      ),
+    )
+
+    expect(artifact.version).toBe(3)
+    expect(artifact.rows).toEqual([
+      {
+        sourceResolutionId: 'comparison-project-1:article-1:pdf-resolution',
+        sourceArticleRowId: 'article-1',
+        externalArticleId: 'EXT-article-1',
+        title: 'Title article-1',
+        identifiers: [],
+        resolution: {mode: 'summary', value: 'yes', label: 'Yes'},
+        comment: 'Resolution note',
+      },
+      {
+        sourceResolutionId: 'comparison-project-1:article-3:pdf-resolution',
+        sourceArticleRowId: 'article-3',
+        externalArticleId: 'EXT-article-3',
+        title: 'Title article-3',
+        identifiers: [],
+        resolution: {mode: 'summary', value: 'no', label: 'No'},
+        comment: null,
+      },
+      {
+        sourceResolutionId: 'comparison-project-1:article-2:pdf-comment',
+        sourceArticleRowId: 'article-2',
+        externalArticleId: 'EXT-article-2',
+        title: 'Title article-2',
+        identifiers: [],
+        resolution: null,
+        comment: 'Comment-only note',
+      },
+    ])
+  })
+
+  test('comment-only rows without hidden row metadata import into the same project only', () => {
+    const parsedImport = parsePdfConflictResolutionImport(
+      createCommentReviewPdf(
+        [{articleId: 'article-1', exportedComment: null, value: 'Note', withMetadata: false}],
+        false,
+      ),
+    )
+
+    expect(parsedImport.source.comparisonProjectId).toBe('comparison-project-1')
+    expect(
+      getComparisonProjectConflictResolutionTransferArtifactFromPdfImport({
+        parsedImport,
+        targetComparisonProjectId: 'comparison-project-1',
+      }).rows,
+    ).toMatchObject([
+      {sourceResolutionId: 'comparison-project-1:article-1:pdf-comment', resolution: null, comment: 'Note'},
+    ])
+    expect(() => {
+      getComparisonProjectConflictResolutionTransferArtifactFromPdfImport({
+        parsedImport,
+        targetComparisonProjectId: 'comparison-project-2',
+      })
+    }).toThrow('PDF has no hidden row metadata')
+    expect(
+      getComparisonProjectConflictResolutionTransferArtifactFromPdfImport({
+        parsedImport: parsePdfConflictResolutionImport(
+          createCommentReviewPdf([{articleId: 'article-1', exportedComment: null, value: 'Note'}]),
+        ),
+        targetComparisonProjectId: 'comparison-project-2',
+      }).rows,
+    ).toHaveLength(1)
+  })
+
+  test('cuts comments to 4000 UTF-16 code units without splitting a surrogate pair', () => {
+    const parsedImport = parsePdfConflictResolutionImport(
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: null, value: `${'x'.repeat(3999)}\u{1F44D}`},
+        {articleId: 'article-2', exportedComment: null, value: 'y'.repeat(4001)},
+        {articleId: 'article-3', exportedComment: 'z'.repeat(4000), value: `${'z'.repeat(4000)} more`},
+      ]),
+    )
+
+    expect(
+      parsedImport.commentOnlyRows.map((row) => {
+        return [row.canonicalArticleId, row.comment.length]
+      }),
+    ).toEqual([
+      ['article-1', 3999],
+      ['article-2', 4000],
+    ])
+  })
+
+  test('the last incremental update of a field wins and binary appearance streams are skipped', () => {
+    const getAppearanceStream = (objectNumber: number, bytes: number[]) => {
+      return Buffer.concat([
+        Buffer.from(
+          `${objectNumber} 0 obj\n<< /Type /XObject /Subtype /Form /Filter /FlateDecode /Length ${bytes.length} >>\nstream\n`,
+          'latin1',
+        ),
+        Buffer.from(bytes),
+        Buffer.from('\nendstream\nendobj\n', 'latin1'),
+      ])
+    }
+    const original = createCommentReviewPdf([{articleId: 'article-1', exportedComment: 'Old', radio: null}])
+    const firstEdit = appendViewerFieldUpdates(original, [
+      {fieldName: getCommentFieldName('article-1'), valueToken: '(First edit)'},
+    ])
+    const secondEdit = appendViewerFieldUpdates(
+      Buffer.concat([firstEdit, getAppearanceStream(90, [0x3c, 0x3c, 0x01, 0xff, 0x00, 0x9a])]),
+      [{fieldName: getCommentFieldName('article-1'), valueToken: '(Second edit)'}],
+    )
+    const withLaterStream = Buffer.concat([secondEdit, getAppearanceStream(91, [0x02, 0x3e, 0x3e, 0xfe])])
+
+    expect(parsePdfConflictResolutionImport(withLaterStream).commentOnlyRows).toMatchObject([{comment: 'Second edit'}])
+  })
+
+  test('reads top-level keys only, so values that look like keys do not confuse the field name', () => {
+    const metadata = getMetadataValue({canonicalArticleId: 'article-1', exportedComment: null})
+    const pdfSource = `%PDF-1.4
+1 0 obj
+<</V(see /T \\(x\\) and /FT /Btn)/AA<</V 9 0 R>>/FT/Tx/T(${getCommentFieldName('article-1')})>>
+endobj
+2 0 obj
+<</FT/Tx/T(comparison.comparison-project-1.article.article-1.metadata)/V<${Buffer.from(metadata, 'latin1').toString('hex')}>>>
+endobj`
+
+    expect(parsePdfConflictResolutionImport(pdfSource).commentOnlyRows).toMatchObject([
+      {
+        canonicalArticleId: 'article-1',
+        comment: 'see /T (x) and /FT /Btn',
+        fieldName: getCommentFieldName('article-1'),
+      },
+    ])
   })
 })

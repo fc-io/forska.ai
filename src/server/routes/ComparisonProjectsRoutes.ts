@@ -21,6 +21,10 @@ import {
 } from '../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {getOrderedComparisonProjectColumns} from '../../utils/comparisonProjectColumnOrder.ts'
 import {
+  comparisonProjectConflictResolutionCommentMaxLength,
+  getNormalizedComparisonProjectConflictComment,
+} from '../../utils/comparisonProjectConflictResolutionComment.ts'
+import {
   getNormalizedComparisonProjectConflictResolutionFilters,
   getNormalizedComparisonProjectConflictResolutionProvenanceFilters,
 } from '../../utils/comparisonProjectConflictResolutionFilter.ts'
@@ -84,6 +88,7 @@ import {
   type ComparisonProjectConflictComment,
   type ComparisonProjectConflictCommentReadRow,
   comparisonProjectConflictCommentTable,
+  getComparisonProjectConflictCommentImportWrites,
   getComparisonProjectConflictCommentReadRowsSql,
   getComparisonProjectConflictCommentsByArticleId,
   getComparisonProjectConflictCommentTextsByArticleId,
@@ -102,6 +107,7 @@ import {
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionFileTransfer.ts'
 import {
   type ComparisonProjectConflictResolutionImportAnalyzeResult,
+  type ComparisonProjectConflictResolutionImportCommentChange,
   type ComparisonProjectConflictResolutionImportMode,
   type ComparisonProjectConflictResolutionImportOverwriteMode,
   type ComparisonProjectConflictResolutionImportSourceQueryRow,
@@ -2609,7 +2615,13 @@ const getValidatedPdfUndecidedMode = (value: unknown): ComparisonProjectConflict
 
 const getPdfUndecidedTransferArtifact = (parsedImport: ParsedPdfConflictResolutionImport) => {
   return getComparisonProjectConflictResolutionTransferArtifactFromPdfImport({
-    parsedImport: {...parsedImport, rows: parsedImport.undecidedRows},
+    parsedImport: {
+      ...parsedImport,
+      commentOnlyRows: [],
+      rows: parsedImport.undecidedRows.map((row) => {
+        return {...row, comment: null}
+      }),
+    },
   })
 }
 
@@ -2694,7 +2706,10 @@ const getPdfImportAnalyzeResult = async (params: {
     pdfUndecidedRowCount: params.parsedImport.undecidedRows.length,
     pdfWarnings: params.pdfWarnings,
     reviewer: params.reviewer,
-    rowCount: params.parsedImport.rows.length + params.parsedImport.undecidedRows.length,
+    rowCount:
+      params.parsedImport.rows.length
+      + params.parsedImport.undecidedRows.length
+      + params.parsedImport.commentOnlyRows.length,
   }
 
   if (params.pdfUndecidedMode === 'ignore' || params.parsedImport.undecidedRows.length === 0) {
@@ -2789,15 +2804,10 @@ const analyzeComparisonProjectConflictResolutionPdfImport = async (
 
   const {artifact, importMode, overwriteMode, parsedImport, pdfUndecidedMode, pdfWarnings, reviewer} =
     await getComparisonProjectConflictResolutionPdfImportRequest(scope, body)
-  const sourceRows = getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact(artifact)
-  const targetArticles = await getConflictResolutionImportTargetArticles({sourceRows, scope, tx: appDatabaseService})
-  const analyzeResult = getComparisonProjectConflictResolutionImportAnalyzeResult({
-    artifact,
-    importMode,
-    overwriteMode,
-    sourceRows,
-    targetArticles,
-    targetSummaryOptionValues: getComparisonProjectScopeSummaryOptionValues(scope),
+  const {analyzeResult} = await getConflictResolutionArtifactImportAnalysis({
+    body: {artifact, importMode, overwriteMode},
+    scope,
+    tx: appDatabaseService,
   })
 
   return getPdfImportAnalyzeResult({
@@ -2949,6 +2959,15 @@ const commitComparisonProjectConflictResolutionImport = async (scope: Comparison
   })
 }
 
+const getPdfImportCommentChanges = (
+  commentChanges: readonly ComparisonProjectConflictResolutionImportCommentChange[],
+  reviewer: {id: string; name: string} | null,
+) => {
+  return commentChanges.map((commentChange) => {
+    return {...commentChange, authorDisplayName: reviewer?.name ?? null, authorUserId: reviewer?.id ?? null}
+  })
+}
+
 const commitComparisonProjectConflictResolutionPdfImport = async (
   scope: ComparisonProjectScope,
   body: ComparisonProjectConflictResolutionPdfImportBody,
@@ -2956,7 +2975,7 @@ const commitComparisonProjectConflictResolutionPdfImport = async (
   return appDatabaseService.transaction(async (tx) => {
     const {artifact, importMode, overwriteMode, parsedImport, pdfUndecidedMode, pdfWarnings, reviewer} =
       await getComparisonProjectConflictResolutionPdfImportRequest(scope, body)
-    const {analyzeResult, plan, sourceRows} = await getConflictResolutionArtifactImportAnalysis({
+    const {analyzeResult, commentChanges, plan, sourceRows} = await getConflictResolutionArtifactImportAnalysis({
       body: {artifact, importMode, overwriteMode},
       scope,
       tx,
@@ -2972,7 +2991,8 @@ const commitComparisonProjectConflictResolutionPdfImport = async (
       tx,
     })
     const importedReviewer =
-      plan.candidates.length === 0
+      getComparisonProjectConflictResolutionImportResolutionCandidates(plan.candidates).length === 0
+      && getComparisonProjectConflictCommentImportWrites(commentChanges).length === 0
         ? null
         : await getOrCreatePdfConflictResolutionImportReviewer({displayName: reviewer.displayName, tx})
     const pdfJudgmentContextId = isComparisonJudgmentContextId(parsedImport.source.judgmentContextId)
@@ -2991,6 +3011,11 @@ const commitComparisonProjectConflictResolutionPdfImport = async (
         },
         sourceRows,
       }),
+      tx,
+    })
+    await writeComparisonProjectConflictCommentImportChanges({
+      commentChanges: getPdfImportCommentChanges(commentChanges, importedReviewer),
+      comparisonProjectId: scope.id,
       tx,
     })
     const cleared =
@@ -5194,7 +5219,7 @@ const addComparisonProjectPdfHiddenMetadata = (pdf: SimplePdfDocument, fieldName
 
 const comparisonProjectPdfFrontPageFontSizes = {body: 10, heading: 11, title: 18} as const
 const comparisonProjectPdfReviewerNameHelperText =
-  'Enter the name that should be attached to imported conflict resolutions.\nOptional, but helps distinguish different reviewers.'
+  'Enter the name that should be attached to imported conflict resolutions and comments.\nOptional, but helps distinguish different reviewers.'
 
 const getComparisonProjectPdfArticleFieldPrefix = (scope: ComparisonProjectScope, row: ComparisonProjectExportRow) => {
   return [
@@ -5243,7 +5268,7 @@ const addComparisonProjectPdfFrontPage = (params: {
   pdf.addText(`Filters: ${exportFilters}`, {fontSize: frontPageFontSizes.body, gapAfter: 12})
   pdf.addText('Offline review', {font: 'bold', fontSize: frontPageFontSizes.heading, gapAfter: 4})
   pdf.addText(
-    "Use this PDF to assess review conflicts offline. Fill in or change the conflict resolution radio buttons for the articles you've reviewed. This PDF can then be imported into a forska.ai project to compare results.",
+    "Use this PDF to assess review conflicts offline. Fill in or change the conflict resolution radio buttons and comments for the articles you've reviewed. This PDF can then be imported into a forska.ai project to compare results.",
     {fontSize: frontPageFontSizes.body, gapAfter: 12},
   )
   pdf.addTextField({
@@ -5321,12 +5346,36 @@ const addComparisonProjectPdfPromptOverviewPage = (pdf: SimplePdfDocument, scope
   })
 }
 
+const getComparisonProjectPdfExportedComment = (row: ComparisonProjectExportRow) => {
+  return getNormalizedComparisonProjectConflictComment(row.conflictComment?.comment)
+}
+
+const addComparisonProjectPdfResolutionRadios = (
+  pdf: SimplePdfDocument,
+  scope: ComparisonProjectScope,
+  row: ComparisonProjectExportRow,
+) => {
+  if (!row.hasConflict && !row.conflictResolution) {
+    return
+  }
+
+  pdf.addText(getIsSummaryMode(scope) ? 'Include this study?' : 'Choose resolution', {fontSize: 10, gapAfter: 4})
+  pdf.addRadioRow(
+    [getComparisonProjectPdfArticleFieldPrefix(scope, row), 'resolution'].join('.'),
+    null,
+    getComparisonProjectPdfResolutionOptions(scope).map((option) => {
+      return {label: option.label, value: option.value, fontSize: 10, gapAfter: 3}
+    }),
+  )
+  pdf.addGap(6)
+}
+
 const addComparisonProjectPdfConflictResolution = (
   pdf: SimplePdfDocument,
   scope: ComparisonProjectScope,
   row: ComparisonProjectExportRow,
 ) => {
-  if (!scope.allowConflictResolution || (!row.hasConflict && !row.conflictResolution)) {
+  if (!scope.allowConflictResolution || (!row.hasConflict && !row.conflictResolution && !row.conflictComment)) {
     return
   }
 
@@ -5339,15 +5388,17 @@ const addComparisonProjectPdfConflictResolution = (
       ],
       {fontSize: 10, gapAfter: 6},
     )
-    pdf.addText(getIsSummaryMode(scope) ? 'Include this study?' : 'Choose resolution', {fontSize: 10, gapAfter: 4})
-
-    pdf.addRadioRow(
-      [getComparisonProjectPdfArticleFieldPrefix(scope, row), 'resolution'].join('.'),
-      null,
-      getComparisonProjectPdfResolutionOptions(scope).map((option) => {
-        return {label: option.label, value: option.value, fontSize: 10, gapAfter: 3}
-      }),
-    )
+    addComparisonProjectPdfResolutionRadios(pdf, scope, row)
+    pdf.addTextField({
+      fieldName: [getComparisonProjectPdfArticleFieldPrefix(scope, row), 'comment'].join('.'),
+      fontSize: 10,
+      gapAfter: 0,
+      label: 'Comment (optional)',
+      lines: 4,
+      maxLength: comparisonProjectConflictResolutionCommentMaxLength,
+      multiline: true,
+      value: getComparisonProjectPdfExportedComment(row) ?? '',
+    })
   })
 }
 
@@ -5365,6 +5416,7 @@ const addComparisonProjectPdfRowImportMetadata = (
       canonicalArticleId: row.canonicalArticleId,
       comparisonProjectId: scope.id,
       currentResolutionValue: row.conflictResolution?.value ?? null,
+      exportedComment: getComparisonProjectPdfExportedComment(row),
       hasConflict: row.hasConflict,
     },
   )

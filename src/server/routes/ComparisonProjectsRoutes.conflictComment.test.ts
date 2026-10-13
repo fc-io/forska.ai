@@ -881,7 +881,7 @@ test('creating a comparison project from a project copies comments, also comment
   expect(sourceComments).toHaveLength(2)
 })
 
-test('PDF imports never touch comments, also when clearing an undecided article', async () => {
+test('PDF imports without comment fields leave comments alone, also when clearing an undecided article', async () => {
   const targetBefore = await setTargetResolution('no', 'Target note')
   const importResponse = await commitPdfImport('yes', 'ignore')
 
