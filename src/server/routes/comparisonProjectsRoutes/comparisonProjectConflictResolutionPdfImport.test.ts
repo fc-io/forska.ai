@@ -924,6 +924,58 @@ endobj`
     )
   })
 
+  test('an indirect string redefined later as a stream or dictionary is not read as stale text', () => {
+    const withObjects = Buffer.concat([
+      createCommentReviewPdf([
+        {articleId: 'article-1', exportedComment: null},
+        {articleId: 'article-2', exportedComment: null},
+        {articleId: 'article-3', exportedComment: null},
+      ]),
+      Buffer.from(
+        '40 0 obj\n(stale first draft)\nendobj\n41 0 obj\n(stale second draft)\nendobj\n42 0 obj\n(kept)\nendobj\n',
+        'latin1',
+      ),
+      Buffer.from(
+        '40 0 obj\n<< /Length 5 >>\nstream\nhello\nendstream\nendobj\n41 0 obj\n<< /Kind /Other >>\nendobj\n',
+        'latin1',
+      ),
+    ])
+    const parsedImport = parsePdfConflictResolutionImport(
+      appendViewerFieldUpdates(withObjects, [
+        {fieldName: getCommentFieldName('article-1'), valueToken: ' 40 0 R'},
+        {fieldName: getCommentFieldName('article-2'), valueToken: ' 41 0 R'},
+        {fieldName: getCommentFieldName('article-3'), valueToken: ' 42 0 R'},
+      ]),
+    )
+
+    expect(
+      parsedImport.commentOnlyRows.map((row) => {
+        return [row.canonicalArticleId, row.comment]
+      }),
+    ).toEqual([['article-3', 'kept']])
+    expect(parsedImport.warnings).toEqual(
+      expect.arrayContaining([
+        `PDF field ${getCommentFieldName('article-1')} has an indirect value that is not a plain string object and was ignored.`,
+        `PDF field ${getCommentFieldName('article-2')} has an indirect value that is not a plain string object and was ignored.`,
+      ]) as string[],
+    )
+  })
+
+  test('the error for a PDF without changes names indirect values that were ignored', () => {
+    const withStream = Buffer.concat([
+      createCommentReviewPdf([{articleId: 'article-1', exportedComment: null}]),
+      Buffer.from('961 0 obj\n<< /Length 5 >>\nstream\nhello\nendstream\nendobj\n', 'latin1'),
+    ])
+
+    expect(() => {
+      parsePdfConflictResolutionImport(
+        appendViewerFieldUpdates(withStream, [{fieldName: getCommentFieldName('article-1'), valueToken: ' 961 0 R'}]),
+      )
+    }).toThrow(
+      `The selected PDF has no filled conflict-resolution radio fields and no changed comments. PDF field ${getCommentFieldName('article-1')} has an indirect value that is not a plain string object and was ignored.`,
+    )
+  })
+
   test('counts an article with an Undecided radio and a changed comment once', () => {
     const parsedImport = parsePdfConflictResolutionImport(
       createCommentReviewPdf([
