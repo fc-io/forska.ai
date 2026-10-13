@@ -2493,6 +2493,7 @@ const getDedupedCount = (candidates: readonly ComparisonProjectConflictResolutio
 
 const commentSourceSkipReasons = new Set<ComparisonProjectConflictResolutionImportSkipReason>([
   'existing-target-resolution',
+  'not-conflicting',
   'same-value',
 ])
 

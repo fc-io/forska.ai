@@ -2005,6 +2005,71 @@ test('comment sources cover every matched row, take the first non-empty comment 
   ])
 })
 
+test('rows skipped as not-conflicting still bring their comment when they match exactly one target', () => {
+  const plan = getPlan({
+    importMode: 'conflicting-only',
+    sourceRows: [
+      getSourceRow({
+        sourceComment: 'On a resolved row',
+        sourceResolutionId: 'resolution-1',
+        sourceRowId: 'resolution-1',
+      }),
+      getSourceRow({
+        externalArticleId: 'source-ext-2',
+        resolutionMode: null,
+        resolutionValue: null,
+        sourceArticleId: 'source-article-2',
+        sourceComment: 'Comment only',
+        sourceExternalArticleId: 'source-ext-2',
+        sourceResolutionId: 'comment-2',
+        sourceRowId: 'comment-2',
+        title: 'Second title',
+      }),
+      getSourceRow({
+        externalArticleId: null,
+        sourceArticleId: 'source-article-3',
+        sourceComment: 'Two possible targets',
+        sourceExternalArticleId: null,
+        sourceResolutionId: 'comment-3',
+        sourceRowId: 'comment-3',
+        title: 'Shared title',
+      }),
+    ],
+    targetArticles: [
+      getTargetArticle({isConflictResolutionEligible: false}),
+      getTargetArticle({
+        articleId: 'target-article-2',
+        externalArticleId: 'source-ext-2',
+        isConflictResolutionEligible: false,
+        title: 'Second title',
+      }),
+      getTargetArticle({
+        articleId: 'target-article-3',
+        externalArticleId: 'target-ext-3',
+        isConflictResolutionEligible: false,
+        title: 'Shared title',
+      }),
+      getTargetArticle({
+        articleId: 'target-article-4',
+        externalArticleId: 'target-ext-4',
+        isConflictResolutionEligible: false,
+        title: 'Shared title',
+      }),
+    ],
+  })
+
+  expect(plan.candidates).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts({notConflicting: 3}))
+  expect(
+    plan.commentSources.map((commentSource) => {
+      return [commentSource.sourceRowId, commentSource.targetArticleId, commentSource.comment]
+    }),
+  ).toEqual([
+    ['resolution-1', 'target-article-1', 'On a resolved row'],
+    ['comment-2', 'target-article-2', 'Comment only'],
+  ])
+})
+
 test('comment changes add to empty targets, replace only different text when overwriting and never remove', () => {
   const commentSources = [
     {authorDisplayName: null, authorUserId: null, comment: 'New', sourceRowId: 'row-1', targetArticleId: 'empty'},
