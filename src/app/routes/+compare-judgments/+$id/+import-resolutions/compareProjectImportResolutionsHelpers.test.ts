@@ -6,6 +6,7 @@ import {
   getAnalyzeImportDisabledReason,
   getCommitImportDisabledReason,
   getCommitSummaryStats,
+  getEmptyImportableRowsLabel,
   getImportSummaryStats,
   getMatchKeyLabel,
   getMatchKindLabel,
@@ -35,6 +36,14 @@ const transferArtifact: ComparisonProjectConflictResolutionTransferArtifact = {
 }
 
 describe('compare project import resolutions helpers', () => {
+  test('says when comments are still written although no resolution row is imported', () => {
+    expect(getEmptyImportableRowsLabel({commentsAdded: 0, commentsReplaced: 0})).toBe('No rows will be imported.')
+    expect(getEmptyImportableRowsLabel({commentsAdded: 1, commentsReplaced: 0})).toBe(
+      'No resolutions will be imported. 1 comment will still be added or replaced from the rows listed under "Rows that will not be imported".',
+    )
+    expect(getEmptyImportableRowsLabel({commentsAdded: 1, commentsReplaced: 2})).toContain('3 comments will still be')
+  })
+
   test('parses a selected conflict-resolution JSON file', async () => {
     const file = new File([JSON.stringify(transferArtifact)], 'source-conflict-resolutions.json', {
       type: 'application/json',
@@ -106,9 +115,7 @@ describe('compare project import resolutions helpers', () => {
     expect(getMatchKindLabel('covidence-id-title')).toBe('Covidence ID + title')
     expect(getMatchKindLabel('id-title')).toBe('External ID + title')
     expect(getMatchKindLabel('title')).toBe('Title')
-    expect(getMatchKeyLabel('covidence-id-title', 'covidence:#40264\u001ftitle 1')).toBe(
-      'covidence:#40264 / title 1',
-    )
+    expect(getMatchKeyLabel('covidence-id-title', 'covidence:#40264\u001ftitle 1')).toBe('covidence:#40264 / title 1')
     expect(getMatchKeyLabel('id-title', 'external-1\u001ftitle 1')).toBe('external-1 / title 1')
     expect(
       getImportSummaryStats({

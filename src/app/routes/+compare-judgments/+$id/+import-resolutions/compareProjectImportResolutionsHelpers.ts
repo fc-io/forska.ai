@@ -72,6 +72,16 @@ export const getImportCommentChangeCount = (
   return summary.commentsAdded + summary.commentsReplaced
 }
 
+export const getEmptyImportableRowsLabel = (
+  summary: Pick<ComparisonProjectConflictResolutionImportAnalyzeSummary, 'commentsAdded' | 'commentsReplaced'>,
+) => {
+  const commentChangeCount = getImportCommentChangeCount(summary)
+
+  return commentChangeCount > 0
+    ? `No resolutions will be imported. ${getCommentCountLabel(commentChangeCount)} will still be added or replaced from the rows listed under "Rows that will not be imported".`
+    : 'No rows will be imported.'
+}
+
 export const getImportCommentChangeLabel = (change: ComparisonProjectConflictResolutionImportCommentChange) => {
   const labels: Record<ComparisonProjectConflictResolutionImportCommentChange, string> = {
     add: 'Adds comment',
