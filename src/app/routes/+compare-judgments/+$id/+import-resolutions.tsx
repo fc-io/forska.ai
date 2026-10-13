@@ -53,7 +53,8 @@ const conflictResolutionImportModeOptions: Array<{
   value: ComparisonProjectConflictResolutionImportMode
 }> = [
   {
-    description: 'Import only saved decisions for articles that are currently conflicts in this comparison project.',
+    description:
+      'Import only saved decisions for articles that are currently conflicts in this comparison project. Comments are imported for every matched article.',
     label: 'Only current conflicts',
     value: 'conflicting-only',
   },
@@ -96,7 +97,7 @@ const pdfUndecidedModeOptions: Array<{
   },
   {
     description:
-      'Treat Undecided as a request to clear the target conflict resolution for those articles. Their comments are kept.',
+      'Treat Undecided as a request to clear the target conflict resolution for those articles. Comments are never removed; changed comments on those articles are still imported.',
     label: 'Set to not set',
     value: 'clear',
   },

@@ -521,7 +521,9 @@ describe('CompareProjectImportResolutionsPage', () => {
         expect(container.textContent).toContain('Ignore undecided')
         expect(container.textContent).toContain('Changed comments on those articles are still imported.')
         expect(container.textContent).toContain('Set to not set')
-        expect(container.textContent).toContain('Their comments are kept.')
+        expect(container.textContent).toContain(
+          'Comments are never removed; changed comments on those articles are still imported.',
+        )
       })
 
       getInputFromLabel(container, 'Set to not set').click()
