@@ -545,7 +545,7 @@ test('round trip: PDFDocEncoding strings from a viewer arrive exactly, and a re-
   await clearComparisonProject(targetComparisonProjectId)
 })
 
-test('a PDF import previews comment counts and markers and writes comments with the PDF reviewer as author', async () => {
+test('a PDF import previews comment counts and markers, also brings comments on non-conflicting articles and writes them with the PDF reviewer as author', async () => {
   const pdf = getCommentReviewPdf([
     {articleId: 'pdf-comment-article-1', exportedComment: null, radio: 'yes', value: 'Decided note'},
     {articleId: 'pdf-comment-article-2', exportedComment: null, radio: null, value: 'Unset note'},
@@ -554,7 +554,13 @@ test('a PDF import previews comment counts and markers and writes comments with 
   const preview = await analyzePdfImport(pdf)
 
   expect(preview.data.source.rowCount).toBe(3)
-  expect(preview.data.summary).toMatchObject({commentsAdded: 2, commentsKept: 0, commentsReplaced: 0, importable: 2})
+  expect(preview.data.summary).toMatchObject({
+    commentsAdded: 3,
+    commentsKept: 0,
+    commentsReplaced: 0,
+    importable: 2,
+    skippedNotConflicting: 1,
+  })
   expect(getRowMarkers(preview.data.importableRows)).toEqual([
     ['pdf-comment-article-1', 'yes', 'add'],
     ['pdf-comment-article-2', '', 'add'],
@@ -563,7 +569,7 @@ test('a PDF import previews comment counts and markers and writes comments with 
     preview.data.skippedRows.map((row) => {
       return [row.sourceArticleRowId, row.reason, row.commentChange ?? null]
     }),
-  ).toEqual([['pdf-comment-article-3', 'not-conflicting', null]])
+  ).toEqual([['pdf-comment-article-3', 'not-conflicting', 'add']])
 
   await commitPdfImport(pdf)
   const [resolutionRow] = await getResolutionRows(targetComparisonProjectId)
@@ -577,7 +583,9 @@ test('a PDF import previews comment counts and markers and writes comments with 
   ).toEqual([
     ['pdf-comment-article-1', 'Decided note', resolutionRow?.reviewerUserId ?? null, 'Dr PDF'],
     ['pdf-comment-article-2', 'Unset note', resolutionRow?.reviewerUserId ?? null, 'Dr PDF'],
+    ['pdf-comment-article-3', 'Not conflicting note', resolutionRow?.reviewerUserId ?? null, 'Dr PDF'],
   ])
+  expect(await getResolutionRows(targetComparisonProjectId)).toHaveLength(1)
   await clearComparisonProject(targetComparisonProjectId)
 })
 

@@ -896,3 +896,60 @@ test('PDF imports without comment fields leave comments alone, also when clearin
   expect(await getCommentRow('comment-article-1', targetComparisonProjectId)).toEqual(targetBefore)
   await clearComparisonProject(targetComparisonProjectId)
 })
+
+test('file imports bring comments on non-conflicting target articles; the import mode governs resolutions only', async () => {
+  const artifact = await exportSourceArtifact()
+  const [resolutionRow] = getResolutionRowsOnly(artifact)
+  const commentOnlyRow = artifact.rows.find((row) => {
+    return row.resolution === null
+  })
+
+  if (!resolutionRow || !commentOnlyRow) {
+    throw new Error('Missing exported rows')
+  }
+
+  const getMovedArtifact = (row: TransferArtifact['rows'][number], comment: string) => {
+    return {
+      ...artifact,
+      rows: [
+        {
+          ...row,
+          comment,
+          externalArticleId: 'external-3',
+          identifiers: [],
+          sourceArticleRowId: 'comment-article-3',
+          title: 'Comment article three',
+        },
+      ],
+    }
+  }
+  const resolutionArtifact = getMovedArtifact(resolutionRow, 'Resolution row on a non-conflicting article')
+  const resolutionPreview = await analyzeFileImport(resolutionArtifact, 'skip-existing')
+
+  expect(resolutionPreview.data.summary).toMatchObject({commentsAdded: 1, importable: 0, skippedNotConflicting: 1})
+  expect(
+    resolutionPreview.data.skippedRows.map((row) => {
+      return [row.sourceArticleRowId, row.reason, row.commentChange]
+    }),
+  ).toEqual([['comment-article-3', 'not-conflicting', 'add']])
+
+  await commitFileImport(resolutionArtifact, 'skip-existing')
+  expect(await getResolutionRows(targetComparisonProjectId)).toEqual([])
+  expect(await getTargetCommentTexts()).toEqual([['comment-article-3', 'Resolution row on a non-conflicting article']])
+
+  const commentOnlyArtifact = getMovedArtifact(commentOnlyRow, 'Comment-only row on a non-conflicting article')
+  const commentOnlyPreview = await analyzeFileImport(commentOnlyArtifact, 'overwrite-different')
+
+  expect(commentOnlyPreview.data.summary).toMatchObject({commentsReplaced: 1, importable: 0, skippedNotConflicting: 1})
+  expect(
+    commentOnlyPreview.data.skippedRows.map((row) => {
+      return [row.sourceArticleRowId, row.reason, row.commentChange]
+    }),
+  ).toEqual([['comment-article-3', 'not-conflicting', 'replace']])
+
+  await commitFileImport(commentOnlyArtifact, 'overwrite-different')
+  expect(await getTargetCommentTexts()).toEqual([
+    ['comment-article-3', 'Comment-only row on a non-conflicting article'],
+  ])
+  await clearComparisonProject(targetComparisonProjectId)
+})
