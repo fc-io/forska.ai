@@ -68,7 +68,8 @@ const pdfLiteralStringDepthChanges = new Map([
 const pdfNamePattern = /\/[^\0\t\n\f\r ()<>[\]{}/%]*/y
 const pdfRegularTokenPattern = /[^\0\t\n\f\r ()<>[\]{}/%]+/y
 const pdfOctalEscapePattern = /[0-7]{1,3}/y
-const pdfTopLevelTokenStartPattern = /[%(<]/g
+const pdfTopLevelTokenStartPattern = /[%(<]|(?<![A-Za-z0-9])obj(?![A-Za-z0-9])/g
+const pdfObjectKeyword = 'obj'
 const pdfCommentPattern = /%[^\r\n]*/y
 const pdfStreamKeywordPattern = /stream(?:\r\n|\r|\n)/y
 const pdfDirectLengthPattern = /(\d+)(?!\d)(?!\s+\d+\s+R)/y
@@ -369,6 +370,12 @@ const getPdfDocumentIndex = (source: string): PdfDocumentIndex => {
 
     if (character === '%') {
       index = getPdfPatternEndIndex(pdfCommentPattern, source, tokenStart)
+      continue
+    }
+
+    if (source.startsWith(pdfObjectKeyword, tokenStart)) {
+      stringObjects.delete(getPdfIndirectObjectNumber(source, tokenStart + pdfObjectKeyword.length) ?? '')
+      index = tokenStart + pdfObjectKeyword.length
       continue
     }
 
@@ -766,7 +773,12 @@ export const parsePdfConflictResolutionImport = (
   )
 
   if (rows.length === 0 && undecidedRows.length === 0 && commentOnlyRows.length === 0) {
-    throw new Error('The selected PDF has no filled conflict-resolution radio fields and no changed comments.')
+    throw new Error(
+      [
+        'The selected PDF has no filled conflict-resolution radio fields and no changed comments.',
+        ...getPdfUnresolvedValueWarnings(fields),
+      ].join(' '),
+    )
   }
 
   if (!formatMetadata) {
