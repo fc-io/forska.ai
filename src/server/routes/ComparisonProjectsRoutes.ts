@@ -140,6 +140,7 @@ import {
 } from './comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts'
 import {
   getComparisonProjectConflictResolutionTransferArtifactFromPdfImport,
+  getParsedPdfConflictResolutionImportArticleCount,
   type ParsedPdfConflictResolutionImport,
   parsePdfConflictResolutionImport,
   pdfConflictResolutionNotSetValue,
@@ -2706,10 +2707,7 @@ const getPdfImportAnalyzeResult = async (params: {
     pdfUndecidedRowCount: params.parsedImport.undecidedRows.length,
     pdfWarnings: params.pdfWarnings,
     reviewer: params.reviewer,
-    rowCount:
-      params.parsedImport.rows.length
-      + params.parsedImport.undecidedRows.length
-      + params.parsedImport.commentOnlyRows.length,
+    rowCount: getParsedPdfConflictResolutionImportArticleCount(params.parsedImport),
   }
 
   if (params.pdfUndecidedMode === 'ignore' || params.parsedImport.undecidedRows.length === 0) {

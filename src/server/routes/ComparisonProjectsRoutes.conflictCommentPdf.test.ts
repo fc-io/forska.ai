@@ -510,6 +510,41 @@ test('round trip: a comment a viewer wrote into the exported PDF lands in the ta
   await clearComparisonProject(targetComparisonProjectId)
 })
 
+test('round trip: PDFDocEncoding strings from a viewer arrive exactly, and a re-encoded untouched comment brings nothing', async () => {
+  const exportedPdf = await exportPdf(sourceComparisonProjectId)
+  const reviewedPdf = appendViewerFieldUpdates(exportedPdf, [
+    {
+      fieldName: getArticleFieldName(sourceComparisonProjectId, 'pdf-comment-article-1', 'comment'),
+      valueToken: '(Population unclear \\205 see protocol\\rsecond line)',
+    },
+    {
+      fieldName: getArticleFieldName(sourceComparisonProjectId, 'pdf-comment-article-2', 'comment'),
+      valueToken: '(it\\220s \\205 5 \\240 \\200 \\215ok\\216)',
+    },
+    {fieldName: 'forska.reviewer.displayName', valueToken: '(O\\220Brien)'},
+  ])
+  const preview = await analyzePdfImport(reviewedPdf)
+
+  expect(preview.data.source.reviewer?.displayName).toBe('O\u2019Brien')
+  expect(preview.data.summary).toMatchObject({commentsAdded: 1, commentsReplaced: 0})
+  expect(getRowMarkers(preview.data.importableRows)).toEqual([['pdf-comment-article-2', '', 'add']])
+
+  await commitPdfImport(reviewedPdf)
+  const [commentRow] = await getCommentRows(targetComparisonProjectId)
+  const reviewer = (await getPdfReviewerRows()).find((row) => {
+    return row.id === commentRow?.authorUserId
+  })
+
+  expect(await getCommentRows(targetComparisonProjectId)).toHaveLength(1)
+  expect(commentRow).toMatchObject({
+    articleId: 'pdf-comment-article-2',
+    authorDisplayName: 'O\u2019Brien',
+    comment: 'it\u2019s \u2013 5 \u20ac \u2022 \u201cok\u201d',
+  })
+  expect(reviewer?.name).toBe('O\u2019Brien')
+  await clearComparisonProject(targetComparisonProjectId)
+})
+
 test('a PDF import previews comment counts and markers and writes comments with the PDF reviewer as author', async () => {
   const pdf = getCommentReviewPdf([
     {articleId: 'pdf-comment-article-1', exportedComment: null, radio: 'yes', value: 'Decided note'},
@@ -605,7 +640,7 @@ test('clearing undecided PDF selections never touches comments; a changed commen
   ])
   const preview = await analyzePdfImport(changedPdf, {overwriteMode: 'overwrite-different', pdfUndecidedMode: 'clear'})
 
-  expect(preview.data.source.rowCount).toBe(2)
+  expect(preview.data.source.rowCount).toBe(1)
   expect(preview.data.summary).toMatchObject({commentsReplaced: 1})
   expect(getRowMarkers(preview.data.importableRows)).toEqual([
     ['pdf-comment-article-1', '', 'replace'],

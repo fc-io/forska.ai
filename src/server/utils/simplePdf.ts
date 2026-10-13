@@ -49,6 +49,7 @@ const sectionStrokeColor = '0.82 0.88 0.95'
 const panelPaddingX = 16
 const panelPaddingTop = 24
 const panelPaddingBottom = 16
+const textFieldLabelGap = 3
 
 const getNormalizedPdfText = (value: string) => {
   return value.replace(/&#x0D;|&#13;/gi, '\n').replace(/&#x0A;|&#10;/gi, '\n')
@@ -525,12 +526,12 @@ export class SimplePdfDocument {
       return
     }
 
-    if (this.y - lineHeight - fieldHeight < marginBottom) {
+    if (this.y - lineHeight - (options.label ? textFieldLabelGap : 0) - fieldHeight < marginBottom) {
       this.addPage()
     }
 
     if (options.label) {
-      this.addText(options.label, {font: 'bold', fontSize, gapAfter: 3, indent: options.indent})
+      this.addText(options.label, {font: 'bold', fontSize, gapAfter: textFieldLabelGap, indent: options.indent})
     }
 
     const pageIndex = this.pages.length - 1

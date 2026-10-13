@@ -34,7 +34,16 @@ export type ParsedPdfConflictResolutionImport = {
   warnings: string[]
 }
 
-type PdfFormField = {name: string; value: string | null; fieldType: 'button' | 'text' | 'unknown'}
+type PdfFormField = {
+  name: string
+  value: string | null
+  fieldType: 'button' | 'text' | 'unknown'
+  hasUnresolvedValueReference: boolean
+}
+
+type PdfDocumentIndex = {dictionaries: string[]; stringObjects: Map<string, string>}
+
+type PdfTextDecoder = {bom: string; decode: (bytes: string) => string}
 
 type PdfStringToken = {bytes: string; endIndex: number}
 
@@ -59,9 +68,29 @@ const pdfLiteralStringDepthChanges = new Map([
 const pdfNamePattern = /\/[^\0\t\n\f\r ()<>[\]{}/%]*/y
 const pdfRegularTokenPattern = /[^\0\t\n\f\r ()<>[\]{}/%]+/y
 const pdfOctalEscapePattern = /[0-7]{1,3}/y
-const pdfStreamPattern = /(>>\s*stream)(?:\r\n|\r|\n)[\s\S]*?endstream/g
-const pdfUtf16BeBom = String.fromCharCode(0xfe, 0xff)
-const pdfUtf8Bom = String.fromCharCode(0xef, 0xbb, 0xbf)
+const pdfTopLevelTokenStartPattern = /[%(<]/g
+const pdfCommentPattern = /%[^\r\n]*/y
+const pdfStreamKeywordPattern = /stream(?:\r\n|\r|\n)/y
+const pdfDirectLengthPattern = /(\d+)(?!\d)(?!\s+\d+\s+R)/y
+const pdfIndirectReferencePattern = /(\d+)\s+\d+\s+R/y
+const pdfIndirectObjectHeaderPattern = /(\d+)\s+\d+\s+obj\s*$/
+const pdfEndStreamKeyword = 'endstream'
+const pdfDocEncodingCharacters = new Map<number, string>([
+  ...[0x02d8, 0x02c7, 0x02c6, 0x02d9, 0x02dd, 0x02db, 0x02da, 0x02dc].map((codePoint, index) => {
+    return [0x18 + index, String.fromCodePoint(codePoint)] as const
+  }),
+  ...[
+    0x2022, 0x2020, 0x2021, 0x2026, 0x2014, 0x2013, 0x0192, 0x2044, 0x2039, 0x203a, 0x2212, 0x2030, 0x201e, 0x201c,
+    0x201d, 0x2018, 0x2019, 0x201a, 0x2122, 0xfb01, 0xfb02, 0x0141, 0x0152, 0x0160, 0x0178, 0x017d, 0x0131, 0x0142,
+    0x0153, 0x0161, 0x017e,
+  ].map((codePoint, index) => {
+    return [0x80 + index, String.fromCodePoint(codePoint)] as const
+  }),
+  [0x7f, ''],
+  [0x9f, ''],
+  [0xa0, String.fromCodePoint(0x20ac)],
+  [0xad, ''],
+])
 
 const getPdfText = (input: Buffer | Uint8Array | ArrayBuffer | string) => {
   if (typeof input === 'string') {
@@ -73,10 +102,6 @@ const getPdfText = (input: Buffer | Uint8Array | ArrayBuffer | string) => {
   }
 
   return Buffer.from(input).toString('latin1')
-}
-
-const getPdfTextWithoutStreams = (source: string) => {
-  return source.replace(pdfStreamPattern, '$1\nendstream')
 }
 
 const getPdfPatternEndIndex = (pattern: RegExp, source: string, index: number) => {
@@ -199,31 +224,6 @@ const readPdfDictionaryEndIndex = (source: string, startIndex: number) => {
   return null
 }
 
-const getPdfDictionaries = (source: string) => {
-  const dictionaries: string[] = []
-  let searchIndex = 0
-
-  while (searchIndex < source.length) {
-    const startIndex = source.indexOf('<<', searchIndex)
-
-    if (startIndex === -1) {
-      break
-    }
-
-    const endIndex = readPdfDictionaryEndIndex(source, startIndex)
-
-    if (endIndex === null) {
-      searchIndex = startIndex + 2
-      continue
-    }
-
-    dictionaries.push(source.slice(startIndex, endIndex))
-    searchIndex = endIndex
-  }
-
-  return dictionaries
-}
-
 const getPdfArrayEndIndex = (source: string, startIndex: number) => {
   let index = getPdfNonWhitespaceIndex(source, startIndex + 1)
 
@@ -274,28 +274,145 @@ const getPdfDictionaryEntries = (dictionary: string) => {
   return entries
 }
 
-const getUtf16BeText = (bytes: string) => {
+const getUtf16Buffer = (bytes: string) => {
   return Buffer.from(bytes.length % 2 === 0 ? bytes : bytes.slice(0, -1), 'latin1')
-    .swap16()
-    .toString('utf16le')
+}
+
+const pdfTextDecoders: PdfTextDecoder[] = [
+  {
+    bom: String.fromCharCode(0xfe, 0xff),
+    decode: (bytes) => {
+      return getUtf16Buffer(bytes).swap16().toString('utf16le')
+    },
+  },
+  {
+    bom: String.fromCharCode(0xff, 0xfe),
+    decode: (bytes) => {
+      return getUtf16Buffer(bytes).toString('utf16le')
+    },
+  },
+  {
+    bom: String.fromCharCode(0xef, 0xbb, 0xbf),
+    decode: (bytes) => {
+      return Buffer.from(bytes, 'latin1').toString('utf8')
+    },
+  },
+]
+
+const getPdfDocEncodingText = (bytes: string) => {
+  return Array.from(bytes)
+    .map((character) => {
+      return pdfDocEncodingCharacters.get(character.charCodeAt(0)) ?? character
+    })
+    .join('')
 }
 
 const getUnicodePdfText = (bytes: string) => {
-  if (bytes.startsWith(pdfUtf16BeBom)) {
-    return getUtf16BeText(bytes.slice(pdfUtf16BeBom.length))
-  }
+  const decoder = pdfTextDecoders.find((textDecoder) => {
+    return bytes.startsWith(textDecoder.bom)
+  })
 
-  return bytes.startsWith(pdfUtf8Bom) ? Buffer.from(bytes.slice(pdfUtf8Bom.length), 'latin1').toString('utf8') : bytes
+  return decoder ? decoder.decode(bytes.slice(decoder.bom.length)) : getPdfDocEncodingText(bytes)
 }
 
 const getLineFeedText = (value: string) => {
   return value.replace(/\r\n?/g, '\n')
 }
 
+const getDecodedPdfText = (bytes: string) => {
+  return getLineFeedText(getUnicodePdfText(bytes))
+}
+
 const getPdfTextStringAt = (source: string, index: number) => {
   const stringToken = readPdfStringToken(source, index)
 
-  return stringToken ? getLineFeedText(getUnicodePdfText(stringToken.bytes)) : null
+  return stringToken ? getDecodedPdfText(stringToken.bytes) : null
+}
+
+const getPdfStreamEndIndex = (source: string, dictionary: string, dataStartIndex: number) => {
+  const lengthIndex = getPdfDictionaryEntries(dictionary).get('Length')
+  pdfDirectLengthPattern.lastIndex = lengthIndex ?? dictionary.length
+  const directLength = lengthIndex === undefined ? null : pdfDirectLengthPattern.exec(dictionary)?.[1]
+  const lengthEndIndex =
+    directLength === undefined || directLength === null
+      ? null
+      : getPdfNonWhitespaceIndex(source, dataStartIndex + Number(directLength))
+  const keywordIndex =
+    lengthEndIndex !== null && source.startsWith(pdfEndStreamKeyword, lengthEndIndex)
+      ? lengthEndIndex
+      : source.indexOf(pdfEndStreamKeyword, dataStartIndex)
+
+  return keywordIndex === -1 ? source.length : keywordIndex + pdfEndStreamKeyword.length
+}
+
+const getPdfIndexAfterStream = (source: string, dictionary: string, dictionaryEndIndex: number) => {
+  const keywordIndex = getPdfNonWhitespaceIndex(source, dictionaryEndIndex)
+  pdfStreamKeywordPattern.lastIndex = keywordIndex
+  const keyword = pdfStreamKeywordPattern.exec(source)
+
+  return keyword ? getPdfStreamEndIndex(source, dictionary, keywordIndex + keyword[0].length) : dictionaryEndIndex
+}
+
+const getPdfIndirectObjectNumber = (source: string, index: number) => {
+  return pdfIndirectObjectHeaderPattern.exec(source.slice(Math.max(index - 40, 0), index))?.[1] ?? null
+}
+
+const getPdfDocumentIndex = (source: string): PdfDocumentIndex => {
+  const dictionaries: string[] = []
+  const stringObjects = new Map<string, string>()
+  let index = 0
+
+  while (index < source.length) {
+    pdfTopLevelTokenStartPattern.lastIndex = index
+    const tokenStart = pdfTopLevelTokenStartPattern.exec(source)?.index ?? source.length
+    const character = source[tokenStart]
+
+    if (character === '%') {
+      index = getPdfPatternEndIndex(pdfCommentPattern, source, tokenStart)
+      continue
+    }
+
+    if (character === '<' && source[tokenStart + 1] === '<') {
+      const dictionaryEndIndex = readPdfDictionaryEndIndex(source, tokenStart)
+      const dictionary = dictionaryEndIndex === null ? null : source.slice(tokenStart, dictionaryEndIndex)
+
+      if (dictionary) {
+        dictionaries.push(dictionary)
+      }
+
+      index = dictionary ? getPdfIndexAfterStream(source, dictionary, tokenStart + dictionary.length) : tokenStart + 2
+      continue
+    }
+
+    const stringToken = tokenStart < source.length ? readPdfStringToken(source, tokenStart) : null
+    const objectNumber = stringToken ? getPdfIndirectObjectNumber(source, tokenStart) : null
+
+    if (stringToken && objectNumber) {
+      stringObjects.set(objectNumber, stringToken.bytes)
+    }
+
+    index = stringToken ? stringToken.endIndex : tokenStart + 1
+  }
+
+  return {dictionaries, stringObjects}
+}
+
+const getPdfFieldValue = (dictionary: string, valueIndex: number, stringObjects: ReadonlyMap<string, string>) => {
+  pdfIndirectReferencePattern.lastIndex = valueIndex
+  const objectNumber = pdfIndirectReferencePattern.exec(dictionary)?.[1] ?? null
+  const referencedBytes = objectNumber === null ? undefined : stringObjects.get(objectNumber)
+
+  if (objectNumber !== null) {
+    return {
+      hasUnresolvedValueReference: referencedBytes === undefined,
+      value: referencedBytes === undefined ? null : getDecodedPdfText(referencedBytes),
+    }
+  }
+
+  return {
+    hasUnresolvedValueReference: false,
+    value: getPdfTextStringAt(dictionary, valueIndex) ?? getPdfNameAt(dictionary, valueIndex),
+  }
 }
 
 const getPdfNameAt = (source: string, index: number) => {
@@ -304,7 +421,7 @@ const getPdfNameAt = (source: string, index: number) => {
     : null
 }
 
-const getPdfFormField = (dictionary: string): PdfFormField[] => {
+const getPdfFormField = (dictionary: string, stringObjects: ReadonlyMap<string, string>): PdfFormField[] => {
   const entries = getPdfDictionaryEntries(dictionary)
   const fieldTypeIndex = entries.get('FT')
   const nameIndex = entries.get('T')
@@ -317,13 +434,13 @@ const getPdfFormField = (dictionary: string): PdfFormField[] => {
   }
 
   const fieldTypeName = getPdfNameAt(dictionary, fieldTypeIndex)
-  const value =
+  const fieldValue =
     valueIndex === undefined
-      ? null
-      : (getPdfTextStringAt(dictionary, valueIndex) ?? getPdfNameAt(dictionary, valueIndex))
+      ? {hasUnresolvedValueReference: false, value: null}
+      : getPdfFieldValue(dictionary, valueIndex, stringObjects)
   const fieldType = fieldTypeName === 'Btn' ? 'button' : fieldTypeName === 'Tx' ? 'text' : 'unknown'
 
-  return [{name, value, fieldType}]
+  return [{name, fieldType, ...fieldValue}]
 }
 
 const getLatestPdfFormFields = (fields: readonly PdfFormField[]) => {
@@ -337,7 +454,13 @@ const getLatestPdfFormFields = (fields: readonly PdfFormField[]) => {
 }
 
 const getPdfFormFields = (source: string): PdfFormField[] => {
-  return getLatestPdfFormFields(getPdfDictionaries(getPdfTextWithoutStreams(source)).flatMap(getPdfFormField))
+  const documentIndex = getPdfDocumentIndex(source)
+
+  return getLatestPdfFormFields(
+    documentIndex.dictionaries.flatMap((dictionary) => {
+      return getPdfFormField(dictionary, documentIndex.stringObjects)
+    }),
+  )
 }
 
 const getTrimmedValue = (value: string | null | undefined) => {
@@ -510,6 +633,16 @@ const getFilledPdfResolutionFields = (fields: readonly PdfFormField[]) => {
   })
 }
 
+const getPdfUnresolvedValueWarnings = (fields: readonly PdfFormField[]) => {
+  return fields
+    .filter((field) => {
+      return field.hasUnresolvedValueReference && /^(?:comparison|forska)\./.test(field.name)
+    })
+    .map((field) => {
+      return `PDF field ${field.name} has an indirect value that is not a plain string object and was ignored.`
+    })
+}
+
 const getPdfFieldProjectWarnings = (
   fields: ReadonlyArray<{fieldName: string; projectId: string | null}>,
   fieldLabel: string,
@@ -627,6 +760,7 @@ export const parsePdfConflictResolutionImport = (
   )
 
   warnings.push(
+    ...getPdfUnresolvedValueWarnings(fields),
     ...getPdfFieldProjectWarnings(resolutionFields, 'Resolution', projectMetadata),
     ...getPdfFieldProjectWarnings(commentFields, 'Comment', projectMetadata),
   )
@@ -662,6 +796,14 @@ export const parsePdfConflictResolutionImport = (
     commentOnlyRows,
     warnings,
   }
+}
+
+export const getParsedPdfConflictResolutionImportArticleCount = (parsedImport: ParsedPdfConflictResolutionImport) => {
+  return new Set(
+    [...parsedImport.rows, ...parsedImport.undecidedRows, ...parsedImport.commentOnlyRows].map((row) => {
+      return row.fieldName.replace(/\.(?:comment|resolution)$/, '')
+    }),
+  ).size
 }
 
 const getPdfTransferRowBase = (
