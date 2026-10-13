@@ -1321,40 +1321,39 @@ test('project transfer import get reads running progress artifacts before the se
   expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
 })
 
-test('project transfer import get reads commit progress artifacts before the session repository', async () => {
-  const app = await getProjectTransferApp()
-  mkdirSync(getImportRootPath(commitProgressArtifactImportSessionId), {recursive: true})
-  writeFileSync(
-    getImportProgressPath(commitProgressArtifactImportSessionId),
-    JSON.stringify({
-      message: 'Writing imported project tables',
-      phase: 'app_table_writes',
-      planRevision: 2,
-      rowCountProcessed: 1200,
-      rowCountTotal: 89419,
-      status: 'running',
-      updatedAt: '2030-01-01T00:00:10.000Z',
-      warningCount: 1,
-    }),
-  )
+test.each(['app_table_writes', 'revalidation'])(
+  'project transfer import get reads %s progress artifacts before the session repository',
+  async (phase) => {
+    const app = await getProjectTransferApp()
+    mkdirSync(getImportRootPath(commitProgressArtifactImportSessionId), {recursive: true})
+    writeFileSync(
+      getImportProgressPath(commitProgressArtifactImportSessionId),
+      JSON.stringify({
+        message: 'Writing imported project tables',
+        phase,
+        planRevision: 2,
+        rowCountProcessed: 1200,
+        rowCountTotal: 89419,
+        status: 'running',
+        updatedAt: '2030-01-01T00:00:10.000Z',
+        warningCount: 1,
+      }),
+    )
 
-  const response = await getRouteResponse(app, `/api/projects/import/${commitProgressArtifactImportSessionId}`, 'GET')
-  const body = (await response.json()) as {
-    data: {canCommit: boolean; progress: {message: string; phase: string}; state: string}
-    error: string | null
-  }
+    const response = await getRouteResponse(app, `/api/projects/import/${commitProgressArtifactImportSessionId}`, 'GET')
+    const body = (await response.json()) as {
+      data: {canCommit: boolean; progress: {message: string; phase: string}; state: string}
+      error: string | null
+    }
 
-  expect(response.status).toBe(200)
-  expect(body).toMatchObject({
-    data: {
-      canCommit: false,
-      progress: {message: 'Writing imported project tables', phase: 'app_table_writes'},
-      state: 'committing',
-    },
-    error: null,
-  })
-  expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
-})
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({
+      data: {canCommit: false, progress: {message: 'Writing imported project tables', phase}, state: 'committing'},
+      error: null,
+    })
+    expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
+  },
+)
 
 test('project transfer import get reads completed import artifacts before the session repository', async () => {
   const app = await getProjectTransferApp()

@@ -1504,34 +1504,49 @@ test('normalizes schema-vNext NDJSON payloads to legacy JSON artifacts for downs
   }
 })
 
-test('keeps full staged judgments while planning from compact fidelity digests', async () => {
-  const cwd = getRuntimeRoot()
+test.each(['legacy', 'screening_v1'] as const)(
+  'keeps %s staged judgments and compact plan identities consistent',
+  async (systemPromptVariant) => {
+    const cwd = getRuntimeRoot()
 
-  try {
-    const {layout, manifest, serializedPayloads, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd})
-    const result = await analyzeProjectTransferImportPackage({
-      availableDiskBytes: 10_000_000_000,
-      cwd,
-      layout,
-      planRevision: 10,
-      runner: getEmptyAnalyzeTargetRunner(),
-      uploadMetadata,
-      zipModule,
-    })
-    const stagedJudgments = await readFile(
-      join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.judgments),
-      'utf8',
-    )
-    const [judgmentPlan] = result.plan.targetPlan.judgmentPlan ?? []
+    try {
+      const {layout, manifest, serializedPayloads, uploadMetadata, zipModule} = await writeAnalyzeUpload({
+        cwd,
+        payloadOverride: (payloads) => {
+          return {
+            ...payloads,
+            judgments: payloads.judgments.map((judgment) => {
+              return {...judgment, systemPromptVariant}
+            }),
+          }
+        },
+      })
+      const result = await analyzeProjectTransferImportPackage({
+        availableDiskBytes: 10_000_000_000,
+        cwd,
+        layout,
+        planRevision: 10,
+        runner: getEmptyAnalyzeTargetRunner(),
+        uploadMetadata,
+        zipModule,
+      })
+      const stagedJudgments = await readFile(
+        join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.judgments),
+        'utf8',
+      )
+      const [judgmentPlan] = result.plan.targetPlan.judgmentPlan ?? []
 
-    expect(stagedJudgments).toBe(serializedPayloads.judgments)
-    expect(result.analysis.computedPackageFingerprint).toBe(manifest.packageFingerprint)
-    expect(result.analysis.stagedPackage?.packageFingerprintInputs.checksumSha256).toBe(manifest.packageFingerprint)
-    expect(judgmentPlan?.inputSignatureMatches).toBe(true)
-  } finally {
-    rmSync(cwd, {force: true, recursive: true})
-  }
-})
+      expect(stagedJudgments).toBe(serializedPayloads.judgments)
+      expect(result.analysis.computedPackageFingerprint).toBe(manifest.packageFingerprint)
+      expect(result.analysis.stagedPackage?.packageFingerprintInputs.checksumSha256).toBe(manifest.packageFingerprint)
+      expect(judgmentPlan?.inputSignatureMatches).toBe(true)
+      expect(judgmentPlan?.physicalKey).toContain(`|${systemPromptVariant}`)
+      expect(judgmentPlan?.reviewVisibleKey).toContain(`|${systemPromptVariant}`)
+    } finally {
+      rmSync(cwd, {force: true, recursive: true})
+    }
+  },
+)
 
 test('aborts checksum failures before plan artifact creation', async () => {
   const cwd = getRuntimeRoot()

@@ -489,6 +489,7 @@ const getFakeSessionRepository = (initialSession: ProjectTransferSessionRecord) 
               ownerToken: null,
               planRevision: session.planRevision + 1,
               planSummaryJson: params.planSummary,
+              progressJson: params.progress ?? session.progressJson,
               state: 'awaiting_resolution',
             }
           : session
@@ -1313,6 +1314,36 @@ test('project transfer commit reopens stale plans before claiming', async () => 
     expect(fake.calls.transition).toHaveLength(0)
     expect(fake.calls.updatePlan).toHaveLength(1)
     expect(writtenPlan.planRevision).toBe(2)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit stops running progress when revalidation reopens the plan', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const plan = getPlan({planRevision: 1})
+    const stalePlan = getPlan({planRevision: 2, summary: getReadySummary({blockerCount: 1})})
+    const layout = await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: plan.summary}))
+    let revalidationCount = 0
+    const result = await runCommit({
+      cwd,
+      repository: fake.repository,
+      revalidate: async () => {
+        revalidationCount += 1
+
+        return revalidationCount === 1
+          ? {changed: false, plan, ready: true}
+          : {changed: true, plan: stalePlan, ready: false}
+      },
+    })
+    const progress: unknown = JSON.parse(await readFile(join(cwd, layout.progressPath), 'utf8'))
+
+    expect(result.status).toBe('stale')
+    expect(progress).toMatchObject({phase: 'revalidation', planRevision: 2, status: 'completed'})
+    expect(fake.getSession()).toMatchObject({ownerToken: null, progressJson: progress, state: 'awaiting_resolution'})
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
