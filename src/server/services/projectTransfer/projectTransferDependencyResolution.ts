@@ -597,9 +597,22 @@ const isDependencyBlocker = (blocker: ProjectTransferPlanBlocker) => {
   return blocker.scope.startsWith(dependencyScopePrefix) || blocker.code.startsWith('dependency_')
 }
 
+export const projectTransferCommitRevalidationScope = 'commit.revalidation'
+
+const isCommitRevalidationBlocker = (blocker: ProjectTransferPlanBlocker) => {
+  return blocker.scope === projectTransferCommitRevalidationScope
+}
+
+// Re-resolving dependencies produces a fresh plan revision, and the commit re-checks it against the target
+// again, so a stale-plan verdict from an earlier commit attempt must not survive here or the session can
+// never commit again.
 const getBasePlanBlockers = (plan: ProjectTransferResolvedDependencyPlanArtifact) => {
   return (plan.blockers ?? []).filter((blocker) => {
-    return !isDependencyBlocker(blocker) && !isProjectTransferFidelityBlocker(blocker)
+    return (
+      !isDependencyBlocker(blocker)
+      && !isProjectTransferFidelityBlocker(blocker)
+      && !isCommitRevalidationBlocker(blocker)
+    )
   })
 }
 
@@ -886,13 +899,22 @@ const getResolvedProviderMappings = ({
       importedProvider,
       runner,
     })
+    // A plan may already point at a hidden imported snapshot that listProviderConnections does not return
+    // (singleton kinds such as codex collapse to the live connection). Keep that handoff whenever the snapshot
+    // still matches, so commit-time revalidation (autoResolve off) reaches the same plan as the dependency step.
+    const previouslyResolvedHiddenSnapshotId =
+      existingTargetId !== undefined
+      && existingTargetProviderConnection === null
+      && existingTargetId === reusableSnapshotProviderConnectionId
+        ? existingTargetId
+        : null
     const reusableExistingTargetId =
       existingTargetProviderConnection !== null
       && providerFingerprintsMatch(importedProvider, existingTargetProviderConnection)
         ? existingTargetId
         : existingTargetId && isImportedTargetProviderConnectionId(existingTargetId)
           ? (reusableSnapshotProviderConnectionId ?? equivalentTargetProviderConnection?.id ?? existingTargetId)
-          : null
+          : previouslyResolvedHiddenSnapshotId
     const targetProviderConnectionId = resolutionState.unresolvedProviderSourceIds.includes(sourceProviderConnectionId)
       ? null
       : reusableExistingTargetId
@@ -979,7 +1001,11 @@ const getResolvedModelMappings = ({
         ? existingTargetId
         : existingTargetId && isImportedTargetModelId(existingTargetId)
           ? (reusableSnapshotModelId ?? equivalentTargetModel?.id ?? existingTargetId)
-          : null
+          : existingTargetId !== undefined
+              && existingTargetModel === null
+              && existingTargetId === reusableSnapshotModelId
+            ? existingTargetId
+            : null
     const targetModelId = resolutionState.unresolvedModelSourceIds.includes(sourceModelId)
       ? null
       : reusableExistingTargetId
