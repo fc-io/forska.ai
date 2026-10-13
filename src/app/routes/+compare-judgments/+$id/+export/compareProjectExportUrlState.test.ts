@@ -76,7 +76,7 @@ test('compare export URL state normalizes legacy compare filters to canonical pa
   })
 })
 
-test('compare export URL state carries the compare page title search into the export request', () => {
+test('compare export URL state keeps the compare page title search for the back link but out of the export request', () => {
   const state = getInitialCompareProjectExportUrlState({rowFilter: 'fully-answered', search: '  Metformin   糖尿病 '})
 
   expect(state.searchText).toBe('Metformin 糖尿病')
@@ -87,9 +87,6 @@ test('compare export URL state carries the compare page title search into the ex
     conflictResolutionProvenanceFilter: [],
     differenceFilter: [],
     rowFilter: ['fully-answered'],
-    search: 'Metformin 糖尿病',
   })
-  expect(Object.keys(getCompareProjectExportRequestBody(getInitialCompareProjectExportUrlState({})))).not.toContain(
-    'search',
-  )
+  expect(Object.keys(getCompareProjectExportRequestBody(state))).not.toContain('search')
 })

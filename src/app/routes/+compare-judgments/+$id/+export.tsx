@@ -1,4 +1,4 @@
-import {useMutation, useQuery} from '@tanstack/solid-query'
+import {keepPreviousData, useMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, on, onMount, Show} from 'solid-js'
 
@@ -6,8 +6,10 @@ import {Button} from '../../../../components/ui/button'
 import {getIsSameMultiSelectOptionList} from '../../../../components/ui/multi-select.tsx'
 import {
   type ComparisonProjectJudgmentsColumn,
+  fetchComparisonProjectJudgmentsCount,
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectStats,
+  getComparisonProjectServingRefetchInterval,
 } from '../../../../services/comparisonProjectsService'
 import {
   type ComparisonProjectArticleCategory,
@@ -32,7 +34,6 @@ import {
   getComparisonProjectRowFilterLabel,
   getSelectableComparisonProjectRowFilters,
 } from '../../../../utils/comparisonProjectRowFilter.ts'
-import {getNormalizedComparisonProjectSearchText} from '../../../../utils/comparisonProjectSearchText.ts'
 import {downloadFileFromPost} from '../../../utils/downloadCsv.ts'
 import {CompareProjectExportFilters} from './+export/compareProjectExportFilters.tsx'
 import {CompareProjectExportMetadata} from './+export/compareProjectExportMetadata.tsx'
@@ -81,12 +82,11 @@ const CompareProjectExportPage = () => {
   const [conflictResolutionProvenanceFilters, setConflictResolutionProvenanceFilters] = createSignal<
     ComparisonProjectConflictResolutionProvenanceFilter[]
   >(initialUrlState.conflictResolutionProvenanceFilters)
-  const [searchText, setSearchText] = createSignal(initialUrlState.searchText)
-  const [searchInitialized, setSearchInitialized] = createSignal(false)
+  const [isMounted, setIsMounted] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
   onMount(() => {
-    setSearchInitialized(true)
+    setIsMounted(true)
   })
 
   const comparisonProjectQuery = useQuery(() => {
@@ -170,7 +170,7 @@ const CompareProjectExportPage = () => {
   const hasChineseArticles = createMemo(() => {
     return getHasComparisonProjectChineseArticles(comparisonProjectStatsQuery.data?.categoryBreakdowns)
   })
-  const urlState = createMemo(() => {
+  const urlState = () => {
     return {
       articleCategoryFilters: articleCategoryFilters(),
       conflictResolutionFilters: showConflictResolutionFilter() ? conflictResolutionFilters() : [],
@@ -178,9 +178,47 @@ const CompareProjectExportPage = () => {
       differenceFilters: differenceFilters(),
       pageLimit: pageLimit(),
       rowFilters: rowFilters(),
-      searchText: getNormalizedComparisonProjectSearchText(searchText()),
+      searchText: initialUrlState.searchText,
+    }
+  }
+  const judgmentsCountQuery = useQuery(() => {
+    const state = urlState()
+
+    return {
+      queryKey: [
+        'comparison-project-judgments-count',
+        comparisonProjectId(),
+        state.pageLimit,
+        state.rowFilters,
+        state.differenceFilters,
+        state.articleCategoryFilters,
+        state.conflictResolutionFilters,
+        state.conflictResolutionProvenanceFilters,
+        '',
+      ] as const,
+      queryFn: () => {
+        return fetchComparisonProjectJudgmentsCount(
+          comparisonProjectId(),
+          state.pageLimit,
+          state.rowFilters,
+          state.differenceFilters,
+          state.articleCategoryFilters,
+          state.conflictResolutionFilters,
+          '',
+          state.conflictResolutionProvenanceFilters,
+        )
+      },
+      enabled: isMounted() && comparisonProjectQuery.isSuccess,
+      placeholderData: keepPreviousData,
+      refetchInterval: getComparisonProjectServingRefetchInterval(comparisonProjectQuery.data?.servingStatus),
+      refetchOnWindowFocus: false,
     }
   })
+  const exportCount = () => {
+    return judgmentsCountQuery.isSuccess && !judgmentsCountQuery.isPlaceholderData
+      ? (judgmentsCountQuery.data?.totalCount ?? null)
+      : null
+  }
   createEffect(() => {
     if (!comparisonProjectStatsQuery.isSuccess || hasChineseArticles() || articleCategoryFilters().length === 0) {
       return
@@ -199,11 +237,10 @@ const CompareProjectExportPage = () => {
         conflictResolutionFilters,
         conflictResolutionProvenanceFilters,
         showConflictResolutionFilter,
-        searchText,
-        searchInitialized,
+        isMounted,
       ],
       () => {
-        if (!searchInitialized()) {
+        if (!isMounted()) {
           return
         }
 
@@ -336,6 +373,7 @@ const CompareProjectExportPage = () => {
                 differenceFilters={differenceFilters()}
                 differenceFilterDisabled={availableDifferenceFilters().length <= 1 && differenceFilters().length === 0}
                 differenceFilterOptions={differenceFilterOptions()}
+                exportCount={exportCount()}
                 isExportingCsv={csvExportMutation.isPending}
                 isExportingPdf={pdfExportMutation.isPending}
                 rowFilterOptions={rowFilterOptions()}
@@ -348,9 +386,7 @@ const CompareProjectExportPage = () => {
                 onExportCsv={handleExport}
                 onExportPdf={handlePdfExport}
                 onRowFiltersChange={updateRowFilters}
-                onSearchTextChange={setSearchText}
                 rowFilters={rowFilters()}
-                searchText={searchText()}
               />
               <CompareProjectResolutionExportSection
                 allowConflictResolution={comparisonProject().allowConflictResolution}
