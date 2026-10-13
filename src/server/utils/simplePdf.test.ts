@@ -164,3 +164,58 @@ test('simple PDF continues panel layout across page breaks without resetting to 
   expect(output).toContain('(After panel)')
   expect(output).toContain('Page 2')
 })
+
+const getTextFieldDictionary = (output: string, fieldName: string) => {
+  return new RegExp(`<< /Type /Annot /Subtype /Widget /FT /Tx /T \\(${fieldName.replace(/\./g, '\\.')}\\)[^\\n]*`).exec(
+    output,
+  )?.[0]
+}
+
+const getRectHeight = (dictionary: string | undefined) => {
+  const [, bottomY, , topY] =
+    /\/Rect \[(\d+\.\d+) (\d+\.\d+) (\d+\.\d+) (\d+\.\d+)\]/
+      .exec(dictionary ?? '')
+      ?.slice(1)
+      .map(Number) ?? []
+
+  return (topY ?? 0) - (bottomY ?? 0)
+}
+
+test('simple PDF writes multiline text fields with a line-based height and a maximum length', () => {
+  const pdf = new SimplePdfDocument()
+  pdf.addTextField({fieldName: 'single', value: 'One line'})
+  pdf.addTextField({fieldName: 'comment', lines: 4, maxLength: 4000, multiline: true, value: 'Note'})
+
+  const output = pdf.toBuffer().toString('latin1')
+  const single = getTextFieldDictionary(output, 'single')
+  const comment = getTextFieldDictionary(output, 'comment')
+
+  expect(single).not.toContain('/Ff')
+  expect(single).not.toContain('/MaxLen')
+  expect(getRectHeight(single)).toBe(18)
+  expect(comment).toContain('/Ff 4096')
+  expect(comment).toContain('/MaxLen 4000')
+  expect(getRectHeight(comment)).toBe(18 + 3 * 12.5)
+  expect(output).toContain(`48.00 ${(842 - 42 - 18 - 8 - 18 - 37.5).toFixed(2)} 499.00 ${(18 + 37.5).toFixed(2)} re`)
+  expect(output).toContain('/NeedAppearances true')
+})
+
+test('simple PDF keeps printable ASCII text field values literal and writes other values as UTF-16BE hex', () => {
+  const pdf = new SimplePdfDocument()
+  pdf.addTextField({fieldName: 'ascii', value: 'Plain (note) \\ 100%'})
+  pdf.addTextField({fieldName: 'empty', value: ''})
+  pdf.addTextField({fieldName: 'latin', multiline: true, value: 'Oklart åäö\nrad två'})
+  pdf.addTextField({fieldName: 'emoji', value: 'Ok \u{1F44D}'})
+
+  const output = pdf.toBuffer().toString('latin1')
+
+  expect(getTextFieldDictionary(output, 'ascii')).toContain(
+    '/V (Plain \\(note\\) \\\\ 100%) /DV (Plain \\(note\\) \\\\ 100%)',
+  )
+  expect(getTextFieldDictionary(output, 'empty')).toContain('/V () /DV ()')
+  expect(getTextFieldDictionary(output, 'latin')).toContain(
+    '/V <FEFF004F006B006C006100720074002000E500E400F6000A00720061006400200074007600E5> /DV <FEFF004F006B006C006100720074002000E500E400F6000A00720061006400200074007600E5>',
+  )
+  expect(getTextFieldDictionary(output, 'emoji')).toContain('/V <FEFF004F006B0020D83DDC4D>')
+  expect(output).not.toContain('(Oklart ?')
+})
