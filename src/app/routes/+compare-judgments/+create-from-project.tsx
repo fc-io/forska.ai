@@ -34,7 +34,8 @@ const conflictResolutionImportModeOptions: Array<{
   value: ComparisonProjectConflictResolutionImportMode
 }> = [
   {
-    description: 'Import only saved decisions for articles that are conflicts in the new compare project.',
+    description:
+      'Import only saved decisions for articles that are conflicts in the new compare project. Comments are copied for every matched article.',
     label: 'Only current conflicts',
     value: 'conflicting-only',
   },
