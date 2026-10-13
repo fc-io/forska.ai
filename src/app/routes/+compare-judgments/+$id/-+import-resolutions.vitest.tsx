@@ -415,6 +415,66 @@ describe('CompareProjectImportResolutionsPage', () => {
     }
   })
 
+  test('shows comment changes from a PDF import with the PDF reviewer', async () => {
+    mockState.analyzeComparisonProjectConflictResolutionPdfImport.mockResolvedValueOnce({
+      ...mockState.analyzePreview,
+      importableRows: [
+        {
+          commentChange: 'replace',
+          matchKey: 'external-1',
+          matchKind: 'article-id',
+          reason: 'importable',
+          selectedResolution: '',
+          sourceArticleRowId: 'article-1',
+          sourceComparisonProjectId: 'source-comparison-project-1',
+          sourceComparisonProjectName: 'Source comparison',
+          sourceExternalArticleId: 'external-1',
+          sourceResolutionId: 'source-comparison-project-1:article-1:pdf-comment',
+          sourceTitle: 'Article 1',
+          targetArticleId: 'article-1',
+          targetArticleIds: ['article-1'],
+          targetExternalArticleId: 'external-1',
+          targetExternalArticleIds: ['external-1'],
+          targetTitle: 'Article 1',
+        },
+      ],
+      source: {
+        ...mockState.analyzePreview.source,
+        importKind: 'pdf' as const,
+        pdfUndecidedMode: 'ignore' as const,
+        pdfUndecidedRowCount: 0,
+        reviewer: {displayName: 'Dr PDF', instanceId: null},
+      },
+      summary: {...mockState.analyzePreview.summary, commentsReplaced: 1, importable: 1},
+    } as never)
+
+    const {container, dispose} = await renderImportResolutionsPage()
+
+    try {
+      const input = container.querySelector('[data-testid="conflict-resolution-import-file"]')
+      const file = new File(['%PDF-1.7'], 'conflict-resolutions.pdf', {type: 'application/pdf'})
+
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error('Import file input not found')
+      }
+
+      Object.defineProperty(input, 'files', {configurable: true, value: getFileList(file)})
+      input.dispatchEvent(new Event('change', {bubbles: true}))
+
+      await waitForCondition(() => {
+        expect(container.querySelector('[data-comment-change="replace"]')?.textContent).toBe('Replaces comment')
+        expect(container.textContent).toContain('Comment only')
+        expect(container.textContent).toContain('Comments replaced')
+        expect(container.textContent).toContain('Reviewer: Dr PDF')
+        expect(container.textContent).toContain('Comments are only added or replaced by different text, never removed.')
+        expect(container.textContent).not.toContain('Undecided PDF selections')
+      })
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('sends PDF exports to the server-side PDF analyzer', async () => {
     const {container, dispose} = await renderImportResolutionsPage()
 
@@ -459,7 +519,9 @@ describe('CompareProjectImportResolutionsPage', () => {
       await waitForCondition(() => {
         expect(container.textContent).toContain('Undecided PDF selections')
         expect(container.textContent).toContain('Ignore undecided')
+        expect(container.textContent).toContain('Changed comments on those articles are still imported.')
         expect(container.textContent).toContain('Set to not set')
+        expect(container.textContent).toContain('Their comments are kept.')
       })
 
       getInputFromLabel(container, 'Set to not set').click()
