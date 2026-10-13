@@ -3,6 +3,7 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {CollapsibleSelectionSection} from '../../../components/main/projects/collapsibleSelectionSection.tsx'
 import {ImportRouteGroups} from '../../../components/main/projects/importRouteGroups.tsx'
 import {RuntimeModelNotice} from '../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../components/ui/button'
@@ -11,6 +12,7 @@ import {ensureSelectableModelId} from '../../../services/ensureSelectableModelId
 import type {fetchProjects} from '../../../services/projectsService.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../utils/getSglangRuntimeModelNotice.ts'
+import {createListMemo} from '../../utils/createListMemo.ts'
 import {fetchProviderConnections} from '../+admin/+models/providerConnectionsClient.ts'
 
 type PromptItem = {id: string; content: string; promptHeading: string; type: string}
@@ -22,6 +24,7 @@ type ExistingPrompt = {
   type: string | null
   createdAt: string | null
   enabled: boolean
+  linkedToCovidenceProject: boolean
 }
 
 type ExistingPromptsResponse = {
@@ -31,6 +34,7 @@ type ExistingPromptsResponse = {
     promptHeading: string | null
     type: string | null
     createdAt: Date | string | null
+    linkedToCovidenceProject?: boolean
   }>
 }
 
@@ -274,19 +278,42 @@ const CreateProject = () => {
             type: p.type,
             createdAt: p.createdAt ? String(p.createdAt) : null,
             enabled: false,
+            linkedToCovidenceProject: p.linkedToCovidenceProject === true,
           }
         }),
       )
     }
   })
 
-  const sortedExistingPrompts = createMemo(() => {
+  const sortedExistingPrompts = createListMemo<ExistingPrompt>(() => {
     return existingPrompts.slice().sort((a, b) => {
       const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0
       const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0
       return dateB - dateA
     })
   })
+
+  // Stable section objects so toggling Include does not recreate the <details> and lose its open state.
+  const existingPromptSections = [
+    {
+      key: 'regular',
+      label: 'Existing prompts',
+      prompts: createListMemo<ExistingPrompt>(() => {
+        return sortedExistingPrompts().filter((p) => {
+          return !p.linkedToCovidenceProject
+        })
+      }),
+    },
+    {
+      key: 'covidence',
+      label: 'Covidence project prompts',
+      prompts: createListMemo<ExistingPrompt>(() => {
+        return sortedExistingPrompts().filter((p) => {
+          return p.linkedToCovidenceProject
+        })
+      }),
+    },
+  ]
 
   const toggleExistingPromptEnabled = (promptId: string) => {
     const idx = existingPrompts.findIndex((p) => {
@@ -564,7 +591,6 @@ const CreateProject = () => {
             </div>
 
             <div>
-              <p class="block text-sm font-medium mb-2">Import Routes</p>
               <Show when={importRoutesQuery.isLoading}>
                 <p class="text-sm text-muted-foreground">Loading import routes...</p>
               </Show>
@@ -738,92 +764,104 @@ const CreateProject = () => {
             </div>
 
             <Show when={sortedExistingPrompts().length > 0}>
-              <div>
-                <div class="flex items-center justify-between mb-2">
-                  <label class="block text-sm font-medium">Existing Prompts</label>
-                  <span class="text-xs text-muted-foreground">
-                    {
-                      sortedExistingPrompts().filter((p) => {
+              <div class="space-y-2">
+                <For each={existingPromptSections}>
+                  {(section) => {
+                    const selectedCount = () => {
+                      return section.prompts().filter((p) => {
                         return p.enabled
                       }).length
-                    }{' '}
-                    of {sortedExistingPrompts().length} selected
-                  </span>
-                </div>
-                <div class="space-y-3">
-                  <For each={sortedExistingPrompts()}>
-                    {(promptItem) => {
-                      return (
-                        <details
-                          class="group border rounded-lg bg-background"
-                          classList={{'opacity-40': !promptItem.enabled}}
-                          open={promptItem.enabled}
-                        >
-                          <summary class="cursor-pointer list-none flex justify-between items-start gap-3 p-4">
-                            <div class="flex items-center gap-2 flex-wrap">
-                              <Show when={promptItem.promptHeading}>
-                                <span class="font-medium">{promptItem.promptHeading}</span>
-                              </Show>
-                              <Show when={promptItem.type}>
-                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                  {promptItem.type}
-                                </span>
-                              </Show>
-                              <Show when={promptItem.createdAt}>
-                                <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
-                                  Created: {new Date(promptItem.createdAt as string).toLocaleDateString()}
-                                </span>
-                              </Show>
-                              <Show when={promptItem.enabled}>
-                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                  Selected
-                                </span>
-                              </Show>
-                            </div>
-                            <div class="flex items-center gap-3 shrink-0">
-                              <label class="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  class="mt-0.5"
-                                  checked={promptItem.enabled}
-                                  onChange={() => {
-                                    return toggleExistingPromptEnabled(promptItem.id)
-                                  }}
-                                />
-                                <span class="text-sm">Include</span>
-                              </label>
-                              <span class="text-xs text-muted-foreground group-open:hidden">Expand</span>
-                              <span class="text-xs text-muted-foreground hidden group-open:inline">Collapse</span>
-                            </div>
-                          </summary>
+                    }
 
-                          <div class="px-4 pb-4 space-y-3">
-                            <Show when={promptItem.promptHeading}>
-                              <div>
-                                <label class="text-sm font-medium text-muted-foreground block mb-1">Heading</label>
-                                <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
-                                  {promptItem.promptHeading}
-                                </div>
-                              </div>
-                            </Show>
-                            <Show when={promptItem.type}>
-                              <div>
-                                <label class="text-sm font-medium text-muted-foreground block mb-1">Type</label>
-                                <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">{promptItem.type}</div>
-                              </div>
-                            </Show>
-                            <div>
-                              <label class="text-sm font-medium text-muted-foreground block mb-1">Prompt Text</label>
-                              <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
-                                {promptItem.originalText}
-                              </div>
-                            </div>
+                    return (
+                      <Show when={section.prompts().length > 0}>
+                        <CollapsibleSelectionSection
+                          label={section.label}
+                          selectedCount={selectedCount()}
+                          totalCount={section.prompts().length}
+                        >
+                          <div class="space-y-3">
+                            <For each={section.prompts()}>
+                              {(promptItem) => {
+                                return (
+                                  <div
+                                    class="border rounded-lg p-4 bg-background"
+                                    classList={{'opacity-40': !promptItem.enabled}}
+                                  >
+                                    <div class="flex justify-between items-start gap-3 mb-3">
+                                      <div class="flex items-center gap-2 flex-wrap">
+                                        <Show when={promptItem.promptHeading}>
+                                          <span class="font-medium">{promptItem.promptHeading}</span>
+                                        </Show>
+                                        <Show when={promptItem.type}>
+                                          <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                            {promptItem.type}
+                                          </span>
+                                        </Show>
+                                        <Show when={promptItem.createdAt}>
+                                          <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
+                                            Created: {new Date(promptItem.createdAt as string).toLocaleDateString()}
+                                          </span>
+                                        </Show>
+                                        <Show when={promptItem.enabled}>
+                                          <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                            Selected
+                                          </span>
+                                        </Show>
+                                      </div>
+                                      <label class="flex items-center gap-2 shrink-0">
+                                        <input
+                                          type="checkbox"
+                                          class="mt-0.5"
+                                          checked={promptItem.enabled}
+                                          onChange={() => {
+                                            return toggleExistingPromptEnabled(promptItem.id)
+                                          }}
+                                        />
+                                        <span class="text-sm">Include</span>
+                                      </label>
+                                    </div>
+
+                                    <div class="space-y-3">
+                                      <Show when={promptItem.promptHeading}>
+                                        <div>
+                                          <label class="text-sm font-medium text-muted-foreground block mb-1">
+                                            Heading
+                                          </label>
+                                          <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
+                                            {promptItem.promptHeading}
+                                          </div>
+                                        </div>
+                                      </Show>
+                                      <Show when={promptItem.type}>
+                                        <div>
+                                          <label class="text-sm font-medium text-muted-foreground block mb-1">
+                                            Type
+                                          </label>
+                                          <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
+                                            {promptItem.type}
+                                          </div>
+                                        </div>
+                                      </Show>
+                                      <div>
+                                        <label class="text-sm font-medium text-muted-foreground block mb-1">
+                                          Prompt Text
+                                        </label>
+                                        <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
+                                          {promptItem.originalText}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              }}
+                            </For>
                           </div>
-                        </details>
-                      )
-                    }}
-                  </For>
-                </div>
+                        </CollapsibleSelectionSection>
+                      </Show>
+                    )
+                  }}
+                </For>
               </div>
             </Show>
 

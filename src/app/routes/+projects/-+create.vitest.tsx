@@ -21,6 +21,7 @@ type MockImportRoute = {name: string | null; route: string}
 type MockPrompt = {
   createdAt: string | null
   id: string
+  linkedToCovidenceProject?: boolean
   originalText: string
   promptHeading: string | null
   type: string | null
@@ -315,7 +316,7 @@ describe('project create route content flags', () => {
     }
   })
 
-  test('groups import routes under collapsed headings and submits the selected route', async () => {
+  test('groups import routes under headings, data source group open, and submits the selected route', async () => {
     mockState.importRoutes = [
       {name: '/api/datasources/import/pubmed', route: '/api/datasources/import/pubmed'},
       {name: 'cov 6 | 3', route: 'covidence:route-1'},
@@ -333,7 +334,8 @@ describe('project create route content flags', () => {
       const covidenceCheckbox = covidenceGroup?.querySelector<HTMLInputElement>('input[type="checkbox"]')
 
       expect(container.textContent).not.toContain('Other imports')
-      expect(dataSourceGroup?.hasAttribute('open')).toBe(false)
+      expect(container.textContent).not.toContain('Import Routes')
+      expect(dataSourceGroup?.hasAttribute('open')).toBe(true)
       expect(covidenceGroup?.hasAttribute('open')).toBe(false)
       expect(fileGroup?.hasAttribute('open')).toBe(false)
       expect(dataSourceGroup?.querySelector('summary')?.textContent).toContain('0 of 1 selected')
@@ -363,7 +365,7 @@ describe('project create route content flags', () => {
     }
   }, 15_000)
 
-  test('keeps existing prompts collapsed until they are included', async () => {
+  test('splits existing prompts into collapsed sections, Covidence project prompts apart', async () => {
     mockState.prompts = [
       {
         createdAt: '2026-10-01T00:00:00.000Z',
@@ -379,33 +381,49 @@ describe('project create route content flags', () => {
         promptHeading: 'Second heading',
         type: null,
       },
+      {
+        createdAt: '2026-08-01T00:00:00.000Z',
+        id: 'prompt-3',
+        linkedToCovidenceProject: true,
+        originalText: 'Third prompt text',
+        promptHeading: 'Third heading',
+        type: null,
+      },
     ]
     const browserFailures = createBrowserFailureAssertions(window)
     const {container, dispose, queryClient} = await mountCreateRoute()
 
     try {
-      const firstPrompt = getDetailsBySummaryText(container, 'First heading')
-      const secondPrompt = getDetailsBySummaryText(container, 'Second heading')
-      const includeCheckbox = firstPrompt?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+      const regularSection = getDetailsBySummaryText(container, 'Existing prompts')
+      const covidenceSection = getDetailsBySummaryText(container, 'Covidence project prompts')
+      const regularSummary = regularSection?.querySelector('summary')
+      const includeCheckbox = regularSection?.querySelector<HTMLInputElement>('input[type="checkbox"]')
 
-      expect(firstPrompt?.hasAttribute('open')).toBe(false)
-      expect(secondPrompt?.hasAttribute('open')).toBe(false)
-      expect(firstPrompt?.textContent).toContain('First prompt text')
-      expect(container.textContent).toContain('0 of 2 selected')
+      expect(container.querySelectorAll('details')).toHaveLength(2)
+      expect(regularSection?.hasAttribute('open')).toBe(false)
+      expect(covidenceSection?.hasAttribute('open')).toBe(false)
+      expect(regularSummary?.textContent).toContain('0 of 2 selected')
+      expect(covidenceSection?.querySelector('summary')?.textContent).toContain('0 of 1 selected')
+      expect(regularSection?.textContent).toContain('First prompt text')
+      expect(regularSection?.textContent).toContain('Second heading')
+      expect(regularSection?.textContent).not.toContain('Third heading')
+      expect(covidenceSection?.textContent).toContain('Third prompt text')
 
       includeCheckbox?.click()
       await waitForUpdates()
 
       expect(includeCheckbox?.checked).toBe(true)
-      expect(firstPrompt?.hasAttribute('open')).toBe(true)
-      expect(secondPrompt?.hasAttribute('open')).toBe(false)
-      expect(firstPrompt?.querySelector('summary')?.textContent).toContain('Selected')
-      expect(container.textContent).toContain('1 of 2 selected')
+      expect(regularSummary?.textContent).toContain('1 of 2 selected')
+      expect(regularSection?.textContent).toContain('Selected')
+      expect(regularSection?.hasAttribute('open')).toBe(false)
+      expect(covidenceSection?.hasAttribute('open')).toBe(false)
 
-      includeCheckbox?.click()
-      await waitForUpdates()
+      await submitCreateForm(container)
 
-      expect(firstPrompt?.hasAttribute('open')).toBe(false)
+      const payload = mockState.createPayloads[0] as Record<string, unknown>
+
+      expect(mockState.createPayloads).toHaveLength(1)
+      expect(payload.existingPromptIds).toEqual([{order: 0, originalId: 'prompt-1'}])
       browserFailures.assertNoFailures()
     } finally {
       browserFailures.dispose()

@@ -612,3 +612,43 @@ test('deleting invalid judgments records a V4 deleted-judgment delta', async () 
   })
   expect(Number(dirtyArticleCount?.count ?? 0)).toBe(0)
 })
+
+test('listing prompts flags prompts linked to Covidence projects', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('App not initialized')
+  }
+
+  const connectionId = 'covidence-flag-connection'
+  const modelId = 'covidence-flag-model'
+  const covidenceProjectId = 'covidence-flag-project'
+  const covidencePromptId = 'covidence-flag-prompt'
+  const plainPromptId = 'covidence-flag-plain-prompt'
+  const importRouteId = 'covidence-flag-import-route'
+
+  await insertPromptFixture({promptId: covidencePromptId})
+  await insertPromptFixture({promptId: plainPromptId})
+  await insertProjectFixture({connectionId, modelId, projectId: covidenceProjectId})
+  await insertProjectPromptFixture({projectId: covidenceProjectId, promptId: covidencePromptId})
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name)
+    VALUES ('${importRouteId}', 'covidence:${importRouteId}', 'cov flag')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('${importRouteId}-link', '${covidenceProjectId}', '${importRouteId}')
+  `)
+
+  const response = await app.handle(new Request('http://localhost/api/prompts'))
+
+  expect(response.status).toBe(200)
+
+  const body = (await response.json()) as {data: Array<{id: string; linkedToCovidenceProject: boolean}>}
+  const rowsById = new Map(
+    body.data.map((row) => {
+      return [row.id, row] as const
+    }),
+  )
+
+  expect(rowsById.get(covidencePromptId)?.linkedToCovidenceProject).toBe(true)
+  expect(rowsById.get(plainPromptId)?.linkedToCovidenceProject).toBe(false)
+})
