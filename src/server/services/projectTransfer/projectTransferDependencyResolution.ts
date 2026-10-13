@@ -53,7 +53,7 @@ import {
   type ProjectTransferPayloadByKey,
   type ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
-import {projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
+import {projectTransferPayloadFormatByKey, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 
 type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | undefined>}
@@ -360,7 +360,9 @@ const readOperationTablePayload = async ({
     return getJsonValue(row.payloadJson)
   })
 
-  return key === 'project' ? values[0] : values
+  // 'json' payload files (project, models, providerConnections, prompts, ...) stage as a single row holding
+  // the whole document, while 'ndjson' files stage one row per record.
+  return projectTransferPayloadFormatByKey[key] === 'json' ? values[0] : values
 }
 
 const readDependencyPayloadsFromOperationTables = async ({
@@ -380,6 +382,8 @@ const readDependencyPayloadsFromOperationTables = async ({
     return payload === undefined ? payloads : {...payloads, [key]: payload}
   }, {})
 }
+
+export const readProjectTransferDependencyPayloadsFromOperationTables = readDependencyPayloadsFromOperationTables
 
 const writeJsonArtifact = async (input: RuntimePathOptions & {pathValue: string; value: unknown}) => {
   const resolvedPath = resolveProjectTransferTempWritablePath(input)

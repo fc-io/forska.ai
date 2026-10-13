@@ -8,13 +8,14 @@ import {expect, test} from 'bun:test'
 import {resetDuckdbServiceForTests} from '../../utils/duckdbService.ts'
 import {resetServerRuntimeRoleForTests} from '../../utils/serverRuntimeRole.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
+import {readProjectTransferDependencyPayloadsFromOperationTables} from './projectTransferDependencyResolution.ts'
 import {
   getProjectTransferOperationTableNames,
   type ProjectTransferOperationTableRunner,
   withProjectTransferOperationTables,
 } from './projectTransferOperationTables.ts'
 import {getProjectTransferPayloadFixtureMap, serializeProjectTransferPayload} from './projectTransferPayloadSchemas.ts'
-import {projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
+import {projectTransferPayloadKeys, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import {getProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {getProjectTransferImportStagingLayout} from './projectTransferStaging.ts'
 import {projectTransferCommitTransactionWorkloadContext} from './projectTransferWorkloadContext.ts'
@@ -243,4 +244,65 @@ test('operation table cleanup failure cannot replace the original work failure',
 
   expect(workError).toBe('expected original work failure')
   expect(cleanupAttempts).toBe(2)
+})
+
+test('dependency payloads read back from operation tables keep json documents whole and ndjson rows separate', async () => {
+  const cwd = getRuntimeRoot()
+  const duckdbPath = join(cwd, 'operation-tables.duckdb')
+  process.env.API_SERVER_PORT = '3001'
+  process.env.DUCKDB_PATH = duckdbPath
+  process.env.DUCKDB_TEMP_DIRECTORY = join(cwd, 'duckdb-temp')
+  process.env.SERVER_ROLE = 'dev-single'
+  process.env.VITE_PORT = '3000'
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
+  const database = getAppDatabaseService()
+
+  try {
+    const layout = getProjectTransferImportTempLayout('operation-table-dependency-payloads-session')
+    const payloads = getProjectTransferPayloadFixtureMap()
+
+    await Promise.all(
+      projectTransferPayloadKeys.map(async (key) => {
+        const path = join(cwd, layout.extractedPath, projectTransferPayloadPathByKey[key])
+        await mkdir(dirname(path), {recursive: true})
+        await globalThis.Bun.write(path, serializeProjectTransferPayload(key, payloads[key]))
+      }),
+    )
+
+    const staged = await withProjectTransferOperationTables({
+      cwd,
+      layout,
+      runner: database,
+      work: ({runner, tables}) => {
+        return readProjectTransferDependencyPayloadsFromOperationTables({runner, tables})
+      },
+    })
+    const getIds = (records: unknown, field: string) => {
+      return Array.isArray(records)
+        ? records.map((record) => {
+            return (record as Record<string, unknown>)[field]
+          })
+        : records
+    }
+
+    expect(getIds(staged.providerConnections, 'sourceProviderConnectionId')).toEqual(
+      getIds(payloads.providerConnections, 'sourceProviderConnectionId'),
+    )
+    expect(getIds(staged.models, 'sourceModelId')).toEqual(getIds(payloads.models, 'sourceModelId'))
+    expect(getIds(staged.prompts, 'sourcePromptId')).toEqual(getIds(payloads.prompts, 'sourcePromptId'))
+    expect(Array.isArray(staged.project)).toBe(false)
+    expect((staged.project as Record<string, unknown> | undefined)?.sourceProjectId).toBe(
+      payloads.project.sourceProjectId,
+    )
+    expect(getIds(staged.judgments, 'sourceJudgmentId')).toEqual(getIds(payloads.judgments, 'sourceJudgmentId'))
+    expect(getIds(staged.articles, 'sourceArticleId')).toEqual(getIds(payloads.articles, 'sourceArticleId'))
+  } finally {
+    await database.close().catch(() => {
+      return undefined
+    })
+    resetDuckdbServiceForTests()
+    resetServerRuntimeRoleForTests()
+    rmSync(cwd, {force: true, recursive: true})
+  }
 })
