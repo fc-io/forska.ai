@@ -51,6 +51,12 @@ const mockState = vi.hoisted(() => {
     },
     editPatchResponse: null as {data?: unknown; error?: unknown; status?: number} | null,
     editPayloads: [] as unknown[],
+    fetchGates: {
+      importRoutes: null as Promise<void> | null,
+      models: null as Promise<void> | null,
+      projectDetails: null as Promise<void> | null,
+      providerConnections: null as Promise<void> | null,
+    },
     importRoutes: [] as Array<{name: string | null; route: string}>,
     models: [
       {
@@ -286,12 +292,18 @@ vi.mock('../../../../services/apiClient.ts', () => {
         'import-routes': {
           get: async () => {
             mockState.apiCallCounts.importRoutes += 1
+            if (mockState.fetchGates.importRoutes) {
+              await mockState.fetchGates.importRoutes
+            }
             return {data: {data: mockState.importRoutes}}
           },
         },
         'provider-connections': {
           get: async () => {
             mockState.apiCallCounts.providerConnections += 1
+            if (mockState.fetchGates.providerConnections) {
+              await mockState.fetchGates.providerConnections
+            }
             return {data: {data: mockState.providerConnectionsPayload}}
           },
         },
@@ -319,6 +331,9 @@ vi.mock('../../../../services/apiClient.ts', () => {
           },
           get: async () => {
             mockState.apiCallCounts.models += 1
+            if (mockState.fetchGates.models) {
+              await mockState.fetchGates.models
+            }
             return {data: {data: mockState.models}}
           },
         },
@@ -340,6 +355,9 @@ vi.mock('../../../../services/apiClient.ts', () => {
             },
             get: async () => {
               mockState.apiCallCounts.projectDetails += 1
+              if (mockState.fetchGates.projectDetails) {
+                await mockState.fetchGates.projectDetails
+              }
               return {data: {data: getProjectDetails(id)}}
             },
             edit: {
@@ -371,6 +389,7 @@ describe('project edit route regressions', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
     resetApiCallCounts()
+    mockState.fetchGates = {importRoutes: null, models: null, projectDetails: null, providerConnections: null}
     mockState.importRoutes = []
     mockState.models = [
       {
@@ -779,6 +798,109 @@ describe('project edit route regressions', () => {
       expect(text).toContain('Kept shared LLM judgments: 3')
       expect(text).toContain('Kept comparison judgments: 4')
     } finally {
+      queryClient.clear()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('project edit renders when the project query lands while sibling queries still hold the navigation transition', async () => {
+    const projectId = 'project-transition-test'
+    const details = buildProjectDetails(projectId)
+    mockState.projectDetailsById[projectId] = {
+      ...details,
+      prompts: [
+        ...details.prompts,
+        {
+          archived: false,
+          createdAt: null,
+          enabled: false,
+          id: 'prompt-importable',
+          order: 0,
+          originalText: 'Importable prompt body',
+          originProjectId: null,
+          linkedToProject: false,
+          promptArchived: false,
+          promptHeading: 'Importable heading',
+          type: "'yes' | 'no' | 'maybe'",
+        },
+      ],
+    }
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: true})
+    const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
+    const browserFailures = createBrowserFailureAssertions(window)
+
+    queryClient.clear()
+    seedCovidenceImportQueries(queryClient)
+
+    const {container, dispose, router} = await mountRouterAtPath({
+      path: '/admin/datasources/covidence-import',
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      expect(container.textContent ?? '').toContain('Covidence multi-file import')
+      resetApiCallCounts()
+
+      // Coming from the project page the access query is already cached, so the project query starts inside the
+      // navigation transition. Hold the models and import-routes fetches so the project query lands while they
+      // still suspend that transition; that ordering renders the form outside the transition.
+      queryClient.setQueryData(['project', projectId, 'access'], getProjectAccess(projectId))
+      let releaseImportRoutes = (): void => {}
+      let releaseModels = (): void => {}
+      let releaseProjectDetails = (): void => {}
+      let releaseProviderConnections = (): void => {}
+      mockState.fetchGates = {
+        importRoutes: new Promise<void>((resolve) => {
+          releaseImportRoutes = resolve
+        }),
+        models: new Promise<void>((resolve) => {
+          releaseModels = resolve
+        }),
+        projectDetails: new Promise<void>((resolve) => {
+          releaseProjectDetails = resolve
+        }),
+        providerConnections: new Promise<void>((resolve) => {
+          releaseProviderConnections = resolve
+        }),
+      }
+
+      await router.navigate({params: {id: projectId} as never, to: '/projects/$id/edit'})
+      await waitForUpdates()
+      await waitForUpdates()
+
+      releaseProjectDetails()
+      await waitForUpdates()
+      await waitForUpdates()
+
+      expect(mockState.apiCallCounts.projectDetails).toBe(1)
+      expect(mockState.apiCallCounts.models).toBe(1)
+      expect(container.querySelector(`[data-testid="${routeErrorSurfaceTestId}"]`)).toBeNull()
+
+      releaseImportRoutes()
+      releaseModels()
+      releaseProviderConnections()
+      await waitForUpdates()
+      await waitForUpdates()
+
+      const text = container.textContent ?? ''
+      const projectNameInput = container.querySelector<HTMLInputElement>('#project-name')
+      const modelSelect = container.querySelector<HTMLSelectElement>('#model')
+
+      expect(container.querySelector(`[data-testid="${routeErrorSurfaceTestId}"]`)).toBeNull()
+      expect(projectNameInput?.value).toBe(`Project ${projectId}`)
+      expect(text).toContain('Importable prompts')
+      expect(text).toContain('Importable heading')
+      expect(modelSelect?.disabled).toBe(false)
+      browserFailures.assertNoFailures()
+    } finally {
+      browserFailures.dispose()
       queryClient.clear()
       providerQueryClient.clear()
       dispose()

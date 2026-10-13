@@ -14,6 +14,7 @@ import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
 import {isImportedFileRoute} from '../../../../utils/importRouteUtils.ts'
 import {appQueryClient} from '../../../queryClient'
+import {createListMemo} from '../../../utils/createListMemo.ts'
 import {fetchProviderConnections} from '../../+admin/+models/providerConnectionsClient.ts'
 import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
@@ -517,25 +518,28 @@ const EditProject = (): JSX.Element => {
     return canEditJudgmentConfig() ? editableFieldStateClass : lockedFieldStateClass
   })
 
-  const sortedOwnedPrompts = createMemo(() => {
+  // List memos: when the project query lands while another query still holds the navigation transition open, the
+  // form renders outside the transition and reads these memos' committed values. `createListMemo` keeps those reads
+  // arrays instead of `undefined`.
+  const sortedOwnedPrompts = createListMemo<PromptItem>(() => {
     return ownedPrompts.slice().sort((a, b) => {
       return a.order - b.order
     })
   })
 
-  const visibleOwnedPrompts = createMemo(() => {
+  const visibleOwnedPrompts = createListMemo<PromptItem>(() => {
     // Show all owned prompts (already linked to project) regardless of promptArchived
     // They're already part of the project, so user should be able to see and manage them
     return sortedOwnedPrompts()
   })
 
-  const sortedImportedPrompts = createMemo(() => {
+  const sortedImportedPrompts = createListMemo<PromptItem>(() => {
     return importedPrompts.slice().sort((a, b) => {
       return a.order - b.order
     })
   })
 
-  const visibleImportedPrompts = createMemo(() => {
+  const visibleImportedPrompts = createListMemo<PromptItem>(() => {
     // Show imported prompts if they're enabled OR if the underlying prompt is not archived
     // This ensures enabled prompts remain visible even after the base prompt is archived
     return sortedImportedPrompts().filter((prompt) => {
