@@ -89,12 +89,14 @@ const pdfUndecidedModeOptions: Array<{
   value: ComparisonProjectConflictResolutionPdfUndecidedMode
 }> = [
   {
-    description: 'Leave articles marked Undecided out of the import and keep any existing target resolution.',
+    description:
+      'Leave articles marked Undecided out of the import and keep any existing target resolution. Changed comments on those articles are still imported.',
     label: 'Ignore undecided',
     value: 'ignore',
   },
   {
-    description: 'Treat Undecided as a request to clear the target conflict resolution for those articles.',
+    description:
+      'Treat Undecided as a request to clear the target conflict resolution for those articles. Their comments are kept.',
     label: 'Set to not set',
     value: 'clear',
   },
