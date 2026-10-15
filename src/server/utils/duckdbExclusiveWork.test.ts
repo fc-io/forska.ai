@@ -6,6 +6,7 @@ import {
   getDuckdbExclusiveWorkAdmissionError,
   hasActiveDuckdbExclusiveWork,
   isDuckdbExclusiveWorkAdmissionError,
+  isDuckdbExclusiveWorkLeaseContext,
   prepareDuckdbExclusiveWork,
   resetDuckdbExclusiveWorkForTests,
   runWithDuckdbExclusiveWork,
@@ -316,7 +317,104 @@ test('prepareDuckdbExclusiveWork times out before heavy work can start', async (
   expect(error?.message).toContain(
     'Timed out after 0ms waiting for DuckDB exclusive project_transfer_import commit work',
   )
+  expect(error?.message).toContain(
+    'blocked by 1 queued or running foreground DuckDB work item(s); in-flight reviewServing.projector.worker',
+  )
   expect(operationStarted).toBe(false)
+  expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+})
+
+test('lease run marks only its own async work as the exclusive-work lease context', async () => {
+  let releaseOperation = () => {}
+  const operationGate = new Promise<void>((resolve) => {
+    releaseOperation = resolve
+  })
+  const leaseContexts: boolean[] = []
+  const lease = await prepareDuckdbExclusiveWork(getInput(), {
+    dependencies: {
+      getReadinessSnapshot: () => {
+        return readyReadiness
+      },
+      sleep: async () => {},
+    },
+  })
+  const running = lease.run(async () => {
+    leaseContexts.push(isDuckdbExclusiveWorkLeaseContext())
+    await operationGate
+    leaseContexts.push(isDuckdbExclusiveWorkLeaseContext())
+  })
+  const outsideWhileRunning = isDuckdbExclusiveWorkLeaseContext()
+
+  releaseOperation()
+  await running
+
+  expect(leaseContexts).toEqual([true, true])
+  expect(outsideWhileRunning).toBe(false)
+  expect(isDuckdbExclusiveWorkLeaseContext()).toBe(false)
+  expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+})
+
+test('lease reclaimMemory collects garbage and keeps the runtime when RSS is back under the cap', async () => {
+  const events: string[] = []
+  const lease = await prepareDuckdbExclusiveWork(getInput(), {
+    dependencies: {
+      forceGarbageCollection: () => {
+        events.push('gc')
+      },
+      getReadinessSnapshot: () => {
+        events.push('readiness')
+        return {...readyReadiness, maxRssBytes: 100, rssBytes: 40}
+      },
+      recycleDuckdbRuntime: () => {
+        events.push('recycle')
+      },
+      sleep: async () => {},
+    },
+  })
+  events.length = 0
+
+  const reclaim = await lease.run(() => {
+    return lease.reclaimMemory()
+  })
+
+  expect(events).toEqual(['gc', 'readiness', 'gc'])
+  expect(reclaim).toMatchObject({readiness: {rssBytes: 40, rssReady: true}, recycled: false})
+  expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+})
+
+test('lease reclaimMemory recycles DuckDB once when RSS stays at the cap after garbage collection', async () => {
+  const events: string[] = []
+  let rssAtCap = false
+  const lease = await prepareDuckdbExclusiveWork(getInput(), {
+    dependencies: {
+      forceGarbageCollection: () => {
+        events.push('gc')
+      },
+      getReadinessSnapshot: () => {
+        events.push('readiness')
+        return rssAtCap
+          ? {...readyReadiness, maxRssBytes: 100, recycleRecommended: true, rssBytes: 95, rssReady: false}
+          : readyReadiness
+      },
+      recycleDuckdbRuntime: () => {
+        rssAtCap = false
+        events.push(`recycle:${getActiveDuckdbExclusiveWorkSnapshot()?.admissionState ?? 'missing'}`)
+      },
+      sleep: async () => {},
+    },
+  })
+  rssAtCap = true
+  events.length = 0
+
+  const result = await lease.run(async () => {
+    const reclaim = await lease.reclaimMemory()
+
+    return {reclaim, snapshot: lease.snapshot()}
+  })
+
+  expect(events).toEqual(['gc', 'readiness', 'recycle:recycling', 'gc', 'gc'])
+  expect(result.reclaim).toMatchObject({readiness: {rssBytes: 95, rssReady: false}, recycled: true})
+  expect(result.snapshot).toMatchObject({admissionState: 'running', message: 'DuckDB exclusive work is running'})
   expect(hasActiveDuckdbExclusiveWork()).toBe(false)
 })
 
@@ -345,4 +443,126 @@ test('prepareDuckdbExclusiveWork rejects concurrent exclusive work', async () =>
   )
 
   expect(error?.message).toContain('DuckDB exclusive work is already active')
+})
+
+const busyHighRssReadiness: DuckdbExclusiveWorkReadinessSnapshot = {
+  activeMaintenance: ['background backgroundQuery reviewServing.projector.worker for 5 ms'],
+  appendQueueDepth: 0,
+  backgroundQueueDepth: 1,
+  foregroundQueueDepth: 1,
+  maxRssBytes: 100,
+  recycleRecommended: true,
+  rssBytes: 95,
+  rssReady: false,
+}
+
+const drainedHighRssReadiness: DuckdbExclusiveWorkReadinessSnapshot = {
+  ...readyReadiness,
+  maxRssBytes: 100,
+  recycleRecommended: true,
+  rssBytes: 95,
+  rssReady: false,
+}
+
+const getHighRssReadiness = (busy: boolean) => {
+  return busy ? busyHighRssReadiness : drainedHighRssReadiness
+}
+
+test('lease reclaimMemory waits for in-flight DuckDB work to drain before recycling', async () => {
+  const events: string[] = []
+  const messagesWhileWaiting: string[] = []
+  let reclaiming = false
+  let busyReads = 2
+  const lease = await prepareDuckdbExclusiveWork(getInput(), {
+    dependencies: {
+      forceGarbageCollection: () => {
+        events.push('gc')
+      },
+      getReadinessSnapshot: () => {
+        const busy = reclaiming && busyReads > 0
+
+        busyReads = busy ? busyReads - 1 : busyReads
+        events.push(busy ? 'readiness:busy' : 'readiness:drained')
+        return reclaiming ? getHighRssReadiness(busy) : readyReadiness
+      },
+      recycleDuckdbRuntime: () => {
+        events.push('recycle')
+      },
+      sleep: async () => {
+        messagesWhileWaiting.push(getActiveDuckdbExclusiveWorkSnapshot()?.message ?? 'missing')
+        events.push('sleep')
+      },
+    },
+    pollIntervalMs: 1,
+  })
+  reclaiming = true
+  events.length = 0
+
+  const result = await lease.run(async () => {
+    const reclaim = await lease.reclaimMemory()
+
+    return {reclaim, snapshot: lease.snapshot()}
+  })
+
+  expect(events).toEqual([
+    'gc',
+    'readiness:busy',
+    'sleep',
+    'readiness:busy',
+    'sleep',
+    'readiness:drained',
+    'recycle',
+    'gc',
+    'gc',
+  ])
+  expect(messagesWhileWaiting).toEqual([
+    'Waiting for in-flight DuckDB work to finish before recycling the runtime',
+    'Waiting for in-flight DuckDB work to finish before recycling the runtime',
+  ])
+  expect(result.reclaim).toMatchObject({readiness: {activeMaintenance: [], foregroundQueueDepth: 0}, recycled: true})
+  expect(result.snapshot).toMatchObject({admissionState: 'running', message: 'DuckDB exclusive work is running'})
+  expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+})
+
+test('lease reclaimMemory skips the recycle when in-flight DuckDB work does not drain in time', async () => {
+  let clockMs = 0
+  let reclaiming = false
+  let recycleCount = 0
+  let sleepCount = 0
+  const lease = await prepareDuckdbExclusiveWork(getInput(), {
+    dependencies: {
+      getReadinessSnapshot: () => {
+        return reclaiming ? busyHighRssReadiness : readyReadiness
+      },
+      now: () => {
+        return new Date(clockMs)
+      },
+      recycleDuckdbRuntime: () => {
+        recycleCount += 1
+      },
+      sleep: async (delayMs) => {
+        sleepCount += 1
+        clockMs += delayMs
+      },
+    },
+    pollIntervalMs: 250,
+    reclaimDrainTimeoutMs: 1000,
+  })
+  reclaiming = true
+
+  const result = await lease.run(async () => {
+    const reclaim = await lease.reclaimMemory()
+
+    return {reclaim, snapshot: lease.snapshot()}
+  })
+
+  expect(result.reclaim).toMatchObject({
+    readiness: {activeMaintenance: busyHighRssReadiness.activeMaintenance, rssReady: false},
+    recycleSkippedReason: 'drainTimeout',
+    recycled: false,
+  })
+  expect(recycleCount).toBe(0)
+  expect(sleepCount).toBe(4)
+  expect(result.snapshot).toMatchObject({admissionState: 'running', message: 'DuckDB exclusive work is running'})
+  expect(hasActiveDuckdbExclusiveWork()).toBe(false)
 })

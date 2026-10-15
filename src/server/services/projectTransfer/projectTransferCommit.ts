@@ -61,6 +61,7 @@ import {
   type ProjectTransferDirtyTokenRevalidationDecision,
 } from './projectTransferDirtyTokenRevalidation.ts'
 import {
+  type ProjectTransferDuckdbExclusiveWorkLease,
   runWithDuckdbExclusiveWork,
   updateActiveDuckdbExclusiveWorkProgress,
 } from './projectTransferDuckdbExclusiveWork.ts'
@@ -114,6 +115,7 @@ type ProjectTransferCommitRepositories = {
     ReturnType<typeof getProjectTransferHistoryRepository>,
     'getCompletedImportHistoryBySessionId'
   >
+  reclaimRevalidationMemory?: (lease: ProjectTransferDuckdbExclusiveWorkLease) => Promise<unknown>
   revalidate?: (input: ProjectTransferCommitRevalidationInput) => Promise<ProjectTransferCommitRevalidationResult>
   requestReviewServingBuild?: (input: RequestReviewServingV4RebuildInput) => Promise<unknown>
   runAppTableWrites?: (input: ProjectTransferCommitAppTableWriteInput) => Promise<ProjectTransferCommitAppWriteResult>
@@ -1258,86 +1260,74 @@ const persistPostClaimStalePlan = async ({
   return reopened
 }
 
-const getPostClaimRevalidationResult = async ({
+const runClaimedCommitRevalidation = async ({
   artifacts,
   claimed,
-  commitId,
   inputRepositories,
-  now,
-  ownerToken,
   repositories,
   runtimeOptions,
-}: {
-  artifacts: ProjectTransferCommitArtifacts
-  claimed: ProjectTransferSessionRecord
-  commitId: string
-  inputRepositories?: ProjectTransferCommitRepositories
-  now: Date
-  ownerToken: string
-  repositories: ProjectTransferCommitRepositorySet
-  runtimeOptions: RuntimePathOptions
-}) => {
-  const postClaimRevalidationMeasurement = await measureProjectTransferPhase('revalidation', () => {
-    return runClaimedCommitHeartbeatOperation({
-      getProgress: () => {
-        return getCommitProgress({
-          artifacts,
-          includeBytes: false,
-          includeRows: false,
-          message: 'Commit revalidation running',
-          now,
-          phase: 'revalidation',
-          planRevision: claimed.planRevision,
-          status: 'running',
-        })
-      },
-      operation: () => {
-        return repositories.revalidate({
-          ...runtimeOptions,
-          analysis: artifacts.analysis,
-          layout: artifacts.layout,
-          nextPlanRevision: claimed.planRevision + 1,
-          plan: artifacts.plan,
-          repositories: inputRepositories,
-        })
-      },
-      ownerToken,
-      repositories,
-      runtimeOptions,
-      sessionId: claimed.id,
+}: ProjectTransferClaimedCommitInput) => {
+  const revalidationMeasurement = await measureProjectTransferPhase('revalidation', () => {
+    return repositories.revalidate({
+      ...runtimeOptions,
+      analysis: artifacts.analysis,
+      layout: artifacts.layout,
+      nextPlanRevision: claimed.planRevision + 1,
+      plan: artifacts.plan,
+      repositories: inputRepositories,
     })
   })
-  const postClaimRevalidation = postClaimRevalidationMeasurement.value
-  const performanceMetrics = mergeProjectTransferPerformanceMetrics(
-    getImportPerformanceMetrics(postClaimRevalidation.performanceMetrics),
-    getProjectTransferPerformanceMetrics({
-      benchmark: {
-        revalidationOutcome: {changed: postClaimRevalidation.changed, ready: postClaimRevalidation.ready},
-        wallTimeMs: postClaimRevalidationMeasurement.timing.durationMs,
-      },
-      operation: 'import',
-      phases: {revalidation: postClaimRevalidationMeasurement.timing},
-    }),
-  )
+  const {changed, performanceMetrics, plan, ready} = revalidationMeasurement.value
 
-  if (!postClaimRevalidation.ready || postClaimRevalidation.changed) {
-    const reopened = await persistPostClaimStalePlan({
-      artifacts,
-      commitId,
-      nextPlan: postClaimRevalidation.plan,
-      now,
-      ownerToken,
-      repositories,
-      runtimeOptions,
-      session: claimed,
-    })
-
-    return reopened === null
-      ? {error: 'Project transfer commit could not reopen claimed stale plan', ok: false as const}
-      : {ok: true as const, performanceMetrics, session: reopened, stalePlan: postClaimRevalidation.plan}
+  return {
+    performanceMetrics: mergeProjectTransferPerformanceMetrics(
+      getImportPerformanceMetrics(performanceMetrics),
+      getProjectTransferPerformanceMetrics({
+        benchmark: {revalidationOutcome: {changed, ready}, wallTimeMs: revalidationMeasurement.timing.durationMs},
+        operation: 'import',
+        phases: {revalidation: revalidationMeasurement.timing},
+      }),
+    ),
+    plan,
+    stale: !ready || changed,
   }
+}
 
-  return {artifacts: {...artifacts, plan: postClaimRevalidation.plan}, ok: true as const, performanceMetrics}
+const revalidationMemoryReclaimMessages = {
+  drainTimeout:
+    'Project transfer commit skipped the DuckDB recycle after revalidation because in-flight DuckDB work did not drain',
+  recycled: 'Project transfer commit recycled DuckDB because RSS stayed high after revalidation',
+  released: 'Project transfer commit released revalidation memory before writes',
+} as const
+
+const getRevalidationMemoryReclaimOutcome = (
+  reclaim: Awaited<ReturnType<ProjectTransferDuckdbExclusiveWorkLease['reclaimMemory']>>,
+) => {
+  return reclaim.recycleSkippedReason ?? (reclaim.recycled ? 'recycled' : 'released')
+}
+
+const reclaimProjectTransferCommitRevalidationMemory = async (lease: ProjectTransferDuckdbExclusiveWorkLease) => {
+  const reclaim = await lease.reclaimMemory()
+  const outcome = getRevalidationMemoryReclaimOutcome(reclaim)
+
+  writeRuntimeLogEvent({
+    attrs: {
+      activeMaintenance: reclaim.readiness.activeMaintenance ?? [],
+      appendQueueDepth: reclaim.readiness.appendQueueDepth,
+      backgroundQueueDepth: reclaim.readiness.backgroundQueueDepth,
+      foregroundQueueDepth: reclaim.readiness.foregroundQueueDepth,
+      maxRssBytes: reclaim.readiness.maxRssBytes ?? null,
+      outcome,
+      recycled: reclaim.recycled,
+      rssBytes: reclaim.readiness.rssBytes ?? null,
+      sessionId: lease.snapshot().sessionId,
+    },
+    event: 'project_transfer.commit_revalidation_memory_reclaimed',
+    message: revalidationMemoryReclaimMessages[outcome],
+    severity: outcome === 'released' ? 'INFO' : 'WARN',
+  })
+
+  return reclaim
 }
 
 const getRepositorySet = (repositories?: ProjectTransferCommitRepositories) => {
@@ -1345,6 +1335,8 @@ const getRepositorySet = (repositories?: ProjectTransferCommitRepositories) => {
     getCommitId: repositories?.getCommitId ?? randomUUID,
     getOwnerToken: repositories?.getOwnerToken ?? randomUUID,
     historyRepository: repositories?.historyRepository ?? getProjectTransferHistoryRepository(),
+    reclaimRevalidationMemory:
+      repositories?.reclaimRevalidationMemory ?? reclaimProjectTransferCommitRevalidationMemory,
     revalidate: repositories?.revalidate ?? revalidateProjectTransferCommitPlan,
     requestReviewServingBuild: repositories?.requestReviewServingBuild ?? requestReviewServingV4Rebuild,
     runAppTableWrites: repositories?.runAppTableWrites ?? runProjectTransferCommitAppTableWrites,
@@ -1597,6 +1589,22 @@ const settleCompletionSideEffect = async <TValue>(operation: Promise<TValue>) =>
 
 type ProjectTransferCommitRepositorySet = ReturnType<typeof getRepositorySet>
 
+type ProjectTransferClaimedCommitInput = {
+  artifacts: ProjectTransferCommitArtifacts
+  claimed: ProjectTransferSessionRecord
+  commitId: string
+  inputRepositories?: ProjectTransferCommitRepositories
+  now: Date
+  ownerToken: string
+  repositories: ProjectTransferCommitRepositorySet
+  runtimeOptions: RuntimePathOptions
+  sessionId: string
+}
+
+type ProjectTransferClaimedCommitRevalidation = Awaited<ReturnType<typeof runClaimedCommitRevalidation>>
+
+type ProjectTransferPublishCommitProgress = (progress: ProjectTransferProgressPayload) => Promise<void>
+
 const requestPostImportReviewServingBuild = ({
   completion,
   repositories,
@@ -1782,42 +1790,132 @@ const failClaimedPostClaimCommit = async ({
   return {error: error instanceof Error ? error.message : String(error), status: 'error', statusCode}
 }
 
-const runClaimedProjectTransferImportCommit = async ({
+const getClaimedCommitRevalidationProgress = ({
   artifacts,
   claimed,
-  commitId,
-  now,
-  ownerToken,
-  performanceMetrics,
-  repositories,
-  runtimeOptions,
-  sessionId,
+  message,
 }: {
   artifacts: ProjectTransferCommitArtifacts
   claimed: ProjectTransferSessionRecord
-  commitId: string
-  now: Date
-  ownerToken: string
-  performanceMetrics?: ProjectTransferPerformanceMetrics | null
-  repositories: ProjectTransferCommitRepositorySet
-  runtimeOptions: RuntimePathOptions
-  sessionId: string
+  message: string
+}) => {
+  return getCommitProgress({
+    artifacts,
+    includeBytes: false,
+    includeRows: false,
+    message,
+    now: new Date(),
+    phase: 'revalidation',
+    planRevision: claimed.planRevision,
+    status: 'running',
+  })
+}
+
+const writeRevalidatedClaimedCommit = async ({
+  input,
+  lease,
+  publishProgress,
+  revalidation,
+}: {
+  input: ProjectTransferClaimedCommitInput
+  lease: ProjectTransferDuckdbExclusiveWorkLease
+  publishProgress: ProjectTransferPublishCommitProgress
+  revalidation: ProjectTransferClaimedCommitRevalidation
+}) => {
+  const artifacts = {...input.artifacts, plan: revalidation.plan}
+
+  await input.repositories.reclaimRevalidationMemory(lease)
+
+  const writeResult = await input.repositories.runAppTableWrites({
+    artifacts,
+    commitId: input.commitId,
+    now: input.now,
+    onProgress: publishProgress,
+    schemaVersion: getAnalysisSchemaVersion(artifacts.analysis),
+    ...input.runtimeOptions,
+    sessionId: input.sessionId,
+  })
+
+  return {artifacts, performanceMetrics: revalidation.performanceMetrics, status: 'written' as const, writeResult}
+}
+
+const runClaimedCommitExclusiveWork = ({
+  input,
+  publishProgress,
+}: {
+  input: ProjectTransferClaimedCommitInput
+  publishProgress: ProjectTransferPublishCommitProgress
+}) => {
+  return runWithDuckdbExclusiveWork(
+    {
+      estimatedRows: getCommitRowCount(input.artifacts.plan),
+      kind: 'project_transfer_import',
+      message: 'Commit revalidation and app-table writes requested',
+      ownerToken: input.ownerToken,
+      phase: 'commit',
+      sessionId: input.sessionId,
+    },
+    async (lease) => {
+      await publishProgress(
+        getClaimedCommitRevalidationProgress({
+          artifacts: input.artifacts,
+          claimed: input.claimed,
+          message: 'Commit revalidation running',
+        }),
+      )
+
+      const revalidation = await runClaimedCommitRevalidation(input)
+
+      return revalidation.stale
+        ? {plan: revalidation.plan, status: 'stale' as const}
+        : writeRevalidatedClaimedCommit({input, lease, publishProgress, revalidation})
+    },
+  )
+}
+
+const reopenClaimedCommitStalePlan = async ({
+  input,
+  plan,
+}: {
+  input: ProjectTransferClaimedCommitInput
+  plan: ProjectTransferImportPlanArtifact
 }): Promise<ProjectTransferCommitResult> => {
+  const reopened = await persistPostClaimStalePlan({
+    artifacts: input.artifacts,
+    commitId: input.commitId,
+    nextPlan: plan,
+    now: input.now,
+    ownerToken: input.ownerToken,
+    repositories: input.repositories,
+    runtimeOptions: input.runtimeOptions,
+    session: input.claimed,
+  })
+
+  return reopened === null
+    ? failClaimedPostClaimCommit({
+        artifacts: input.artifacts,
+        error: 'Project transfer commit could not reopen claimed stale plan',
+        ownerToken: input.ownerToken,
+        repositories: input.repositories,
+        runtimeOptions: input.runtimeOptions,
+        sessionId: input.sessionId,
+        statusCode: 409,
+      })
+    : {plan, session: reopened, status: 'stale', statusCode: 200}
+}
+
+const runClaimedProjectTransferImportCommit = async (
+  input: ProjectTransferClaimedCommitInput,
+): Promise<ProjectTransferCommitResult> => {
+  const {claimed, ownerToken, repositories, runtimeOptions, sessionId} = input
+
   try {
-    const stagingLoadProgress = getCommitProgress({
-      artifacts,
-      completedItems: 0,
-      completedRows: 0,
-      includeBytes: false,
-      message: 'Loading package payloads',
-      now: new Date(),
-      phase: 'staging_load',
-      percent: 0,
-      planRevision: claimed.planRevision,
-      status: 'running',
-      totalItems: projectTransferPayloadKeys.length,
+    const waitingProgress = getClaimedCommitRevalidationProgress({
+      artifacts: input.artifacts,
+      claimed,
+      message: 'Waiting for DuckDB maintenance work to pause',
     })
-    let activeProgress = stagingLoadProgress
+    let activeProgress = waitingProgress
     const publishProgress = async (progress: ProjectTransferProgressPayload) => {
       activeProgress = progress
       updateActiveDuckdbExclusiveWorkProgress(progress)
@@ -1829,7 +1927,7 @@ const runClaimedProjectTransferImportCommit = async ({
     }
     const progressed = await updateClaimedCommitProgress({
       ownerToken,
-      progress: stagingLoadProgress,
+      progress: waitingProgress,
       repositories,
       runtimeOptions,
       sessionId,
@@ -1837,56 +1935,30 @@ const runClaimedProjectTransferImportCommit = async ({
 
     if (progressed === null) {
       return {
-        error: 'Project transfer import commit ownership was lost before writes',
+        error: 'Project transfer import commit ownership was lost before revalidation',
         status: 'error',
         statusCode: 409,
       }
     }
 
-    const writeResult = await runClaimedCommitHeartbeatOperation({
+    const outcome = await runClaimedCommitHeartbeatOperation({
       getProgress: () => {
         return activeProgress
       },
-      operation: async () => {
-        await publishProgress(
-          getCommitProgress({
-            artifacts,
-            includeBytes: false,
-            message: 'Waiting for DuckDB maintenance work to pause',
-            now: new Date(),
-            phase: 'commit',
-            planRevision: artifacts.plan.planRevision,
-            status: 'running',
-          }),
-        )
-
-        return runWithDuckdbExclusiveWork(
-          {
-            estimatedRows: getCommitRowCount(artifacts.plan),
-            kind: 'project_transfer_import',
-            message: 'Commit app-table writes running',
-            ownerToken,
-            phase: 'commit',
-            sessionId,
-          },
-          () => {
-            return repositories.runAppTableWrites({
-              artifacts,
-              commitId,
-              now,
-              onProgress: publishProgress,
-              schemaVersion: getAnalysisSchemaVersion(artifacts.analysis),
-              ...runtimeOptions,
-              sessionId,
-            })
-          },
-        )
+      operation: () => {
+        return runClaimedCommitExclusiveWork({input, publishProgress})
       },
       ownerToken,
       repositories,
       runtimeOptions,
       sessionId,
     })
+
+    if (outcome.status === 'stale') {
+      return await reopenClaimedCommitStalePlan({input, plan: outcome.plan})
+    }
+
+    const {artifacts, performanceMetrics, writeResult} = outcome
     const completionNow = new Date()
     const completedPerformanceMetrics = getCommitPerformanceMetrics({
       artifacts,
@@ -1937,7 +2009,7 @@ const runClaimedProjectTransferImportCommit = async ({
     }
   } catch (error) {
     await settleCompletionSideEffect(
-      failClaimedCommit({artifacts, error, ownerToken, repositories, runtimeOptions, sessionId}),
+      failClaimedCommit({artifacts: input.artifacts, error, ownerToken, repositories, runtimeOptions, sessionId}),
     )
     return getCommitErrorResult(error)
   }
@@ -2075,95 +2147,27 @@ export const commitProjectTransferImportSession = async ({
   writeProjectTransferCommitRuntimeEvent({ownerToken, progress: claimProgress, sessionId, state: claimed.state})
   await writeCommitProgressArtifact({progress: claimProgress, runtimeOptions, sessionId})
 
-  const runClaimed = (
-    claimedArtifacts: ProjectTransferCommitArtifacts,
-    performanceMetrics?: ProjectTransferPerformanceMetrics | null,
-  ) => {
-    return runClaimedProjectTransferImportCommit({
-      artifacts: claimedArtifacts,
-      claimed,
-      commitId,
-      now,
-      ownerToken,
-      performanceMetrics,
-      repositories,
-      runtimeOptions,
-      sessionId,
-    })
+  const claimedCommitInput: ProjectTransferClaimedCommitInput = {
+    artifacts,
+    claimed,
+    commitId,
+    inputRepositories,
+    now,
+    ownerToken,
+    repositories,
+    runtimeOptions,
+    sessionId,
   }
 
   if (executionMode === 'background') {
     repositories.startBackgroundCommit(async () => {
       await runWithProjectTransferBackgroundActivity(async () => {
-        try {
-          const revalidation = await getPostClaimRevalidationResult({
-            artifacts,
-            claimed,
-            commitId,
-            inputRepositories,
-            now,
-            ownerToken,
-            repositories,
-            runtimeOptions,
-          })
-
-          if ('artifacts' in revalidation) {
-            await runClaimed(revalidation.artifacts, revalidation.performanceMetrics)
-          }
-
-          if ('error' in revalidation && !('stalePlan' in revalidation)) {
-            await failClaimedPostClaimCommit({
-              artifacts,
-              error: revalidation.error,
-              ownerToken,
-              repositories,
-              runtimeOptions,
-              sessionId,
-              statusCode: 409,
-            })
-          }
-        } catch (error) {
-          await failClaimedPostClaimCommit({artifacts, error, ownerToken, repositories, runtimeOptions, sessionId})
-        }
+        await runClaimedProjectTransferImportCommit(claimedCommitInput)
       })
     })
 
     return {commitId, executionMode, session: claimed, status: 'claimed', statusCode: 202}
   }
 
-  let postClaimRevalidation: Awaited<ReturnType<typeof getPostClaimRevalidationResult>>
-
-  try {
-    postClaimRevalidation = await getPostClaimRevalidationResult({
-      artifacts,
-      claimed,
-      commitId,
-      inputRepositories,
-      now,
-      ownerToken,
-      repositories,
-      runtimeOptions,
-    })
-  } catch (error) {
-    return failClaimedPostClaimCommit({artifacts, error, ownerToken, repositories, runtimeOptions, sessionId})
-  }
-
-  return 'artifacts' in postClaimRevalidation
-    ? runClaimed(postClaimRevalidation.artifacts, postClaimRevalidation.performanceMetrics)
-    : postClaimRevalidation.stalePlan
-      ? {
-          plan: postClaimRevalidation.stalePlan,
-          session: postClaimRevalidation.session,
-          status: 'stale',
-          statusCode: 200,
-        }
-      : failClaimedPostClaimCommit({
-          artifacts,
-          error: postClaimRevalidation.error,
-          ownerToken,
-          repositories,
-          runtimeOptions,
-          sessionId,
-          statusCode: 409,
-        })
+  return runClaimedProjectTransferImportCommit(claimedCommitInput)
 }

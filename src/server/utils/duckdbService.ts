@@ -24,7 +24,11 @@ import {
   isDuckdbLegacyWalCompatibilityError,
 } from './duckdbEngineCompatibility.ts'
 import {duckdbExpectedEngineIdentity} from './duckdbEngineContract.ts'
-import {getActiveDuckdbExclusiveWorkSnapshot, getDuckdbExclusiveWorkAdmissionError} from './duckdbExclusiveWork.ts'
+import {
+  getActiveDuckdbExclusiveWorkSnapshot,
+  getDuckdbExclusiveWorkAdmissionError,
+  isDuckdbExclusiveWorkLeaseContext,
+} from './duckdbExclusiveWork.ts'
 import {
   type DuckdbGracefulShutdownLogEntry,
   getDuckdbGracefulShutdownBudgetMs,
@@ -126,6 +130,14 @@ export type DuckdbActiveMainWorkRuntimeSnapshot = {
   timeoutMs: number | null
   workloadClass: string
 }
+export type DuckdbInFlightWorkloadSnapshot = {
+  durationMs: number
+  exclusiveWorkCompatible: boolean
+  operation: DuckdbWorkloadOperation
+  queue: DuckdbWorkloadQueue
+  routeOrJobKey: string
+  startedAt: string
+}
 export type DuckdbTempSpillMetrics = {
   available: boolean
   error: string | null
@@ -206,6 +218,9 @@ type DuckdbWorkloadDiagnosticContext = {
   queueDepthAtStart: number
 }
 type DuckdbActiveMainWorkRuntimeState = Omit<DuckdbActiveMainWorkRuntimeSnapshot, 'durationMs'> & {startedAtMs: number}
+type DuckdbInFlightWorkloadState = Omit<DuckdbInFlightWorkloadSnapshot, 'durationMs' | 'startedAt'> & {
+  startedAtMs: number
+}
 type DuckdbMainWorkPriority = 'background' | 'foreground'
 type DuckdbQueuedMainWork<T = unknown> = {
   diagnosticContext: DuckdbWorkloadDiagnosticContext | undefined
@@ -256,6 +271,7 @@ type DuckdbServiceState = {
   controlTransactionDepth: number
   duckdbInstance: DuckDBInstance | null
   duckdbForegroundIdleWaiters: Set<(idle: boolean) => void>
+  duckdbInFlightWorkloads: Map<symbol, DuckdbInFlightWorkloadState>
   duckdbLastDurationMs: number | null
   duckdbLastWaitMs: number | null
   duckdbMainQueueRunning: boolean
@@ -2714,6 +2730,7 @@ const getDuckdbServiceState = () => {
     controlTransactionDepth: 0,
     duckdbInstance: null,
     duckdbForegroundIdleWaiters: new Set(),
+    duckdbInFlightWorkloads: new Map(),
     duckdbLastDurationMs: null,
     duckdbLastWaitMs: null,
     duckdbMainQueueRunning: false,
@@ -2742,6 +2759,7 @@ duckdbServiceState.activeMainWork ??= null
 duckdbServiceState.duckdbMainQueueRunning ??= false
 duckdbServiceState.duckdbMainQueuedWork ??= []
 duckdbServiceState.duckdbForegroundIdleWaiters ??= new Set()
+duckdbServiceState.duckdbInFlightWorkloads ??= new Map()
 
 const getTrimmedValue = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim()
@@ -6144,6 +6162,7 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.controlTransactionIndexedMutationTargets = []
   duckdbServiceState.controlTransactionDepth = 0
   duckdbServiceState.duckdbInstance = null
+  duckdbServiceState.duckdbInFlightWorkloads = new Map()
   duckdbServiceState.duckdbLastDurationMs = null
   duckdbServiceState.duckdbLastWaitMs = null
   duckdbServiceState.duckdbMainQueueRunning = false
@@ -7866,15 +7885,69 @@ const duckdbExclusiveWorkAllowedRouteOrJobKeys = new Set([
   'projectTransfer.session',
 ])
 
+const isDuckdbWorkloadContextAllowedDuringExclusiveWork = (context: DuckdbWorkloadContext) => {
+  return (
+    duckdbExclusiveWorkAllowedRouteOrJobKeys.has(context.routeOrJobKey)
+    || context.routeOrJobKey.startsWith('review.warnings.')
+  )
+}
+
 const shouldAllowDuckdbWorkDuringExclusiveWork = (
   _operation: DuckdbWorkloadOperation,
   context?: DuckdbWorkloadContext,
 ) => {
   return (
     context === undefined
-    || duckdbExclusiveWorkAllowedRouteOrJobKeys.has(context.routeOrJobKey)
-    || context.routeOrJobKey.startsWith('review.warnings.')
+    || isDuckdbWorkloadContextAllowedDuringExclusiveWork(context)
+    || isDuckdbExclusiveWorkLeaseContext()
   )
+}
+
+const isDuckdbWorkloadExclusiveWorkCompatible = (context?: DuckdbWorkloadContext) => {
+  return (
+    isDuckdbExclusiveWorkLeaseContext()
+    || (context !== undefined && isDuckdbWorkloadContextAllowedDuringExclusiveWork(context))
+  )
+}
+
+const runDuckdbInFlightWorkload = async <T>(
+  {
+    context,
+    operation,
+    queue,
+    routeOrJobKey,
+  }: {
+    context?: DuckdbWorkloadContext
+    operation: DuckdbWorkloadOperation
+    queue: DuckdbWorkloadQueue
+    routeOrJobKey: string
+  },
+  work: () => Promise<T>,
+): Promise<T> => {
+  const inFlightWorkloadKey = Symbol(routeOrJobKey)
+  const inFlightWorkloads = duckdbServiceState.duckdbInFlightWorkloads
+
+  inFlightWorkloads.set(inFlightWorkloadKey, {
+    exclusiveWorkCompatible: isDuckdbWorkloadExclusiveWorkCompatible(context),
+    operation,
+    queue,
+    routeOrJobKey,
+    startedAtMs: Date.now(),
+  })
+
+  try {
+    return await work()
+  } finally {
+    inFlightWorkloads.delete(inFlightWorkloadKey)
+  }
+}
+
+export const getDuckdbInFlightWorkloadsSnapshot = (): DuckdbInFlightWorkloadSnapshot[] => {
+  const nowMs = Date.now()
+
+  return [...duckdbServiceState.duckdbInFlightWorkloads.values()].map(({startedAtMs, ...workload}) => {
+    return {...workload, durationMs: Math.max(0, nowMs - startedAtMs), startedAt: new Date(startedAtMs).toISOString()}
+  })
 }
 
 const assertDuckdbExclusiveWorkAllowsWorkload = (
@@ -8032,7 +8105,7 @@ const withDuckdbWorkloadContext = <T>({
     }
   }
 
-  const runWork = () => {
+  const runUntrackedWork = () => {
     const activeMainWorkId = duckdbWorkloadDiagnosticStorage.getStore()?.activeMainWorkId
 
     return duckdbWorkloadDiagnosticStorage.run(
@@ -8041,6 +8114,15 @@ const withDuckdbWorkloadContext = <T>({
         return work(runExecution)
       },
     )
+  }
+
+  const runWork = () => {
+    return duckdbOwnerWorkloadQueues.has(queue)
+      ? runDuckdbInFlightWorkload(
+          {context, operation, queue, routeOrJobKey: diagnosticContext?.routeOrJobKey ?? 'unclassified'},
+          runUntrackedWork,
+        )
+      : runUntrackedWork()
   }
 
   if (context === undefined) {
