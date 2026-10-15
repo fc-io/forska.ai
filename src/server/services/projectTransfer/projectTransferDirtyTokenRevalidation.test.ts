@@ -1,4 +1,6 @@
-import {rmSync} from 'node:fs'
+import {mkdtempSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, setDefaultTimeout, test} from 'bun:test'
 
@@ -65,6 +67,7 @@ const getSnapshot = (
 
 const runDirtyTokenServiceScript = <TResult>(body: string) => {
   const duckdbPath = `/tmp/f2-project-transfer-dirty-token-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const runtimeRoot = mkdtempSync(join(tmpdir(), `f2-project-transfer-dirty-token-${process.pid}-`))
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -96,6 +99,7 @@ const runDirtyTokenServiceScript = <TResult>(body: string) => {
         ...process.env,
         API_SERVER_PORT: '39991',
         DUCKDB_PATH: duckdbPath,
+        PROJECT_TRANSFER_TEST_RUNTIME_ROOT: runtimeRoot,
         SERVER_ROLE: 'dev-single',
         VITE_PORT: '39992',
       },
@@ -109,6 +113,7 @@ const runDirtyTokenServiceScript = <TResult>(body: string) => {
 
     return JSON.parse(getLastJsonLine(result.stdout.toString())) as TResult
   } finally {
+    removeFileIfExists(runtimeRoot)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
@@ -514,6 +519,7 @@ test('project transfer set-based commit advances dirty tokens for touched write 
 
       await writeProjectTransferCommitAppTables({
         commitId: 'commit-dirty-token-writer',
+        cwd: process.env.PROJECT_TRANSFER_TEST_RUNTIME_ROOT,
         database: operationDatabase(tx),
         now,
         operationTables,

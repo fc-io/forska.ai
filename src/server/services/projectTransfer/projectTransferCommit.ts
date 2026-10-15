@@ -383,6 +383,7 @@ const cleanupCompletedImportArtifacts = async ({
 }) => {
   const cleanupPaths = [
     layout.analysisPath,
+    layout.commitTempTablesPath,
     layout.extractedPath,
     layout.manifestPath,
     layout.planPath,
@@ -1506,6 +1507,7 @@ const runProjectTransferCommitAppTableWrites = async ({
           work: ({tables}) => {
             return database.transaction((tx): Promise<ProjectTransferCommitAppWriteResult> => {
               return writeProjectTransferCommitAppTables({
+                ...runtimeOptions,
                 commitId,
                 database: getProjectTransferCommitOperationDatabase(tx),
                 now,

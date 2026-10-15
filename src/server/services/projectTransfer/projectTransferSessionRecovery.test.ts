@@ -1245,6 +1245,7 @@ test('project transfer recovery expires ready export artifacts only after public
 
 test('project transfer recovery uses import session history and completed sessions only clean temp files', () => {
   const result = runRecoveryScript<{
+    crashCommitTempTablesExists: boolean
     crashPromotedExists: boolean
     completedPromotedExists: boolean
     completedTempExists: boolean
@@ -1297,6 +1298,7 @@ test('project transfer recovery uses import session history and completed sessio
       targetProjectName: 'Target Project History',
     })
     await writeRuntimeFile(crashLayout.uploadPath)
+    await writeRuntimeFile(crashLayout.commitTempTablesPath + '/temp_project_transfer_commit_crash_commit_id_map/idMap.ndjson')
     await writeRuntimeFile(completedLayout.uploadPath)
     await writeRuntimeFile(crashPromotedPath)
     await writeRuntimeFile(completedPromotedPath)
@@ -1325,6 +1327,7 @@ test('project transfer recovery uses import session history and completed sessio
     console.log(JSON.stringify({
       completedPromotedExists: await fileExists(completedPromotedPath),
       completedTempExists: await fileExists(completedLayout.uploadPath),
+      crashCommitTempTablesExists: await fileExists(crashLayout.commitTempTablesPath),
       crashPromotedExists: await fileExists(crashPromotedPath),
       crashTempExists: await fileExists(crashLayout.uploadPath),
       result,
@@ -1336,6 +1339,7 @@ test('project transfer recovery uses import session history and completed sessio
   expect(result.result.cleanupTempArtifactCount).toBe(2)
   expect(result.result.deletedPromotedAssetCount).toBe(0)
   expect(result.crashTempExists).toBe(false)
+  expect(result.crashCommitTempTablesExists).toBe(false)
   expect(result.completedTempExists).toBe(false)
   expect(result.crashPromotedExists).toBe(true)
   expect(result.completedPromotedExists).toBe(true)

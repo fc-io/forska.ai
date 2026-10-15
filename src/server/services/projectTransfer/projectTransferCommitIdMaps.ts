@@ -1,10 +1,14 @@
 import {randomUUID} from 'node:crypto'
 
 import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
-import {getJsonValue, getQuotedStringList, getSqlLiteral} from '../appQueryHelpers.ts'
+import {getJsonValue, getQuotedStringList} from '../appQueryHelpers.ts'
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
 import type {ProjectTransferCommitPromotionResult} from './projectTransferCommitRollback.ts'
+import {
+  type ProjectTransferCommitTempTableFileRoot,
+  withProjectTransferCommitTempTableFiles,
+} from './projectTransferCommitTempTableFiles.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {getProjectTransferNormalizedArticleIdentifiers} from './projectTransferIdentifierNormalization.ts'
 import type {
@@ -768,44 +772,39 @@ const getCommitIdMapEntries = (maps: ProjectTransferCommitIdMaps) => {
   ]
 }
 
-const getCommitIdMapRowsSql = (maps: ProjectTransferCommitIdMaps) => {
-  const entries = getCommitIdMapEntries(maps)
-
-  return entries.length === 0
-    ? ''
-    : entries
-        .map((entry) => {
-          return `(${getSqlLiteral(entry.kind)}, ${getSqlLiteral(entry.sourceId)}, ${getSqlLiteral(entry.targetId)})`
-        })
-        .join(', ')
-}
+const commitIdMapFileColumns = {kind: 'VARCHAR', sourceId: 'VARCHAR', targetId: 'VARCHAR'} as const
 
 export const loadProjectTransferCommitIdMapTables = async ({
+  fileRoot,
   maps,
   operationId,
   runner,
 }: {
+  fileRoot: ProjectTransferCommitTempTableFileRoot
   maps: ProjectTransferCommitIdMaps
   operationId: string
   runner: ProjectTransferCommitIdMapRunner
 }): Promise<ProjectTransferCommitIdMapTableSet> => {
   const tables = {idMap: getCommitIdMapTableName(operationId), operationId: getOperationId(operationId)}
-  const rowsSql = getCommitIdMapRowsSql(maps)
 
-  await runner.run(`
-    DROP TABLE IF EXISTS ${tables.idMap};
-    CREATE TEMP TABLE ${tables.idMap} (
-      map_kind VARCHAR NOT NULL,
-      source_id VARCHAR NOT NULL,
-      target_id VARCHAR NOT NULL
-    );
-    ${
-      rowsSql === ''
-        ? ''
-        : `INSERT INTO ${tables.idMap} (map_kind, source_id, target_id)
-           VALUES ${rowsSql};`
-    }
-  `)
+  await withProjectTransferCommitTempTableFiles({
+    directoryName: tables.idMap,
+    files: {idMap: {columns: commitIdMapFileColumns, rows: getCommitIdMapEntries(maps)}},
+    root: fileRoot,
+    work: (sourceSqlByName) => {
+      return runner.run(`
+        DROP TABLE IF EXISTS ${tables.idMap};
+        CREATE TEMP TABLE ${tables.idMap} (
+          map_kind VARCHAR NOT NULL,
+          source_id VARCHAR NOT NULL,
+          target_id VARCHAR NOT NULL
+        );
+        INSERT INTO ${tables.idMap} (map_kind, source_id, target_id)
+        SELECT "kind", "sourceId", "targetId"
+        FROM ${sourceSqlByName.idMap};
+      `)
+    },
+  })
 
   return tables
 }

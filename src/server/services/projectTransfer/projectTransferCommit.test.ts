@@ -1,5 +1,5 @@
-import {mkdtempSync, rmSync} from 'node:fs'
-import {mkdir, readFile} from 'node:fs/promises'
+import {existsSync, mkdtempSync, rmSync} from 'node:fs'
+import {mkdir, readFile, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
@@ -126,12 +126,13 @@ const getLastJsonLine = (stdout: string) => {
 
 const runCommitWriterScript = <TResult>(body: string) => {
   const duckdbPath = `/tmp/f2-project-transfer-commit-writer-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const runtimeRoot = getRuntimeRoot()
   const result = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
-        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {computePromptContentHash}, {writeProjectTransferCommitAppTables}, {getProjectTransferPlanWithCommitIdMaps}, {getProjectTransferOperationTableNames}, {intakeReviewImportDeltasToDirtyWork}] = await Promise.all([
+        const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {computePromptContentHash}, {writeProjectTransferCommitAppTables: writeProjectTransferCommitAppTablesInRuntimeRoot}, {getProjectTransferPlanWithCommitIdMaps}, {getProjectTransferOperationTableNames}, {intakeReviewImportDeltasToDirtyWork}] = await Promise.all([
           import('./src/db/migrateDuckdb.ts'),
           import('./src/server/services/appDatabaseService.ts'),
           import('./src/server/utils/duckdbService.ts'),
@@ -147,6 +148,9 @@ const runCommitWriterScript = <TResult>(body: string) => {
         resetServerRuntimeRoleForTests()
         await migrateDuckdb()
 
+        const writeProjectTransferCommitAppTables = (input) => {
+          return writeProjectTransferCommitAppTablesInRuntimeRoot({cwd: process.env.PROJECT_TRANSFER_TEST_RUNTIME_ROOT, ...input})
+        }
         const database = getAppDatabaseService()
         const now = new Date('2026-05-28T13:00:00.000Z')
         const catchMessage = async (operation) => {
@@ -266,6 +270,7 @@ const runCommitWriterScript = <TResult>(body: string) => {
         ...process.env,
         API_SERVER_PORT: '39991',
         DUCKDB_PATH: duckdbPath,
+        PROJECT_TRANSFER_TEST_RUNTIME_ROOT: runtimeRoot,
         SERVER_ROLE: 'dev-single',
         VITE_PORT: '39992',
       },
@@ -279,6 +284,7 @@ const runCommitWriterScript = <TResult>(body: string) => {
 
     return JSON.parse(getLastJsonLine(result.stdout.toString())) as TResult
   } finally {
+    removePathIfExists(runtimeRoot)
     removePathIfExists(duckdbPath)
     removePathIfExists(`${duckdbPath}.wal`)
     removePathIfExists(`${duckdbPath}.duckdb-owner.lock`)
@@ -919,6 +925,13 @@ test('project transfer commit requests review-serving build after successful app
     await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
     const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
     const rebuildRequests: RequestReviewServingV4RebuildInput[] = []
+    const commitTempTablesPath = join(cwd, getProjectTransferImportTempLayout('commit-session').commitTempTablesPath)
+    const leftoverCommitTempTableFile = join(
+      commitTempTablesPath,
+      'temp_project_transfer_crashed_commit_id_map/idMap.ndjson',
+    )
+    await mkdir(dirname(leftoverCommitTempTableFile), {recursive: true})
+    await writeFile(leftoverCommitTempTableFile, '{}\n')
     const result = await runCommit({
       cwd,
       repository: fake.repository,
@@ -936,6 +949,7 @@ test('project transfer commit requests review-serving build after successful app
     ])
     expect(fake.calls.persist).toHaveLength(1)
     expect(fake.calls.cleanup).toHaveLength(1)
+    expect(existsSync(commitTempTablesPath)).toBe(false)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
