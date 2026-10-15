@@ -103,107 +103,8 @@ const getProjectTransferBytes = (value: string | Uint8Array) => {
   return typeof value === 'string' ? textEncoder.encode(value) : value
 }
 
-const getJsonUnicodeEscape = (value: number) => {
-  return `\\u${value.toString(16).padStart(4, '0')}`
-}
-
-const updateHashWithCanonicalJsonString = (hash: ReturnType<typeof createHash>, value: string) => {
-  hash.update('"')
-  let chunkStart = 0
-  let index = 0
-
-  while (index < value.length) {
-    const codeUnit = value.charCodeAt(index)
-    const nextCodeUnit = value.charCodeAt(index + 1)
-    const escapeSequence =
-      codeUnit === 0x22
-        ? '\\"'
-        : codeUnit === 0x5c
-          ? '\\\\'
-          : codeUnit === 0x08
-            ? '\\b'
-            : codeUnit === 0x0c
-              ? '\\f'
-              : codeUnit === 0x0a
-                ? '\\n'
-                : codeUnit === 0x0d
-                  ? '\\r'
-                  : codeUnit === 0x09
-                    ? '\\t'
-                    : codeUnit < 0x20
-                      ? getJsonUnicodeEscape(codeUnit)
-                      : codeUnit >= 0xd800 && codeUnit <= 0xdbff
-                        ? nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff
-                          ? null
-                          : getJsonUnicodeEscape(codeUnit)
-                        : codeUnit >= 0xdc00 && codeUnit <= 0xdfff
-                          ? getJsonUnicodeEscape(codeUnit)
-                          : null
-
-    if (escapeSequence === null) {
-      index += codeUnit >= 0xd800 && codeUnit <= 0xdbff && nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff ? 2 : 1
-      continue
-    }
-
-    if (chunkStart < index) {
-      hash.update(value.slice(chunkStart, index))
-    }
-
-    hash.update(escapeSequence)
-    index += 1
-    chunkStart = index
-  }
-
-  if (chunkStart < value.length) {
-    hash.update(value.slice(chunkStart))
-  }
-
-  hash.update('"')
-}
-
-const updateHashWithCanonicalJson = (hash: ReturnType<typeof createHash>, value: unknown): void => {
-  if (Array.isArray(value)) {
-    hash.update('[')
-    value.forEach((entry, index) => {
-      if (index > 0) {
-        hash.update(',')
-      }
-
-      updateHashWithCanonicalJson(hash, entry)
-    })
-    hash.update(']')
-    return
-  }
-
-  if (isObjectRecord(value)) {
-    hash.update('{')
-    getCanonicalObjectEntries(value).forEach((key, index) => {
-      if (index > 0) {
-        hash.update(',')
-      }
-
-      updateHashWithCanonicalJsonString(hash, key)
-      hash.update(':')
-      updateHashWithCanonicalJson(hash, value[key])
-    })
-    hash.update('}')
-    return
-  }
-
-  if (typeof value === 'string') {
-    updateHashWithCanonicalJsonString(hash, value)
-    return
-  }
-
-  hash.update(JSON.stringify(value) ?? 'null')
-}
-
 const getProjectTransferCanonicalJsonChecksum = (value: unknown) => {
-  const hash = createHash('sha256')
-
-  updateHashWithCanonicalJson(hash, value)
-
-  return hash.digest('hex')
+  return createHash('sha256').update(getProjectTransferCanonicalJson(value)).digest('hex')
 }
 
 const getExcludedKeySet = (excludedKeys: readonly string[] = []) => {
@@ -397,6 +298,22 @@ export const getProjectTransferCanonicalPayloadChecksum = (
     : getProjectTransferSha256Checksum(getProjectTransferCanonicalJson(input.value))
 }
 
+const getLogicalFingerprintObject = (value: Record<string, unknown>, excludedKeys: Set<string>) => {
+  const payload: Record<string, ProjectTransferFingerprintValue> = {}
+
+  for (const key of getLogicalObjectEntries(value, excludedKeys)) {
+    const entry = getProjectTransferLogicalFingerprintValue(value[key], excludedKeys)
+
+    if (key === '__proto__') {
+      Object.defineProperty(payload, key, {configurable: true, enumerable: true, value: entry, writable: true})
+    } else {
+      payload[key] = entry
+    }
+  }
+
+  return payload
+}
+
 export const getProjectTransferLogicalFingerprintValue = (
   value: unknown,
   excludedKeys: Set<string> = getExcludedKeySet(),
@@ -406,12 +323,7 @@ export const getProjectTransferLogicalFingerprintValue = (
         return getProjectTransferLogicalFingerprintValue(entry, excludedKeys)
       })
     : isObjectRecord(value)
-      ? getLogicalObjectEntries(value, excludedKeys).reduce<Record<string, ProjectTransferFingerprintValue>>(
-          (payload, key) => {
-            return {...payload, [key]: getProjectTransferLogicalFingerprintValue(value[key], excludedKeys)}
-          },
-          {},
-        )
+      ? getLogicalFingerprintObject(value, excludedKeys)
       : value === undefined
         ? null
         : (value as ProjectTransferFingerprintValue)

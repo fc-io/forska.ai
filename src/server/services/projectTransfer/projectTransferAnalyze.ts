@@ -63,6 +63,7 @@ import {
 } from './projectTransferPaths.ts'
 import {
   assertProjectTransferPayload,
+  assertProjectTransferPayloadRow,
   parseProjectTransferPayloadForSchemaVersion,
   type ProjectTransferAssetManifestEntry,
   type ProjectTransferAssetReference,
@@ -74,7 +75,6 @@ import {
   type ProjectTransferSchemaVNextAssetReferencePayloadRecord,
   serializeProjectTransferPayload,
   serializeProjectTransferPayloadForSchemaVersion,
-  serializeProjectTransferPayloadNdjsonRow,
   serializeProjectTransferPayloadNdjsonRowForSchemaVersion,
   validateProjectTransferPayloadRowForSchemaVersion,
 } from './projectTransferPayloadSchemas.ts'
@@ -797,6 +797,7 @@ const appendStagedNdjsonLine = async ({
   artifactKey,
   hash,
   key,
+  line,
   lineNumber,
   schemaVersion,
   state,
@@ -806,22 +807,20 @@ const appendStagedNdjsonLine = async ({
   artifactKey: ProjectTransferPayloadKey
   hash: ReturnType<typeof createHash>
   key: ProjectTransferPackagePayloadKey
+  line: string
   lineNumber: number
   schemaVersion: ProjectTransferManifest['schemaVersion']
   state: ProjectTransferNdjsonStreamState
   stream: null | WriteStream
   value: Record<string, unknown>
 }) => {
-  const serializedLine = `${serializeProjectTransferPayloadNdjsonRowForSchemaVersion(
-    schemaVersion,
-    key,
-    value,
-    lineNumber,
-  )}\n`
+  const serializedRow = serializeProjectTransferPayloadNdjsonRowForSchemaVersion(schemaVersion, key, value, lineNumber)
+  const serializedLine = `${line === serializedRow ? line : serializedRow}\n`
   const lineBytes = textEncoder.encode(serializedLine)
 
   if (stream !== null) {
-    await writeTextToStream(stream, `${serializeProjectTransferPayloadNdjsonRow(artifactKey, value, lineNumber)}\n`)
+    assertProjectTransferPayloadRow(artifactKey, value, lineNumber)
+    await writeTextToStream(stream, serializedLine)
   }
 
   hash.update(lineBytes)
@@ -873,6 +872,7 @@ const processStagedNdjsonLine = async ({
     artifactKey,
     hash,
     key,
+    line,
     lineNumber,
     schemaVersion,
     state,

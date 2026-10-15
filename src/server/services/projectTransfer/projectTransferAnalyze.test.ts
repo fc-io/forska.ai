@@ -1580,3 +1580,66 @@ test('aborts checksum failures before plan artifact creation', async () => {
     rmSync(cwd, {force: true, recursive: true})
   }
 })
+
+const stagedParityJudgment = {
+  ...getProjectTransferPayloadFixtureMap().judgments[0],
+  quotes: ['Å🙂\u2028', '\ud800', 'quote"\n\\'],
+  confidenceOriginal: 1,
+}
+const stagedParityRows = [
+  stagedParityJudgment,
+  {
+    ...stagedParityJudgment,
+    sourceJudgmentId: 'j-second',
+    quotes: [],
+    nested: {warnings: ['existing'], omissions: ['omitted'], redactions: ['redacted'], keep: true},
+  },
+]
+const stagedParityBytes =
+  '{"answeredOriginal":"include","answeredOriginalAsArray":["include"],"confidenceOriginal":1,"contentSettings":{"humanJudgmentMode":"prompt","useAbstract":true,"useFulltext":false,"useFulltextNoImages":false,"useTitle":true},"explanation":"Fixture explanation","isAnswered":true,"judgmentInputSignature":{"article":{"articleSummaryDigest":null,"articleTitleDigest":"36d65cf053f87083c5e58147b84331742d20bec64e37e3e77831482122c57fa6","contentHash":null,"fullTextAssetsDigest":null,"fullTextDigest":null,"fullTextHtmlDigest":null,"fullTextPdfReferenceDigest":null,"identifierKeys":["arxiv:2401.12345","doi:10.1101/2024.01.01.123456","pmid:12345"],"promptInput":{"articleSummaryDigest":null,"articleTitleDigest":"36d65cf053f87083c5e58147b84331742d20bec64e37e3e77831482122c57fa6","promptOriginalTextDigest":"57fff23fa1930f01b7c37bb4f83ac0adbf1620b1d5d08852ac677780ffa2e338","promptTemplateFamily":"judgeGetSinglePrompt:v1","promptType":"system","sourceTextWrapper":"sourceTextBoundaryWrapper:v1"}},"chunking":{"chunkEvidenceDigests":null,"finalPromptDigest":null,"strategy":null},"contentSettings":{"humanJudgmentMode":"prompt","useAbstract":true,"useFulltext":false,"useFulltextNoImages":false,"useTitle":true},"fullTextProcessing":{"maxTokens":null,"processedTextDigest":null,"stripImages":false,"tokenCount":null,"withinBudget":null},"kind":"judgmentInputSignature","model":{"contextLimit":32768,"modelOptions":{"thinking":"medium"},"modelSignature":{"displayName":"GPT 5.4","modelName":"gpt-5.4","name":"GPT 5.4","providerConnectionSignature":{"authMode":"apiKey","baseURL":null,"configSignature":{"apiVersion":"2026-05-21"},"providerKind":"openai"},"remoteModelId":"gpt-5.4","variant":null,"version":null},"promptTokenLimit":28768},"prompt":{"contentHash":"c4f659c8baf0066f65ecb7006731b24d","originalTextDigest":"57fff23fa1930f01b7c37bb4f83ac0adbf1620b1d5d08852ac677780ffa2e338","promptHeading":"Eligibility","serializedPromptIdentifier":null,"transformedTextDigest":null,"type":"system"},"provider":{"providerConnectionSignature":{"authMode":"apiKey","baseURL":null,"configSignature":{"apiVersion":"2026-05-21"},"providerKind":"openai"},"providerKind":"openai","transportFamily":"openai-responses"},"request":{"evidenceOutputSchemaDigest":"fixture-evidence-schema-digest","evidenceSystemPromptDigest":null,"invocationTemperature":0.2,"maxRetries":2,"outputSchemaDigest":"fixture-output-schema-digest","providerInvocationAdapter":"invokeStoredProviderModel:v1","quoteValidationContract":"exact-source-substring:v1","reservedCompletionTokens":4000,"retryContract":"json-schema-and-quote-validation:v1","systemPromptDigest":"fixture-system-prompt-digest","systemPromptFamily":"getSinglePromptSystemPromptForArticle:v2","systemPromptVariant":"legacy"},"version":1},"judgmentInputSignatureProvenance":{"kind":"currentReviewRows","version":1},"provenance":{"sourceArticleId":"article-1","sourceModelId":"model-1","sourcePromptId":"prompt-1"},"quotes":["\u00c5\ud83d\ude42\u2028","\\ud800","quote\\"\\n\\\\"],"signature":{"articleSignature":{"identifierKeys":["arxiv:2401.12345","doi:10.1101/2024.01.01.123456","pmid:12345"],"title":"Fixture Article"},"contentSettings":{"humanJudgmentMode":"prompt","useAbstract":true,"useFulltext":false,"useFulltextNoImages":false,"useTitle":true},"modelSignature":{"displayName":"GPT 5.4","modelName":"gpt-5.4","name":"GPT 5.4","providerConnectionSignature":{"authMode":"apiKey","baseURL":null,"configSignature":{"apiVersion":"2026-05-21"},"providerKind":"openai"},"remoteModelId":"gpt-5.4","variant":null,"version":null},"promptSignature":{"contentHash":"c4f659c8baf0066f65ecb7006731b24d","originalText":"Include the study?"}},"sourceArticleId":"article-1","sourceJudgmentId":"judgment-1","sourceModelId":"model-1","sourcePromptId":"prompt-1"}\n{"answeredOriginal":"include","answeredOriginalAsArray":["include"],"confidenceOriginal":1,"contentSettings":{"humanJudgmentMode":"prompt","useAbstract":true,"useFulltext":false,"useFulltextNoImages":false,"useTitle":true},"explanation":"Fixture explanation","isAnswered":true,"judgmentInputSignature":{"article":{"articleSummaryDigest":null,"articleTitleDigest":"36d65cf053f87083c5e58147b84331742d20bec64e37e3e77831482122c57fa6","contentHash":null,"fullTextAssetsDigest":null,"fullTextDigest":null,"fullTextHtmlDigest":null,"fullTextPdfReferenceDigest":null,"identifierKeys":["arxiv:2401.12345","doi:10.1101/2024.01.01.123456","pmid:12345"],"promptInput":{"articleSummaryDigest":null,"articleTitleDigest":"36d65cf053f87083c5e58147b84331742d20bec64e37e3e77831482122c57fa6","promptOriginalTextDigest":"57fff23fa1930f01b7c37bb4f83ac0adbf1620b1d5d08852ac677780ffa2e338","promptTemplateFamily":"judgeGetSinglePrompt:v1","promptType":"system","sourceTextWrapper":"sourceTextBoundaryWrapper:v1"}},"chunking":{"chunkEvidenceDigests":null,"finalPromptDigest":null,"strategy":null},"contentSettings":{"humanJudgmentMode":"prompt","useAbstract":true,"useFulltext":false,"useFulltextNoImages":false,"useTitle":true},"fullTextProcessing":{"maxTokens":null,"processedTextDigest":null,"stripImages":false,"tokenCount":null,"withinBudget":null},"kind":"judgmentInputSignature","model":{"contextLimit":32768,"modelOptions":{"thinking":"medium"},"modelSignature":{"displayName":"GPT 5.4","modelName":"gpt-5.4","name":"GPT 5.4","providerConnectionSignature":{"authMode":"apiKey","baseURL":null,"configSignature":{"apiVersion":"2026-05-21"},"providerKind":"openai"},"remoteModelId":"gpt-5.4","variant":null,"version":null},"promptTokenLimit":28768},"prompt":{"contentHash":"c4f659c8baf0066f65ecb7006731b24d","originalTextDigest":"57fff23fa1930f01b7c37bb4f83ac0adbf1620b1d5d08852ac677780ffa2e338","promptHeading":"Eligibility","serializedPromptIdentifier":null,"transformedTextDigest":null,"type":"system"},"provider":{"providerConnectionSignature":{"authMode":"apiKey","baseURL":null,"configSignature":{"apiVersion":"2026-05-21"},"providerKind":"openai"},"providerKind":"openai","transportFamily":"openai-responses"},"request":{"evidenceOutputSchemaDigest":"fixture-evidence-schema-digest","evidenceSystemPromptDigest":null,"invocationTemperature":0.2,"maxRetries":2,"outputSchemaDigest":"fixture-output-schema-digest","providerInvocationAdapter":"invokeStoredProviderModel:v1","quoteValidationContract":"exact-source-substring:v1","reservedCompletionTokens":4000,"retryContract":"json-schema-and-quote-validation:v1","systemPromptDigest":"fixture-system-prompt-digest","systemPromptFamily":"getSinglePromptSystemPromptForArticle:v2","systemPromptVariant":"legacy"},"version":1},"judgmentInputSignatureProvenance":{"kind":"currentReviewRows","version":1},"provenance":{"sourceArticleId":"article-1","sourceModelId":"model-1","sourcePromptId":"prompt-1"},"quotes":[],"signature":{"articleSignature":{"identifierKeys":["arxiv:2401.12345","doi:10.1101/2024.01.01.123456","pmid:12345"],"title":"Fixture Article"},"contentSettings":{"humanJudgmentMode":"prompt","useAbstract":true,"useFulltext":false,"useFulltextNoImages":false,"useTitle":true},"modelSignature":{"displayName":"GPT 5.4","modelName":"gpt-5.4","name":"GPT 5.4","providerConnectionSignature":{"authMode":"apiKey","baseURL":null,"configSignature":{"apiVersion":"2026-05-21"},"providerKind":"openai"},"remoteModelId":"gpt-5.4","variant":null,"version":null},"promptSignature":{"contentHash":"c4f659c8baf0066f65ecb7006731b24d","originalText":"Include the study?"}},"sourceArticleId":"article-1","sourceJudgmentId":"j-second","sourceModelId":"model-1","sourcePromptId":"prompt-1","nested":{"warnings":["existing","omitted","redacted"],"keep":true}}\n'
+
+test.each(['canonical', 'noncanonical'] as const)(
+  'preserves characterized staged bytes for %s NDJSON',
+  async (inputKind) => {
+    const cwd = getRuntimeRoot()
+    const rawLines = stagedParityRows.map((row) => {
+      return JSON.stringify(row)
+    })
+    const canonicalInput = `${rawLines.join('\n')}\n`
+    const noncanonicalInput = `\n \t${(rawLines[0] ?? '').replace('"confidenceOriginal":1', '"confidenceOriginal":1e0').replace('Å', '\\u00c5')}\r\n\n${rawLines[1]} `
+    const input = inputKind === 'canonical' ? canonicalInput : noncanonicalInput
+
+    try {
+      const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({
+        cwd,
+        serializedPayloadOverride: (serializedPayloads) => {
+          return {...serializedPayloads, judgments: input}
+        },
+      })
+      const result = await analyzeProjectTransferImportPackage({
+        availableDiskBytes: 10_000_000_000,
+        cwd,
+        layout,
+        planRevision: 11,
+        runner: getEmptyAnalyzeTargetRunner(),
+        uploadMetadata,
+        zipModule,
+      })
+      const stagedBytes = await readFile(join(cwd, layout.extractedPath, projectTransferPayloadPathByKey.judgments))
+
+      expect(stagedBytes.equals(Buffer.from(stagedParityBytes))).toBe(true)
+      expect(getProjectTransferSha256Checksum(stagedBytes)).toBe(
+        '2634c95302c86b8c81f379e6e4c8da9dcdd8c20c08fe7b91f3b30de2cd078c5e',
+      )
+      expect(result.analysis.stagedPackage?.payloads.judgments).toMatchObject({
+        canonicalByteLength: 7540,
+        canonicalChecksumSha256: '2634c95302c86b8c81f379e6e4c8da9dcdd8c20c08fe7b91f3b30de2cd078c5e',
+        invalidRecordCount: 0,
+        logicalDigestSha256: 'fa9bbf246015fb3016db6a6e20c879ea1cfd1c2456d7d106ff27c4dc67a885e5',
+        recordCount: 2,
+      })
+    } finally {
+      rmSync(cwd, {force: true, recursive: true})
+    }
+  },
+)
