@@ -1,12 +1,12 @@
 # Historical DuckDB checkpoint memory backport
 
-**Superseded:** normal installs, containers, and desktop now use the pinned
+**Superseded:** normal installs and containers now use the pinned
 Forska-patched 2.0 alpha described in [the distribution guide](../../vendor/duckdb/README.md).
 The old C++ build and patch files were removed in that cutover. This document
 records the earlier diagnosis, reviewed backport, and evidence; its build
 commands and container-only scope are historical, not current instructions.
 
-Scope: database engine and container build; no application schema or authoritative-row changes. The Apple container uses a patched Linux ARM64 DuckDB library. Host web and desktop installations are not replaced by this container build.
+Scope: database engine and container build; no application schema or authoritative-row changes. The Apple container uses a patched Linux ARM64 DuckDB library. Host web installations are not replaced by this container build.
 
 ## Pinned provenance
 

@@ -18,7 +18,7 @@ The release workload shape covers import append checkpoints, dirty
 materialization resume checkpoints, serving refresh health/warning checkpoints,
 review lists, filters, named counts, token-prefix search, async substring state,
 bulk jobs, export/PDF jobs, article-set hydration, list/detail payload hydration,
-human facets/options, queue reads, and desktop-style interruption/resume slices.
+human facets/options, queue reads, and interruption/resume slices.
 Validation fails on missing dimensions, request-slice diversity gaps, wrong
 count keys/filter prefixes, bad search/count/job dimensions, over-wide scanned
 rows, over-page returned rows, foreground temp spill, p95/p99 latency breaches,

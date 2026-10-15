@@ -10,7 +10,7 @@ import {
 test('Bun test discovery normalizes Windows paths before excluding generated and dependency tests', () => {
   expect(normalizeBunTestFilePath('src\\server\\example.test.ts')).toBe('src/server/example.test.ts')
   expect(isIgnoredBunTestFilePath('node_modules\\package\\source.test.ts')).toBe(true)
-  expect(isIgnoredBunTestFilePath('desktopBuild\\package\\source.test.ts')).toBe(true)
+  expect(isIgnoredBunTestFilePath('dist\\package\\source.test.ts')).toBe(true)
   expect(isIgnoredBunTestFilePath('src\\server\\example.test.ts')).toBe(false)
 })
 

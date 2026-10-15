@@ -64,7 +64,6 @@ test.each(['json', 'xml'] as const)(
           DUCKDB_MEMORY_LIMIT: '512MiB',
           DUCKDB_PATH: join(runtimeRoot, 'fixture.duckdb'),
           DUCKDB_TEMP_DIRECTORY: join(runtimeRoot, 'spill'),
-          FORSKA_DESKTOP_MODE: 'false',
           SERVER_DUCKDB_OWNER_URL: '',
           SERVER_ROLE: 'dev-single',
         },

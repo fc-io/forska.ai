@@ -5,7 +5,7 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-non-review',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'owner-dependent local product API classification; not linked from review tables or desktop review flows',
+    guard: 'owner-dependent local product API classification; not linked from review tables or review flows',
     method: 'GET',
     reason:
       'Global article catalog recency surface; it does not select project-scoped review rows or make review decisions.',
@@ -16,7 +16,7 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-non-review',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'owner-dependent local product API classification; not linked from review tables or desktop review flows',
+    guard: 'owner-dependent local product API classification; not linked from review tables or review flows',
     method: 'GET',
     reason:
       'Global article catalog lookup for manual selection; it is not project scoped and has no review decision path.',
@@ -70,8 +70,7 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'migrated-job',
     contractKeys: ['review.queue.unassessed'],
     excludedFromNormalReviewFlow: true,
-    guard:
-      'owner-dependent local product API for browser and desktop admin job pages; not linked from normal review row flows',
+    guard: 'owner-dependent local product API for browser admin job pages; not linked from normal review row flows',
     method: 'GET',
     reason: 'Judgment-job unassessed count is served from the V4 unassessed queue with no legacy OLAP raw fallback.',
     routeFile: 'src/server/routes/JudgmentsJobsRoutes.ts',
@@ -82,7 +81,7 @@ export const reviewServingAdjacentRouteClassifications = [
     contractKeys: ['review.queue.unassessed'],
     excludedFromNormalReviewFlow: true,
     guard:
-      'owner-dependent local product API for browser and desktop admin job pages; bounded preview route outside normal review row flows',
+      'owner-dependent local product API for browser admin job pages; bounded preview route outside normal review row flows',
     method: 'GET',
     reason:
       'Judgment-job unassessed article preview is served from the V4 unassessed queue with no legacy OLAP raw fallback.',
@@ -93,10 +92,9 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-admin-debug',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'owner-dependent local product API for the browser and desktop admin assessments page only',
+    guard: 'owner-dependent local product API for the browser admin assessments page only',
     method: 'GET',
-    reason:
-      'Aggregate human-assessment overview for admin reporting; it is not used by browser or desktop review row flows.',
+    reason: 'Aggregate human-assessment overview for admin reporting; it is not used by browser review row flows.',
     routeFile: 'src/server/routes/HumanAssessmentRoutes.ts',
     routePath: '/api/humanassessment/overview',
   },
@@ -104,7 +102,7 @@ export const reviewServingAdjacentRouteClassifications = [
     classification: 'out-of-scope-admin-debug',
     contractKeys: [],
     excludedFromNormalReviewFlow: true,
-    guard: 'owner-dependent local product API for the browser and desktop admin assessments page only',
+    guard: 'owner-dependent local product API for the browser admin assessments page only',
     method: 'GET',
     reason:
       'Aggregate both-projects human-assessment overview for admin reporting; it is not a normal review row surface.',

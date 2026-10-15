@@ -584,8 +584,6 @@ Client:
   reconciliation bucket/range, last error, and active window.
 - Deleted article rows should be visibly marked as deleted from the data source,
   while still linking to the preserved article identity where available.
-- Preserve browser and desktop app flows because this is shared UI and API
-  surface.
 
 ## Implementation Steps
 

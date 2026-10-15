@@ -3,7 +3,6 @@ import {Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
-import {getLocationHrefWithSearch, getLocationSearch} from '../../../../utils/locationSearch.ts'
 import {
   analyzeProjectImportSession,
   cancelProjectImportSession,
@@ -68,7 +67,7 @@ const getInitialSessionId = () => {
     return null
   }
 
-  const value = new URLSearchParams(getLocationSearch(window.location)).get('sessionId')?.trim() ?? ''
+  const value = new URLSearchParams(window.location.search).get('sessionId')?.trim() ?? ''
 
   return value.length > 0 ? value : null
 }
@@ -78,7 +77,7 @@ const setSessionSearchParam = (sessionId: string | null) => {
     return
   }
 
-  const searchParams = new URLSearchParams(getLocationSearch(window.location))
+  const searchParams = new URLSearchParams(window.location.search)
 
   if (sessionId === null) {
     searchParams.delete('sessionId')
@@ -86,7 +85,9 @@ const setSessionSearchParam = (sessionId: string | null) => {
     searchParams.set('sessionId', sessionId)
   }
 
-  window.history.replaceState(null, '', getLocationHrefWithSearch(window.location, searchParams.toString()))
+  const nextSearch = searchParams.toString()
+
+  window.history.replaceState(null, '', `${window.location.pathname}${nextSearch === '' ? '' : `?${nextSearch}`}`)
 }
 
 const getSessionUpdatedAtTime = (session: ProjectImportSession) => {
@@ -990,7 +991,7 @@ const ReadPathsPanel = () => {
       <h2 class="text-base font-semibold text-gray-900">Read paths</h2>
       <div class="mt-3 space-y-2 text-sm text-gray-600">
         <p>Normal session reads and dependency mutations use Eden and TanStack Query.</p>
-        <p>Package upload uses the desktop-safe API origin resolved by getApiRequestUrl.</p>
+        <p>Package upload uses the API origin resolved by getApiRequestUrl.</p>
       </div>
     </section>
   )

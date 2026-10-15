@@ -41,7 +41,7 @@ targets that remaining memory churn.
 
 ## Non-Goals
 
-- Do not hide memory pressure by raising the desktop DuckDB memory cap.
+- Do not hide memory pressure by raising the DuckDB memory cap.
 - Do not solve this only by longer sleeps, broader retries, or quieter logs.
 - Do not make default review pages depend on payload/detail enrichment.
 - Do not remove bounded restart recovery until memory pressure is genuinely

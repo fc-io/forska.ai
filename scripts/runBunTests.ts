@@ -1,6 +1,6 @@
 import {resolve} from 'node:path'
 
-const ignoredPrefixes = ['node_modules/', 'dist/', '.git/', 'desktopBuild/', 'desktopArtifacts/']
+const ignoredPrefixes = ['node_modules/', 'dist/', '.git/']
 export const bunTestProcessTimeoutMs = 10 * 60_000
 
 export const normalizeBunTestFilePath = (filePath: string) => {

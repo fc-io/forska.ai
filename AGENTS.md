@@ -13,8 +13,6 @@
 bun install
 bun run dev:server
 bun run dev:app
-bun run desktop:dev
-bun run desktop:build
 bun run build
 bun run lint
 bun run lint:fix
@@ -30,8 +28,6 @@ bun run db:duck:request-review-serving-all-projects-rebuild
 - Never silently retry, downgrade, override, or work around benchmark-critical settings unless the user explicitly asks for that behavior.
 - If a request fails under configured benchmark settings, preserve that failure and surface it.
 - When fixing any out-of-memory issue, add a short entry to `OOM_ERRORS.md` in the same change.
-- Desktop support is additive. Do not break the normal browser flow while adding or changing desktop behavior.
-- For shared app, frontend, runtime-path, server, import, or local file storage changes, explicitly consider both browser/web and desktop app flows.
 - Do not fix unrelated lint issues.
 - Do not add auth, session, user, or admin requirements unless explicitly asked. Default to no-auth single-user behavior.
 - Do not remove `debugger` or `console.log` unless explicitly asked.
@@ -44,7 +40,7 @@ matching `SKILL.md` file directly before starting that kind of work.
 
 - Load `forskai-code-style` before TypeScript, refactor, lint, import, file-structure, or style-sensitive edits.
   Path: `.opencode/skills/forskai-code-style/SKILL.md`
-- Load `forskai-frontend-solid` before SolidJS UI, TanStack Query, routing, desktop/web shared UI, Suspense, or stale-data work.
+- Load `forskai-frontend-solid` before SolidJS UI, TanStack Query, routing, shared UI, Suspense, or stale-data work.
   Path: `.opencode/skills/forskai-frontend-solid/SKILL.md`
 - Load `forskai-api-server` before server routes, Eden/RPC, API boundaries, ArkType validation, upload/download, errors/error handling, environment wiring, runtime paths, imports, or local file storage.
   Path: `.opencode/skills/forskai-api-server/SKILL.md`

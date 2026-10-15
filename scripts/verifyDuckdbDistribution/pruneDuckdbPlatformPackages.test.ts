@@ -7,7 +7,7 @@ import {expect, test} from 'bun:test'
 import {pruneDuckdbPlatformPackages} from './pruneDuckdbPlatformPackages.ts'
 
 test('build pruning removes other targets in flat and nested copies without touching host packages', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'forska-desktop-native-prune-'))
+  const directory = mkdtempSync(join(tmpdir(), 'forska-native-prune-'))
   const modules = join(directory, 'bundle', 'node_modules')
   const hostPackage = join(directory, 'host', 'node_modules', '@duckdb', 'node-bindings-win32-x64')
   const nativePaths = [
@@ -36,7 +36,7 @@ test('build pruning removes other targets in flat and nested copies without touc
 })
 
 test('refuses a node_modules link that could point at the source installation', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'forska-desktop-native-link-'))
+  const directory = mkdtempSync(join(tmpdir(), 'forska-native-link-'))
   try {
     const host = join(directory, 'host')
     const copiedLink = join(directory, 'node_modules')
