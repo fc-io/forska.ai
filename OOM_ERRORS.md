@@ -1,5 +1,13 @@
 # OOM Errors
 
+## 2026-10-16 - Project Transfer Commit Lease Before Revalidation
+
+- Error: No OOM. Live creates waited 12-13 s for DuckDB exclusive-work admission because the commit asked for its lease only after revalidation, when RSS was 15-21 GB from revalidation's parsed payloads against the 0.9 x 12.9 GB readiness cap, so admission recycled DuckDB (or the first write queued behind other work).
+- Context: `runClaimedProjectTransferImportCommit` in `projectTransferCommit.ts`, `projectTransferDuckdbExclusiveWork.ts`, the shared lease in `duckdbExclusiveWork.ts`.
+- Cause: The OOM guard (RSS readiness ratio 0.9, one recycle, then admit) ran at the most memory-heavy point of the commit.
+- Fix: No threshold changed. The commit now takes its lease before post-claim revalidation (admission runs while RSS is still low) and holds it through the app-table writes. After revalidation the payloads are unreachable and `lease.reclaimMemory()` runs `Bun.gc(true)`, re-reads the same RSS readiness and recycles DuckDB once only if RSS is still at or above 0.9 x the cap, so the guard still applies right before the writes. Admission also waits for in-flight owner-lane DuckDB workloads (`activeMaintenance`), and DuckDB work issued inside the lease is admitted as the lease's own work.
+- Verification: `bun test src/server/services/projectTransfer src/server/utils/duckdbExclusiveWork.test.ts src/server/utils/duckdbServiceWorkloadContext.test.ts`.
+
 ## 2026-09-28 - Review-Serving Search Rebuild Output Counts
 
 - Error: No OOM. `limiting rebuild chunk batch size due to RSS cap` with `appBytes` 5.5-6.0 GB against the 4 GiB app headroom clamped search rebuild batches from 32 to 1 while an active snapshot's search was rebuilt in place.

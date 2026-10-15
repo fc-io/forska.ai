@@ -7,6 +7,7 @@ import {expect, setDefaultTimeout, test} from 'bun:test'
 
 import type {ProjectTransferSessionRecord} from '../../../db/schemaTypes.ts'
 import type {RequestReviewServingV4RebuildInput} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
+import {runMeasuredDuckdbJsonWorkload} from '../../utils/duckdbService.ts'
 import type {
   ProjectTransferImportAnalysisArtifact,
   ProjectTransferImportPlanArtifact,
@@ -18,7 +19,10 @@ import {
   revalidateProjectTransferCommitPlan,
 } from './projectTransferCommit.ts'
 import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
-import {getActiveDuckdbExclusiveWorkSnapshot} from './projectTransferDuckdbExclusiveWork.ts'
+import {
+  getActiveDuckdbExclusiveWorkSnapshot,
+  hasActiveDuckdbExclusiveWork,
+} from './projectTransferDuckdbExclusiveWork.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {
   getProjectTransferImportTempLayout,
@@ -584,6 +588,8 @@ const getNoopHistoryRepository = () => {
 
 const runCommit = async ({
   cwd,
+  onAppTableWrites,
+  reclaimRevalidationMemory,
   repository,
   requestReviewServingBuild = async () => {
     return undefined
@@ -591,13 +597,17 @@ const runCommit = async ({
   request = {planRevision: 1},
   revalidate,
   sessionId = 'commit-session',
+  startBackgroundCommit,
 }: {
   cwd: string
+  onAppTableWrites?: () => Promise<void> | void
+  reclaimRevalidationMemory?: NonNullable<ProjectTransferCommitInput['repositories']>['reclaimRevalidationMemory']
   repository: MutableSessionRepository
   requestReviewServingBuild?: NonNullable<ProjectTransferCommitInput['repositories']>['requestReviewServingBuild']
   request?: ProjectTransferCommitInput['request']
   revalidate: NonNullable<ProjectTransferCommitInput['repositories']>['revalidate']
   sessionId?: string
+  startBackgroundCommit?: NonNullable<ProjectTransferCommitInput['repositories']>['startBackgroundCommit']
 }): Promise<ProjectTransferCommitResult> => {
   return commitProjectTransferImportSession({
     cwd,
@@ -610,9 +620,11 @@ const runCommit = async ({
         return 'owner-generated'
       },
       historyRepository: getNoopHistoryRepository(),
+      reclaimRevalidationMemory,
       revalidate,
       requestReviewServingBuild,
       runAppTableWrites: async () => {
+        await onAppTableWrites?.()
         expect(getActiveDuckdbExclusiveWorkSnapshot()).toMatchObject({
           admissionState: 'running',
           kind: 'project_transfer_import',
@@ -660,6 +672,7 @@ const runCommit = async ({
         }
       },
       sessionRepository: repository,
+      startBackgroundCommit,
     },
     request,
     sessionId,
@@ -706,12 +719,12 @@ test('project transfer commit loads frozen artifacts and claims with server gene
     expect(fake.calls.transition[1]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {percent: 0, phase: 'staging_load', status: 'running'},
+      progress: {message: 'Waiting for DuckDB maintenance work to pause', phase: 'revalidation', status: 'running'},
     })
     expect(fake.calls.transition[2]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {message: 'Waiting for DuckDB maintenance work to pause', phase: 'commit', status: 'running'},
+      progress: {message: 'Commit revalidation running', phase: 'revalidation', status: 'running'},
     })
     expect(fake.calls.transition[3]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
@@ -1425,6 +1438,7 @@ test('project transfer commit does not publish post-claim stale plans after a lo
       status: 'error',
       statusCode: 409,
     })
+    expect(hasActiveDuckdbExclusiveWork()).toBe(false)
     expect(fake.calls.reopen).toHaveLength(1)
     expect(writtenPlan.planRevision).toBe(1)
   } finally {
@@ -1462,8 +1476,9 @@ test('project transfer commit marks claimed sessions failed when post-claim reva
       ownerToken: null,
       state: 'failed',
     })
-    expect(fake.calls.transition).toHaveLength(2)
-    expect(fake.calls.transition[1]).toMatchObject({
+    expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+    expect(fake.calls.transition).toHaveLength(4)
+    expect(fake.calls.transition[3]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextOwnerToken: null,
       nextState: 'failed',
@@ -1523,13 +1538,288 @@ test('project transfer background commit marks claimed sessions failed when reva
       ownerToken: null,
       state: 'failed',
     })
-    expect(fake.calls.transition).toHaveLength(2)
-    expect(fake.calls.transition[1]).toMatchObject({
+    expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+    expect(fake.calls.transition).toHaveLength(4)
+    expect(fake.calls.transition[3]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextOwnerToken: null,
       nextState: 'failed',
       progress: {phase: 'commit', status: 'failed'},
     })
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+const getBackgroundSizedPlan = (summary: ProjectTransferPlanSummary) => {
+  const plan = getPlan({planRevision: 1, summary})
+
+  return {...plan, packageCounts: {...plan.packageCounts, articles: 10_000, judgments: 40_000}}
+}
+
+const getExclusiveLeaseState = () => {
+  return getActiveDuckdbExclusiveWorkSnapshot()?.admissionState ?? 'no-lease'
+}
+
+const getProgressRecordingSessionRepository = (
+  repository: NonNullable<MutableSessionRepository>,
+  events: string[],
+): NonNullable<MutableSessionRepository> => {
+  return {
+    ...repository,
+    transitionProjectTransferSessionState: async (params) => {
+      events.push(`progress:${params.progress?.message ?? 'none'}:${getExclusiveLeaseState()}`)
+
+      return repository.transitionProjectTransferSessionState(params)
+    },
+  }
+}
+
+const waitForCondition = async (predicate: () => boolean, remainingAttempts = 2000): Promise<boolean> => {
+  if (predicate()) {
+    return true
+  }
+
+  if (remainingAttempts <= 0) {
+    return false
+  }
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, 5)
+  })
+  return waitForCondition(predicate, remainingAttempts - 1)
+}
+
+const runLeaseOrderCommit = async (executionMode: 'background' | 'inline') => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = executionMode === 'background' ? getBackgroundSizedPlan(summary) : getPlan({planRevision: 1, summary})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const events: string[] = []
+    const reclaimedLeaseTokens: string[] = []
+    const activeLeaseTokens: string[] = []
+    let backgroundOperation = null as null | (() => Promise<void>)
+    const result = await runCommit({
+      cwd,
+      onAppTableWrites: () => {
+        events.push(`writes:${getExclusiveLeaseState()}`)
+      },
+      reclaimRevalidationMemory: async (lease) => {
+        events.push(`reclaim:${getExclusiveLeaseState()}`)
+        reclaimedLeaseTokens.push(lease.token)
+        activeLeaseTokens.push(getActiveDuckdbExclusiveWorkSnapshot()?.token ?? 'missing')
+      },
+      repository: getProgressRecordingSessionRepository(fake.repository, events),
+      revalidate: async () => {
+        events.push(`revalidate:${getExclusiveLeaseState()}`)
+        return {changed: false, plan, ready: true}
+      },
+      startBackgroundCommit: (operation) => {
+        backgroundOperation = operation
+      },
+    })
+
+    await backgroundOperation?.()
+
+    return {activeLeaseTokens, events, fake, reclaimedLeaseTokens, result}
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+}
+
+test('project transfer commit holds the exclusive lease from before revalidation through the writes', async () => {
+  const leasedSequence = [
+    'progress:Commit revalidation running:no-lease',
+    'progress:Waiting for DuckDB maintenance work to pause:no-lease',
+    'progress:Commit revalidation running:running',
+    'revalidate:running',
+    'reclaim:running',
+    'writes:running',
+    'progress:Commit transaction completed:no-lease',
+  ]
+  const inline = await runLeaseOrderCommit('inline')
+  const background = await runLeaseOrderCommit('background')
+
+  expect(inline.result.status).toBe('completed')
+  expect(inline.events).toEqual(['revalidate:no-lease', ...leasedSequence])
+  expect(inline.reclaimedLeaseTokens).toEqual(inline.activeLeaseTokens)
+  expect(background.result).toMatchObject({executionMode: 'background', status: 'claimed'})
+  expect(background.events).toEqual(leasedSequence)
+  expect(background.fake.getSession()).toMatchObject({ownerToken: null, state: 'completed'})
+  expect(background.reclaimedLeaseTokens).toEqual(background.activeLeaseTokens)
+  expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+})
+
+test('project transfer commit waits for in-flight DuckDB maintenance before revalidating', async () => {
+  const cwd = getRuntimeRoot()
+  let releaseMaintenance = () => {}
+  const maintenanceGate = new Promise<void>((resolve) => {
+    releaseMaintenance = resolve
+  })
+  const maintenance = runMeasuredDuckdbJsonWorkload({
+    operation: 'backgroundQuery',
+    queue: 'background',
+    queueDepthAtStart: 0,
+    workloadContext: {
+      fallbackIntent: 'async',
+      routeOrJobKey: 'reviewServing.projector.worker',
+      workloadClass: 'reviewProjector',
+    },
+    work: async () => {
+      await maintenanceGate
+      return []
+    },
+  })
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 1, summary})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const revalidationLeaseStates: string[] = []
+    const commit = runCommit({
+      cwd,
+      repository: fake.repository,
+      revalidate: async () => {
+        revalidationLeaseStates.push(getExclusiveLeaseState())
+        return {changed: false, plan, ready: true}
+      },
+    })
+    const blocked = await waitForCondition(() => {
+      return (getActiveDuckdbExclusiveWorkSnapshot()?.blockedBy.activeMaintenance?.length ?? 0) > 0
+    })
+    const blockedSnapshot = getActiveDuckdbExclusiveWorkSnapshot()
+    const blockedProgress = fake.getSession().progressJson
+    const revalidationsWhileBlocked = [...revalidationLeaseStates]
+
+    releaseMaintenance()
+    await maintenance
+
+    const result = await commit
+
+    expect(blocked).toBe(true)
+    expect(blockedSnapshot).toMatchObject({admissionState: 'draining', phase: 'commit'})
+    expect(blockedSnapshot?.blockedBy.activeMaintenance?.[0]).toContain('reviewServing.projector.worker')
+    expect(blockedProgress).toMatchObject({message: 'Waiting for DuckDB maintenance work to pause'})
+    expect(revalidationsWhileBlocked).toEqual(['no-lease'])
+    expect(result.status).toBe('completed')
+    expect(revalidationLeaseStates).toEqual(['no-lease', 'running'])
+    expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+  } finally {
+    releaseMaintenance()
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit releases the exclusive lease before reopening a stale plan', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getBackgroundSizedPlan(summary)
+    const stalePlan = getPlan({planRevision: 2, summary: getReadySummary({blockerCount: 1})})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const leaseStatesAtReopen: string[] = []
+    const lateSteps: string[] = []
+    let backgroundOperation = null as null | (() => Promise<void>)
+    const result = await runCommit({
+      cwd,
+      onAppTableWrites: () => {
+        lateSteps.push('writes')
+      },
+      reclaimRevalidationMemory: async () => {
+        lateSteps.push('reclaim')
+      },
+      repository: {
+        ...fake.repository,
+        reopenProjectTransferCommitSession: async (params) => {
+          leaseStatesAtReopen.push(getExclusiveLeaseState())
+          return fake.repository.reopenProjectTransferCommitSession(params)
+        },
+      },
+      revalidate: async () => {
+        return {changed: true, plan: stalePlan, ready: false}
+      },
+      startBackgroundCommit: (operation) => {
+        backgroundOperation = operation
+      },
+    })
+
+    await backgroundOperation?.()
+
+    expect(result).toMatchObject({status: 'claimed'})
+    expect(leaseStatesAtReopen).toEqual(['no-lease'])
+    expect(lateSteps).toEqual([])
+    expect(fake.getSession()).toMatchObject({ownerToken: null, planRevision: 2, state: 'awaiting_resolution'})
+    expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit releases the exclusive lease when writes throw', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 1, summary})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const result = await runCommit({
+      cwd,
+      onAppTableWrites: () => {
+        throw new Error('app-table writes failed')
+      },
+      repository: fake.repository,
+      revalidate: async () => {
+        return {changed: false, plan, ready: true}
+      },
+    })
+
+    expect(result).toMatchObject({error: 'app-table writes failed', status: 'error', statusCode: 500})
+    expect(fake.getSession()).toMatchObject({errorJson: {message: 'app-table writes failed'}, state: 'failed'})
+    expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit releases the exclusive lease when ownership is lost inside it', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 1, summary})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    let revalidationCount = 0
+    const result = await runCommit({
+      cwd,
+      repository: {
+        ...fake.repository,
+        transitionProjectTransferSessionState: async (params) => {
+          return getExclusiveLeaseState() === 'running' && params.nextState === 'committing'
+            ? null
+            : fake.repository.transitionProjectTransferSessionState(params)
+        },
+      },
+      revalidate: async () => {
+        revalidationCount += 1
+        return {changed: false, plan, ready: true}
+      },
+    })
+
+    expect(result).toMatchObject({
+      error: 'Project transfer import commit ownership was lost while updating progress',
+      status: 'error',
+      statusCode: 500,
+    })
+    expect(revalidationCount).toBe(1)
+    expect(hasActiveDuckdbExclusiveWork()).toBe(false)
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }

@@ -10,7 +10,9 @@ import {
 } from '../../utils/duckdbExclusiveWork.ts'
 import {
   closeDuckdbService,
+  type DuckdbInFlightWorkloadSnapshot,
   getDuckdbAppendRuntimeMetrics,
+  getDuckdbInFlightWorkloadsSnapshot,
   getDuckdbQueueRuntimeMetricsSnapshot,
 } from '../../utils/duckdbService.ts'
 import {getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from '../../utils/env.ts'
@@ -23,10 +25,25 @@ import type {ProjectTransferProgressPayload} from './projectTransferContracts.ts
 
 const projectTransferExclusiveWorkPollIntervalMs = 250
 const projectTransferExclusiveWorkTimeoutMs = 120_000
+const projectTransferExclusiveWorkReclaimDrainTimeoutMs = 30_000
 const projectTransferExclusiveWorkReadyRssRatio = 0.9
 
 const getProjectTransferExclusiveWorkMaxRssBytes = () => {
   return getDefaultReviewServingRebuildChunkBatchMaxRssBytes()
+}
+
+const getInFlightMaintenanceDescription = (workload: DuckdbInFlightWorkloadSnapshot) => {
+  return `${workload.queue} ${workload.operation} ${workload.routeOrJobKey} for ${workload.durationMs} ms`
+}
+
+export const getProjectTransferExclusiveWorkActiveMaintenance = (
+  workloads: DuckdbInFlightWorkloadSnapshot[] = getDuckdbInFlightWorkloadsSnapshot(),
+) => {
+  return workloads
+    .filter((workload) => {
+      return !workload.exclusiveWorkCompatible
+    })
+    .map(getInFlightMaintenanceDescription)
 }
 
 const getProjectTransferExclusiveWorkReadinessSnapshot = () => {
@@ -38,7 +55,7 @@ const getProjectTransferExclusiveWorkReadinessSnapshot = () => {
   const rssReady = !isProcessMemoryAtCap(maxRssBytes, projectTransferExclusiveWorkReadyRssRatio, memoryUsage)
 
   return {
-    activeMaintenance: [],
+    activeMaintenance: getProjectTransferExclusiveWorkActiveMaintenance(),
     appendQueueDepth: appendMetrics.queueDepth,
     backgroundQueueDepth: queueMetrics.background.queueDepth,
     foregroundQueueDepth: queueMetrics.main.queueDepth,
@@ -74,6 +91,7 @@ export const runWithDuckdbExclusiveWork = async <T>(
         recycleDuckdbRuntime: recycleDuckdbRuntimeBeforeProjectTransferExclusiveWork,
       },
       pollIntervalMs: projectTransferExclusiveWorkPollIntervalMs,
+      reclaimDrainTimeoutMs: projectTransferExclusiveWorkReclaimDrainTimeoutMs,
       timeoutMs: projectTransferExclusiveWorkTimeoutMs,
     },
   )

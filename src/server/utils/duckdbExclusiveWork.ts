@@ -1,3 +1,4 @@
+import {AsyncLocalStorage} from 'node:async_hooks'
 import {randomUUID} from 'node:crypto'
 
 export type DuckdbExclusiveWorkKind = 'project_transfer_import'
@@ -79,13 +80,27 @@ export type PrepareDuckdbExclusiveWorkOptions = {
   forceGarbageCollection?: () => void | Promise<void>
   getReadiness?: () => DuckdbExclusiveWorkReadiness | Promise<DuckdbExclusiveWorkReadiness>
   pollIntervalMs?: number
+  reclaimDrainTimeoutMs?: number
   recycleDuckdb?: () => void | Promise<void>
   sleep?: (delayMs: number) => Promise<void>
   timeoutMs?: number
 }
 
+export type DuckdbExclusiveWorkMemoryReclaim = {
+  readiness: DuckdbExclusiveWorkReadinessSnapshot
+  recycled: boolean
+  recycleSkippedReason?: 'drainTimeout'
+}
+
+type DuckdbExclusiveWorkReclaimSettings = {
+  dependencies: DuckdbExclusiveWorkDependencies
+  drainTimeoutMs: number
+  pollIntervalMs: number
+}
+
 export type DuckdbExclusiveWorkLease = {
   readonly token: string
+  reclaimMemory: () => Promise<DuckdbExclusiveWorkMemoryReclaim>
   release: () => Promise<void>
   run: <T>(operation: () => Promise<T> | T) => Promise<T>
   snapshot: () => DuckdbExclusiveWorkSnapshot
@@ -97,11 +112,19 @@ export type DuckdbExclusiveWorkHandle = DuckdbExclusiveWorkLease
 
 const defaultPollIntervalMs = 250
 const defaultTimeoutMs = 60_000
+const defaultReclaimDrainTimeoutMs = 30_000
 const duckdbExclusiveWorkAdmissionErrorPrefix = 'DuckDB is reserved for project-transfer '
 
 let activeDuckdbExclusiveWork: DuckdbExclusiveWorkSnapshot | null = null
+const duckdbExclusiveWorkLeaseStorage = new AsyncLocalStorage<string>()
 
 export class DuckdbExclusiveWorkAdmissionError extends Error {}
+
+export const isDuckdbExclusiveWorkLeaseContext = () => {
+  const leaseToken = duckdbExclusiveWorkLeaseStorage.getStore()
+
+  return leaseToken !== undefined && activeDuckdbExclusiveWork?.token === leaseToken
+}
 
 export const getDuckdbExclusiveWorkAdmissionError = ({
   operation,
@@ -236,10 +259,36 @@ const getActiveSnapshotForToken = (token: string) => {
   return cloneSnapshot(activeDuckdbExclusiveWork)
 }
 
+const getQueueBlockerDescription = (depth: number, label: string) => {
+  return depth > 0 ? `${depth} queued or running ${label} DuckDB work item(s)` : null
+}
+
+const getRssBlockerDescription = (blockedBy: DuckdbExclusiveWorkBlockedBy) => {
+  return blockedBy.rssReady === false
+    ? `process RSS ${blockedBy.rssBytes ?? 'unknown'} bytes against the ${blockedBy.maxRssBytes ?? 'unknown'} byte cap`
+    : null
+}
+
+const getBlockedByDescription = (blockedBy: DuckdbExclusiveWorkBlockedBy) => {
+  const descriptions = [
+    getQueueBlockerDescription(blockedBy.foregroundQueueDepth, 'foreground'),
+    getQueueBlockerDescription(blockedBy.backgroundQueueDepth, 'background'),
+    getQueueBlockerDescription(blockedBy.appendQueueDepth, 'append'),
+    ...(blockedBy.activeMaintenance ?? []).map((maintenance) => {
+      return `in-flight ${maintenance}`
+    }),
+    getRssBlockerDescription(blockedBy),
+  ].filter((description): description is string => {
+    return description !== null
+  })
+
+  return descriptions.length === 0 ? 'no recorded blocker' : descriptions.join('; ')
+}
+
 const getTimeoutError = (snapshot: DuckdbExclusiveWorkSnapshot, timeoutMs: number) => {
   return new Error(
     `Timed out after ${timeoutMs}ms waiting for DuckDB exclusive ${snapshot.kind} ${snapshot.phase} work admission readiness `
-      + `for session ${snapshot.sessionId}`,
+      + `for session ${snapshot.sessionId}; blocked by ${getBlockedByDescription(snapshot.blockedBy)}`,
   )
 }
 
@@ -336,13 +385,111 @@ const updateActiveDuckdbExclusiveWorkForToken = (token: string, patch: DuckdbExc
   return cloneSnapshot(activeDuckdbExclusiveWork)
 }
 
-const createLease = (token: string, dependencies: DuckdbExclusiveWorkDependencies): DuckdbExclusiveWorkLease => {
+const recycleDuckdbExclusiveWorkRuntime = async (
+  token: string,
+  dependencies: DuckdbExclusiveWorkDependencies,
+  readiness: DuckdbExclusiveWorkReadinessSnapshot,
+): Promise<DuckdbExclusiveWorkMemoryReclaim> => {
+  const now = getNow(dependencies)
+  const {admissionState, message} = getActiveSnapshotForToken(token)
+
+  setAdmissionState(token, 'recycling', now)
+  updateMessage(token, 'Recycling DuckDB runtime before exclusive work continues', now)
+  await dependencies.recycleDuckdbRuntime?.()
+  await dependencies.forceGarbageCollection?.()
+  setAdmissionState(token, admissionState, now)
+  updateMessage(token, message, now)
+
+  return {readiness, recycled: true}
+}
+
+const readDuckdbExclusiveWorkReadiness = async (token: string, dependencies: DuckdbExclusiveWorkDependencies) => {
+  const getReadinessSnapshot = dependencies.getReadinessSnapshot ?? defaultReadinessSnapshot
+
+  assertOwnsActiveWork(token)
+
+  const readiness = normalizeReadinessSnapshot(await getReadinessSnapshot())
+  updateBlockedBy(token, readiness, getNow(dependencies))
+
+  return readiness
+}
+
+const waitForDuckdbExclusiveWorkRecycleDrain = async ({
+  deadlineMs,
+  readiness,
+  settings,
+  token,
+}: {
+  deadlineMs: number
+  readiness: DuckdbExclusiveWorkReadinessSnapshot
+  settings: DuckdbExclusiveWorkReclaimSettings
+  token: string
+}): Promise<{drained: boolean; readiness: DuckdbExclusiveWorkReadinessSnapshot}> => {
+  const drained = isQueueAndMaintenanceDrained(readiness)
+
+  if (drained || getNow(settings.dependencies)().getTime() >= deadlineMs) {
+    return {drained, readiness}
+  }
+
+  await (settings.dependencies.sleep ?? defaultSleep)(settings.pollIntervalMs)
+
+  return waitForDuckdbExclusiveWorkRecycleDrain({
+    deadlineMs,
+    readiness: await readDuckdbExclusiveWorkReadiness(token, settings.dependencies),
+    settings,
+    token,
+  })
+}
+
+const recycleDuckdbExclusiveWorkRuntimeAfterDrain = async (
+  token: string,
+  settings: DuckdbExclusiveWorkReclaimSettings,
+  readiness: DuckdbExclusiveWorkReadinessSnapshot,
+): Promise<DuckdbExclusiveWorkMemoryReclaim> => {
+  const now = getNow(settings.dependencies)
+  const {message} = getActiveSnapshotForToken(token)
+
+  updateMessage(token, 'Waiting for in-flight DuckDB work to finish before recycling the runtime', now)
+
+  const drain = await waitForDuckdbExclusiveWorkRecycleDrain({
+    deadlineMs: now().getTime() + settings.drainTimeoutMs,
+    readiness,
+    settings,
+    token,
+  })
+
+  updateMessage(token, message, now)
+
+  return drain.drained
+    ? recycleDuckdbExclusiveWorkRuntime(token, settings.dependencies, drain.readiness)
+    : {readiness: drain.readiness, recycled: false, recycleSkippedReason: 'drainTimeout'}
+}
+
+const reclaimDuckdbExclusiveWorkMemory = async (
+  token: string,
+  settings: DuckdbExclusiveWorkReclaimSettings,
+): Promise<DuckdbExclusiveWorkMemoryReclaim> => {
+  assertOwnsActiveWork(token)
+  await settings.dependencies.forceGarbageCollection?.()
+
+  const readiness = await readDuckdbExclusiveWorkReadiness(token, settings.dependencies)
+
+  return readiness.recycleRecommended === true
+    ? recycleDuckdbExclusiveWorkRuntimeAfterDrain(token, settings, readiness)
+    : {readiness, recycled: false}
+}
+
+const createLease = (token: string, settings: DuckdbExclusiveWorkReclaimSettings): DuckdbExclusiveWorkLease => {
+  const {dependencies} = settings
   const now = getNow(dependencies)
   let released = false
 
   return {
     get token() {
       return token
+    },
+    reclaimMemory: () => {
+      return reclaimDuckdbExclusiveWorkMemory(token, settings)
     },
     release: async () => {
       if (released) {
@@ -358,7 +505,7 @@ const createLease = (token: string, dependencies: DuckdbExclusiveWorkDependencie
       updateMessage(token, 'DuckDB exclusive work is running', now)
 
       try {
-        return await operation()
+        return await duckdbExclusiveWorkLeaseStorage.run(token, operation)
       } finally {
         await releaseDuckdbExclusiveWorkToken(token, dependencies)
         released = true
@@ -419,7 +566,11 @@ export const prepareDuckdbExclusiveWork = async (
       timeoutMs: options.timeoutMs ?? defaultTimeoutMs,
     })
 
-    return createLease(token, dependencies)
+    return createLease(token, {
+      dependencies,
+      drainTimeoutMs: options.reclaimDrainTimeoutMs ?? defaultReclaimDrainTimeoutMs,
+      pollIntervalMs: options.pollIntervalMs ?? defaultPollIntervalMs,
+    })
   } catch (error) {
     await releaseDuckdbExclusiveWorkToken(token, dependencies)
     throw error
