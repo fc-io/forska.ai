@@ -375,12 +375,14 @@ const getArticleInputBySource = ({
       const baseArticle = sourceArticle ?? null
       const update = updatesBySource[match.sourceArticleId] ?? null
       const filledArticle = update
-        ? update.fieldFills.reduce<Record<string, unknown>>(
-            (article, fill) => {
-              return {...article, [fill.field]: fill.value}
-            },
-            {...(baseArticle ?? {})},
-          )
+        ? {
+            ...(baseArticle ?? {}),
+            ...Object.fromEntries(
+              update.fieldFills.map((fill) => {
+                return [fill.field, fill.value]
+              }),
+            ),
+          }
         : baseArticle
 
       return filledArticle ? [[match.sourceArticleId, filledArticle as ExportArticleInput]] : []
@@ -797,7 +799,12 @@ const getDuplicateKeyBlockers = ({
     const key = getKey(entry)
     const existing = key === null ? [] : (mapped.get(key) ?? [])
 
-    return key === null ? mapped : mapped.set(key, [...existing, entry])
+    if (key !== null) {
+      existing.push(entry)
+      mapped.set(key, existing)
+    }
+
+    return mapped
   }, new Map())
 
   return [...groups.values()]
@@ -996,16 +1003,16 @@ const getJudgmentModelRows = ({
   const sourceProviderInputById = getSourceProviderInputById(payloads)
   const targetModelInputById = getTargetModelInputById(targetConnections)
   const targetProviderInputById = getTargetProviderInputById(targetConnections)
-  const modelInputById = Object.entries(getModelTargetIdBySource({dependencyResolution, payloads})).reduce<
-    Record<string, ExportModelInput>
-  >((mapped, [sourceModelId, targetModelId]) => {
-    const targetModel = targetModelId ? (targetModelInputById[targetModelId] ?? null) : null
-    const sourceModel = sourceModelInputById[sourceModelId] ?? null
+  const modelInputById = Object.fromEntries(
+    Object.entries(getModelTargetIdBySource({dependencyResolution, payloads})).flatMap(
+      ([sourceModelId, targetModelId]) => {
+        const targetModel = targetModelId ? (targetModelInputById[targetModelId] ?? null) : null
+        const sourceModel = sourceModelInputById[sourceModelId] ?? null
 
-    return (targetModel ?? sourceModel)
-      ? {...mapped, [sourceModelId]: (targetModel ?? sourceModel) as ExportModelInput}
-      : mapped
-  }, {})
+        return (targetModel ?? sourceModel) ? [[sourceModelId, (targetModel ?? sourceModel) as ExportModelInput]] : []
+      },
+    ),
+  )
   const providerInputById = Object.fromEntries(
     Object.values(modelInputById).flatMap((model) => {
       const targetProvider = targetProviderInputById[model.providerConnectionId] ?? null
@@ -1325,7 +1332,12 @@ const getHumanReviewPlan = ({
       const mapKey = uniqueKey === null ? null : `${row.kind}:${uniqueKey}`
       const existing = mapKey === null ? [] : (mapped.get(mapKey) ?? [])
 
-      return mapKey === null ? mapped : mapped.set(mapKey, [...existing, row])
+      if (mapKey !== null) {
+        existing.push(row)
+        mapped.set(mapKey, existing)
+      }
+
+      return mapped
     }, new Map())
     .values()
   const duplicateBlockers = [...duplicateKeyBlockers]
