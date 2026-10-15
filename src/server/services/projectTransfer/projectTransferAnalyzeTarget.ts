@@ -336,7 +336,13 @@ const chunkValues = <T>(values: readonly T[], size: number) => {
   return values.reduce<T[][]>((chunks, value) => {
     const last = chunks.at(-1)
 
-    return last === undefined || last.length >= size ? [...chunks, [value]] : [...chunks.slice(0, -1), [...last, value]]
+    if (last === undefined || last.length >= size) {
+      chunks.push([value])
+    } else {
+      last.push(value)
+    }
+
+    return chunks
   }, [])
 }
 
@@ -718,27 +724,17 @@ const getTargetArticlesByIdentifier = async ({
   return getNormalizedTargetArticleMatchRows({inputs, rows})
 }
 
-const getCandidateArticleMap = ({
-  input,
-  rows,
-}: {
-  input: ImportedArticleMatchInput
-  rows: readonly TargetArticleMatchRow[]
-}) => {
-  const candidateRows = rows
-    .filter((row) => {
-      return row.sourceArticleId === input.sourceArticleId
-    })
-    .map((row) => {
-      return {
-        matchedIdentifier: {
-          identifierType: getIdentifierTypeFromKey(row.matchedKey),
-          key: row.matchedKey,
-          value: row.matchedValue,
-        },
-        targetArticle: row,
-      }
-    })
+const getCandidateArticleMap = (rows: readonly TargetArticleMatchRow[]) => {
+  const candidateRows = rows.map((row) => {
+    return {
+      matchedIdentifier: {
+        identifierType: getIdentifierTypeFromKey(row.matchedKey),
+        key: row.matchedKey,
+        value: row.matchedValue,
+      },
+      targetArticle: row,
+    }
+  })
 
   return candidateRows.reduce<Map<string, TargetArticleCandidateDetail>>((candidateMap, row) => {
     const existing = candidateMap.get(row.targetArticle.targetArticleId)
@@ -747,8 +743,12 @@ const getCandidateArticleMap = ({
       return identifier.key === row.matchedIdentifier.key && identifier.value === row.matchedIdentifier.value
     })
 
+    if (!hasIdentifier) {
+      matchedIdentifiers.push(row.matchedIdentifier)
+    }
+
     candidateMap.set(row.targetArticle.targetArticleId, {
-      matchedIdentifiers: hasIdentifier ? matchedIdentifiers : [...matchedIdentifiers, row.matchedIdentifier],
+      matchedIdentifiers,
       targetArticle: row.targetArticle,
       targetArticleId: row.targetArticle.targetArticleId,
     })
@@ -849,11 +849,20 @@ const getInitialArticleMatchPlans = ({
   inputs: readonly ImportedArticleMatchInput[]
   rows: readonly TargetArticleMatchRow[]
 }) => {
-  const candidateDetailsBySourceArticleId = inputs.reduce<Record<string, TargetArticleCandidateDetail[]>>(
-    (candidateMap, input) => {
-      return {...candidateMap, [input.sourceArticleId]: [...getCandidateArticleMap({input, rows}).values()]}
-    },
-    {},
+  const rowsBySourceArticleId = rows.reduce<Map<string, TargetArticleMatchRow[]>>((rowMap, row) => {
+    const sourceRows = rowMap.get(row.sourceArticleId) ?? []
+
+    sourceRows.push(row)
+    rowMap.set(row.sourceArticleId, sourceRows)
+
+    return rowMap
+  }, new Map())
+  const candidateDetailsBySourceArticleId = Object.fromEntries(
+    inputs.map((input) => {
+      const sourceRows = rowsBySourceArticleId.get(input.sourceArticleId) ?? []
+
+      return [input.sourceArticleId, [...getCandidateArticleMap(sourceRows).values()]]
+    }),
   )
   const packageIdentifierBlockers = getPackageIdentifierDuplicateBlockers(inputs)
   const blockers = inputs.flatMap((input) => {
@@ -901,7 +910,8 @@ const getCollapseBlockers = (plans: readonly ArticleMatchPlan[]) => {
       const targetArticleId = plan.selectedTargetArticleId ?? ''
       const existing = targetMap.get(targetArticleId) ?? []
 
-      targetMap.set(targetArticleId, [...existing, plan.sourceArticleId])
+      existing.push(plan.sourceArticleId)
+      targetMap.set(targetArticleId, existing)
 
       return targetMap
     }, new Map())
@@ -950,16 +960,18 @@ const getSelectedTargetArticleBySourceFromCandidateDetails = ({
   candidateDetailsBySourceArticleId: Record<string, readonly TargetArticleCandidateDetail[]>
   plans: readonly ArticleMatchPlan[]
 }) => {
-  return plans.reduce<Record<string, TargetArticleRow | null>>((articleMap, plan) => {
-    const targetArticle =
-      plan.selectedTargetArticleId === null
-        ? null
-        : (candidateDetailsBySourceArticleId[plan.sourceArticleId]?.find((candidate) => {
-            return candidate.targetArticleId === plan.selectedTargetArticleId
-          })?.targetArticle ?? null)
+  return Object.fromEntries(
+    plans.map((plan) => {
+      const targetArticle =
+        plan.selectedTargetArticleId === null
+          ? null
+          : (candidateDetailsBySourceArticleId[plan.sourceArticleId]?.find((candidate) => {
+              return candidate.targetArticleId === plan.selectedTargetArticleId
+            })?.targetArticle ?? null)
 
-    return {...articleMap, [plan.sourceArticleId]: targetArticle}
-  }, {})
+      return [plan.sourceArticleId, targetArticle]
+    }),
+  )
 }
 
 const replaceProjectTransferArticleMatchPlanTable = async ({
@@ -1014,15 +1026,19 @@ const getArticleMatchAnalysis = async ({
 }
 
 const getResolvedArticleIdBySource = (plans: readonly ArticleMatchPlan[]) => {
-  return plans.reduce<Record<string, string | null>>((articleMap, plan) => {
-    return {...articleMap, [plan.sourceArticleId]: plan.selectedTargetArticleId}
-  }, {})
+  return Object.fromEntries(
+    plans.map((plan) => {
+      return [plan.sourceArticleId, plan.selectedTargetArticleId]
+    }),
+  )
 }
 
 const getImportedArticleBySource = (articles: readonly ProjectTransferArticlePayloadRecord[]) => {
-  return articles.reduce<Record<string, ProjectTransferArticlePayloadRecord>>((articleMap, article) => {
-    return {...articleMap, [article.sourceArticleId]: article}
-  }, {})
+  return Object.fromEntries(
+    articles.map((article) => {
+      return [article.sourceArticleId, article]
+    }),
+  )
 }
 
 const getRuntimeAssetPathsFromString = (value: string) => {
@@ -1040,9 +1056,11 @@ const getRuntimeAssetPathsFromValue = (value: unknown): string[] => {
 }
 
 const getArticleFieldAssetPaths = (article: ProjectTransferArticlePayloadRecord) => {
-  return articleFillFields.reduce<Record<string, string[]>>((assetMap, field) => {
-    return {...assetMap, [field]: getRuntimeAssetPathsFromValue(getRecordField(article, field))}
-  }, {})
+  return Object.fromEntries(
+    articleFillFields.map((field) => {
+      return [field, getRuntimeAssetPathsFromValue(getRecordField(article, field))]
+    }),
+  )
 }
 
 const hasIncomingFillValue = (value: unknown) => {
@@ -1380,9 +1398,11 @@ const getPromptPlan = async ({
     ],
     runner,
   })
-  const targetPromptByHash = promptRows.reduce<Record<string, TargetPromptRow>>((promptMap, prompt) => {
-    return prompt.contentHash ? {...promptMap, [prompt.contentHash]: prompt} : promptMap
-  }, {})
+  const targetPromptByHash = Object.fromEntries(
+    promptRows.flatMap((prompt) => {
+      return prompt.contentHash ? [[prompt.contentHash, prompt]] : []
+    }),
+  )
   const promptPlan = promptInputs.map((prompt): PromptPlanEntry => {
     const targetPrompt = targetPromptByHash[prompt.computedContentHash] ?? null
 
@@ -1394,9 +1414,11 @@ const getPromptPlan = async ({
       targetPromptId: targetPrompt?.targetPromptId ?? null,
     }
   })
-  const promptPlanBySource = promptPlan.reduce<Record<string, PromptPlanEntry>>((promptMap, prompt) => {
-    return {...promptMap, [prompt.sourcePromptId]: prompt}
-  }, {})
+  const promptPlanBySource = Object.fromEntries(
+    promptPlan.map((prompt) => {
+      return [prompt.sourcePromptId, prompt]
+    }),
+  )
   const projectPromptPlan = projectPrompts.map((projectPrompt): ProjectPromptPlanEntry => {
     const sourcePromptId = getStringField(projectPrompt, 'sourcePromptId')
     const prompt = promptPlanBySource[sourcePromptId]
@@ -1422,7 +1444,8 @@ const getPromptPlan = async ({
         const targetPromptId = projectPrompt.targetPromptId ?? ''
         const existing = planMap.get(targetPromptId) ?? []
 
-        planMap.set(targetPromptId, [...existing, projectPrompt])
+        existing.push(projectPrompt)
+        planMap.set(targetPromptId, existing)
 
         return planMap
       }, new Map())
@@ -1639,20 +1662,24 @@ const getActiveRouteBySource = ({
   importRoutes: readonly ProjectTransferPayloadRecord[]
   targetRoutes: readonly TargetImportRouteRow[]
 }) => {
-  const activeTargetByRoute = targetRoutes
-    .filter((route) => {
-      return route.active
-    })
-    .reduce<Record<string, TargetImportRouteRow>>((routeMap, route) => {
-      return {...routeMap, [route.route]: route}
-    }, {})
+  const activeTargetByRoute = Object.fromEntries(
+    targetRoutes
+      .filter((route) => {
+        return route.active
+      })
+      .map((route) => {
+        return [route.route, route]
+      }),
+  )
 
-  return importRoutes.reduce<Record<string, TargetImportRouteRow | null>>((routeMap, route) => {
-    const sourceImportRouteId = getStringField(route, 'sourceImportRouteId')
-    const routeValue = getStringField(route, 'route')
+  return Object.fromEntries(
+    importRoutes.map((route) => {
+      const sourceImportRouteId = getStringField(route, 'sourceImportRouteId')
+      const routeValue = getStringField(route, 'route')
 
-    return {...routeMap, [sourceImportRouteId]: activeTargetByRoute[routeValue] ?? null}
-  }, {})
+      return [sourceImportRouteId, activeTargetByRoute[routeValue] ?? null]
+    }),
+  )
 }
 
 const getRouteWarnings = ({
@@ -2071,11 +2098,10 @@ const getAssetPromotionPlan = ({
   articles: readonly ProjectTransferArticlePayloadRecord[]
   assetManifestEntries: readonly ProjectTransferAssetManifestEntry[]
 }) => {
-  const assetEntryByPath = assetManifestEntries.reduce<Record<string, ProjectTransferAssetManifestEntry>>(
-    (entryMap, entry) => {
-      return {...entryMap, [entry.packagePath]: entry}
-    },
-    {},
+  const assetEntryByPath = Object.fromEntries(
+    assetManifestEntries.map((entry) => {
+      return [entry.packagePath, entry]
+    }),
   )
   const reusedPromotionRows = articleUpdatePlan.flatMap((plan) => {
     return plan.fieldFills.flatMap((fill) => {
@@ -2118,7 +2144,8 @@ const getAssetPromotionPlan = ({
       .reduce<Map<string, typeof promotionRows>>((promotionMap, row) => {
         const existing = promotionMap.get(row.assetPath) ?? []
 
-        promotionMap.set(row.assetPath, [...existing, row])
+        existing.push(row)
+        promotionMap.set(row.assetPath, existing)
 
         return promotionMap
       }, new Map())
