@@ -57,6 +57,7 @@ import {
   type ProjectTransferCommitTempTableFileRoot,
   withProjectTransferCommitTempTableFiles,
 } from './projectTransferCommitTempTableFiles.ts'
+import {assertProjectTransferCommitTargetStateUnchanged} from './projectTransferCommitWriteGuard.ts'
 import type {ProjectTransferImportCompletionPayload} from './projectTransferContracts.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
@@ -6875,6 +6876,8 @@ const writeProjectTransferCommitAppTablesTx = async ({
   sessionId,
   tx,
 }: Omit<ProjectTransferCommitWriterInput, 'database'> & {tx: ProjectTransferCommitWriterTx}) => {
+  assertProjectTransferCommitTargetStateUnchanged({plan, sessionId})
+
   const project = payloads.project ?? failCommitWriter('project payload is required')
   const prompts = payloads.prompts ?? []
   const projectPrompts = payloads.projectPrompts ?? []

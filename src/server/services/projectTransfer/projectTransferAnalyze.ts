@@ -2821,6 +2821,7 @@ const analyzeProjectTransferImportPackageCore = async (
     status: 'running',
     warningCount: parsed.warnings.length,
   })
+  const targetState = await getTargetStateDirtyTokenSnapshotForPlan(input.runner)
   const targetAnalysisMeasurement = await runTargetAnalysisWithProgressHeartbeat({
     input,
     operation: () => {
@@ -2864,7 +2865,6 @@ const analyzeProjectTransferImportPackageCore = async (
     status: 'running',
     warningCount: parsed.warnings.length + targetAnalysis.packageWarnings.length,
   })
-  const targetState = await getTargetStateDirtyTokenSnapshotForPlan(input.runner)
   const blockers = [...packageContractBlockers, ...targetAnalysis.blockers]
   const packageWarnings = [...parsed.warnings, ...targetAnalysis.packageWarnings]
   const jsonMetrics = getAnalyzePayloadJsonMetrics({
