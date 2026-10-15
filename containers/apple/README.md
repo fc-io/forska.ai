@@ -20,7 +20,7 @@ The launcher starts Apple's container service, builds the Linux ARM64 image, and
 runs **`bun run dev:start`** with **`--memory 8G`** (8 GiB). Open
 <http://localhost:3300>. The API, maintenance owner, and judge worker stay inside
 the VM; Vite proxies browser API requests to the internal API. Only Vite is
-published, on host loopback. Normal web and desktop commands are unchanged.
+published, on host loopback. Normal web commands are unchanged.
 
 ```sh
 # Inspect commands without installing or starting the container runtime
@@ -50,7 +50,7 @@ existing container with the same name is not automatically deleted or replaced.
 
 ## Use the existing Mac database
 
-Stop the host `bun run dev:start` stack (or desktop app) cleanly, then run:
+Stop the host `bun run dev:start` stack cleanly, then run:
 
 ```sh
 bun run dev:container --host-db
@@ -115,7 +115,7 @@ Omit `--host-db` to return to the isolated named-volume database.
   automatically forwarded. Configure providers in the app as usual. Container
   `localhost` means the VM, not the Mac; a model server on the host needs a
   container-reachable host address and suitable bind/firewall configuration.
-  Apple GPU/Metal workloads and the native desktop UI do not run in this Linux VM.
+  Apple GPU/Metal workloads do not run in this Linux VM.
 - **Scope:** this is a development server, not a production deployment. One named
   instance is supported to avoid concurrent use of the same database volume.
 
@@ -170,11 +170,11 @@ DB/WAL and logs remain preserved. See the
 [investigation record](../../docs/apple-container-checkpoint-investigation.md)
 and `OOM_ERRORS.md`. The Windows conflict-resolution crash has **not** been
 reproduced or proven fixed by these historical checks. At that point, host
-web/desktop native dependencies had not been changed.
+web native dependencies had not been changed.
 
 ## Shared pinned DuckDB engine
 
-The container, normal web/server installation, and desktop build now install the
+The container and normal web/server installation now install the
 same **Forska-patched DuckDB `v2.0.0-alpha40881`**, distribution
 `2.0.0-alpha40881.forska.2`, through platform-specific packages. It retains official
 base `816a3eb2d512ce359efb40d9319f6db59788422a` and applies the narrow string-bound
@@ -193,16 +193,13 @@ Every image build runs `bun scripts/verifyDuckdbDistribution.ts`: it validates
 which package and engine actually loaded, scalar/nested NULL decoding,
 transaction commit/rollback, new-WAL replay in a fresh process, and the unchanged
 32 MiB checkpoint regression. Startup prints the installed package's provenance.
-Desktop builds remove other platforms’ DuckDB packages from the copied bundle,
-then verify its native files and load that copied engine before packaging; the app does not download DuckDB at
-runtime. Build each desktop target natively so the copied engine can be executed.
+The app does not download DuckDB at runtime.
 
 Bun currently downloads all six tarball-override packages even though each package
 has platform metadata; the installed loader selects only the current target.
 The image build removes unused targets in the same install layer and keeps the
-Bun download cache outside the image. Desktop pruning touches only copied build
-output, never the developer's installed packages. This bounds delivered image/app
-size; it does not hide or eliminate Bun's extra initial download cost.
+Bun download cache outside the image. This bounds delivered image size; it does
+not hide or eliminate Bun's extra initial download cost.
 
 No separate engine installation or file copying is required:
 

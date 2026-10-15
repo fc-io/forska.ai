@@ -59,7 +59,3 @@ bun run lint
 bun run test:network-smoke
 bun run test:network-smoke:synthetic
 ```
-
-The browser smoke gate is not desktop evidence. Desktop release checks remain
-separate through desktop build/runtime tests and any current review-serving
-progress gate required by `TESTS.md`.

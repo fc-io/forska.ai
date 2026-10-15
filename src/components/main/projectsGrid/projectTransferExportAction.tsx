@@ -293,22 +293,12 @@ export const getProjectTransferExportRequestPath = (projectId: string) => {
   return `/api/projects/${encodeURIComponent(projectId)}/export-project`
 }
 
-export const getProjectTransferExportRequestUrl = (
-  projectId: string,
-  locationOrigin?: string | null,
-  desktopApiOrigin?: string | null,
-) => {
-  return getApiRequestUrl(getProjectTransferExportRequestPath(projectId), locationOrigin, desktopApiOrigin)
+export const getProjectTransferExportRequestUrl = (projectId: string, locationOrigin?: string | null) => {
+  return getApiRequestUrl(getProjectTransferExportRequestPath(projectId), locationOrigin)
 }
 
-export const getProjectTransferDownloadRequestUrl = (
-  downloadUrl: string,
-  locationOrigin?: string | null,
-  desktopApiOrigin?: string | null,
-) => {
-  return /^https?:\/\//i.test(downloadUrl)
-    ? downloadUrl
-    : getApiRequestUrl(downloadUrl, locationOrigin, desktopApiOrigin)
+export const getProjectTransferDownloadRequestUrl = (downloadUrl: string, locationOrigin?: string | null) => {
+  return /^https?:\/\//i.test(downloadUrl) ? downloadUrl : getApiRequestUrl(downloadUrl, locationOrigin)
 }
 
 const projectTransferExportTerminalStatuses = new Set([404, 409, 410])

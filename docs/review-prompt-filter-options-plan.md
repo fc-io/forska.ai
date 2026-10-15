@@ -489,7 +489,7 @@ Quality gates:
 
 - targeted executable DuckDB tests for prompt-answer postings
 - focused frontend tests for query-key stability and first render
-- focused Playwright desktop verification
+- focused Playwright verification
 - touched-file lint
 - `bun run build`
 - `bun run db:mig` if schema changes are introduced

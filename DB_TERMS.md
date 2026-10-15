@@ -118,7 +118,7 @@ same result. Replay means a projector can rerun old deltas to rebuild state.
 Example: If a projector crashes halfway through delta 1000, rerunning delta
 1000 should not create duplicate rows or double-count anything.
 
-Why it improves things: Crashes, restarts, and desktop sleep become routine
+Why it improves things: Crashes, restarts, and laptop sleep become routine
 recovery cases instead of data corruption risks.
 
 Performance benefit: Workers can retry bounded batches instead of triggering
@@ -304,9 +304,9 @@ Pros: Safer failures, clearer operator action, fewer user-facing outages.
 
 Cons: Requires state machines, leases, retry limits, and visible diagnostics.
 
-### Desktop Constraints
+### Local Machine Constraints
 
-What it means: Desktop runs on a user's local machine, often with lower
+What it means: Forska runs on a user's local machine, often with lower
 memory, slower disk, sleep/restart interruptions, and no server-class
 operations team.
 
@@ -320,9 +320,9 @@ Performance benefit: Small resumable batches work on both high-end servers and
 laptops.
 
 Consistency benefit: Cursors, leases, and generation manifests prevent
-half-finished desktop work from becoming active data.
+half-finished local work from becoming active data.
 
-Pros: More reliable desktop app, same architecture for web and desktop, lower
+Pros: More reliable local app, same architecture on servers and laptops, lower
 memory pressure.
 
 Cons: More resumability requirements and stricter batch-size discipline.

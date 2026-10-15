@@ -277,12 +277,8 @@ export const getProjectImportUploadRequestPath = (sessionId: string) => {
   return `/api/projects/import/${encodeURIComponent(sessionId)}/upload`
 }
 
-export const getProjectImportUploadRequestUrl = (
-  sessionId: string,
-  locationOrigin?: string | null,
-  desktopApiOrigin?: string | null,
-) => {
-  return getApiRequestUrl(getProjectImportUploadRequestPath(sessionId), locationOrigin, desktopApiOrigin)
+export const getProjectImportUploadRequestUrl = (sessionId: string, locationOrigin?: string | null) => {
+  return getApiRequestUrl(getProjectImportUploadRequestPath(sessionId), locationOrigin)
 }
 
 export const createProjectImportSession = async () => {

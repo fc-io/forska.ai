@@ -1,6 +1,6 @@
 import {existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
-import {dirname, join, normalize, resolve} from 'node:path'
+import {join, resolve} from 'node:path'
 
 import {afterEach, expect, test} from 'bun:test'
 
@@ -85,20 +85,6 @@ test('resolves test runtime log dirs under temp when no explicit log dir is conf
   }).logDir
 
   expect(logDir).toBe(join('/tmp/forska-tests', 'forska-runtime-logs', String(process.pid), 'secondary'))
-})
-
-test('resolves desktop runtime log dir under desktop writable root', () => {
-  const envValues = {
-    DUCKDB_PATH: '/Users/tester/Library/Application Support/Forska/desktop/forska.duckdb',
-    FORSKA_DESKTOP_MODE: 'true',
-    FORSKA_RUNTIME_PROFILE: 'local',
-  }
-
-  const desktopWritableRoot = dirname(normalize(envValues.DUCKDB_PATH))
-
-  expect(getDefaultRuntimeLogDir({cwd: '/repo/forska', envValues})).toBe(
-    resolve(desktopWritableRoot, 'logs', 'runtime', 'local'),
-  )
 })
 
 test('normalizes runtime log filtering env and resolves explicit log dirs', () => {
@@ -338,63 +324,6 @@ test('runtime JSONL sink preserves one JSONL record per append during burst writ
       return record.event === 'runtime.logger.append-burst'
     }),
   ).toBe(true)
-  resetRuntimeJsonlSinkForTests()
-  resetRuntimeProcessIdentityForTests()
-})
-
-test('desktop dev-single runtime writes JSONL under the desktop writable root', () => {
-  resetRuntimeJsonlSinkForTests()
-  resetRuntimeProcessIdentityForTests()
-  const dataRoot = createRuntimeLoggerTestDirectory('forska-desktop-runtime-logger-')
-  const duckdbPath = join(dataRoot, 'forska.duckdb')
-  const timestamp = '2026-04-20T12:30:00.000Z'
-  initializeRuntimeProcessIdentity({
-    envValues: {API_SERVER_PORT: '32101', FORSKA_RUNTIME_PROFILE: 'local'},
-    hostnameValue: 'desktop-host',
-    listenPort: 32101,
-    pid: 444,
-    processStartedAt: '2026-04-20T12:00:00.000Z',
-    service: 'dev-single-server',
-  })
-  installRuntimeJsonlSink({
-    envValues: {
-      DUCKDB_PATH: duckdbPath,
-      FORSKA_DESKTOP_MODE: 'true',
-      FORSKA_RUNTIME_PROFILE: 'local',
-      LOG_LEVEL: 'INFO',
-      SERVER_ROLE: 'dev-single',
-    },
-    timestamp,
-  })
-
-  expect(
-    writeRuntimeLogEvent({
-      attrs: {source: 'desktop-backend'},
-      event: 'runtime.logger.desktop-dev-single',
-      message: 'desktop runtime sink test',
-      severity: 'INFO',
-      timestamp,
-    }),
-  ).toBe(true)
-
-  const runtimeLogDir = join(dataRoot, 'logs', 'runtime', 'local')
-  const logContent = readFileSync(getOnlyRuntimeJsonlFilePath(runtimeLogDir), 'utf8')
-  const [record] = logContent
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      return JSON.parse(line) as Record<string, unknown>
-    })
-
-  expect(record).toMatchObject({
-    attrs: {source: 'desktop-backend'},
-    event: 'runtime.logger.desktop-dev-single',
-    message: 'desktop runtime sink test',
-    runtime: {listenPort: 32101, runtimeProfile: 'local', serverRole: 'dev-single', service: 'dev-single-server'},
-    severity: 'INFO',
-    timestamp,
-  })
-  expect(existsSync(join(dataRoot, 'logs', 'runtime', 'local', 'backend.log'))).toBe(false)
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
 })

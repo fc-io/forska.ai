@@ -30,9 +30,4 @@ description: Use ONLY when touching server routes, Elysia, Eden/RPC, API paths, 
 - Keep secrets and values that must change outside the app in shell env or secret files.
 - Keep shell env use limited to runtime wiring, machine-local paths, and secrets.
 - If you start a local server or process for debugging, stop it before finishing or replying.
-
-## Web And Desktop Awareness
-
-- Server, API wiring, runtime-path, import, and local file storage changes may affect both browser and desktop app flows.
 - Keep `bun run dev:server` and `bun run dev:app` working unless the task explicitly says otherwise.
-- Check `bun run desktop:build` or `bun run desktop:dev` when the shared runtime path or desktop integration is relevant.

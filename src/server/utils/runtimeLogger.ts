@@ -45,7 +45,6 @@ type RuntimeLogConfigOptions = {
   cwd?: string
   envValues?: Record<string, string | undefined>
   joinPath?: (...paths: string[]) => string
-  runtimeWritableRoot?: string
 }
 
 type RuntimeJsonlSinkState = {
@@ -307,30 +306,25 @@ export const getDefaultRuntimeLogDir = ({
   cwd = process.cwd(),
   envValues = process.env,
   joinPath = join,
-  runtimeWritableRoot,
 }: RuntimeLogConfigOptions = {}) => {
   const runtimeProfile = getRuntimeLogProfile({envValues})
-  const defaultRuntimeLogDir = runtimeWritableRoot
-    ? joinPath(runtimeWritableRoot, 'logs', 'runtime', runtimeProfile)
-    : resolveRuntimeWritablePath({cwd, envValues, pathValue: join('logs', 'runtime', runtimeProfile)})
 
   return isTestRuntime(envValues)
     ? getDefaultTestRuntimeLogDir({envValues, joinPath, runtimeProfile})
-    : defaultRuntimeLogDir
+    : resolveRuntimeWritablePath({cwd, pathValue: join('logs', 'runtime', runtimeProfile)})
 }
 
 export const getRuntimeLogConfig = ({
   cwd = process.cwd(),
   envValues = process.env,
   joinPath = join,
-  runtimeWritableRoot,
 }: RuntimeLogConfigOptions = {}) => {
   const runtimeProfile = getRuntimeLogProfile({envValues})
   const configuredLogDir = getTrimmedValue(envValues.LOG_DIR)
   const logDir =
     configuredLogDir === null
-      ? getDefaultRuntimeLogDir({cwd, envValues, joinPath, runtimeWritableRoot})
-      : resolveRuntimeFilePath({cwd, envValues, pathValue: configuredLogDir})
+      ? getDefaultRuntimeLogDir({cwd, envValues, joinPath})
+      : resolveRuntimeFilePath({cwd, pathValue: configuredLogDir})
 
   return {
     logDir,

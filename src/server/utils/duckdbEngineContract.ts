@@ -16,7 +16,7 @@ export const assertDuckdbEngineVersion = (actualVersion: string) => {
     throw new Error(
       `Forska requires DuckDB ${expectedVersion}, but loaded ${actualVersion}. `
         + 'Stop the app and run bun install --frozen-lockfile from the updated checkout. '
-        + 'For a packaged desktop app, reinstall the matching release. The database was not opened.',
+        + 'The database was not opened.',
     )
   }
 }

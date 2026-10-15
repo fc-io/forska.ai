@@ -102,7 +102,7 @@ was then stopped cleanly with SIGTERM.
   Windows conflict-resolution crash remains unproven.
 - Five focused launcher tests, launcher/regression lint and the web build passed;
   the test stack was stopped. Exact commands and the cross-engine fixture
-  sequence are in [TESTS.md](../TESTS.md#apple-container-launcher). Host desktop
+  sequence are in [TESTS.md](../TESTS.md#apple-container-launcher). Host
   native dependencies were not changed; this does not validate the Windows case.
 
 ## Evidence-preserving recovery

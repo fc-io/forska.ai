@@ -1,16 +1,13 @@
 ---
 name: forskai-frontend-solid
-description: Use ONLY when touching SolidJS, TSX, TanStack Query, Eden client calls, Suspense, stale data, UI loading states, browser flow, desktop flow, or shared frontend runtime paths.
+description: Use ONLY when touching SolidJS, TSX, TanStack Query, Eden client calls, Suspense, stale data, UI loading states, browser flow, or shared frontend runtime paths.
 ---
 
 # Forska Frontend And Solid
 
-## Web And Desktop
+## Web Runtime
 
-- Desktop support is additive.
-- Do not break the normal browser flow while adding or changing desktop behavior.
 - Keep `bun run dev:server` and `bun run dev:app` working for the web app unless the task explicitly says otherwise.
-- When changes affect shared UI, API wiring, runtime asset paths, imports, or local file storage, also check the desktop path with `bun run desktop:build` or `bun run desktop:dev` when relevant.
 
 ## Client And UI
 

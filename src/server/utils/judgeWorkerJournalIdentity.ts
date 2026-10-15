@@ -143,18 +143,10 @@ const getJudgeWorkerJournalAppDataRoot = ({
   return duckdbPath === ':memory:' ? null : dirname(duckdbPath)
 }
 
-const resolveExplicitJournalPath = ({
-  cwd,
-  envValues,
-  journalPath,
-}: {
-  cwd: string
-  envValues: Record<string, string | undefined>
-  journalPath: string
-}) => {
+const resolveExplicitJournalPath = ({cwd, journalPath}: {cwd: string; journalPath: string}) => {
   const expandedPath = expandHomeDirectory(journalPath)
 
-  return resolveRuntimeFilePath({cwd, envValues, pathValue: expandedPath})
+  return resolveRuntimeFilePath({cwd, pathValue: expandedPath})
 }
 
 const resolveJournalPathFromWorkerId = ({
@@ -187,7 +179,7 @@ export const resolveJudgeWorkerJournalIdentity = ({
   }
 
   if (configuredJournalPath !== null) {
-    const journalPath = resolveExplicitJournalPath({cwd, envValues, journalPath: configuredJournalPath})
+    const journalPath = resolveExplicitJournalPath({cwd, journalPath: configuredJournalPath})
 
     assertDurableJournalPath(journalPath, envValues)
 

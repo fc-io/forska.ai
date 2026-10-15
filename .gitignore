@@ -21,10 +21,6 @@ data/
 # output
 out
 dist
-desktopArtifacts/
-desktopBuild/
-.desktopArtifacts/
-.desktopBuild/
 *.tgz
 cache
 

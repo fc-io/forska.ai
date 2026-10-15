@@ -6,10 +6,11 @@ import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('f2-article-admin-fk')
+const originalCwd = process.cwd()
 
+process.chdir(tempRuntimeRoot.rootDirectory)
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
-process.env.FORSKA_DESKTOP_MODE = 'true'
 process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
@@ -45,6 +46,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await database?.close()
+  process.chdir(originalCwd)
   tempRuntimeRoot.cleanup()
 })
 

@@ -636,14 +636,6 @@ Entry format:
 - Fix: Replaced the full-row `ORDER BY ... LIMIT 1` with aggregate tie-break CTEs that select the next `chunk_id` via `MIN(...)`, then fetch only that manifest row while keeping temp spill disallowed.
 - Verification: `bun test src/server/reviewServing/reviewServingChunkManifestRepository.test.ts src/server/workers/reviewServingProjectorWorker.test.ts src/server/utils/reviewServingProjectorWorkerHeartbeat.test.ts`; `bun run lint`; in-memory DuckDB parser/runtime check for `getNextClaimableReviewServingRebuildChunk`.
 
-## 2026-06-20 - Desktop DuckDB Runtime Memory Default
-
-- Error: Desktop backend could start without an explicit DuckDB cap, leaving laptop/default runtimes exposed to the same `failed to pin block` class of DuckDB OOM under review-serving overlap workloads.
-- Context: Phase 5 Part 2 desktop backend startup through `getDesktopRuntimeConfig` and shared review-serving projector, job, search, cleanup, and route runtime paths.
-- Cause: Browser/server profiles already had low-memory DuckDB worker behavior, but desktop startup did not provide a bounded default `DUCKDB_MEMORY_LIMIT` when the operator had not set an override.
-- Fix: Desktop backend now defaults `DUCKDB_MEMORY_LIMIT` to `6400MiB` while preserving explicit operator overrides; the existing DuckDB service maps limits at or below `6400MiB` to reduced concurrency and serialized work.
-- Verification: `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/server/reviewServing/reviewServingDesktopInterruptionEvidence.test.ts`; `bun run desktop:build`; Phase 5 closure audit targeted gates on 2026-06-20.
-
 ## 2026-06-13 - Review Serving V4 Foundation
 
 - Error: `Out of Memory Error: failed to pin block of size 256.0 KiB (6.2 GiB/6.2 GiB used)` from foreground review reads under import/materialization overlap.
@@ -680,17 +672,17 @@ Entry format:
 
 - Observed with the existing primary DB in an 8 GiB Linux ARM64 VM: `FATAL Error: Failed to create checkpoint: Out of Memory Error: could not allocate block of size 256.0 KiB (3.9 GiB/3.9 GiB used)`.
 - Cause: Ordinary checkpoint initialization loads historical deleted-row metadata. Stable 1.5.1/1.5.5 expand compact masks into retained per-row allocations (`BASE_TABLE` grew to about 3.84 GB while ART stayed near 125 MB). Disabling optional vacuum tasks did not avoid that load.
-- Fix: Container-only pinned DuckDB 1.5.5 source build with upstream #23964/#24336 backported: compact delete masks/constants and snapshot-safe allocation release. No WAL deletion, checkpoint bypass or memory-cap increase; host web/desktop dependencies remain unchanged.
+- Fix: Container-only pinned DuckDB 1.5.5 source build with upstream #23964/#24336 backported: compact delete masks/constants and snapshot-safe allocation release. No WAL deletion, checkpoint bypass or memory-cap increase; host web dependencies remain unchanged.
 - Verification: Preserved real-DB clone ordinary full checkpoint passed at literal `4GB` / `8G` VM in 13 seconds, RSS about 2.11 GB. Original-DB API/owner/judge readiness returned 200; active-project completed chunks advanced 68→120 and pending 317→265 over 84 seconds with no failed/quarantined/expired chunks. Host 1.5.1→patched checkpoint→host 1.5.1 read-only fixture compatibility, all 13 upstream cases and `bun scripts/duckdbCheckpointMemoryRegression.ts` (32 MiB checkpoint/reopen) passed; see `TESTS.md` and `docs/apple-container-checkpoint-investigation.md`.
 - Live limitation: Scheduled bounded-loop recycling caused a transient owner-not-ready 502 before readiness recovered; no OOM/process crash was observed. Continuous availability during recycling is not established. Browser loaded 100 rows; stack stopped cleanly with SIGTERM.
 - Recovery: Preserve DB/WAL, logs and stale lease evidence; stop all owners before copying/restoring and keep host/container access exclusive. Judge-journal lock checks address a separate startup blocker. The Windows conflict-resolution crash remains unproven and is not claimed fixed.
 
-## 2026-09-08 - Deliver the checkpoint fix to normal installs and desktop
+## 2026-09-08 - Deliver the checkpoint fix to normal installs
 
 - Error: The historical deleted-row checkpoint allocation OOM remained possible in normal installs because the earlier 1.5.5 backport replaced only the Apple-container engine.
-- Cause: Host, desktop, and container paths installed different native engines.
+- Cause: Host and container paths installed different native engines.
 - Fix: Pin official DuckDB `v2.0.0-alpha40881` (`816a3eb2d5`) in checksummed platform packages with the existing Node bridge, use those packages in every runtime, and remove the custom C++ build/backport. The shared NULL-type compatibility setting is required; incompatible legacy WAL is not silently deleted.
-- Verification gates: Clean native install matrix, loaded bundle verification in desktop builds, exact new-WAL commit/replay, unchanged 32 MiB checkpoint/reopen regression, and current-DB clone checkpoint/live progress at the original cap; see `TESTS.md`. The separate Windows conflict-save crash still requires its affected-workload verification.
+- Verification gates: Clean native install matrix, exact new-WAL commit/replay, unchanged 32 MiB checkpoint/reopen regression, and current-DB clone checkpoint/live progress at the original cap; see `TESTS.md`. The separate Windows conflict-save crash still requires its affected-workload verification.
 
 ## 2026-09-09 - Shared corrected alpha distribution
 

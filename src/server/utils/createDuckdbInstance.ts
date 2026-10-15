@@ -44,7 +44,7 @@ export const createDuckdbInstance = async ({
           `Forska requires DuckDB ${expectedEngine.version} (source ${expectedEngine.sourceId}), `
             + `but loaded ${actualVersion} (source ${actualSourceId}). `
             + 'Stop the app and run bun install --frozen-lockfile from the updated checkout. '
-            + 'For a packaged desktop app, reinstall the matching release. The database was not opened.',
+            + 'The database was not opened.',
         )
       }
 

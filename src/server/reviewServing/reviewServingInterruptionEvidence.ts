@@ -1,38 +1,18 @@
-export type ReviewServingDesktopInterruptionEvidenceArea =
-  | 'browserDesktopParity'
+export type ReviewServingInterruptionEvidenceArea =
   | 'projectorResume'
   | 'bulkJobResume'
   | 'searchJobResume'
   | 'cleanupResume'
   | 'lowMemoryDefaults'
 
-export type ReviewServingDesktopInterruptionEvidenceEntry = {
-  area: ReviewServingDesktopInterruptionEvidenceArea
+export type ReviewServingInterruptionEvidenceEntry = {
+  area: ReviewServingInterruptionEvidenceArea
   contract: string
   evidenceFiles: readonly string[]
   requiredMarkers: readonly string[]
 }
 
-export const reviewServingDesktopInterruptionEvidence: readonly ReviewServingDesktopInterruptionEvidenceEntry[] = [
-  {
-    area: 'browserDesktopParity',
-    contract: 'desktop backend starts the same server entry and routes /api requests to the shared API surface',
-    evidenceFiles: [
-      'src/desktop/getDesktopRuntimeConfig.ts',
-      'src/desktop/index.ts',
-      'src/server/reviewServing/reviewServingReadContracts.ts',
-    ],
-    requiredMarkers: ['../server/index.ts', "pathname.startsWith('/api/')", 'reviewServingReadContractRouteInventory'],
-  },
-  {
-    area: 'browserDesktopParity',
-    contract: 'shared serving requests use the same admission contracts and DuckDB workload contexts',
-    evidenceFiles: [
-      'src/server/reviewServing/reviewServingAdmission.ts',
-      'src/server/reviewServing/reviewServingReader.ts',
-    ],
-    requiredMarkers: ['admitReviewServingDuckdbWorkload', 'getDuckdbWorkloadContext', 'readReviewServingRows'],
-  },
+export const reviewServingInterruptionEvidence: readonly ReviewServingInterruptionEvidenceEntry[] = [
   {
     area: 'projectorResume',
     contract: 'projector work resumes through durable dirty-work leases, chunk manifests, and released claims',
@@ -96,9 +76,8 @@ export const reviewServingDesktopInterruptionEvidence: readonly ReviewServingDes
   {
     area: 'lowMemoryDefaults',
     contract:
-      'desktop and low-memory DuckDB runtime reduce memory pressure with bounded batches, one thread, and serialized work before raising concurrency',
+      'low-memory DuckDB runtimes reduce memory pressure with bounded batches, one thread, and serialized work before raising concurrency',
     evidenceFiles: [
-      'src/desktop/getDesktopRuntimeConfig.ts',
       'src/server/utils/duckdbService.ts',
       'src/server/utils/duckdbServiceMemoryLimit.test.ts',
       'src/server/workers/reviewServingProjectorWorker.ts',
@@ -107,7 +86,6 @@ export const reviewServingDesktopInterruptionEvidence: readonly ReviewServingDes
       'src/server/reviewServing/reviewSearchService.test.ts',
     ],
     requiredMarkers: [
-      "DUCKDB_MEMORY_LIMIT: getTrimmedValue(envValues.DUCKDB_MEMORY_LIMIT) ?? '6400MiB'",
       'memoryLimitMiB !== null && memoryLimitMiB <= 6400',
       'serializeConcurrentWork',
       'defaultReviewServingProjectorWorkerBatchSize = 64',

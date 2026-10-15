@@ -1049,13 +1049,8 @@ export const getComparisonProjectConflictResolutionExportRequestPath = (comparis
 export const getComparisonProjectConflictResolutionExportRequestUrl = (
   comparisonProjectId: string,
   locationOrigin?: string | null,
-  desktopApiOrigin?: string | null,
 ) => {
-  return getApiRequestUrl(
-    getComparisonProjectConflictResolutionExportRequestPath(comparisonProjectId),
-    locationOrigin,
-    desktopApiOrigin,
-  )
+  return getApiRequestUrl(getComparisonProjectConflictResolutionExportRequestPath(comparisonProjectId), locationOrigin)
 }
 
 export const fetchComparisonProjectConflictResolutionExportArtifact = async (

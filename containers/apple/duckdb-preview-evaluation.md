@@ -138,8 +138,8 @@ an upstream fix or an explicit, tested migration. Disposable dev resets do not
 need to retain the old WAL, but must not be generalized to other users. Rerun the
 [upgrade checklist](../../TESTS.md#duckdb-upgrades-checkpoint-memory-regression-gate),
 including NULL-vector handling and platform packaging checks. The isolated Linux
-ARM64 live app/progress gate now passes with the configuration above. Windows,
-x64 platforms, and desktop packaging were not tested in this evaluation.
+ARM64 live app/progress gate now passes with the configuration above. Windows
+and x64 platforms were not tested in this evaluation.
 The original Windows conflict-save crash remains unconfirmed.
 
 ## Commands and evidence

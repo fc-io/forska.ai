@@ -184,7 +184,6 @@ UI expectations:
 
 - The import session screen/action already polls session progress; use that as the primary progress bar.
 - Review-serving warnings should show a non-alarming blocked state when indexing is paused because import exclusive work is active.
-- Browser and desktop flows should both show the same import progress/status because they use the shared API.
 
 Do not make the whole app look down. Say the import is running and indexing/maintenance is paused.
 

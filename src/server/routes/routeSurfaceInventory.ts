@@ -171,13 +171,6 @@ export const routeSurfaceEntrypoints: RouteSurfaceEntrypoint[] = [
   },
   {
     category: 'internal-runtime-api',
-    defaultBind: 'process-local',
-    releaseDecision: 'Keep as desktop-local bridge only. Backend route decisions still apply.',
-    source: 'src/desktop/index.ts',
-    surface: 'Desktop API bridge forwarding /api/* to the configured loopback API origin',
-  },
-  {
-    category: 'internal-runtime-api',
     defaultBind: 'loopback',
     releaseDecision: 'Keep as split-runtime implementation detail. Unknown /api/* remains fail-closed.',
     source: 'src/server/routes/ApiProxyRoutes.ts',

@@ -23,8 +23,8 @@ Do not publish the existing git history as-is.
 
 ## Local API Contract
 
-Forska may expose a supported loopback API for the UI, desktop app, local LLM
-tools, agents, and scripts, but not every mounted route is supported.
+Forska may expose a supported loopback API for the UI, local LLM tools, agents,
+and scripts, but not every mounted route is supported.
 
 Use these categories:
 

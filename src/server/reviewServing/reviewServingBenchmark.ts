@@ -40,7 +40,7 @@ export const reviewServingBenchmarkRequiredReleaseScopes = [
   'listDetailPayloads',
   'humanFacetsOptions',
   'queueReads',
-  'desktopInterruptionResume',
+  'interruptionResume',
 ] as const
 
 export type ReviewServingBenchmarkFixtureKind = (typeof reviewServingBenchmarkFixtureKinds)[number]
@@ -752,7 +752,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       pageSize: 1,
       requestCount: 70,
       requestSliceFields: ['projectId', 'snapshotId', 'filter'],
-      scopes: ['desktopInterruptionResume', 'import', 'servingRefresh'],
+      scopes: ['interruptionResume', 'import', 'servingRefresh'],
       targetRowsReturnedPerRequest: 1,
       workloadClass: 'reviewMaintenance',
     },
@@ -764,7 +764,7 @@ export const reviewServingBenchmarkOverlapWorkloadDefinition = {
       pageSize: 1,
       requestCount: 70,
       requestSliceFields: ['projectId', 'snapshotId', 'filter'],
-      scopes: ['desktopInterruptionResume', 'dirtyMaterialization', 'servingRefresh'],
+      scopes: ['interruptionResume', 'dirtyMaterialization', 'servingRefresh'],
       targetRowsReturnedPerRequest: 1,
       workloadClass: 'reviewMaintenance',
     },
@@ -2903,7 +2903,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'reviewMaintenance',
         },
-        filterSignature: 'desktop-resume:import-append',
+        filterSignature: 'resume:import-append',
         key: 'smoke-import-serving-refresh-checkpoint',
         observation: {
           latencyMs: 6,
@@ -2914,11 +2914,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           tempUsageBytes: 0,
         },
         operationKey: 'importAppendServingRefreshCheckpoint',
-        requestSlice: {
-          filter: 'desktop-resume:import-append',
-          projectId: 'smoke-project',
-          snapshotId: 'smoke-snapshot',
-        },
+        requestSlice: {filter: 'resume:import-append', projectId: 'smoke-project', snapshotId: 'smoke-snapshot'},
       },
       {
         admissionRequest: {
@@ -2931,7 +2927,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
           snapshotId: 'smoke-snapshot',
           workloadClass: 'reviewMaintenance',
         },
-        filterSignature: 'desktop-resume:dirty-materialization',
+        filterSignature: 'resume:dirty-materialization',
         key: 'smoke-dirty-materialization-resume-checkpoint',
         observation: {
           latencyMs: 8,
@@ -2943,7 +2939,7 @@ export const getReviewServingBenchmarkSmokeInput = (): ReviewServingBenchmarkRun
         },
         operationKey: 'dirtyMaterializationResumeCheckpoint',
         requestSlice: {
-          filter: 'desktop-resume:dirty-materialization',
+          filter: 'resume:dirty-materialization',
           projectId: 'smoke-project',
           snapshotId: 'smoke-snapshot',
         },

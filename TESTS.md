@@ -43,7 +43,7 @@ transaction, while standalone completion calls create their own transaction.
 
 ## DuckDB upgrades: checkpoint-memory regression gate
 
-Normal installation, container images, and desktop builds use the pinned
+Normal installation and container images use the pinned
 Forska-patched 2.0 alpha in [the distribution manifest](vendor/duckdb/manifest.json). The former
 1.5.5 container-only backport has been removed. A version bump or successful
 native import alone is not evidence that the original memory bug stays fixed.
@@ -85,7 +85,7 @@ For every engine, binding, or native-package update:
   `statistics_propagation` does not fix scan pruning. These regressions must pass
   with native statistics/filter pushdown enabled; neither an application-query
   rewrite nor a checkpoint that heals the in-memory state is sufficient.
-  The copied desktop/container verifier runs both synthetic fixtures, including
+  The container verifier runs both synthetic fixtures, including
   the live UPDATE before any checkpoint. Keep their old-engine failing evidence
   and require exact IDs, ranges, joins and unchanged read-only DB/WAL bytes.
   Statistics propagation remains enabled after the narrow native correction;
@@ -105,8 +105,8 @@ For every engine, binding, or native-package update:
   the same-version unpatched engine must not pass merely because its version
   text matches. Generated children and isolated candidate verifiers must supply
   their exact expected identity, never a skip-validation flag.
-- Run `bun test scripts/verifyDuckdbDistribution scripts/verifyDesktopDuckdbDistribution.test.ts --timeout 120000`
-  for copied-package containment, native-library symlink rejection, and target-only
+- Run `bun test scripts/verifyDuckdbDistribution --timeout 120000`
+  for package containment, native-library symlink rejection, and target-only
   pruning. Existing mock-heavy runtime suites require the per-file runner
   `bun run test:bun`, not concatenating their paths into a shared Bun process.
 - Run `bun test src/db/migrateDuckdb.fresh.test.ts --timeout 120000` for a genuinely
@@ -138,11 +138,6 @@ For every engine, binding, or native-package update:
 - Preserve DB/WAL evidence and require an ordinary full checkpoint on a
   consistent current-DB clone at the unchanged 4 GB DuckDB / 8 GiB VM limits.
   Verify API/owner readiness and advancing live review-indexing counters.
-- Run `bun run desktop:build` on a native target. Its post-build gate resolves
-  and executes the copied bundle's native engine, not checkout dependencies,
-  after removing non-target DuckDB packages from that copy.
-  Test packaged-desktop lifecycle separately; the build gate does not open the
-  user's desktop database or prove window/server shutdown behavior.
 - Reproduce the affected conflict-resolution save on Windows before claiming
   that distinct owner crash is fixed. Linux/macOS checks do not establish it.
 
@@ -315,9 +310,7 @@ bun test src/server/routes/JudgmentsJobsRoutes.test.ts src/server/cron/judgments
 
 The focused, component, recovery, topology, and browser commands are required
 for judgment-workflow PRs. `bun run build` is required when shared UI or routing
-changes, and `bun run desktop:build` plus the manual packaged-app check below is
-required when desktop/shared runtime code changes. The real-Codex command is
-operator-only.
+changes. The real-Codex command is operator-only.
 
 Benchmark-critical fixture settings are fixed rather than negotiated at
 runtime. The component gate uses the `sglang`/`component-stub` local provider
@@ -381,17 +374,6 @@ documents Low as the CLI setting for quick well-scoped tasks. The
 confirms the exact model ID, low reasoning support, Codex/API availability, and
 structured-output support. This provenance justifies the fixed smoke setting;
 it is not permission to select a different model dynamically.
-
-When desktop or shared runtime code changes, also run `bun run desktop:build`
-and perform the packaged-app lifecycle check against an explicitly isolated
-temporary profile/server stack: navigate to the seeded job, verify progress,
-pause, drain, and confirm the project review result. Never attach this manual
-check to the primary profile. This remains a documented manual gate until an
-automated packaged-app driver exists. A future
-`bun run test:desktop:judgment-workflow` must own isolated fixture startup and
-teardown, drive the packaged app on supported desktop CI hosts, and cover
-navigation, lookup/detail, progress, pause, drain, and project review output;
-the command does not exist yet and must not be reported as executed.
 
 Touched layers for this workflow are server/runtime, shared client UI, isolated
 DuckDB/SQLite fixtures, and documentation.

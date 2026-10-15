@@ -404,8 +404,5 @@ Live gate:
 - Existing `mart.review_filtered_count_serving_v4` rows are derived cache state.
   Prefer pruning/rebuilding derived rows over compatibility shims if the cache
   identity changes.
-- Browser and desktop share the API and TanStack query path, so both should be
-  considered. A browser verification is sufficient for the shared review page
-  behavior unless desktop runtime wiring changes.
 - If a migration adds a component revision table or columns, run `bun run
   db:mig` and include the migration tests relevant to the touched schema.

@@ -219,9 +219,9 @@ describe('ProjectsGrid export project link', () => {
     })
   })
 
-  test('resolves export and download paths for browser and desktop runtimes', () => {
-    expect(getProjectTransferExportRequestUrl('project 1', 'views://mainview', 'http://127.0.0.1:32101')).toBe(
-      'http://127.0.0.1:32101/api/projects/project%201/export-project',
+  test('resolves export and download paths for the local vite dev profile', () => {
+    expect(getProjectTransferExportRequestUrl('project 1', 'http://localhost:3000')).toBe(
+      'http://127.0.0.1:3001/api/projects/project%201/export-project',
     )
     expect(
       getProjectTransferDownloadRequestUrl('/api/projects/export/export-1/download', 'http://localhost:3000'),

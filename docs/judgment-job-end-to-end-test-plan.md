@@ -5,14 +5,12 @@ Date: 2026-08-28
 ## Implementation Status
 
 Rechecked on 2026-08-30. The named focused, component, recovery, topology,
-browser, and opt-in real-Codex commands exist. Every automated PR gate is green,
-but the plan is not ready for final PR completion until the manual packaged
-desktop lifecycle is executed and recorded.
+browser, and opt-in real-Codex commands exist. Every automated PR gate is green.
 
 Current execution is green for focused (227 tests), component (125 tests),
 recovery (202 tests), fresh/migration-boundary/restart topology, the browser
-lifecycle (1 Playwright test) with exact displayed queue counts, the desktop
-build, repository-wide lint, and the full Bun suite (all 385 discovered test
+lifecycle (1 Playwright test) with exact displayed queue counts,
+repository-wide lint, and the full Bun suite (all 385 discovered test
 files completed successfully). The macOS/Linux/Windows production-topology
 matrix is green in GitHub Actions run
 [`33300054921`](https://github.com/fc-io/forska.ai/actions/runs/33300054921).
@@ -26,12 +24,10 @@ and now upgrades from the versioned
 `0089_dropProjectJudgmentModelForeignKeys.sql` boundary while preserving a
 non-empty sentinel row.
 
-The only remaining required release gate is the packaged desktop lifecycle,
-which has not been executed or recorded. The lint recheck repaired a stale
+The lint recheck repaired a stale
 review-detail type discriminator and two formatter-only baseline findings; both
 repository-wide and touched-file lint pass. The operator-only paid real-Codex
-smoke was not run and is not a PR requirement. Do not finalize the PR until the
-manual desktop gate has its required evidence.
+smoke was not run and is not a PR requirement.
 
 ## Goal
 
@@ -74,7 +70,7 @@ downgrade, or fall back to another provider or model.
 - A deterministic isolated smoke of the production server-stack topology.
 - Exact crash, replay, retry, lease, quarantine, and configuration boundaries.
 - API/read-model lifecycle assertions.
-- Browser and desktop lifecycle smoke coverage for the shared UI/runtime path.
+- Browser lifecycle smoke coverage for the shared UI/runtime path.
 - A separate opt-in real-provider smoke against isolated temporary data.
 
 ### Out Of Scope
@@ -378,7 +374,7 @@ Acceptance criteria:
   DuckDB state at every tested boundary.
 - Canonical reads require an exact model and content-configuration key match.
 
-### 6. Add Browser And Desktop Lifecycle Smokes
+### 6. Add Browser Lifecycle Smokes
 
 - [x] Add a synthetic fixture that can be started by Playwright without using a
       real provider or the primary database.
@@ -403,26 +399,13 @@ Acceptance criteria:
       contract gate, not evidence of the split production server topology. Keep the
       topology command above independently required whenever server role wiring,
       owner routing, worker orchestration, or journals change.
-- [ ] For the current interim desktop gate, run `bun run desktop:build` and
-      document a manual packaged-app lifecycle check covering navigation, job
-      lookup/detail, progress, pause, and drain whenever desktop/shared runtime
-      code changes. Run that check against an explicitly isolated temporary runtime
-      profile/server stack; never let the packaged app discover or mutate the
-      developer's primary profile as part of the test.
-- [x] Separately scope a future automated desktop harness, fixture startup and
-      teardown, packaged-app driver, CI support, and a named command such as
-      `bun run test:desktop:judgment-workflow`; do not claim this gate exists until
-      the harness is implemented.
 - [x] Ensure the fixture stops all servers/workers and removes temporary state.
 
 Acceptance criteria:
 
 - The browser smoke proves the user-visible lifecycle against a deterministic
   backend fixture.
-- Until automation exists, `desktop:build` plus the documented manual packaged
-  app check is the executable desktop gate; the browser smoke remains
-  independently automated.
-- Neither smoke depends on paid provider calls or primary data.
+- The smoke does not depend on paid provider calls or primary data.
 
 ### 7. Add An Opt-In Real-Provider Smoke
 
@@ -537,8 +520,7 @@ Acceptance criteria:
 ### 8. Documentation And Gate Integration
 
 - [x] Add the focused backend gate, happy-path lifecycle command, failure and
-      recovery command, process-topology command, browser smoke, interim desktop
-      build/manual check, future desktop automation command, and opt-in provider
+      recovery command, process-topology command, browser smoke, and opt-in provider
       smoke to `TESTS.md`.
 - [x] State which gates are required for PRs and which are operator-only.
 - [x] Record fixture isolation, temporary storage, and cleanup guarantees.
@@ -553,8 +535,7 @@ Acceptance criteria:
 3. Isolated production process-topology smoke.
 4. Named failure/recovery boundary command and tests.
 5. API/read-model assertions.
-6. Browser smoke, then interim desktop build/manual gate; scope desktop
-   automation separately.
+6. Browser smoke.
 7. Opt-in real-provider smoke and final documentation.
 
 ## Quality Gates
@@ -578,10 +559,6 @@ Acceptance criteria:
       passes for the synthetic browser flow; `scripts/runPlaywright.ts` forwards
       the spec path directly and does not require `--`.
 - [x] `bun run build` passes after shared admin UI or routing changes.
-- [ ] When desktop/shared runtime code is touched, `bun run desktop:build`
-      passes and the documented manual packaged-app lifecycle check records its
-      result; after the desktop harness exists, its named automated command replaces
-      the manual portion of this gate.
 - [x] The opt-in real-provider smoke is documented but is not required for a PR;
       when intentionally run, its exact configuration, fixture hashes, request and
       token counts, elapsed time, and result are recorded without credentials or
@@ -594,5 +571,5 @@ Acceptance criteria:
       explicit production cleanup step counts as evidence that drained-job artifact
       deletion works.
 - [x] `TESTS.md` identifies the end-to-end chain and clearly distinguishes fast
-      PR gates from browser/desktop and operator-only provider gates.
+      PR gates from browser and operator-only provider gates.
 - [x] `bun run test:bun` passes as the full backend pre-merge gate.

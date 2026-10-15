@@ -199,15 +199,6 @@ progress gate:
 - Confirmation that route latency remains bounded and no owner restart, OOM,
   fatal DuckDB error, quarantine, or expired-lease pattern appears.
 
-If desktop/shared runtime behavior is touched, also run:
-
-```bash
-bun run desktop:build
-```
-
-Manual packaged desktop lifecycle smoke remains a separate manual gate unless a
-packaged-app driver exists.
-
 ## Non-Goals
 
 - Do not raise the primary DuckDB memory limit as the fix.
