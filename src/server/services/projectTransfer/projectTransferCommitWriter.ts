@@ -52,6 +52,11 @@ import {
   type ProjectTransferCommitIdMapTableSet,
 } from './projectTransferCommitIdMaps.ts'
 import type {ProjectTransferCommitPromotionResult} from './projectTransferCommitRollback.ts'
+import {
+  type ProjectTransferCommitTempTableFile,
+  type ProjectTransferCommitTempTableFileRoot,
+  withProjectTransferCommitTempTableFiles,
+} from './projectTransferCommitTempTableFiles.ts'
 import type {ProjectTransferImportCompletionPayload} from './projectTransferContracts.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {getProjectTransferHistoryRepository} from './projectTransferHistoryRepository.ts'
@@ -102,7 +107,9 @@ type ProjectTransferCommitWriterDatabase = ProjectTransferCommitWriterTx & {
 
 export type ProjectTransferCommitWriterInput = {
   commitId: string
+  cwd?: string
   database?: ProjectTransferCommitWriterDatabase
+  envValues?: Record<string, string | undefined>
   now?: Date
   operationTables?: ProjectTransferOperationTableSet
   payloads: Partial<ProjectTransferPayloadByKey>
@@ -314,6 +321,13 @@ type ProjectTransferCommitWriterTempTableSet = {
   projectRoutePlan: string
 }
 
+type CommitWriterFileTempTable = Exclude<
+  keyof ProjectTransferCommitWriterTempTableSet,
+  'judgmentRows' | 'projectArticleSources'
+>
+
+type CommitWriterFileTempTableColumn = {field: string; kind: 'boolean' | 'json' | 'string'; name: string}
+
 type ProjectTransferCommitWriterSetBasedContext = {
   commitIdMapTables: ProjectTransferCommitIdMapTableSet
   operationTables: ProjectTransferOperationTableSet
@@ -420,6 +434,16 @@ const commitWriterSetBasedTableSuffixes = [
   'projectArticleSources',
   'projectRoutePlan',
 ] as const satisfies readonly (keyof ProjectTransferCommitWriterTempTableSet)[]
+const commitWriterFileTempTables = [
+  'articleCreates',
+  'articleFieldFills',
+  'articleIdentifiers',
+  'projectRoutePlan',
+  'articleRoutePlan',
+  'judgmentPlan',
+  'judgmentAssessmentPlan',
+  'humanReviewPlan',
+] as const satisfies readonly CommitWriterFileTempTable[]
 const projectTransferCommitWriteDirtyTokenSurfaces = [
   'project',
   'article',
@@ -462,16 +486,14 @@ const getCommitWriterTempTableName = ({
   })}`
 }
 
-const getCommitWriterTempTables = (operationId: string): ProjectTransferCommitWriterTempTableSet => {
+export const getCommitWriterTempTables = (operationId: string): ProjectTransferCommitWriterTempTableSet => {
   return commitWriterSetBasedTableSuffixes.reduce<ProjectTransferCommitWriterTempTableSet>((tables, suffix) => {
     return {...tables, [suffix]: getCommitWriterTempTableName({operationId, suffix})}
   }, {} as ProjectTransferCommitWriterTempTableSet)
 }
 
-const getJsonArrayRowsSourceSql = (rows: readonly unknown[]) => {
-  return rows.length === 0
-    ? `(SELECT CAST(NULL AS JSON) AS row_json WHERE FALSE) AS rows`
-    : `UNNEST(json_extract(CAST(${getSqlLiteral(JSON.stringify(rows))} AS JSON), '$[*]')) AS rows(row_json)`
+const getCommitWriterTempTableFileDirectoryName = (operationId: string) => {
+  return `temp_project_transfer_${getSafeOperationId(operationId)}_commit_writer`
 }
 
 const getJsonStringFieldSql = (jsonExpression: string, field: string) => {
@@ -2537,146 +2559,146 @@ const getArticleFieldFillStageRows = (promotion: ProjectTransferCommitPromotionR
   })
 }
 
-const getCreateArticleCreatesTableSql = ({
+const commitWriterFileTempTableColumns = {
+  articleCreates: [{field: 'sourceArticleId', kind: 'string', name: 'source_article_id'}],
+  articleFieldFills: [
+    {field: 'sourceArticleId', kind: 'string', name: 'source_article_id'},
+    {field: 'targetArticleId', kind: 'string', name: 'target_article_id'},
+    {field: 'field', kind: 'string', name: 'field'},
+    {field: 'value', kind: 'json', name: 'value_json'},
+  ],
+  articleIdentifiers: [
+    {field: 'sourceArticleId', kind: 'string', name: 'source_article_id'},
+    {field: 'sourceKey', kind: 'string', name: 'source_key'},
+    {field: 'kind', kind: 'string', name: 'kind'},
+    {field: 'normalizedValue', kind: 'string', name: 'normalized_value'},
+    {field: 'source', kind: 'string', name: 'source'},
+    {field: 'isPrimary', kind: 'boolean', name: 'is_primary'},
+  ],
+  projectRoutePlan: [
+    {field: 'action', kind: 'string', name: 'action'},
+    {field: 'sourceImportRouteId', kind: 'string', name: 'source_import_route_id'},
+    {field: 'sourceProjectImportRouteId', kind: 'string', name: 'source_project_import_route_id'},
+    {field: 'targetImportRouteId', kind: 'string', name: 'target_import_route_id'},
+  ],
+  articleRoutePlan: [
+    {field: 'action', kind: 'string', name: 'action'},
+    {field: 'snapshotProjectArticleLink', kind: 'boolean', name: 'snapshot_project_article_link'},
+    {field: 'sourceArticleId', kind: 'string', name: 'source_article_id'},
+    {field: 'sourceArticleImportRouteId', kind: 'string', name: 'source_article_import_route_id'},
+    {field: 'sourceImportRouteId', kind: 'string', name: 'source_import_route_id'},
+    {field: 'targetImportRouteId', kind: 'string', name: 'target_import_route_id'},
+  ],
+  judgmentPlan: [
+    {field: 'action', kind: 'string', name: 'action'},
+    {field: 'sourceJudgmentId', kind: 'string', name: 'source_judgment_id'},
+    {field: 'targetArticleId', kind: 'string', name: 'target_article_id'},
+    {field: 'targetJudgmentId', kind: 'string', name: 'target_judgment_id'},
+    {field: 'targetModelId', kind: 'string', name: 'target_model_id'},
+    {field: 'targetPromptId', kind: 'string', name: 'target_prompt_id'},
+  ],
+  judgmentAssessmentPlan: [
+    {field: 'action', kind: 'string', name: 'action'},
+    {field: 'sourceJudgmentAssessmentId', kind: 'string', name: 'source_judgment_assessment_id'},
+    {field: 'sourceJudgmentId', kind: 'string', name: 'source_judgment_id'},
+    {field: 'targetAssessmentId', kind: 'string', name: 'target_assessment_id'},
+    {field: 'targetJudgmentId', kind: 'string', name: 'target_judgment_id'},
+  ],
+  humanReviewPlan: [
+    {field: 'action', kind: 'string', name: 'action'},
+    {field: 'kind', kind: 'string', name: 'kind'},
+    {field: 'sourceId', kind: 'string', name: 'source_id'},
+    {field: 'targetArticleId', kind: 'string', name: 'target_article_id'},
+    {field: 'targetPromptId', kind: 'string', name: 'target_prompt_id'},
+  ],
+} as const satisfies Record<CommitWriterFileTempTable, readonly CommitWriterFileTempTableColumn[]>
+
+const commitWriterFileTempTableReadTypeByKind = {
+  boolean: 'VARCHAR',
+  json: 'JSON',
+  string: 'VARCHAR',
+} as const satisfies Record<CommitWriterFileTempTableColumn['kind'], string>
+
+const commitWriterFileTempTableSelectSqlByKind = {
+  boolean: (fieldSql: string) => {
+    return `COALESCE(TRY_CAST(${fieldSql} AS BOOLEAN), FALSE)`
+  },
+  json: (fieldSql: string) => {
+    return `COALESCE(${fieldSql}, 'null'::JSON)`
+  },
+  string: (fieldSql: string) => {
+    return fieldSql
+  },
+} as const satisfies Record<CommitWriterFileTempTableColumn['kind'], (fieldSql: string) => string>
+
+const getCommitWriterTempTableFile = ({
   rows,
+  table,
+}: {
+  rows: readonly object[]
+  table: CommitWriterFileTempTable
+}): ProjectTransferCommitTempTableFile => {
+  return {
+    columns: Object.fromEntries(
+      commitWriterFileTempTableColumns[table].map((column) => {
+        return [column.field, commitWriterFileTempTableReadTypeByKind[column.kind]]
+      }),
+    ),
+    rows,
+  }
+}
+
+export const getCommitWriterTempTableFiles = ({
+  articles,
+  plan,
+  promotion,
+}: {
+  articles: readonly ProjectTransferArticlePayloadRecord[]
+  plan: ProjectTransferImportPlanArtifact
+  promotion: ProjectTransferCommitPromotionResult
+}): Record<CommitWriterFileTempTable, ProjectTransferCommitTempTableFile> => {
+  return {
+    articleCreates: getCommitWriterTempTableFile({rows: getArticleCreateStageRows(promotion), table: 'articleCreates'}),
+    articleFieldFills: getCommitWriterTempTableFile({
+      rows: getArticleFieldFillStageRows(promotion),
+      table: 'articleFieldFills',
+    }),
+    articleIdentifiers: getCommitWriterTempTableFile({
+      rows: getArticleIdentifierStageRows({articleMatches: plan.targetPlan.articleMatches, articles}),
+      table: 'articleIdentifiers',
+    }),
+    articleRoutePlan: getCommitWriterTempTableFile({rows: plan.targetPlan.articleRoutePlan, table: 'articleRoutePlan'}),
+    humanReviewPlan: getCommitWriterTempTableFile({
+      rows: plan.targetPlan.humanReviewPlan ?? [],
+      table: 'humanReviewPlan',
+    }),
+    judgmentAssessmentPlan: getCommitWriterTempTableFile({
+      rows: plan.targetPlan.judgmentAssessmentPlan ?? [],
+      table: 'judgmentAssessmentPlan',
+    }),
+    judgmentPlan: getCommitWriterTempTableFile({rows: plan.targetPlan.judgmentPlan ?? [], table: 'judgmentPlan'}),
+    projectRoutePlan: getCommitWriterTempTableFile({rows: plan.targetPlan.projectRoutePlan, table: 'projectRoutePlan'}),
+  }
+}
+
+const getCreateFileTempTableSql = ({
+  sourceSql,
+  table,
   tableName,
 }: {
-  rows: readonly ReturnType<typeof getArticleCreateStageRows>[number][]
+  sourceSql: string
+  table: CommitWriterFileTempTable
   tableName: string
 }) => {
   return `
     CREATE TEMP TABLE ${tableName} AS
     SELECT
-      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id
-    FROM ${getJsonArrayRowsSourceSql(rows)}
-  `
-}
-
-const getCreateArticleFieldFillsTableSql = ({
-  rows,
-  tableName,
-}: {
-  rows: readonly ReturnType<typeof getArticleFieldFillStageRows>[number][]
-  tableName: string
-}) => {
-  return `
-    CREATE TEMP TABLE ${tableName} AS
-    SELECT
-      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id,
-      ${getJsonStringFieldSql('row_json', 'targetArticleId')} AS target_article_id,
-      ${getJsonStringFieldSql('row_json', 'field')} AS field,
-      json_extract(row_json, '$.value') AS value_json
-    FROM ${getJsonArrayRowsSourceSql(rows)}
-  `
-}
-
-const getCreateArticleIdentifiersTableSql = ({
-  rows,
-  tableName,
-}: {
-  rows: readonly ArticleIdentifierStageRow[]
-  tableName: string
-}) => {
-  return `
-    CREATE TEMP TABLE ${tableName} AS
-    SELECT
-      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id,
-      ${getJsonStringFieldSql('row_json', 'sourceKey')} AS source_key,
-      ${getJsonStringFieldSql('row_json', 'kind')} AS kind,
-      ${getJsonStringFieldSql('row_json', 'normalizedValue')} AS normalized_value,
-      ${getJsonStringFieldSql('row_json', 'source')} AS source,
-      COALESCE(TRY_CAST(${getJsonStringFieldSql('row_json', 'isPrimary')} AS BOOLEAN), FALSE) AS is_primary
-    FROM ${getJsonArrayRowsSourceSql(rows)}
-  `
-}
-
-const getCreateProjectRoutePlanTableSql = ({
-  rows,
-  tableName,
-}: {
-  rows: readonly ProjectRoutePlanEntry[]
-  tableName: string
-}) => {
-  return `
-    CREATE TEMP TABLE ${tableName} AS
-    SELECT
-      ${getJsonStringFieldSql('row_json', 'action')} AS action,
-      ${getJsonStringFieldSql('row_json', 'sourceImportRouteId')} AS source_import_route_id,
-      ${getJsonStringFieldSql('row_json', 'sourceProjectImportRouteId')} AS source_project_import_route_id,
-      ${getJsonStringFieldSql('row_json', 'targetImportRouteId')} AS target_import_route_id
-    FROM ${getJsonArrayRowsSourceSql(rows)}
-  `
-}
-
-const getCreateArticleRoutePlanTableSql = ({
-  rows,
-  tableName,
-}: {
-  rows: readonly ArticleRoutePlanEntry[]
-  tableName: string
-}) => {
-  return `
-    CREATE TEMP TABLE ${tableName} AS
-    SELECT
-      ${getJsonStringFieldSql('row_json', 'action')} AS action,
-      COALESCE(TRY_CAST(${getJsonStringFieldSql('row_json', 'snapshotProjectArticleLink')} AS BOOLEAN), FALSE) AS snapshot_project_article_link,
-      ${getJsonStringFieldSql('row_json', 'sourceArticleId')} AS source_article_id,
-      ${getJsonStringFieldSql('row_json', 'sourceArticleImportRouteId')} AS source_article_import_route_id,
-      ${getJsonStringFieldSql('row_json', 'sourceImportRouteId')} AS source_import_route_id,
-      ${getJsonStringFieldSql('row_json', 'targetImportRouteId')} AS target_import_route_id
-    FROM ${getJsonArrayRowsSourceSql(rows)}
-  `
-}
-
-const getCreateJudgmentPlanTableSql = ({rows, tableName}: {rows: readonly JudgmentPlanEntry[]; tableName: string}) => {
-  return `
-    CREATE TEMP TABLE ${tableName} AS
-    SELECT
-      ${getJsonStringFieldSql('row_json', 'action')} AS action,
-      ${getJsonStringFieldSql('row_json', 'sourceJudgmentId')} AS source_judgment_id,
-      ${getJsonStringFieldSql('row_json', 'targetArticleId')} AS target_article_id,
-      ${getJsonStringFieldSql('row_json', 'targetJudgmentId')} AS target_judgment_id,
-      ${getJsonStringFieldSql('row_json', 'targetModelId')} AS target_model_id,
-      ${getJsonStringFieldSql('row_json', 'targetPromptId')} AS target_prompt_id
-    FROM ${getJsonArrayRowsSourceSql(rows)}
-  `
-}
-
-const getCreateJudgmentAssessmentPlanTableSql = ({
-  rows,
-  tableName,
-}: {
-  rows: readonly JudgmentAssessmentPlanEntry[]
-  tableName: string
-}) => {
-  return `
-    CREATE TEMP TABLE ${tableName} AS
-    SELECT
-      ${getJsonStringFieldSql('row_json', 'action')} AS action,
-      ${getJsonStringFieldSql('row_json', 'sourceJudgmentAssessmentId')} AS source_judgment_assessment_id,
-      ${getJsonStringFieldSql('row_json', 'sourceJudgmentId')} AS source_judgment_id,
-      ${getJsonStringFieldSql('row_json', 'targetAssessmentId')} AS target_assessment_id,
-      ${getJsonStringFieldSql('row_json', 'targetJudgmentId')} AS target_judgment_id
-    FROM ${getJsonArrayRowsSourceSql(rows)}
-  `
-}
-
-const getCreateHumanReviewPlanTableSql = ({
-  rows,
-  tableName,
-}: {
-  rows: readonly HumanReviewPlanEntry[]
-  tableName: string
-}) => {
-  return `
-    CREATE TEMP TABLE ${tableName} AS
-    SELECT
-      ${getJsonStringFieldSql('row_json', 'action')} AS action,
-      ${getJsonStringFieldSql('row_json', 'kind')} AS kind,
-      ${getJsonStringFieldSql('row_json', 'sourceId')} AS source_id,
-      ${getJsonStringFieldSql('row_json', 'targetArticleId')} AS target_article_id,
-      ${getJsonStringFieldSql('row_json', 'targetPromptId')} AS target_prompt_id
-    FROM ${getJsonArrayRowsSourceSql(rows)}
+      ${commitWriterFileTempTableColumns[table]
+        .map((column) => {
+          return `${commitWriterFileTempTableSelectSqlByKind[column.kind](`"${column.field}"`)} AS ${column.name}`
+        })
+        .join(',\n      ')}
+    FROM ${sourceSql}
   `
 }
 
@@ -2705,8 +2727,9 @@ const getCreateProjectArticleSourcesTableSql = ({
   `
 }
 
-const loadProjectTransferCommitWriterTempTables = async ({
+export const loadProjectTransferCommitWriterTempTables = async ({
   articles,
+  fileRoot,
   operationTables,
   plan,
   promotion,
@@ -2714,16 +2737,13 @@ const loadProjectTransferCommitWriterTempTables = async ({
   tx,
 }: {
   articles: readonly ProjectTransferArticlePayloadRecord[]
+  fileRoot: ProjectTransferCommitTempTableFileRoot
   operationTables: ProjectTransferOperationTableSet
   plan: ProjectTransferImportPlanArtifact
   promotion: ProjectTransferCommitPromotionResult
   tables: ProjectTransferCommitWriterTempTableSet
   tx: ProjectTransferCommitWriterTx
 }) => {
-  const articleCreates = getArticleCreateStageRows(promotion)
-  const articleFieldFills = getArticleFieldFillStageRows(promotion)
-  const articleIdentifiers = getArticleIdentifierStageRows({articleMatches: plan.targetPlan.articleMatches, articles})
-
   await tx.run(
     commitWriterSetBasedTableSuffixes
       .map((suffix) => {
@@ -2731,24 +2751,25 @@ const loadProjectTransferCommitWriterTempTables = async ({
       })
       .join(';\n'),
   )
-  await tx.run(`
-    ${getCreateArticleCreatesTableSql({rows: articleCreates, tableName: tables.articleCreates})};
-    ${getCreateArticleFieldFillsTableSql({rows: articleFieldFills, tableName: tables.articleFieldFills})};
-    ${getCreateArticleIdentifiersTableSql({rows: articleIdentifiers, tableName: tables.articleIdentifiers})};
-    ${getCreateProjectRoutePlanTableSql({rows: plan.targetPlan.projectRoutePlan, tableName: tables.projectRoutePlan})};
-    ${getCreateArticleRoutePlanTableSql({rows: plan.targetPlan.articleRoutePlan, tableName: tables.articleRoutePlan})};
-    ${getCreateJudgmentPlanTableSql({rows: plan.targetPlan.judgmentPlan ?? [], tableName: tables.judgmentPlan})};
-    ${getCreateJudgmentAssessmentPlanTableSql({
-      rows: plan.targetPlan.judgmentAssessmentPlan ?? [],
-      tableName: tables.judgmentAssessmentPlan,
-    })};
-    ${getCreateHumanReviewPlanTableSql({rows: plan.targetPlan.humanReviewPlan ?? [], tableName: tables.humanReviewPlan})};
-    ${getCreateProjectArticleSourcesTableSql({
-      articleRoutePlanTable: tables.articleRoutePlan,
-      operationTables,
-      tableName: tables.projectArticleSources,
-    })}
-  `)
+  await withProjectTransferCommitTempTableFiles({
+    directoryName: getCommitWriterTempTableFileDirectoryName(operationTables.operationId),
+    files: getCommitWriterTempTableFiles({articles, plan, promotion}),
+    root: fileRoot,
+    work: (sourceSqlByName) => {
+      return tx.run(`
+        ${commitWriterFileTempTables
+          .map((table) => {
+            return getCreateFileTempTableSql({sourceSql: sourceSqlByName[table], table, tableName: tables[table]})
+          })
+          .join(';\n')};
+        ${getCreateProjectArticleSourcesTableSql({
+          articleRoutePlanTable: tables.articleRoutePlan,
+          operationTables,
+          tableName: tables.projectArticleSources,
+        })}
+      `)
+    },
+  })
 
   return tables
 }
@@ -6843,6 +6864,8 @@ const insertReviewRows = async ({
 
 const writeProjectTransferCommitAppTablesTx = async ({
   commitId,
+  cwd,
+  envValues,
   now,
   operationTables,
   payloads,
@@ -6888,7 +6911,9 @@ const writeProjectTransferCommitAppTablesTx = async ({
     tx,
   })
   const materializedPlan = {...dependencyMaterialization.plan, commitIdMaps: promptMaterialization.commitIdMaps}
+  const tempTableFileRoot = {cwd, envValues, sessionId}
   const commitIdMapTables = await loadProjectTransferCommitIdMapTables({
+    fileRoot: tempTableFileRoot,
     maps: materializedPlan.commitIdMaps,
     operationId: commitId,
     runner: tx,
@@ -6900,6 +6925,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
     if (operationTables !== undefined && commitWriterTempTables !== null) {
       await loadProjectTransferCommitWriterTempTables({
         articles,
+        fileRoot: tempTableFileRoot,
         operationTables,
         plan: materializedPlan,
         promotion,

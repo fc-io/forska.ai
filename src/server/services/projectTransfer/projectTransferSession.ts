@@ -55,6 +55,7 @@ export const projectTransferWriterOnlyStates = ['cancelled', 'expired'] as const
 
 export const projectTransferImportArtifacts = {
   analysis: 'analysis.json',
+  commitTempTables: 'commit-temp-tables',
   completion: 'completion.json',
   extracted: 'extracted',
   manifest: 'manifest.json',
@@ -74,6 +75,7 @@ export const projectTransferExportArtifacts = {
 
 export type ProjectTransferImportTempLayout = {
   analysisPath: string
+  commitTempTablesPath: string
   completionPath: string
   extractedPath: string
   manifestPath: string
@@ -146,6 +148,7 @@ export const getProjectTransferImportTempLayout = (sessionId: string): ProjectTr
 
   return {
     analysisPath: getArtifactPath(rootPath, projectTransferImportArtifacts.analysis),
+    commitTempTablesPath: getArtifactPath(rootPath, projectTransferImportArtifacts.commitTempTables),
     completionPath: getArtifactPath(rootPath, projectTransferImportArtifacts.completion),
     extractedPath: getArtifactPath(rootPath, projectTransferImportArtifacts.extracted),
     manifestPath: getArtifactPath(rootPath, projectTransferImportArtifacts.manifest),
