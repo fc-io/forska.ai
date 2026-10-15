@@ -10,7 +10,7 @@ import {
   requestReviewServingV4Rebuild,
   type RequestReviewServingV4RebuildInput,
 } from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
-import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
+import {writeRuntimeLogEvent, writeRuntimeOperatorLogEvent} from '../../utils/runtimeLogger.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import type {
   ProjectTransferImportAnalysisArtifact,
@@ -28,6 +28,10 @@ import {
   promoteProjectTransferCommitAssets,
   rollbackProjectTransferCommitPromotion,
 } from './projectTransferCommitRollback.ts'
+import {
+  isProjectTransferCommitTargetStateChangedError,
+  type ProjectTransferCommitTargetStateChangedError,
+} from './projectTransferCommitWriteGuard.ts'
 import {
   type ProjectTransferCommitAppWriteResult,
   writeProjectTransferCommitAppTables,
@@ -150,6 +154,7 @@ type ProjectTransferCommitRevalidationInput = RuntimePathOptions & {
   nextPlanRevision: number
   plan: ProjectTransferImportPlanArtifact
   repositories?: Pick<ProjectTransferCommitRepositories, 'analyzeTargetRunner' | 'dependencyRepositories'>
+  sessionId?: string
 }
 
 type ProjectTransferCommitRevalidationResult = {
@@ -983,15 +988,60 @@ const getPlanWithCommitRevalidationContext = ({
   }
 }
 
+const getTableWriteEpochFields = (targetState: ProjectTransferTargetStateDirtyTokenSnapshot | null | undefined) => {
+  const tableWrites = targetState?.tableWrites
+
+  return {
+    available: tableWrites?.available === true,
+    epoch: typeof tableWrites?.epoch === 'string' ? tableWrites.epoch : null,
+    epochReason: typeof tableWrites?.epochReason === 'string' ? tableWrites.epochReason : null,
+  }
+}
+
+const writeCommitRevalidationDecisionLogEvent = ({
+  context,
+  plan,
+  sessionId,
+}: {
+  context: ProjectTransferCommitRevalidationContext
+  plan: ProjectTransferImportPlanArtifact
+  sessionId?: string
+}) => {
+  const analyzed = getTableWriteEpochFields(plan.targetState)
+  const current = getTableWriteEpochFields(context.currentTargetState)
+
+  writeRuntimeOperatorLogEvent({
+    attrs: {
+      analyzedEpochReason: analyzed.epochReason,
+      analyzedTableWritesAvailable: analyzed.available,
+      changedSurfaces: context.dirtyTokenDecision.changedSurfaces,
+      currentEpochReason: current.epochReason,
+      currentTableWritesAvailable: current.available,
+      epochsMatched: analyzed.epoch !== null && analyzed.epoch === current.epoch,
+      reason: context.dirtyTokenDecision.reason,
+      sessionId: sessionId ?? null,
+      status: context.dirtyTokenDecision.status,
+    },
+    event: 'project_transfer.commit_revalidation_decision',
+    message: context.dirtyTokenDecision.eligible
+      ? 'Project transfer commit skipped revalidation because tracked target tables are unchanged since analysis'
+      : 'Project transfer commit runs full revalidation',
+    severity: 'INFO',
+  })
+}
+
 export const revalidateProjectTransferCommitPlan = async ({
   analysis,
   layout,
   nextPlanRevision,
   plan,
   repositories,
+  sessionId,
   ...runtimeOptions
 }: ProjectTransferCommitRevalidationInput): Promise<ProjectTransferCommitRevalidationResult> => {
   const context = await getCommitRevalidationContext({plan, repositories})
+
+  writeCommitRevalidationDecisionLogEvent({context, plan, sessionId})
 
   if (context.dirtyTokenDecision.eligible) {
     return getCommitRevalidationResult(plan, false)
@@ -1276,6 +1326,7 @@ const runClaimedCommitRevalidation = async ({
       nextPlanRevision: claimed.planRevision + 1,
       plan: artifacts.plan,
       repositories: inputRepositories,
+      sessionId: claimed.id,
     })
   })
   const {changed, performanceMetrics, plan, ready} = revalidationMeasurement.value
@@ -1305,6 +1356,26 @@ const getRevalidationMemoryReclaimOutcome = (
   reclaim: Awaited<ReturnType<ProjectTransferDuckdbExclusiveWorkLease['reclaimMemory']>>,
 ) => {
   return reclaim.recycleSkippedReason ?? (reclaim.recycled ? 'recycled' : 'released')
+}
+
+const getPlanWithCommitWriteGuardChange = ({
+  error,
+  nextPlanRevision,
+  plan,
+}: {
+  error: ProjectTransferCommitTargetStateChangedError
+  nextPlanRevision: number
+  plan: ProjectTransferImportPlanArtifact
+}): ProjectTransferImportPlanArtifact => {
+  const stalePlanReasons = getProjectTransferDirtyTokenStalePlanReasons(error.decision)
+  const {commitIdMaps: _commitIdMaps, ...uncommittedPlan} = plan
+
+  return {
+    ...uncommittedPlan,
+    planRevision: nextPlanRevision,
+    stalePlanReasons,
+    summary: {...plan.summary, stalePlanReasons},
+  }
 }
 
 const reclaimProjectTransferCommitRevalidationMemory = async (lease: ProjectTransferDuckdbExclusiveWorkLease) => {
@@ -1828,17 +1899,42 @@ const writeRevalidatedClaimedCommit = async ({
 
   await input.repositories.reclaimRevalidationMemory(lease)
 
-  const writeResult = await input.repositories.runAppTableWrites({
-    artifacts,
-    commitId: input.commitId,
-    now: input.now,
-    onProgress: publishProgress,
-    schemaVersion: getAnalysisSchemaVersion(artifacts.analysis),
-    ...input.runtimeOptions,
-    sessionId: input.sessionId,
-  })
+  const writeOutcome = await input.repositories
+    .runAppTableWrites({
+      artifacts,
+      commitId: input.commitId,
+      now: input.now,
+      onProgress: publishProgress,
+      schemaVersion: getAnalysisSchemaVersion(artifacts.analysis),
+      ...input.runtimeOptions,
+      sessionId: input.sessionId,
+    })
+    .then(
+      (writeResult) => {
+        return {status: 'written' as const, writeResult}
+      },
+      (error: unknown) => {
+        return isProjectTransferCommitTargetStateChangedError(error)
+          ? {error, status: 'targetStateChanged' as const}
+          : Promise.reject(error)
+      },
+    )
 
-  return {artifacts, performanceMetrics: revalidation.performanceMetrics, status: 'written' as const, writeResult}
+  return writeOutcome.status === 'written'
+    ? {
+        artifacts,
+        performanceMetrics: revalidation.performanceMetrics,
+        status: 'written' as const,
+        writeResult: writeOutcome.writeResult,
+      }
+    : {
+        plan: getPlanWithCommitWriteGuardChange({
+          error: writeOutcome.error,
+          nextPlanRevision: input.claimed.planRevision + 1,
+          plan: revalidation.plan,
+        }),
+        status: 'stale' as const,
+      }
 }
 
 const runClaimedCommitExclusiveWork = ({
@@ -2091,6 +2187,7 @@ export const commitProjectTransferImportSession = async ({
         nextPlanRevision: current.planRevision + 1,
         plan: artifacts.plan,
         repositories: inputRepositories,
+        sessionId: current.id,
       })
     })
     const preClaimRevalidation = preClaimRevalidationMeasurement.value

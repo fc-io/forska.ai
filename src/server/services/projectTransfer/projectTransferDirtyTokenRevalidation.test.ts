@@ -16,6 +16,7 @@ import {
   type ProjectTransferTargetStateSafetySurface,
   projectTransferTargetStateSafetySurfaces,
   projectTransferTargetStateTrackedSurfaces,
+  projectTransferTargetStateTrackedTables,
 } from './projectTransferTargetStateDirtyTokenService.ts'
 
 setDefaultTimeout(120_000)
@@ -60,6 +61,15 @@ const getSnapshot = (
       updatedAt: '2026-06-12T09:00:00.000Z',
     },
     globalUnknownToken: 0,
+    tableWrites: {
+      available: true,
+      counters: Object.fromEntries(
+        projectTransferTargetStateTrackedTables.map((table) => {
+          return [table, 0]
+        }),
+      ),
+      epoch: 'tracker-epoch-1',
+    },
     tokens: getCompleteTokens(),
     ...overrides,
   }
@@ -140,9 +150,7 @@ test('project transfer dirty-token revalidation falls back when coverage or toke
     currentTargetState: completeSnapshot,
   })
   const incompleteCoverage = getProjectTransferDirtyTokenRevalidationDecision({
-    analyzedTargetState: getSnapshot({
-      coverage: {...(completeSnapshot.coverage as NonNullable<typeof completeSnapshot.coverage>), coveredSurfaces: []},
-    }),
+    analyzedTargetState: getSnapshot({tableWrites: null}),
     currentTargetState: completeSnapshot,
   })
 
@@ -291,14 +299,14 @@ test('project transfer target-state service stores coverage and advances known a
     }))
   `)
 
-  expect(result.coverageComplete).toBe(false)
+  expect(result.coverageComplete).toBe(true)
   expect(result.coverageSurfaces).toEqual([...projectTransferTargetStateTrackedSurfaces])
   expect(result.articleToken).toBe(1)
   expect(result.promptToken).toBe(1)
   expect(result.globalUnknownToken).toBe(1)
 })
 
-test('project transfer stored coverage only claims surfaces with dirty-token writers so unchanged tokens still require full revalidation', () => {
+test('project transfer stored coverage only claims surfaces with dirty-token writers so unchanged tokens without table-write tracking still require full revalidation', () => {
   const result = runDirtyTokenServiceScript<{
     coverageSurfaces: string[]
     snapshot: ProjectTransferTargetStateDirtyTokenSnapshot
@@ -316,11 +324,17 @@ test('project transfer stored coverage only claims surfaces with dirty-token wri
       return !trackedSurfaces.has(surface)
     }),
   )
+  const snapshotWithoutTableWrites = {...result.snapshot, tableWrites: null}
   const decision = getProjectTransferDirtyTokenRevalidationDecision({
+    analyzedTargetState: snapshotWithoutTableWrites,
+    currentTargetState: snapshotWithoutTableWrites,
+  })
+  const trackedDecision = getProjectTransferDirtyTokenRevalidationDecision({
     analyzedTargetState: result.snapshot,
     currentTargetState: result.snapshot,
   })
 
+  expect(trackedDecision.status).toBe('incremental_revalidation_allowed')
   expect(untrackedSurfaces.has('article')).toBe(true)
   expect(untrackedSurfaces.has('judgment')).toBe(true)
   expect(untrackedSurfaces.has('prompt')).toBe(true)

@@ -1,3 +1,4 @@
+import {getDuckdbTableWriteTrackerSnapshot} from '../../utils/duckdbTableWriteTracker.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
 import {projectTransferCommitTransactionWorkloadContext} from './projectTransferWorkloadContext.ts'
@@ -38,7 +39,7 @@ type DirtyTokenRow = {dirtyToken: number; surface: string}
 
 type UnknownTokenRow = {dirtyToken: number}
 
-export const projectTransferTargetStateCoverageCodeVersion = 'project-transfer-target-state-coverage-v2'
+export const projectTransferTargetStateCoverageCodeVersion = 'project-transfer-target-state-coverage-v3'
 export const projectTransferDependencyFingerprintAlgorithm = 'project-transfer-snapshot-fingerprint'
 export const projectTransferDependencyFingerprintCodeVersion = 'provider-model-snapshot-v1'
 
@@ -77,6 +78,47 @@ export const projectTransferTargetStateTrackedSurfaces = [
   'projectTransferHistory',
 ] as const satisfies readonly ProjectTransferTargetStateSafetySurface[]
 
+export const projectTransferTargetStateTablesBySurface = {
+  article: ['app.article'],
+  articleIdentifier: ['app.article_identifier'],
+  humanJudgment: ['app.judgment_human'],
+  humanJudgmentSummary: ['app.judgment_human_summary'],
+  importedSnapshotMarker: ['app.model', 'app.provider_connection'],
+  importRoute: ['app.import_route', 'app.article_import_route'],
+  judgment: ['app.judgment'],
+  judgmentAssessment: ['app.judgment_assessment'],
+  model: ['app.model'],
+  project: ['app.project'],
+  projectArticle: ['app.project_article'],
+  projectImportRoute: ['app.project_import_route'],
+  projectPrompt: ['app.project_prompt'],
+  projectTransferHistory: ['app.project_transfer_history'],
+  prompt: ['app.prompt'],
+  providerConnection: ['app.provider_connection', 'app.comparison_project'],
+  review: ['app.review'],
+  snapshotFingerprintInput: ['app.model', 'app.provider_connection'],
+} as const satisfies Record<ProjectTransferTargetStateSafetySurface, readonly string[]>
+
+export const projectTransferTargetStateTrackedTables = Array.from(
+  new Set(
+    projectTransferTargetStateSafetySurfaces.flatMap((surface) => {
+      return projectTransferTargetStateTablesBySurface[surface]
+    }),
+  ),
+).sort()
+
+export type ProjectTransferTargetStateTableWriteSnapshot = {
+  available: boolean
+  counters: Record<string, number>
+  epoch: string
+  epochReason?: string
+  externalCounters?: Record<string, number>
+}
+
+export const getCurrentProjectTransferTargetStateTableWrites = (): ProjectTransferTargetStateTableWriteSnapshot => {
+  return getDuckdbTableWriteTrackerSnapshot(projectTransferTargetStateTrackedTables)
+}
+
 export type ProjectTransferTargetStateCoverageVersion = {
   coverageCodeVersion: string
   coveredSurfaces: ProjectTransferTargetStateSafetySurface[]
@@ -90,6 +132,7 @@ export type ProjectTransferTargetStateDirtyTokenSnapshot = {
   capturedAt: string
   coverage: ProjectTransferTargetStateCoverageVersion | null
   globalUnknownToken: number
+  tableWrites?: ProjectTransferTargetStateTableWriteSnapshot | null
   tokens: Partial<Record<ProjectTransferTargetStateSafetySurface, number>>
 }
 
@@ -279,8 +322,9 @@ const getTargetStateDirtyTokenSnapshot = async ({
     getGlobalUnknownToken(runner),
     getTargetStateDirtyTokenRows(runner),
   ])
+  const tableWrites = inputRunner === undefined ? getCurrentProjectTransferTargetStateTableWrites() : null
 
-  return {capturedAt: new Date().toISOString(), coverage, globalUnknownToken, tokens}
+  return {capturedAt: new Date().toISOString(), coverage, globalUnknownToken, tableWrites, tokens}
 }
 
 const advanceTargetStateDirtyTokensAtomically = async ({
@@ -342,15 +386,39 @@ const advanceGlobalUnknownTargetStateDirtyTokenAtomically = async ({
   })
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export const getCompleteProjectTransferTargetStateTableWrites = (
+  tableWrites: unknown,
+): ProjectTransferTargetStateTableWriteSnapshot | null => {
+  const counters = isRecord(tableWrites) ? tableWrites.counters : null
+  const isComplete =
+    isRecord(tableWrites)
+    && tableWrites.available === true
+    && typeof tableWrites.epoch === 'string'
+    && tableWrites.epoch !== ''
+    && isRecord(counters)
+    && projectTransferTargetStateTrackedTables.every((table) => {
+      return Number.isSafeInteger(counters[table])
+    })
+
+  return isComplete ? (tableWrites as ProjectTransferTargetStateTableWriteSnapshot) : null
+}
+
+export const getProjectTransferTargetStateTableWrites = (snapshot: ProjectTransferTargetStateDirtyTokenSnapshot) => {
+  return getCompleteProjectTransferTargetStateTableWrites(snapshot.tableWrites)
+}
+
 export const isProjectTransferTargetStateCoverageComplete = (
   snapshot: ProjectTransferTargetStateDirtyTokenSnapshot,
 ) => {
-  const coverage = snapshot.coverage
-
   return (
-    coverage !== null
+    isRecord(snapshot.coverage)
+    && getProjectTransferTargetStateTableWrites(snapshot) !== null
     && projectTransferTargetStateSafetySurfaces.every((surface) => {
-      return coverage.coveredSurfaces.includes(surface)
+      return projectTransferTargetStateTablesBySurface[surface].length > 0
     })
   )
 }

@@ -37,7 +37,7 @@ test('project transfer heavy DuckDB flows carry workload contexts', () => {
   expect(analyzeTargetSource).toContain('projectTransferAnalyzeOperationWorkloadContext')
   expect(operationTablesSource).toContain('workloadContext?: DuckdbWorkloadContext')
   expect(commitSource).toContain('runWithDuckdbExclusiveWork')
-  expect(commitSource).toContain('repositories.runAppTableWrites')
+  expect(commitSource).toMatch(/repositories\s*\.\s*runAppTableWrites/)
   expect(commitSource).toContain('projectTransferCommitTransactionWorkloadContext')
   expect(commitAppWritesStart).toBeGreaterThanOrEqual(0)
   expect(commitAppWritesEnd).toBeGreaterThan(commitAppWritesStart)

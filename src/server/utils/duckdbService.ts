@@ -47,6 +47,14 @@ import {
   getInitialDuckdbStartupRepairRungs,
 } from './duckdbStartupRepairLadder.ts'
 import {canDuckdbStatementDeleteIndexedRows} from './duckdbStatementIndexedRowDeletion.ts'
+import {
+  beginDuckdbTableWriteTracking,
+  finishDuckdbTableWriteTracking,
+  recordDuckdbTableWriteTrackerClose,
+  recordDuckdbTableWriteTrackerExternalWrites,
+  recordDuckdbTableWriteTrackerOpen,
+  renewDuckdbTableWriteTrackerEpoch,
+} from './duckdbTableWriteTracker.ts'
 import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
 import {
@@ -3491,6 +3499,8 @@ const quarantineFailedDuckdbWalReplay = async (
 ) => {
   const normalizedError = getNormalizedDuckdbError(error)
 
+  renewDuckdbTableWriteTrackerEpoch('startup-wal-quarantine')
+
   if (isDuckdbLegacyWalCompatibilityError(normalizedError.message)) {
     throw getDuckdbLegacyWalCompatibilityError(runtimeConfig.databasePath, normalizedError)
   }
@@ -4950,6 +4960,14 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig, hadW
   }
 
   clearDuckdbStartupPreflightActiveRepairSpec(activeRepairSpecPath)
+  recordDuckdbTableWriteTrackerExternalWrites({
+    statements: preflightRepairSpecs.map((spec) => {
+      return spec.mutationProbeSql
+    }),
+    tables: preflightRepairSpecs.map((spec) => {
+      return `${spec.schemaName}.${spec.tableName}`
+    }),
+  })
 
   const childProcessInput = getDuckdbStartupChildProcessInput({
     executablePath: process.execPath,
@@ -5678,6 +5696,8 @@ const stopDuckdbStartupIndexedTableRepair = async ({
 }
 
 const repairDuckdbStartupIndexedTables = async (runtimeConfig: DuckdbRuntimeConfig, error: unknown): Promise<void> => {
+  renewDuckdbTableWriteTrackerEpoch('startup-indexed-table-repair')
+
   if (runtimeConfig.databasePath === ':memory:') {
     throw new Error('DuckDB indexed-table repair is unavailable for :memory: databases')
   }
@@ -6133,6 +6153,8 @@ const withNormalizedDuckdbError = async <T>(work: () => Promise<T>, canRetryAfte
 const resetDuckdbRuntimeState = () => {
   const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
 
+  recordDuckdbTableWriteTrackerClose()
+
   for (const finish of duckdbServiceState.duckdbForegroundIdleWaiters) {
     finish(false)
   }
@@ -6341,6 +6363,10 @@ const closeDuckdbServiceWithoutBarrier = async ({
 
   resetDuckdbRuntimeState()
 
+  if (releaseOwnerLease) {
+    renewDuckdbTableWriteTrackerEpoch('owner-lease-released')
+  }
+
   if (!closeRuntime) {
     if (releaseOwnerLease) {
       await releaseCurrentDuckdbOwnerLease()
@@ -6511,6 +6537,7 @@ const closeDuckdbConnectionsForShutdown = () => {
     ...duckdbServiceState.appendConnections,
   ]
 
+  recordDuckdbTableWriteTrackerClose()
   duckdbServiceState.appendConnections = []
   duckdbServiceState.backgroundConnection = null
   duckdbServiceState.controlConnection = null
@@ -6618,6 +6645,27 @@ export const registerDuckdbShutdownHooks = () => {
   })
 }
 
+const getDuckdbTableWriteTrackerIdentity = (
+  runtimeConfig: DuckdbRuntimeConfig,
+  ownerLease: Awaited<ReturnType<typeof ensureCurrentDuckdbOwnerLease>> | null | undefined,
+) => {
+  const fileStat =
+    runtimeConfig.databasePath === ':memory:'
+      ? undefined
+      : statSync(runtimeConfig.databasePath, {bigint: true, throwIfNoEntry: false})
+  const leaseId = ownerLease?.metadata?.leaseId
+
+  return fileStat === undefined || !fileStat.isFile() || typeof leaseId !== 'string'
+    ? null
+    : [
+        runtimeConfig.databasePath,
+        String(fileStat.dev),
+        String(fileStat.ino),
+        leaseId,
+        ownerLease?.metadata.acquiredAt ?? '',
+      ].join('|')
+}
+
 const createDuckdbInstance = async (runtimeConfig: DuckdbRuntimeConfig) => {
   return createInitializedDuckdbInstance({
     create: DuckDBInstance.create.bind(DuckDBInstance),
@@ -6684,6 +6732,8 @@ const cleanupFailedDuckdbStart = async (params: {
     })
   }
 
+  renewDuckdbTableWriteTrackerEpoch('owner-lease-released')
+
   try {
     await releaseCurrentDuckdbOwnerLease()
   } catch (error) {
@@ -6729,7 +6779,7 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
   }
 
   assertDuckdbAcceptingWork('DuckDB open')
-  await ensureCurrentDuckdbOwnerLease()
+  const ownerLease = await ensureCurrentDuckdbOwnerLease()
 
   try {
     await runDuckdbStartupWalPreflight(runtimeConfig)
@@ -6738,6 +6788,7 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
     controlConnection = await duckdbInstance.connect()
     await createAppendConnections(appendLaneCount)
     backgroundConnection = await duckdbInstance.connect()
+    recordDuckdbTableWriteTrackerOpen(getDuckdbTableWriteTrackerIdentity(runtimeConfig, ownerLease))
 
     duckdbServiceState.appendConnections = appendConnections
     duckdbServiceState.appendQueues = getInitialDuckdbAppendQueues(appendLaneCount)
@@ -7493,6 +7544,7 @@ const withDuckdbStatementDiagnostic = async <T>(
 ): Promise<T> => {
   const statementExecutionId = randomUUID()
   const startedAtMs = Date.now()
+  const trackedStatement = beginDuckdbTableWriteTracking(duckdbConnection, statement)
 
   writeDuckdbStatementDiagnostic({
     duckdbConnection,
@@ -7505,6 +7557,7 @@ const withDuckdbStatementDiagnostic = async <T>(
 
   try {
     const result = await work()
+    finishDuckdbTableWriteTracking(trackedStatement)
     writeDuckdbStatementDiagnostic({
       duckdbConnection,
       durationMs: Date.now() - startedAtMs,
@@ -7515,6 +7568,7 @@ const withDuckdbStatementDiagnostic = async <T>(
     })
     return result
   } catch (error) {
+    finishDuckdbTableWriteTracking(trackedStatement)
     writeDuckdbStatementDiagnostic({
       duckdbConnection,
       durationMs: Date.now() - startedAtMs,
@@ -8620,6 +8674,7 @@ const closeDuckdbRuntimeForSnapshotCopy = () => {
   const activeBackgroundConnection = duckdbServiceState.backgroundConnection
   const activeInstance = duckdbServiceState.duckdbInstance
 
+  recordDuckdbTableWriteTrackerClose()
   duckdbServiceState.appendConnections = []
   duckdbServiceState.backgroundConnection = null
   duckdbServiceState.controlConnection = null

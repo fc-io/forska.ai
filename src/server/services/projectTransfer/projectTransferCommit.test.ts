@@ -1,13 +1,20 @@
 import {existsSync, mkdtempSync, rmSync} from 'node:fs'
-import {mkdir, readFile, writeFile} from 'node:fs/promises'
+import {mkdir, readdir, readFile, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname, join} from 'node:path'
 
-import {expect, setDefaultTimeout, test} from 'bun:test'
+import {expect, setDefaultTimeout, spyOn, test} from 'bun:test'
 
 import type {ProjectTransferSessionRecord} from '../../../db/schemaTypes.ts'
 import type {RequestReviewServingV4RebuildInput} from '../../reviewServing/reviewServingV4RebuildRequestService.ts'
 import {runMeasuredDuckdbJsonWorkload} from '../../utils/duckdbService.ts'
+import {
+  beginDuckdbTableWriteTracking,
+  finishDuckdbTableWriteTracking,
+  recordDuckdbTableWriteTrackerClose,
+  recordDuckdbTableWriteTrackerOpen,
+} from '../../utils/duckdbTableWriteTracker.ts'
+import {installRuntimeJsonlSink, resetRuntimeJsonlSinkForTests} from '../../utils/runtimeLogger.ts'
 import type {
   ProjectTransferImportAnalysisArtifact,
   ProjectTransferImportPlanArtifact,
@@ -19,6 +26,7 @@ import {
   revalidateProjectTransferCommitPlan,
 } from './projectTransferCommit.ts'
 import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
+import {assertProjectTransferCommitTargetStateUnchanged} from './projectTransferCommitWriteGuard.ts'
 import {
   getActiveDuckdbExclusiveWorkSnapshot,
   hasActiveDuckdbExclusiveWork,
@@ -34,6 +42,8 @@ import {
   getProjectTransferProgressStagingRevision,
 } from './projectTransferStaging.ts'
 import {
+  getCurrentProjectTransferTargetStateTableWrites,
+  getProjectTransferTargetStateDirtyTokenService,
   projectTransferDependencyFingerprintAlgorithm,
   projectTransferDependencyFingerprintCodeVersion,
   projectTransferTargetStateCoverageCodeVersion,
@@ -104,6 +114,29 @@ const getTargetStateSnapshotRunner = (snapshot: ProjectTransferTargetStateDirtyT
 
 const getRuntimeRoot = () => {
   return mkdtempSync(join(tmpdir(), `f2-project-transfer-commit-${process.pid}-`))
+}
+
+const getCommitRevalidationDecisionEvents = async (logDir: string) => {
+  const files = (await readdir(logDir)).filter((file) => {
+    return file.endsWith('.jsonl')
+  })
+  const contents = await Promise.all(
+    files.map((file) => {
+      return readFile(join(logDir, file), 'utf8')
+    }),
+  )
+
+  return contents.flatMap((content) => {
+    return content
+      .trim()
+      .split('\n')
+      .map((line) => {
+        return JSON.parse(line) as {attrs: Record<string, unknown>; event: string; severity: string}
+      })
+      .filter((event) => {
+        return event.event === 'project_transfer.commit_revalidation_decision'
+      })
+  })
 }
 
 const removePathIfExists = (pathValue: string) => {
@@ -1035,23 +1068,106 @@ test('project transfer commit allows older analysis snapshots for resolved plan 
   }
 })
 
-test('project transfer commit revalidation skips payload reads when target-state dirty tokens are unchanged', async () => {
+test('project transfer commit revalidation reads payloads when a runner target state has no table-write tracking', async () => {
   const cwd = getRuntimeRoot()
+  const logDir = join(cwd, 'logs')
+
+  installRuntimeJsonlSink({envValues: {LOG_DIR: logDir, LOG_LEVEL: 'ERROR'}})
 
   try {
     const targetState = getTargetStateSnapshot()
     const plan = {...getPlan({planRevision: 1}), targetState}
-    const result = await revalidateProjectTransferCommitPlan({
+    const revalidationError = await revalidateProjectTransferCommitPlan({
       analysis: getAnalysis(1),
       cwd,
       layout: getProjectTransferImportTempLayout('commit-session'),
       nextPlanRevision: 2,
       plan,
       repositories: {analyzeTargetRunner: getTargetStateSnapshotRunner(targetState)},
-    })
+      sessionId: 'commit-session',
+    }).then(
+      () => {
+        return null
+      },
+      (error: unknown) => {
+        return error instanceof Error ? error.message : String(error)
+      },
+    )
 
-    expect(result).toMatchObject({changed: false, ready: true})
+    expect(revalidationError).toMatch(/ENOENT|missing|no such file/i)
+    const events = await getCommitRevalidationDecisionEvents(logDir)
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      attrs: {
+        analyzedEpochReason: null,
+        changedSurfaces: [],
+        reason: 'analyzed_target_state_coverage_incomplete',
+        sessionId: 'commit-session',
+        status: 'full_revalidation_required',
+      },
+      severity: 'INFO',
+    })
   } finally {
+    resetRuntimeJsonlSinkForTests()
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit logs one operator decision for each pre-claim and post-claim skip', async () => {
+  const cwd = getRuntimeRoot()
+  const logDir = join(cwd, 'logs')
+  recordDuckdbTableWriteTrackerOpen('project-transfer-decision-log-test')
+  const targetState = getTargetStateSnapshot({tableWrites: getCurrentProjectTransferTargetStateTableWrites()})
+  const snapshot = spyOn(
+    getProjectTransferTargetStateDirtyTokenService(),
+    'getTargetStateDirtyTokenSnapshot',
+  ).mockResolvedValue(targetState)
+
+  installRuntimeJsonlSink({envValues: {LOG_DIR: logDir, LOG_LEVEL: 'ERROR'}})
+
+  try {
+    const summary = getReadySummary()
+    const plan = {...getPlan({planRevision: 1, summary}), targetState}
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const phases: string[] = []
+    const result = await runCommit({
+      beforeAppTableWrites: async (input) => {
+        expect(input.artifacts.plan.targetState).toEqual(targetState)
+        assertProjectTransferCommitTargetStateUnchanged({plan: input.artifacts.plan, sessionId: input.sessionId})
+      },
+      cwd,
+      repository: fake.repository,
+      revalidate: async (input) => {
+        phases.push(fake.getSession().state)
+        expect(await getCommitRevalidationDecisionEvents(logDir)).toHaveLength(phases.length - 1)
+        return revalidateProjectTransferCommitPlan(input)
+      },
+    })
+    const events = await getCommitRevalidationDecisionEvents(logDir)
+
+    expect(result.status).toBe('completed')
+    expect(phases).toEqual(['ready_to_commit', 'committing'])
+    expect(events).toHaveLength(2)
+    events.map((event) => {
+      expect(event.severity).toBe('INFO')
+      expect(event.attrs).toEqual({
+        analyzedEpochReason: targetState.tableWrites?.epochReason,
+        analyzedTableWritesAvailable: true,
+        changedSurfaces: [],
+        currentEpochReason: targetState.tableWrites?.epochReason,
+        currentTableWritesAvailable: true,
+        epochsMatched: true,
+        reason: 'target_state_unchanged',
+        sessionId: 'commit-session',
+        status: 'incremental_revalidation_allowed',
+      })
+    })
+  } finally {
+    snapshot.mockRestore()
+    resetRuntimeJsonlSinkForTests()
+    recordDuckdbTableWriteTrackerClose()
     rmSync(cwd, {force: true, recursive: true})
   }
 })
@@ -1798,6 +1914,120 @@ test('project transfer commit releases the exclusive lease when writes throw', a
     expect(fake.getSession()).toMatchObject({errorJson: {message: 'app-table writes failed'}, state: 'failed'})
     expect(hasActiveDuckdbExclusiveWork()).toBe(false)
   } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+const runTargetStateGuardedCommit = async ({
+  cwd,
+  refreshSnapshot = false,
+  writeBeforeGuard,
+}: {
+  cwd: string
+  refreshSnapshot?: boolean
+  writeBeforeGuard: boolean
+}) => {
+  recordDuckdbTableWriteTrackerOpen('project-transfer-commit-guard-test')
+
+  const summary = getReadySummary()
+  const plan = getProjectTransferPlanWithCommitIdMaps({
+    commitId: 'previous-attempt',
+    now: new Date('2026-10-16T09:00:00.000Z'),
+    payloads: {},
+    plan: {
+      ...getPlan({planRevision: 1, summary}),
+      targetState: getTargetStateSnapshot({tableWrites: getCurrentProjectTransferTargetStateTableWrites()}),
+    },
+    promotion: {
+      articleCreates: [],
+      articleFieldFills: [],
+      manifest: {createdAt: '', promotions: [], sessionId: 'commit-session', updatedAt: ''},
+      promotionPathByPackagePath: {},
+    },
+  })
+  const layout = await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+  const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+  const appWrites: string[] = []
+
+  if (refreshSnapshot) {
+    finishDuckdbTableWriteTracking(beginDuckdbTableWriteTracking({}, 'UPDATE app.judgment SET id = id'))
+  }
+
+  const revalidatedPlan = refreshSnapshot
+    ? {...plan, targetState: getTargetStateSnapshot({tableWrites: getCurrentProjectTransferTargetStateTableWrites()})}
+    : plan
+  const result = await runCommit({
+    beforeAppTableWrites: async (input) => {
+      if (writeBeforeGuard) {
+        finishDuckdbTableWriteTracking(
+          beginDuckdbTableWriteTracking({}, "INSERT INTO app.judgment (id) VALUES ('judgment-in-commit-window')"),
+        )
+      }
+
+      assertProjectTransferCommitTargetStateUnchanged({plan: input.artifacts.plan, sessionId: input.sessionId})
+      appWrites.push('written')
+    },
+    cwd,
+    repository: fake.repository,
+    revalidate: async () => {
+      return {changed: false, plan: revalidatedPlan, ready: true}
+    },
+  })
+  const storedPlanPath = join(cwd, layout.planPath)
+  const storedPlan = existsSync(storedPlanPath)
+    ? (JSON.parse(await readFile(storedPlanPath, 'utf8')) as ProjectTransferImportPlanArtifact)
+    : null
+
+  return {appWrites, fake, plan, result, storedPlan}
+}
+
+test('project transfer commit reopens the plan as stale when a tracked table changes before the write transaction', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {appWrites, fake, plan, result, storedPlan} = await runTargetStateGuardedCommit({cwd, writeBeforeGuard: true})
+
+    expect(result).toMatchObject({status: 'stale', statusCode: 200})
+    expect(appWrites).toEqual([])
+    expect(fake.calls.reopen).toHaveLength(1)
+    expect(fake.getSession()).toMatchObject({ownerToken: null, planRevision: 2, state: 'awaiting_resolution'})
+    expect(storedPlan?.planRevision).toBe(2)
+    expect(storedPlan?.commitIdMaps).toBeUndefined()
+    expect(storedPlan?.targetState).toEqual(plan.targetState)
+    expect(storedPlan?.stalePlanReasons).toEqual({
+      judgment: [{reason: 'target_state_table_write_changed', targetStateSurfaces: ['judgment']}],
+    })
+    expect(hasActiveDuckdbExclusiveWork()).toBe(false)
+  } finally {
+    recordDuckdbTableWriteTrackerClose()
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit guards the fresh revalidation snapshot after earlier target writes', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {appWrites, result} = await runTargetStateGuardedCommit({cwd, refreshSnapshot: true, writeBeforeGuard: false})
+
+    expect(result).toMatchObject({status: 'completed', statusCode: 200})
+    expect(appWrites).toEqual(['written'])
+  } finally {
+    recordDuckdbTableWriteTrackerClose()
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit writes when no tracked table changes before the write transaction', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const {appWrites, result} = await runTargetStateGuardedCommit({cwd, writeBeforeGuard: false})
+
+    expect(result).toMatchObject({status: 'completed', statusCode: 200})
+    expect(appWrites).toEqual(['written'])
+  } finally {
+    recordDuckdbTableWriteTrackerClose()
     rmSync(cwd, {force: true, recursive: true})
   }
 })

@@ -692,7 +692,8 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
       throw new Error('Expected analyzed plan target-state snapshot')
     }
 
-    expect(isProjectTransferTargetStateCoverageComplete(targetState)).toBe(true)
+    expect(targetState.tableWrites).toBeNull()
+    expect(isProjectTransferTargetStateCoverageComplete(targetState)).toBe(false)
     expect(Object.keys(targetState.tokens).sort()).toEqual([...projectTransferTargetStateSafetySurfaces].sort())
     expect(result.staging.stagedPackage?.sourceProject).toMatchObject({
       name: 'Fixture Project',
@@ -706,6 +707,108 @@ test('analyzes a valid Phase 2 project-transfer package and freezes artifacts', 
     rmSync(cwd, {force: true, recursive: true})
   }
 })
+
+const trackedAnalyzeScript = `
+  const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {analyzeProjectTransferImportPackage}, {getProjectTransferImportTempLayout}, {getProjectTransferTargetStateDirtyTokenService}, {getProjectTransferDirtyTokenRevalidationDecision}] = await Promise.all([
+    import('./src/db/migrateDuckdb.ts'),
+    import('./src/server/services/appDatabaseService.ts'),
+    import('./src/server/utils/duckdbService.ts'),
+    import('./src/server/utils/serverRuntimeRole.ts'),
+    import('./src/server/services/projectTransfer/projectTransferAnalyze.ts'),
+    import('./src/server/services/projectTransfer/projectTransferSession.ts'),
+    import('./src/server/services/projectTransfer/projectTransferTargetStateDirtyTokenService.ts'),
+    import('./src/server/services/projectTransfer/projectTransferDirtyTokenRevalidation.ts'),
+  ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
+  await migrateDuckdb()
+
+  const runs = JSON.parse(process.env.PROJECT_TRANSFER_TRACKED_ANALYZE_RUNS ?? '[]')
+  const decisions = []
+
+  for (const run of runs) {
+    const result = await analyzeProjectTransferImportPackage({
+      autoResolveDependencies: true,
+      availableDiskBytes: 10_000_000_000,
+      cwd: run.cwd,
+      layout: getProjectTransferImportTempLayout(run.sessionId),
+      onProgress: async (progress) => {
+        if (run.writeAfterTargetAnalysis && progress.message === 'Target project analysis completed') {
+          await getAppDatabaseService().run("UPDATE app.article SET article_title = 'Edited during analysis', updated_at = now() WHERE id = 'missing-article'")
+        }
+      },
+      planRevision: 1,
+      uploadMetadata: run.uploadMetadata,
+    })
+    const currentTargetState = await getProjectTransferTargetStateDirtyTokenService().getTargetStateDirtyTokenSnapshot()
+
+    decisions.push(getProjectTransferDirtyTokenRevalidationDecision({analyzedTargetState: result.plan.targetState, currentTargetState}))
+  }
+
+  console.log(JSON.stringify(decisions))
+  await getAppDatabaseService().close()
+`
+
+const getTrackedAnalyzeRun = async (writeAfterTargetAnalysis: boolean) => {
+  const cwd = getRuntimeRoot()
+  const {uploadMetadata} = await writeAnalyzeUpload({cwd, useZipModule: false})
+
+  return {cwd, sessionId, uploadMetadata, writeAfterTargetAnalysis}
+}
+
+const runTrackedAnalyzeScript = (runs: Awaited<ReturnType<typeof getTrackedAnalyzeRun>>[]) => {
+  const databaseRoot = getRuntimeRoot()
+  const result = globalThis.Bun.spawnSync(['bun', '-e', trackedAnalyzeScript], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      API_SERVER_PORT: '39991',
+      DUCKDB_PATH: join(databaseRoot, 'tracked-analyze.duckdb'),
+      PROJECT_TRANSFER_TRACKED_ANALYZE_RUNS: JSON.stringify(runs),
+      SERVER_ROLE: 'dev-single',
+      VITE_PORT: '39992',
+    },
+  })
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Tracked analyze script failed')
+    }
+
+    const lastJsonLine =
+      result.stdout
+        .toString()
+        .split('\n')
+        .filter((line) => {
+          return line.startsWith('[')
+        })
+        .at(-1) ?? '[]'
+
+    return JSON.parse(lastJsonLine) as unknown[]
+  } finally {
+    rmSync(databaseRoot, {force: true, recursive: true})
+  }
+}
+
+test('analyze captures the target-state snapshot before target analysis reads the target tables', async () => {
+  const runs = [await getTrackedAnalyzeRun(false), await getTrackedAnalyzeRun(true)]
+
+  try {
+    const [unchanged, writtenAfterTargetAnalysis] = runTrackedAnalyzeScript(runs)
+
+    expect(unchanged).toMatchObject({eligible: true, status: 'incremental_revalidation_allowed'})
+    expect(writtenAfterTargetAnalysis).toMatchObject({
+      changedSurfaces: ['article'],
+      reason: 'target_state_table_write_changed',
+      status: 'full_revalidation_required',
+    })
+  } finally {
+    runs.map((run) => {
+      return rmSync(run.cwd, {force: true, recursive: true})
+    })
+  }
+}, 120_000)
 
 test('releases raw archive buffers before target analysis', async () => {
   const source = await readFile(new URL('./projectTransferAnalyze.ts', import.meta.url), 'utf8')
