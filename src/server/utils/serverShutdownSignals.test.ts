@@ -1,6 +1,12 @@
 import {afterEach, expect, test} from 'bun:test'
 
-import {registerServerShutdownSignalHandlers, type ServerShutdownSignal} from './serverShutdownSignals.ts'
+import {
+  registerServerShutdownSignalHandlers,
+  requestServerShutdown,
+  resetServerShutdownRequestInputForTests,
+  type ServerShutdownSignal,
+  type ServerShutdownTrigger,
+} from './serverShutdownSignals.ts'
 import {
   getServerShutdownSignal,
   isServerShutdownInProgress,
@@ -29,7 +35,7 @@ const createShutdownHarness = (forceExitAfterMs = 60_000) => {
   const shutdown = Promise.withResolvers<undefined>()
   const exits: number[] = []
   const events: string[] = []
-  const shutdownSignals: ServerShutdownSignal[] = []
+  const shutdownSignals: ServerShutdownTrigger[] = []
   const signalSource = createSignalSource()
 
   return {
@@ -43,7 +49,7 @@ const createShutdownHarness = (forceExitAfterMs = 60_000) => {
       log: (entry: {event: string}) => {
         events.push(entry.event)
       },
-      runShutdown: async (signal: ServerShutdownSignal) => {
+      runShutdown: async (signal: ServerShutdownTrigger) => {
         shutdownSignals.push(signal)
         return shutdown.promise
       },
@@ -57,6 +63,7 @@ const createShutdownHarness = (forceExitAfterMs = 60_000) => {
 
 afterEach(() => {
   resetServerShutdownStateForTests()
+  resetServerShutdownRequestInputForTests()
 })
 
 test('the first shutdown signal runs graceful shutdown once and exits 0 only after it finishes', async () => {
@@ -126,4 +133,58 @@ test('signal handlers register once per process', () => {
   expect(registerServerShutdownSignalHandlers(harness.input)).toBe(false)
   expect(harness.signalSource.listenerCount('SIGTERM')).toBe(1)
   expect(harness.signalSource.listenerCount('SIGINT')).toBe(1)
+})
+
+test('a Windows stop request runs the same graceful shutdown as SIGTERM and exits 0 after it finishes', async () => {
+  const harness = createShutdownHarness()
+  const fallbackExits: number[] = []
+
+  registerServerShutdownSignalHandlers(harness.input)
+  requestServerShutdown('stop-request', {
+    exit: (code) => {
+      fallbackExits.push(code)
+    },
+  })
+
+  expect(isServerShutdownInProgress()).toBe(true)
+  expect(getServerShutdownSignal()).toBe('stop-request')
+  expect(harness.shutdownSignals).toEqual(['stop-request'])
+  await globalThis.Bun.sleep(1)
+  expect(harness.exits).toEqual([])
+
+  harness.shutdown.resolve(undefined)
+  await globalThis.Bun.sleep(1)
+
+  expect(harness.exits).toEqual([0])
+  expect(fallbackExits).toEqual([])
+})
+
+test('a stop request during a signal-started shutdown is ignored like a repeated signal', async () => {
+  const harness = createShutdownHarness()
+
+  registerServerShutdownSignalHandlers(harness.input)
+  harness.signalSource.emit('SIGINT')
+  requestServerShutdown('stop-request')
+  requestServerShutdown('parent-exited')
+
+  expect(harness.shutdownSignals).toEqual(['SIGINT'])
+  expect(harness.events).toEqual(['server.shutdown.signal-ignored', 'server.shutdown.signal-ignored'])
+
+  harness.shutdown.resolve(undefined)
+  await globalThis.Bun.sleep(1)
+
+  expect(harness.exits).toEqual([0])
+})
+
+test('a stop request exits directly in roles without graceful shutdown handlers, like the default SIGTERM action', () => {
+  const fallbackExits: number[] = []
+
+  requestServerShutdown('stop-request', {
+    exit: (code) => {
+      fallbackExits.push(code)
+    },
+  })
+
+  expect(fallbackExits).toEqual([0])
+  expect(isServerShutdownInProgress()).toBe(false)
 })

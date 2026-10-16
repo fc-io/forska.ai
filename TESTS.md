@@ -167,6 +167,25 @@ DuckDB/runtime section. With Bun 1.3.13, bare relative paths such as
 child Bun processes exit with empty stdout/stderr, which hides the real JSON
 subprocess output these tests assert.
 
+## Windows graceful shutdown and bounded WAL
+
+```sh
+bun test ./src/server/utils/processStopRequest.test.ts ./scripts/processTree.test.ts ./scripts/stopChildProcess.test.ts ./scripts/serverStackShutdown.test.ts ./src/server/utils/serverShutdownSignals.test.ts --timeout 120000
+bun test ./src/server/utils/duckdbServiceShutdown.test.ts ./src/server/utils/duckdbGracefulShutdown.test.ts --timeout 120000
+bun test ./src/server/utils/duckdbWalCheckpointPolicy.test.ts ./src/server/utils/duckdbIdleWalCheckpoint.test.ts ./src/server/utils/startBackgroundWork.test.ts ./src/server/utils/duckdbStartupChildStderr.test.ts --timeout 120000
+```
+
+On win32, process/subprocess `kill()` is TerminateProcess, so supervisors write a
+pid-addressed stop request (`processStopRequest.ts`, under the OS temp dir) and
+wait for the role's shutdown budget before force-killing the tree; the dev
+wrappers wait for children that already got the console Ctrl+C. These tests mock
+the platform and also drive real processes on macOS/Linux; the DuckDB stop-request
+and WAL tests run natively on the Windows runners of the DuckDB distribution
+workflow, and the supervisor contracts run in the Windows topology job. Verify on
+a real Windows console that Ctrl+C on `bun run dev:start` ends with
+`[duckdb] shutdown checkpoint completed` and no `forska.duckdb.wal` before calling
+the Windows path verified.
+
 ## Failure-regression and fixture-isolation checks
 
 ```sh

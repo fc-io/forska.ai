@@ -1,7 +1,10 @@
 import {realpathSync} from 'node:fs'
 
 import {getBackgroundServerEnv} from '../src/server/utils/backgroundServerStack.ts'
+import {shouldUseProcessStopRequests, startProcessStopRequestWatcher} from '../src/server/utils/processStopRequest.ts'
 import {mergeRuntimeProfileEnv, type RuntimeProfileName} from '../src/utils/runtimeProfile.ts'
+import {getRuntimeProfileWrapperShutdownTimeoutMs} from './serverStackShutdown.ts'
+import {getLiveStopChildProcessDependencies, stopChildProcess} from './stopChildProcess.ts'
 
 export type RuntimeProfileMode =
   | 'api-only-server'
@@ -398,6 +401,10 @@ export const ensureAppPortAvailable = async ({
   )
 }
 
+const logRuntimeProfileWrapperMessage = (message: string) => {
+  console.error(`[runtime-profile] ${message}`)
+}
+
 const runWithRuntimeProfile = async () => {
   const commandOptions = getRuntimeProfileCommandOptions()
   const commandEnv = getRuntimeProfileCommandEnv(commandOptions)
@@ -421,10 +428,11 @@ const runWithRuntimeProfile = async () => {
     }
 
     forwardedSignal = signal
-
-    if (childProcess.exitCode === null) {
-      childProcess.kill(signal)
-    }
+    void stopChildProcess(getLiveStopChildProcessDependencies(logRuntimeProfileWrapperMessage), childProcess, {
+      childName: `${commandOptions.mode} child`,
+      signal,
+      timeoutMs: getRuntimeProfileWrapperShutdownTimeoutMs(commandEnv),
+    })
   }
 
   process.once('SIGINT', () => {
@@ -434,6 +442,14 @@ const runWithRuntimeProfile = async () => {
   process.once('SIGTERM', () => {
     forwardSignal('SIGTERM')
   })
+
+  if (shouldUseProcessStopRequests()) {
+    startProcessStopRequestWatcher({
+      onStopRequest: () => {
+        forwardSignal('SIGTERM')
+      },
+    })
+  }
 
   const exitCode = await childProcess.exited
 

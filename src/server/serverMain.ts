@@ -31,8 +31,13 @@ import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
 import {initializeJudgeWorkerJournalIdentity} from './utils/judgeWorkerJournalIdentity.ts'
 import {validateOwnerlessRouteBackends} from './utils/ownerlessReadableBackends.ts'
+import {shouldUseProcessStopRequests, startProcessStopRequestWatcher} from './utils/processStopRequest.ts'
 import {getRuntimeBuildInfo} from './utils/runtimeBuildInfo.ts'
-import {writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
+import {
+  exitWithRuntimeLogFlush,
+  writeRuntimeFailureLogEvent,
+  writeRuntimeOperatorLogEvent,
+} from './utils/runtimeLogger.ts'
 import {getServerCronMountDecisions, lowMemoryMaintenanceDuckdbLimitMiB} from './utils/serverCronMountDecisions.ts'
 import {shouldDisableServerMutationWork} from './utils/serverMutationMode.ts'
 import {shouldServerRoleRunCodexStartup} from './utils/serverRole.ts'
@@ -44,6 +49,7 @@ import {
   shouldCurrentServerMountPublicProductApi,
   shouldCurrentServerRunJudgingLoops,
 } from './utils/serverRuntimeRole.ts'
+import {requestServerShutdown} from './utils/serverShutdownSignals.ts'
 import {startBackgroundWork} from './utils/startBackgroundWork.ts'
 
 const parentMonitorIntervalMs = 1_000
@@ -58,6 +64,19 @@ const isParentProcessAlive = (pid: number) => {
   } catch {
     return false
   }
+}
+
+const exitAfterStopRequest = (code: number) => {
+  void exitWithRuntimeLogFlush({code})
+}
+
+const requestParentExitedShutdown = () => {
+  if (shouldUseProcessStopRequests()) {
+    requestServerShutdown('parent-exited', {exit: exitAfterStopRequest})
+    return
+  }
+
+  process.kill(process.pid, 'SIGTERM')
 }
 
 const startParentDisconnectMonitor = () => {
@@ -78,10 +97,28 @@ const startParentDisconnectMonitor = () => {
       severity: 'WARN',
       terminalLevel: 'error',
     })
-    process.kill(process.pid, 'SIGTERM')
+    requestParentExitedShutdown()
   }, parentMonitorIntervalMs)
 
   interval.unref()
+}
+
+const startServerStopRequestWatcher = () => {
+  if (!shouldUseProcessStopRequests()) {
+    return
+  }
+
+  startProcessStopRequestWatcher({
+    onStopRequest: (request) => {
+      writeRuntimeOperatorLogEvent({
+        attrs: request,
+        event: 'server.shutdown.stop-requested',
+        message: `[server] stop requested by pid=${request.requesterPid} (${request.reason}); shutting down`,
+        severity: 'INFO',
+      })
+      requestServerShutdown('stop-request', {exit: exitAfterStopRequest})
+    },
+  })
 }
 
 if (canCurrentServerOwnDuckdb()) {
@@ -89,6 +126,7 @@ if (canCurrentServerOwnDuckdb()) {
 }
 
 startParentDisconnectMonitor()
+startServerStopRequestWatcher()
 
 const hasProjectTransferRecoveryProgress = (recovery: ProjectTransferSessionRecoveryResult) => {
   return (

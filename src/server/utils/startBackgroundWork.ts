@@ -6,7 +6,11 @@ import {
   closeDuckdbService,
   getDuckdbAppendRuntimeMetrics,
   getDuckdbQueueRuntimeMetricsSnapshot,
+  getDuckdbWalCheckpointRuntimeState,
+  isDuckdbAutoCheckpointDeferred,
+  runDuckdbIdleWalCheckpoint,
 } from './duckdbService.ts'
+import {getDuckdbWalCheckpointPolicyConfig, startDuckdbWalCheckpointScheduler} from './duckdbWalCheckpointPolicy.ts'
 import {env, getDefaultReviewServingRebuildChunkBatchMaxRssBytes} from './env.ts'
 import {
   getProcessMemoryBudgetUsage,
@@ -326,6 +330,24 @@ const startDuckdbExclusiveWorkAwareMaintenanceHeartbeat = (component: string, st
   }
 }
 
+const startDuckdbWalCheckpointSchedulerIfNeeded = () => {
+  const config = getDuckdbWalCheckpointPolicyConfig({autoCheckpointDeferred: isDuckdbAutoCheckpointDeferred()})
+
+  return config.enabled
+    ? [
+        startDuckdbWalCheckpointScheduler(
+          {
+            checkpoint: runDuckdbIdleWalCheckpoint,
+            getRuntimeState: getDuckdbWalCheckpointRuntimeState,
+            log: writeRuntimeOperatorLogEvent,
+            now: Date.now,
+          },
+          config,
+        ),
+      ]
+    : []
+}
+
 const startMaintenanceBackgroundWork = () => {
   if (!shouldCurrentServerRunMaintenanceLoops()) {
     return
@@ -355,6 +377,7 @@ const startMaintenanceBackgroundWork = () => {
   }
 
   maintenanceBackgroundWorkStops = [
+    ...startDuckdbWalCheckpointSchedulerIfNeeded(),
     ...(shouldDeferNonessentialDuckdbMaintenanceWork()
       ? []
       : [

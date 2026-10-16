@@ -1,5 +1,9 @@
 import {realpathSync} from 'node:fs'
 
+import {shouldUseProcessStopRequests, startProcessStopRequestWatcher} from '../src/server/utils/processStopRequest.ts'
+import {getDevStartShutdownTimeoutMs} from './serverStackShutdown.ts'
+import {getLiveStopChildProcessDependencies, stopChildProcess} from './stopChildProcess.ts'
+
 const bunExecutablePath = realpathSync(process.execPath)
 
 export const devStartCommands = [
@@ -42,17 +46,15 @@ const startDevProcess = (commandConfig: DevStartCommand) => {
   return {childProcess, name: commandConfig.name}
 }
 
-const stopDevProcess = async ({childProcess}: DevStartProcess) => {
-  if (childProcess.exitCode !== null) {
-    await childProcess.exited.catch(() => {
-      return null
-    })
-    return
-  }
+const logDevStartMessage = (message: string) => {
+  console.error(`[dev:start] ${message}`)
+}
 
-  childProcess.kill('SIGTERM')
-  await childProcess.exited.catch(() => {
-    return null
+const stopDevProcess = async ({childProcess, name}: DevStartProcess) => {
+  await stopChildProcess(getLiveStopChildProcessDependencies(logDevStartMessage), childProcess, {
+    childName: name,
+    signal: 'SIGTERM',
+    timeoutMs: getDevStartShutdownTimeoutMs(process.env),
   })
 }
 
@@ -95,6 +97,14 @@ export const runDevStart = async () => {
   process.once('SIGTERM', () => {
     void shutdown(0)
   })
+
+  if (shouldUseProcessStopRequests()) {
+    startProcessStopRequestWatcher({
+      onStopRequest: () => {
+        void shutdown(0)
+      },
+    })
+  }
 
   activeProcesses.push(...devStartCommands.map(startDevProcess))
   await Promise.all(activeProcesses.map(monitorDevProcess))

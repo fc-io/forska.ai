@@ -1,13 +1,22 @@
 import {spawnSync} from 'bun'
 
+import {
+  removeProcessStopRequest,
+  shouldUseProcessStopRequests,
+  writeProcessStopRequest,
+} from '../src/server/utils/processStopRequest.ts'
+
 export type ProcessTreeSignal = 'SIGKILL' | 'SIGTERM'
 
 export type ProcessTreeDependencies = {
+  clearStopRequests: (pids: number[]) => void
   getDescendantProcessIds: (pid: number) => number[]
   isProcessAlive: (pid: number) => boolean
   killProcessIds: (pids: number[], signal: ProcessTreeSignal) => void
   log: (message: string) => void
   now: () => number
+  platform: string
+  requestStop: (pids: number[], reason: string) => void
   wait: (ms: number) => Promise<void>
 }
 
@@ -98,13 +107,32 @@ export const killProcessIds = (pids: number[], signal: ProcessTreeSignal) => {
   }
 }
 
+export const requestProcessIdsStop = (pids: number[], reason: string) => {
+  ;[...new Set(pids)]
+    .filter((pid) => {
+      return isProcessAlive(pid)
+    })
+    .map((pid) => {
+      return writeProcessStopRequest({pid, reason})
+    })
+}
+
+export const clearProcessIdsStopRequests = (pids: number[]) => {
+  ;[...new Set(pids)].map((pid) => {
+    return removeProcessStopRequest(pid)
+  })
+}
+
 export const getLiveProcessTreeDependencies = (log: (message: string) => void): ProcessTreeDependencies => {
   return {
+    clearStopRequests: clearProcessIdsStopRequests,
     getDescendantProcessIds,
     isProcessAlive,
     killProcessIds,
     log,
     now: Date.now,
+    platform: process.platform,
+    requestStop: requestProcessIdsStop,
     wait: async (ms) => {
       await new Promise((resolve) => {
         setTimeout(resolve, ms)
@@ -131,6 +159,34 @@ export const waitForProcessIdsExit = async (
   return waitForProcessIdsExit(dependencies, survivingPids, deadlineMs, pollIntervalMs)
 }
 
+const usesStopRequests = (dependencies: ProcessTreeDependencies) => {
+  return shouldUseProcessStopRequests(dependencies.platform)
+}
+
+const getGracefulStopDescription = (dependencies: ProcessTreeDependencies) => {
+  return usesStopRequests(dependencies) ? 'a stop request' : 'SIGTERM'
+}
+
+const requestStopOrTerminate = (dependencies: ProcessTreeDependencies, pids: number[], processName: string) => {
+  try {
+    dependencies.requestStop(pids, `stop ${processName}`)
+  } catch (error) {
+    dependencies.log(
+      `${processName} pids=${pids.join(',')} could not receive a stop request (${error instanceof Error ? error.message : String(error)}); sending SIGTERM`,
+    )
+    dependencies.killProcessIds(pids, 'SIGTERM')
+  }
+}
+
+const requestGracefulStop = (dependencies: ProcessTreeDependencies, pids: number[], processName: string) => {
+  if (usesStopRequests(dependencies)) {
+    requestStopOrTerminate(dependencies, pids, processName)
+    return
+  }
+
+  dependencies.killProcessIds(pids, 'SIGTERM')
+}
+
 const terminateOrphanedDescendants = (
   dependencies: ProcessTreeDependencies,
   options: StopProcessTreeOptions,
@@ -141,9 +197,9 @@ const terminateOrphanedDescendants = (
   }
 
   dependencies.log(
-    `${options.processName} left pids=${orphanedDescendantPids.join(',')} running after its own shutdown; sending SIGTERM`,
+    `${options.processName} left pids=${orphanedDescendantPids.join(',')} running after its own shutdown; sending ${getGracefulStopDescription(dependencies)}`,
   )
-  dependencies.killProcessIds(orphanedDescendantPids, 'SIGTERM')
+  requestGracefulStop(dependencies, orphanedDescendantPids, `${options.processName} orphaned descendant`)
 }
 
 const killProcessTree = async (
@@ -152,7 +208,7 @@ const killProcessTree = async (
   input: {capturedDescendantPids: number[]; survivingPids: number[]},
 ): Promise<StopProcessTreeResult> => {
   dependencies.log(
-    `${options.processName} pids=${input.survivingPids.join(',')} did not exit within ${options.shutdownTimeoutMs}ms after SIGTERM; sending SIGKILL to the process tree`,
+    `${options.processName} pids=${input.survivingPids.join(',')} did not exit within ${options.shutdownTimeoutMs}ms after ${getGracefulStopDescription(dependencies)}; sending SIGKILL to the process tree`,
   )
 
   const forcedKillPids = [
@@ -175,14 +231,14 @@ const killProcessTree = async (
   return 'killed'
 }
 
-export const stopProcessTree = async (
+const stopProcessTreeWithinDeadline = async (
   dependencies: ProcessTreeDependencies,
   options: StopProcessTreeOptions,
+  capturedDescendantPids: number[],
 ): Promise<StopProcessTreeResult> => {
-  const capturedDescendantPids = dependencies.getDescendantProcessIds(options.pid)
   const deadlineMs = dependencies.now() + options.shutdownTimeoutMs
 
-  dependencies.killProcessIds([options.pid], 'SIGTERM')
+  requestGracefulStop(dependencies, [options.pid], options.processName)
 
   const parentSurvivors = await waitForProcessIdsExit(dependencies, [options.pid], deadlineMs, options.pollIntervalMs)
 
@@ -206,4 +262,19 @@ export const stopProcessTree = async (
   return survivingPids.length === 0
     ? 'exited'
     : killProcessTree(dependencies, options, {capturedDescendantPids, survivingPids})
+}
+
+export const stopProcessTree = async (
+  dependencies: ProcessTreeDependencies,
+  options: StopProcessTreeOptions,
+): Promise<StopProcessTreeResult> => {
+  const capturedDescendantPids = dependencies.getDescendantProcessIds(options.pid)
+
+  try {
+    return await stopProcessTreeWithinDeadline(dependencies, options, capturedDescendantPids)
+  } finally {
+    if (usesStopRequests(dependencies)) {
+      dependencies.clearStopRequests([options.pid, ...capturedDescendantPids])
+    }
+  }
 }

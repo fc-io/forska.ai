@@ -22,6 +22,7 @@ import {
   readDuckdbOwnerLease,
 } from '../src/server/utils/duckdbOwnerLease.ts'
 import {loadEnv} from '../src/server/utils/env.ts'
+import {shouldUseProcessStopRequests, startProcessStopRequestWatcher} from '../src/server/utils/processStopRequest.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
 import {withAbortSignalTimeout} from '../src/utils/withAbortSignalTimeout.ts'
 import {getDevServerWatchFingerprint} from './devServerWatchFingerprint.ts'
@@ -917,6 +918,15 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   void shutdown()
 })
+
+if (shouldUseProcessStopRequests()) {
+  startProcessStopRequestWatcher({
+    onStopRequest: (request) => {
+      log(`stop requested by pid=${request.requesterPid} (${request.reason}); shutting down`)
+      void shutdown()
+    },
+  })
+}
 
 startParentMonitor()
 

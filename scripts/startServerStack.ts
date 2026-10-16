@@ -11,6 +11,7 @@ import {isDuckdbOwnerLeaseProcessAlive, readDuckdbOwnerLease} from '../src/serve
 import {getConfiguredDuckdbPath} from '../src/server/utils/getDuckdbPath.ts'
 import {readJudgeWorkerJournalLock} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
 import {isLockOwnedByCurrentMachine} from '../src/server/utils/localMachineIdentity.ts'
+import {shouldUseProcessStopRequests, startProcessStopRequestWatcher} from '../src/server/utils/processStopRequest.ts'
 import {installRuntimeJsonlSink, writeRuntimeLogEvent} from '../src/server/utils/runtimeLogger.ts'
 import {resolveRuntimeProcessIdentity, type RuntimeProcessIdentity} from '../src/server/utils/runtimeProcessIdentity.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
@@ -957,6 +958,17 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   void shutdown(0)
 })
+
+if (shouldUseProcessStopRequests()) {
+  startProcessStopRequestWatcher({
+    onStopRequest: (request) => {
+      console.log(
+        `[server:stack] stop requested by pid=${request.requesterPid} (${request.reason}); stopping managed processes`,
+      )
+      void shutdown(0)
+    },
+  })
+}
 
 startParentMonitor()
 

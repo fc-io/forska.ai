@@ -1,5 +1,13 @@
 # OOM Errors
 
+## 2026-10-16 - Low-Memory WAL Bound And Small Shutdown Checkpoint
+
+- Error: No OOM. A Windows owner (6400MiB default) crashed in the startup preflight child while replaying a leftover `forska.duckdb.wal`; every Windows stop was a TerminateProcess, and the 4096-6400MiB band defers auto-checkpoints with a 1 TiB threshold, so the WAL grew until an explicit checkpoint and was always left for replay.
+- Context: `getDuckdbCheckpointThresholdValue`, `runDuckdbServiceGracefulShutdown` (low-memory runtimes skipped the shutdown checkpoint), the owner maintenance loop in `startBackgroundWork.ts`.
+- Cause: The deferral and the shutdown skip came from multi-GB checkpoints at the 6.2 GiB cap (2026-06-30 to 2026-07-04 entries). With nothing else bounding the WAL, every checkpoint that did run was a large one.
+- Fix: No threshold or memory limit changed. When the auto-checkpoint threshold is deferred, `duckdbWalCheckpointPolicy.ts` runs a `CHECKPOINT` once the WAL exceeds 64 MiB and no write is in flight, at most once per 60 s, logged as `duckdb.wal-checkpoint.*`. It is queued at background priority on the serialized owner queue behind the append barrier, so foreground work goes first and nothing else runs while it checkpoints; it is skipped while a transaction is open, exclusive DuckDB work holds the lease, or shutdown has started. Low-memory graceful shutdown now checkpoints only when the WAL (read after the drain) is at most 256 MiB, and still skips larger WALs and the native close. Startup logs the WAL size (`duckdb.startup.wal-size`).
+- Verification: `bun test ./src/server/utils/duckdbWalCheckpointPolicy.test.ts ./src/server/utils/duckdbGracefulShutdown.test.ts ./src/server/utils/duckdbIdleWalCheckpoint.test.ts ./src/server/utils/duckdbServiceShutdown.test.ts ./src/server/utils/startBackgroundWork.test.ts ./src/server/utils/duckdbServiceMemoryLimit.test.ts --timeout 120000`.
+
 ## 2026-10-16 - Project Transfer Commit Lease Before Revalidation
 
 - Error: No OOM. Live creates waited 12-13 s for DuckDB exclusive-work admission because the commit asked for its lease only after revalidation, when RSS was 15-21 GB from revalidation's parsed payloads against the 0.9 x 12.9 GB readiness cap, so admission recycled DuckDB (or the first write queued behind other work).
