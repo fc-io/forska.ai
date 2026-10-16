@@ -17,6 +17,13 @@ export type ProjectImportSessionState =
   | 'ready_to_commit'
   | 'uploading'
 
+export type ProjectImportOverallProgress = {
+  operation: 'analyze' | 'commit'
+  percent: number
+  step: {count: number; endPercent: number; index: number; key: string; label: string; startPercent: number}
+  stepFraction: number | null
+}
+
 export type ProjectImportProgress = {
   bytesProcessed?: number | null
   bytesTotal?: number | null
@@ -24,6 +31,7 @@ export type ProjectImportProgress = {
   completedItems?: number | null
   completedRows?: number | null
   message?: string | null
+  overall?: ProjectImportOverallProgress | null
   percent?: number | null
   phase: string
   rowCountProcessed?: number | null

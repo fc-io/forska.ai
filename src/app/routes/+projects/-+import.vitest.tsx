@@ -896,6 +896,49 @@ describe('project import route', () => {
     }
   })
 
+  test('draws the overall create percent with the step label and pulses only the waiting slot', async () => {
+    mockState.sessionQueryResult = {
+      ...mockState.sessionQueryResult,
+      data: getSession({
+        progress: {
+          message: 'Waiting for DuckDB maintenance work to pause',
+          overall: {
+            operation: 'commit',
+            percent: 67,
+            step: {
+              count: 6,
+              endPercent: 7,
+              index: 1,
+              key: 'waitForDuckdb',
+              label: 'Waiting for the database',
+              startPercent: 0,
+            },
+            stepFraction: null,
+          },
+          percent: 0,
+          phase: 'commit',
+          status: 'running',
+          updatedAt: '2030-01-01T00:00:01.000Z',
+        },
+        state: 'committing',
+        updatedAt: '2030-01-01T00:00:01.000Z',
+      }),
+    }
+
+    const {container, dispose} = await renderImportWizard()
+
+    try {
+      expect(container.textContent).toContain(
+        '67% · Waiting for the database (1/6) · Waiting for DuckDB maintenance work to pause',
+      )
+      expect(container.querySelectorAll('.animate-pulse')).toHaveLength(1)
+      expect(container.querySelector('.bg-blue-300.animate-pulse')).not.toBeNull()
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
   test('derives create progress percentage from row counts when artifact has no explicit percent', async () => {
     mockState.sessionQueryResult = {
       ...mockState.sessionQueryResult,

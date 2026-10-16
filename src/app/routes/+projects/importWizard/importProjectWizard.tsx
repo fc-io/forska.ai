@@ -3,6 +3,7 @@ import {Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
+import {getImportProgressDisplay, type ImportProgressDisplay} from './importProgressDisplay.ts'
 import {
   analyzeProjectImportSession,
   cancelProjectImportSession,
@@ -332,28 +333,6 @@ const getCompletedProjectId = (completion: ProjectImportCompletion | null) => {
   return completion?.targetProjectId ?? completion?.projectId ?? null
 }
 
-const getProgressPercent = (
-  session: ProjectImportSession | null,
-  uploadPercent: number | null,
-  createProgress: boolean,
-) => {
-  const progressPercent = session?.progress?.percent
-  const rowCountProcessed = session?.progress?.rowCountProcessed ?? session?.progress?.completedRows ?? null
-  const rowCountTotal = session?.progress?.rowCountTotal ?? session?.progress?.totalRows ?? null
-  const countPercent =
-    typeof rowCountProcessed === 'number'
-    && Number.isFinite(rowCountProcessed)
-    && typeof rowCountTotal === 'number'
-    && Number.isFinite(rowCountTotal)
-    && rowCountTotal > 0
-      ? Math.round(Math.max(0, Math.min(100, (rowCountProcessed / rowCountTotal) * 100)))
-      : null
-
-  return typeof progressPercent === 'number'
-    ? Math.round(progressPercent)
-    : (countPercent ?? (createProgress || session?.state === 'committing' ? null : uploadPercent))
-}
-
 const hasUnresolvedDependencies = (session: ProjectImportSession | null) => {
   return Object.values(session?.planSummary?.dependencyStatuses ?? {}).some((status) => {
     return status !== 'resolved' && status !== 'not_required'
@@ -391,6 +370,20 @@ const isProgressTimerRunning = (session: ProjectImportSession | null) => {
 
 const getVisibleProgressWidth = (session: ProjectImportSession | null, percent: number | null) => {
   return percent === null ? 0 : percent === 0 && isRunningProgress(session) ? 2 : Math.max(0, Math.min(100, percent))
+}
+
+const getProgressBarClass = (session: ProjectImportSession | null, display: ImportProgressDisplay) => {
+  return display.memory === null && isRunningProgress(session)
+    ? 'relative h-full rounded-full bg-blue-600 transition-all animate-pulse'
+    : 'relative h-full rounded-full bg-blue-600 transition-all'
+}
+
+const getProgressPercentLabel = (display: ImportProgressDisplay, notice: string) => {
+  const percentLabel = `${formatCount(Math.round(display.displayPercent ?? 0))}%`
+
+  return display.stepLabel === null
+    ? `${percentLabel} · ${notice}`
+    : `${percentLabel} · ${display.stepLabel} · ${notice}`
 }
 
 const getProgressNotice = (session: ProjectImportSession | null, createProgress: boolean, nowMs: number) => {
@@ -578,11 +571,20 @@ const ProgressPanel = (props: {
   uploadPercent: number | null
 }) => {
   const nowMs = createNowMs()
+  const display = createMemo((previous?: ImportProgressDisplay) => {
+    return getImportProgressDisplay({
+      createProgress: props.createProgress,
+      memory: previous?.memory ?? null,
+      nowMs: nowMs(),
+      session: props.session,
+      uploadPercent: props.uploadPercent,
+    })
+  })
   const percent = createMemo(() => {
-    return getProgressPercent(props.session, props.uploadPercent, props.createProgress)
+    return display().displayPercent
   })
   const visiblePercent = createMemo(() => {
-    return getVisibleProgressWidth(props.session, percent())
+    return getVisibleProgressWidth(props.session, display().determinatePercent)
   })
   const progressNotice = createMemo(() => {
     return getProgressNotice(props.session, props.createProgress, nowMs())
@@ -607,15 +609,16 @@ const ProgressPanel = (props: {
       <Switch>
         <Match when={percent() !== null}>
           <div class="mt-4 space-y-2">
-            <div class="h-2 overflow-hidden rounded-full bg-gray-100">
-              <div
-                class={`h-full rounded-full bg-blue-600 transition-all ${isRunningProgress(props.session) ? 'animate-pulse' : ''}`}
-                style={{width: `${visiblePercent()}%`}}
-              />
+            <div class="relative h-2 overflow-hidden rounded-full bg-gray-100">
+              <Show when={display().indeterminate}>
+                <div
+                  class="absolute inset-y-0 left-0 animate-pulse rounded-full bg-blue-300 transition-all"
+                  style={{width: `${percent()}%`}}
+                />
+              </Show>
+              <div class={getProgressBarClass(props.session, display())} style={{width: `${visiblePercent()}%`}} />
             </div>
-            <p class="text-xs text-gray-500">
-              {formatCount(percent())}% · {progressNotice()}
-            </p>
+            <p class="text-xs text-gray-500">{getProgressPercentLabel(display(), progressNotice())}</p>
           </div>
         </Match>
         <Match when={props.createProgress}>
