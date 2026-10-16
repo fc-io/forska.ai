@@ -164,7 +164,9 @@ export const getProviderMaxInflightRequestsSourceLabel = ({
     ? 'saved provider setting'
     : providerKind === 'codex'
       ? 'CODEX_MAX_INFLIGHT default'
-      : 'runtime/global default'
+      : providerKind === 'claude-code'
+        ? 'FORSKA_CLAUDE_CODE_MAX_INFLIGHT default'
+        : 'runtime/global default'
 }
 
 export const formatProviderMaxInflightRequests = ({
@@ -223,6 +225,16 @@ export type CodexDeviceLoginJob = {
   deviceUrl: string | null
   deviceCode: string | null
   error: string | null
+}
+export type ClaudeCodeStatus = {
+  authMethod: string | null
+  binPath: string
+  cliAvailable: boolean
+  email: string | null
+  loggedIn: boolean
+  message: string
+  subscriptionType: string | null
+  version: string | null
 }
 type StartCodexLoginResponse = {data: {started: boolean; job: CodexDeviceLoginJob | null; message: string}; error: null}
 type CodexLoginJobResponse = {data: CodexDeviceLoginJob; error: null}
@@ -611,7 +623,7 @@ export const getProviderSecretStatus = (connection: ProviderConnection | null | 
     return 'No secret configured'
   }
 
-  return connection.authMode === 'codex-cli'
+  return connection.authMode === 'codex-cli' || connection.authMode === 'claude-cli'
     ? 'CLI auth'
     : connection.authMode === 'api-key'
       ? connection.hasSecret

@@ -89,7 +89,7 @@ export const ProviderConnectionForm = (props: ProviderConnectionFormProps) => {
           value={props.values}
         />
       </Match>
-      <Match when={props.kind === 'codex'}>
+      <Match when={props.kind === 'codex' || props.kind === 'claude-code'}>
         <CodexProviderForm
           onEnabledChange={props.onEnabledChange}
           onLabelChange={props.onLabelChange}

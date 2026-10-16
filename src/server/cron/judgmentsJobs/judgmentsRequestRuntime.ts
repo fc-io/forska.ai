@@ -144,6 +144,12 @@ const normalizeProvider = (value: string | null | undefined): string => {
   return getNormalizedProviderKeyProvider(value)
 }
 
+const isLocalCliRequestProvider = (value: string | null | undefined): boolean => {
+  const provider = normalizeProvider(value)
+
+  return provider === 'codex' || provider === 'claude-code'
+}
+
 const getTrimmedValue = (value: string | null | undefined): string | null => {
   const trimmed = value?.trim() ?? ''
   return trimmed.length > 0 ? trimmed : null
@@ -834,7 +840,7 @@ const createProviderScopeConnectionContext = ({baseURL}: {baseURL: string}) => {
 }
 
 const getProviderProbeEndpointPath = (provider: string | null | undefined): string | null => {
-  return normalizeProvider(provider) === 'codex' ? null : '/v1/models'
+  return isLocalCliRequestProvider(provider) ? null : '/v1/models'
 }
 
 const getProbeFailure = ({
@@ -1575,7 +1581,7 @@ const recoverEndpointAvailabilityBeforeRequest = async ({
   snapshot: ProviderBucketSnapshot
   workerUrls: string[]
 }): Promise<void> => {
-  if (normalizeProvider(provider) === 'codex') {
+  if (isLocalCliRequestProvider(provider)) {
     return undefined
   }
 
@@ -1715,7 +1721,7 @@ const acquireRequestSlot = async ({
     providerUsesFamilyDefault,
   }
 
-  return normalizeProvider(provider) === 'codex'
+  return isLocalCliRequestProvider(provider)
     ? acquireCodexRequestRelease(providerScope, metadata).then((release) => {
         return {baseURL: fallbackBaseURL, release, requiresProbe: false}
       })

@@ -4,6 +4,7 @@ import {type ProviderCatalogEntry, type ProviderKind} from '../services/provider
 
 export type ProviderTransportFamily =
   | 'anthropic-messages'
+  | 'claude-code-cli'
   | 'codex-app'
   | 'docling-convert'
   | 'gemini-generate-content'
@@ -147,6 +148,7 @@ export type ProviderModelRecord = {
 export type ProviderConnectionForAdmin = ProviderConnectionRecord & {models: ProviderModelRecord[]}
 
 export type ProviderListedModel = {
+  defaultEnabled?: boolean
   displayName: string
   metadataJson: unknown
   modelName: string
@@ -255,7 +257,12 @@ export type ProviderInvokeInput = {
   runtimeCredentials: ProviderRuntimeCredentials
 }
 
-export type ProviderInvocationResult = {stopReason?: string | null; text: string; usage: ProviderUsageSnapshot}
+export type ProviderInvocationResult = {
+  stopReason?: string | null
+  structuredOutput?: unknown
+  text: string
+  usage: ProviderUsageSnapshot
+}
 
 export type ProviderAdapter = {
   addManualModel?: (input: ProviderManualModelInput) => Promise<ProviderListedModel>

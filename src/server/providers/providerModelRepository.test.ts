@@ -137,6 +137,59 @@ test('upsertDiscoveredModels persists discovered models through the transaction 
   ])
 })
 
+test('upsertDiscoveredModels inserts Claude Code models with their default enabled state', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {listClaudeCodeModels} = await import('./transports/claudeCodeCliTransport.ts')
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, config_json)
+    VALUES (
+      'claude-code-connection',
+      'claude-code',
+      'Claude Code',
+      TRUE,
+      'claude-cli',
+      CAST('{"archived":false,"disabledModelIds":[],"manualWorkerUrls":[],"workerUrlMode":"manual"}' AS JSON)
+    )
+  `)
+
+  const savedModels = await upsertDiscoveredModels({
+    connection: {
+      authMode: 'claude-cli',
+      baseURL: null,
+      config: {disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+      createdAt: null,
+      enabled: true,
+      hasSecret: false,
+      id: 'claude-code-connection',
+      label: 'Claude Code',
+      lastCheckedAt: null,
+      lastError: null,
+      maxInflightRequests: null,
+      providerKind: 'claude-code',
+      secretRef: null,
+      updatedAt: null,
+    },
+    models: listClaudeCodeModels(),
+  })
+  const enabledModels = savedModels
+    .filter((model) => {
+      return model.enabled
+    })
+    .map((model) => {
+      return {displayName: model.displayName, remoteModelId: model.remoteModelId, variant: model.variant}
+    })
+
+  expect(savedModels).toHaveLength(15)
+  expect(enabledModels).toEqual([
+    {displayName: 'Claude Opus 5.5 (effort: high)', remoteModelId: 'claude-opus-5-5', variant: 'high'},
+    {displayName: 'Claude Sonnet 5.5 (effort: high)', remoteModelId: 'claude-sonnet-5-5', variant: 'high'},
+  ])
+})
+
 test('createProviderModel reuses an existing provider remote variant natural key', async () => {
   if (!queryDatabase || !runDatabase) {
     throw new Error('Test database not initialized')

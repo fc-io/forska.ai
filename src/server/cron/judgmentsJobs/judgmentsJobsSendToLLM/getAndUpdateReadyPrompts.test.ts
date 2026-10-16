@@ -43,6 +43,9 @@ let getAndUpdateReadyPrompts:
       }>
     >)
   | null = null
+let getReadyPromptRuntime:
+  | ((jobId: string) => Promise<{modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]} | null>)
+  | null = null
 
 beforeAll(async () => {
   void mock.module(appReadOnlyDatabaseServiceModulePath, () => {
@@ -93,6 +96,7 @@ beforeAll(async () => {
     return database.run(statement)
   }
   getAndUpdateReadyPrompts = readyPromptsModule.getAndUpdateReadyPrompts
+  getReadyPromptRuntime = readyPromptsModule.getReadyPromptRuntime
 })
 
 afterAll(async () => {
@@ -197,6 +201,84 @@ test('claims ready rows from the per-job SQLite queue', async () => {
       process.env.SERVER_ROLE = previousServerRole
     }
   }
+})
+
+test('claims Claude Code prompts with the CLI placeholder runtime and no base URL', async () => {
+  if (!getAndUpdateReadyPrompts || !getReadyPromptRuntime || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const suffix = `claude-code-${Date.now()}`
+  const connectionId = `connection-${suffix}`
+  const modelId = `model-${suffix}`
+  const projectId = `project-${suffix}`
+  const jobId = `job-${suffix}`
+  const articleId = `article-${suffix}`
+  const promptId = `prompt-${suffix}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url, config_json)
+    VALUES (
+      '${connectionId}',
+      'claude-code',
+      'Claude Code',
+      TRUE,
+      'claude-cli',
+      NULL,
+      '{"manualWorkerUrls":[],"workerUrlMode":"manual"}'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled)
+    VALUES (
+      '${modelId}',
+      '${connectionId}',
+      'Claude Opus 5.5 (effort: high)',
+      'claude-opus-5-5',
+      'Claude Opus 5.5 (effort: high)',
+      'high',
+      'discovered',
+      TRUE
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Claude Code Ready Prompt Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.releaseOwnedLease(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-job-queued')
+  await sqliteService.releaseOwnedLease(jobId)
+
+  expect(await getReadyPromptRuntime(jobId)).toEqual({
+    modelBaseUrl: 'claude-code://cli',
+    modelProvider: 'claude-code',
+    modelWorkerUrls: [],
+  })
+
+  const prompts = await getAndUpdateReadyPrompts('server-job-claim', jobId, 1, {
+    providerConnectionId: connectionId,
+    providerMaxInflightRequests: null,
+    providerUsesFamilyDefault: true,
+  })
+
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]).toMatchObject({
+    articleId,
+    modelBaseUrl: 'claude-code://cli',
+    modelId,
+    promptId,
+    providerConnectionId: connectionId,
+    providerUsesFamilyDefault: true,
+  })
+  await sqliteService.closeAll()
 })
 
 test('owner-backed codex prompts bypass runtime autodetect', async () => {

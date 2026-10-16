@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {getClaudeCodeMaxInflight} from '../cron/judgmentsJobs/getClaudeCodeMaxInflight.ts'
 import {getCodexMaxInflight} from '../cron/judgmentsJobs/getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from '../cron/judgmentsJobs/getJudgmentsCapacity.ts'
 import {
@@ -38,7 +39,9 @@ import {
 import {
   getProviderCatalog,
   getProviderCatalogEntry,
+  isClaudeCodeProvider,
   isCodexProvider,
+  isLocalCliProvider,
   normalizeProviderKind,
 } from '../services/providerCatalog.ts'
 import {HttpError} from '../utils/httpError.ts'
@@ -88,7 +91,12 @@ const getEffectiveMaxInflightRequests = ({
   providerKind: string
 }): number => {
   return (
-    maxInflightRequests ?? (isCodexProvider(providerKind) ? getCodexMaxInflight() : getJudgmentsCapacity(1).maxInflight)
+    maxInflightRequests
+    ?? (isCodexProvider(providerKind)
+      ? getCodexMaxInflight()
+      : isClaudeCodeProvider(providerKind)
+        ? getClaudeCodeMaxInflight()
+        : getJudgmentsCapacity(1).maxInflight)
   )
 }
 
@@ -315,7 +323,7 @@ export const providerConnectionsRoutes = new Elysia()
         return {data: null, error: `${catalogEntry.label} API key is required`}
       }
 
-      const baseURL = isCodexProvider(providerKind)
+      const baseURL = isLocalCliProvider(providerKind)
         ? null
         : getResolvedProviderBaseURL({baseURL: getTrimmedValue(body.baseURL), providerKind})
       const label = getProviderConnectionLabel({label: body.label, providerKind})
@@ -382,7 +390,7 @@ export const providerConnectionsRoutes = new Elysia()
         return {data: null, error: 'Provider connection not found'}
       }
 
-      const nextBaseURL = isCodexProvider(existing.providerKind)
+      const nextBaseURL = isLocalCliProvider(existing.providerKind)
         ? null
         : getResolvedProviderBaseURL({
             baseURL: body.baseURL !== undefined ? getTrimmedValue(body.baseURL) : existing.baseURL,

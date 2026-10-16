@@ -436,7 +436,7 @@ const upsertDiscoveredProviderModelsRecursively = async ({
               ${getSqlLiteral(displayName)},
               ${getSqlLiteral(variant)},
               'discovered',
-              TRUE,
+              ${getSqlLiteral(currentModel.defaultEnabled ?? true)},
               ${getJsonSqlLiteral(persistedMetadataJson)}
             )
             ON CONFLICT DO NOTHING

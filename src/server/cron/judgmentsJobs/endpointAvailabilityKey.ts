@@ -61,6 +61,44 @@ const getCodexEndpointIdentity = (url: URL): {identity: string; misconfiguration
   return {identity: 'codex://app-server', misconfiguration}
 }
 
+const getClaudeCodeEndpointIdentity = (url: URL): {identity: string; misconfiguration: string | null} => {
+  const host = url.hostname.toLowerCase()
+  const hasPath = getMeaningfulPath(url.pathname).length > 0
+  const misconfiguration =
+    host !== 'cli' || hasPath ? 'Endpoint base URL is misconfigured because Claude Code uses claude-code://cli' : null
+
+  return {identity: 'claude-code://cli', misconfiguration}
+}
+
+const getLocalCliEndpointIdentity = ({
+  misconfiguration,
+  scheme,
+  url,
+}: {
+  misconfiguration: string | null
+  scheme: string
+  url: URL
+}): {identity: string; misconfiguration: string | null} => {
+  const endpointIdentity = scheme === 'codex' ? getCodexEndpointIdentity(url) : getClaudeCodeEndpointIdentity(url)
+
+  return {...endpointIdentity, misconfiguration: misconfiguration ?? endpointIdentity.misconfiguration}
+}
+
+const isLocalCliEndpointIdentity = ({
+  identity,
+  provider,
+  providerKey,
+}: {
+  identity: string
+  provider: string
+  providerKey: string
+}): boolean => {
+  return (
+    (identity === 'codex://app-server' && (provider === 'codex' || providerKey === 'codex:default'))
+    || (identity === 'claude-code://cli' && provider === 'claude-code')
+  )
+}
+
 const getEndpointIdentity = (effectiveBaseURL: string): {identity: string; misconfiguration: string | null} => {
   const trimmed = getTrimmedValue(effectiveBaseURL)
 
@@ -72,10 +110,9 @@ const getEndpointIdentity = (effectiveBaseURL: string): {identity: string; misco
     const url = new URL(trimmed)
     const scheme = url.protocol.slice(0, -1).toLowerCase()
     const misconfiguration = getEndpointIdentityMisconfiguration(url)
-    const codexEndpointIdentity = getCodexEndpointIdentity(url)
 
-    return scheme === 'codex'
-      ? {...codexEndpointIdentity, misconfiguration: misconfiguration ?? codexEndpointIdentity.misconfiguration}
+    return scheme === 'codex' || scheme === 'claude-code'
+      ? getLocalCliEndpointIdentity({misconfiguration, scheme, url})
       : scheme === 'http' || scheme === 'https'
         ? {identity: getHttpEndpointIdentity(url), misconfiguration}
         : {
@@ -107,8 +144,7 @@ export const getEndpointAvailabilityKey = (input: EndpointAvailabilityKeyInput):
   const providerKey = getEndpointAvailabilityProviderKey(input)
   const endpointIdentity = getEndpointIdentity(input.effectiveBaseURL)
   const provider = getNormalizedProviderKeyProvider(input.modelProvider)
-  const shouldSkipHttpProbe =
-    endpointIdentity.identity === 'codex://app-server' && (provider === 'codex' || providerKey === 'codex:default')
+  const shouldSkipHttpProbe = isLocalCliEndpointIdentity({identity: endpointIdentity.identity, provider, providerKey})
 
   return {
     endpointAvailabilityKey: `${providerKey}::${endpointIdentity.identity}`,

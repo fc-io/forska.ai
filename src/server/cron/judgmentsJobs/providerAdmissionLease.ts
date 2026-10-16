@@ -10,6 +10,7 @@ import {
   ensureCurrentDuckdbOwnerLease,
   getCurrentServerDuckdbOwnerUrl,
 } from '../../utils/serverRuntimeRole.ts'
+import {getClaudeCodeMaxInflight} from './getClaudeCodeMaxInflight.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts'
@@ -390,7 +391,11 @@ const getProviderFamilyDefaultCapacity = ({
   getNonCodexCapacity: (runningJobCount: number) => Capacity
   providerFamily: string
 }): number => {
-  return providerFamily === 'codex' ? getCodexDefaultMaxInflight() : getNonCodexCapacity(1).maxInflight
+  return providerFamily === 'codex'
+    ? getCodexDefaultMaxInflight()
+    : providerFamily === 'claude-code'
+      ? getClaudeCodeMaxInflight()
+      : getNonCodexCapacity(1).maxInflight
 }
 
 export const publishProviderBucketSnapshot = (snapshot: ProviderBucketSnapshot): ProviderBucketSnapshot => {

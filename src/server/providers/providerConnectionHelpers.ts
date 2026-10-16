@@ -1,4 +1,9 @@
-import {getProviderDefaultBaseURL, isCodexProvider, type ProviderKind} from '../services/providerCatalog.ts'
+import {
+  getProviderDefaultBaseURL,
+  isClaudeCodeProvider,
+  isCodexProvider,
+  type ProviderKind,
+} from '../services/providerCatalog.ts'
 
 const getTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
@@ -27,9 +32,11 @@ export const getProviderConnectionAuthMode = ({
 }): string | null => {
   return isCodexProvider(providerKind)
     ? 'codex-cli'
-    : getTrimmedValue(secretRef)
-      ? 'api-key'
-      : getTrimmedValue(baseURL)
-        ? 'none'
-        : null
+    : isClaudeCodeProvider(providerKind)
+      ? 'claude-cli'
+      : getTrimmedValue(secretRef)
+        ? 'api-key'
+        : getTrimmedValue(baseURL)
+          ? 'none'
+          : null
 }

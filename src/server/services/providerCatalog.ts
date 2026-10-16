@@ -1,6 +1,7 @@
 export type ProviderKind =
   | 'openai'
   | 'codex'
+  | 'claude-code'
   | 'docling'
   | 'anthropic'
   | 'google'
@@ -37,6 +38,15 @@ const providerCatalogEntries: ProviderCatalogEntry[] = [
     description: 'OpenAI Codex app, CLI, and app-server',
     kind: 'codex',
     label: 'Codex App',
+    requiresApiKey: false,
+    supportsDiscovery: true,
+    supportsWorkerUrls: false,
+  },
+  {
+    defaultBaseURL: null,
+    description: 'Claude Code CLI using your claude.ai subscription login',
+    kind: 'claude-code',
+    label: 'Claude Code',
     requiresApiKey: false,
     supportsDiscovery: true,
     supportsWorkerUrls: false,
@@ -156,6 +166,14 @@ export const getProviderDefaultBaseURL = (providerKind: string | null | undefine
 
 export const isCodexProvider = (providerKind: string | null | undefined): boolean => {
   return normalizeProviderKind(providerKind) === 'codex'
+}
+
+export const isClaudeCodeProvider = (providerKind: string | null | undefined): boolean => {
+  return normalizeProviderKind(providerKind) === 'claude-code'
+}
+
+export const isLocalCliProvider = (providerKind: string | null | undefined): boolean => {
+  return isCodexProvider(providerKind) || isClaudeCodeProvider(providerKind)
 }
 
 export const isAnthropicProvider = (providerKind: string | null | undefined): boolean => {

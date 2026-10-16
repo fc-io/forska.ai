@@ -21,6 +21,7 @@ import {
   updateJudgmentPromptRequestWork,
   withJudgmentRequest,
 } from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
+import {claudeCodeRecoverableFailureCodes} from '../server/providers/claudeCodeFailureCodes.ts'
 import {
   invokeStoredProviderModel,
   type StoredProviderInvocationContext,
@@ -639,7 +640,11 @@ const isAnthropicEmptyResponseFailureCode = (failureCode: string | null): boolea
 }
 
 const isRecoverableProviderFailureCode = (failureCode: string | null): boolean => {
-  return isAnthropicEmptyResponseFailureCode(failureCode) || failureCode === 'codex_transient_turn_failure'
+  return (
+    isAnthropicEmptyResponseFailureCode(failureCode)
+    || failureCode === 'codex_transient_turn_failure'
+    || claudeCodeRecoverableFailureCodes.includes(failureCode ?? '')
+  )
 }
 
 const getProviderInvocationFailureCode = (error: unknown): string | null => {
@@ -671,6 +676,7 @@ const getProviderEndpointPath = (providerKind: string | null): string | null => 
     ? '/v1/responses'
     : providerKind === 'anthropic'
         || providerKind === 'codex'
+        || providerKind === 'claude-code'
         || providerKind === 'docling'
         || providerKind === 'google'
       ? null
