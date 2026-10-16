@@ -2,6 +2,8 @@ import {expect, test} from 'bun:test'
 
 import {
   getDevServerWatchStackShutdownTimeoutMs,
+  getDevStartShutdownTimeoutMs,
+  getRuntimeProfileWrapperShutdownTimeoutMs,
   getServerStackRoleShutdownTimeoutMs,
   getServerStackShutdownBudgetMs,
   getServerStackShutdownTimeouts,
@@ -88,4 +90,14 @@ test('the dev watcher escalation deadline outlasts the whole stack shutdown budg
   expect(getDevServerWatchStackShutdownTimeoutMs({FORSKA_SERVER_STACK_MAINTENANCE_SHUTDOWN_TIMEOUT_MS: '600000'})).toBe(
     20_000 + 5_000 + 600_000 + 5_000 + 30_000,
   )
+})
+
+test('Windows dev wrappers wait longer than the dev watcher before they force-kill their child', () => {
+  expect(getRuntimeProfileWrapperShutdownTimeoutMs({})).toBe(300_000 + 5_000 + 30_000)
+  expect(getDevStartShutdownTimeoutMs({})).toBe(300_000 + 5_000 + 30_000 + 30_000)
+  expect(getRuntimeProfileWrapperShutdownTimeoutMs({})).toBeGreaterThan(getDevServerWatchStackShutdownTimeoutMs({}))
+  expect(getDevStartShutdownTimeoutMs({})).toBeGreaterThan(getRuntimeProfileWrapperShutdownTimeoutMs({}))
+  expect(
+    getRuntimeProfileWrapperShutdownTimeoutMs({FORSKA_SERVER_STACK_MAINTENANCE_SHUTDOWN_TIMEOUT_MS: '600000'}),
+  ).toBe(20_000 + 5_000 + 600_000 + 5_000 + 30_000 + 5_000 + 30_000)
 })

@@ -45,6 +45,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Cross-platform topology contracts
         run: bun test scripts/judgmentWorkflowTopology.test.ts scripts/processLockAcquisition.test.ts src/server/utils/backgroundServerStack.test.ts src/server/utils/judgeWorkerJournalIdentity.test.ts src/server/cron/judgmentsJobs/judgmentJobPaths.test.ts
+      - name: Stop-request supervisor contracts
+        run: bun test ./src/server/utils/processStopRequest.test.ts ./scripts/processTree.test.ts ./scripts/stopChildProcess.test.ts
       - name: Production judgment topology
         run: bun run test:judgment-workflow:topology
         env:

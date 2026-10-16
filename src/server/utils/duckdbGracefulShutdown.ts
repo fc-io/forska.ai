@@ -29,7 +29,11 @@ export type DuckdbGracefulShutdownTimeouts = {
   rollbackTimeoutMs: number
 }
 
-export type DuckdbGracefulShutdownOptions = DuckdbGracefulShutdownTimeouts & {shouldCheckpoint: boolean; signal: string}
+export type DuckdbGracefulShutdownOptions = DuckdbGracefulShutdownTimeouts & {
+  lowMemoryCheckpointMaxWalBytes?: number
+  shouldCheckpoint: boolean
+  signal: string
+}
 
 export type DuckdbGracefulShutdownDrain = 'busy' | 'idle' | 'interrupted'
 export type DuckdbGracefulShutdownCheckpoint = 'completed' | 'failed' | 'skipped' | 'timed-out'
@@ -211,11 +215,24 @@ const startDuckdbShutdownCheckpoint = async (
   return attemptDuckdbShutdownCheckpoint(dependencies, options, dependencies.now() + options.checkpointTimeoutMs, 1)
 }
 
+const isSmallLowMemoryShutdownWal = (
+  dependencies: DuckdbGracefulShutdownDependencies,
+  options: DuckdbGracefulShutdownOptions,
+) => {
+  const walBytes = options.lowMemoryCheckpointMaxWalBytes === undefined ? null : dependencies.getWalBytes()
+
+  return walBytes !== null && walBytes > 0 && walBytes <= (options.lowMemoryCheckpointMaxWalBytes ?? 0)
+}
+
 const getDuckdbShutdownCheckpointSkipReason = (
   dependencies: DuckdbGracefulShutdownDependencies,
   options: DuckdbGracefulShutdownOptions,
 ) => {
-  return !dependencies.isRuntimeOpen() ? 'runtime-closed' : !options.shouldCheckpoint ? 'low-memory-runtime' : null
+  return !dependencies.isRuntimeOpen()
+    ? 'runtime-closed'
+    : options.shouldCheckpoint || isSmallLowMemoryShutdownWal(dependencies, options)
+      ? null
+      : 'low-memory-runtime'
 }
 
 const runDuckdbShutdownCheckpoint = async (

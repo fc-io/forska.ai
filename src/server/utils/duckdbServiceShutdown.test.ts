@@ -1,4 +1,4 @@
-import {existsSync, rmSync} from 'node:fs'
+import {existsSync, mkdtempSync, rmSync, statSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -204,7 +204,7 @@ test('duckdb shutdown hook bypasses a stuck append queue on SIGTERM', async () =
   }
 })
 
-test('duckdb shutdown hook skips checkpoint and native close under low-memory maintenance profile', async () => {
+test('duckdb shutdown hook skips checkpoint and native close under low-memory maintenance profile without a WAL', async () => {
   const duckdbPath = join(tmpdir(), `f1-duckdb-low-memory-shutdown-${Date.now()}.duckdb`)
   const processStartedAt = new Date().toISOString()
   const childProcess = globalThis.Bun.spawn(
@@ -403,6 +403,85 @@ test('SIGTERM during an open transaction lets it commit, rejects new work, check
       ),
     ).toEqual([{rowCount: 1001}])
   } finally {
+    removeDuckdbFiles(result.duckdbPath)
+  }
+})
+
+const stopRequestOwnerSource = `
+  const {runDuckdbStatement} = await import('./src/server/utils/duckdbService.ts')
+  const {startProcessStopRequestWatcher, writeProcessStopRequest} = await import('./src/server/utils/processStopRequest.ts')
+  const {requestServerShutdown} = await import('./src/server/utils/serverShutdownSignals.ts')
+  const stopRequestDirectory = process.env.FORSKA_TEST_STOP_REQUEST_DIRECTORY
+
+  await runDuckdbStatement('CREATE TABLE sample (id INTEGER PRIMARY KEY, label VARCHAR)')
+  await runDuckdbStatement("INSERT INTO sample SELECT i, 'row-' || i FROM range(5000) r(i)")
+  startProcessStopRequestWatcher({
+    directory: stopRequestDirectory,
+    onStopRequest: (request) => {
+      console.log('stop requested: ' + request.reason)
+      requestServerShutdown('stop-request')
+    },
+    pollIntervalMs: 20,
+  })
+  writeProcessStopRequest({directory: stopRequestDirectory, pid: process.pid, reason: 'stop maintenance server process'})
+  setTimeout(() => {
+    console.log('still alive')
+  }, 20_000)
+`
+
+const getWalBytesAfterShutdown = (duckdbPath: string) => {
+  return existsSync(`${duckdbPath}.wal`) ? statSync(`${duckdbPath}.wal`).size : 0
+}
+
+test('a Windows stop request runs the SIGTERM graceful path: drain, checkpoint, native close and exit 0 without a WAL', async () => {
+  const stopRequestDirectory = mkdtempSync(join(tmpdir(), 'f1-duckdb-stop-request-'))
+  const result = await runDuckdbShutdownChild({
+    env: {FORSKA_TEST_STOP_REQUEST_DIRECTORY: stopRequestDirectory},
+    name: 'stop-request',
+    source: stopRequestOwnerSource,
+  })
+
+  try {
+    expectCleanGracefulExit(result)
+    expect(result.stdout).toContain('stop requested: stop maintenance server process')
+    expect(result.stdout).toContain('[duckdb] stop-request received')
+    expect(
+      await readDuckdbRowsAfterShutdown<{rowCount: number}>(
+        result.duckdbPath,
+        'SELECT count(*)::INTEGER AS rowCount FROM sample',
+      ),
+    ).toEqual([{rowCount: 5000}])
+  } finally {
+    rmSync(stopRequestDirectory, {force: true, recursive: true})
+    removeDuckdbFiles(result.duckdbPath)
+  }
+})
+
+test('the Windows default 6400MiB owner checkpoints a small WAL on a stop request instead of leaving it for replay', async () => {
+  const stopRequestDirectory = mkdtempSync(join(tmpdir(), 'f1-duckdb-stop-request-low-memory-'))
+  const result = await runDuckdbShutdownChild({
+    env: {DUCKDB_MEMORY_LIMIT: '6400MiB', FORSKA_TEST_STOP_REQUEST_DIRECTORY: stopRequestDirectory},
+    name: 'stop-request-low-memory',
+    source: stopRequestOwnerSource,
+  })
+
+  try {
+    expect({exitCode: result.exitCode, exited: result.exited, stderr: result.stderr}).toMatchObject({
+      exitCode: 0,
+      exited: true,
+    })
+    expect(result.stdout).toContain('[duckdb] shutdown checkpoint completed')
+    expect(result.stdout).toContain('wal_bytes=0')
+    expect(result.stdout).not.toContain('still alive')
+    expect(getWalBytesAfterShutdown(result.duckdbPath)).toBe(0)
+    expect(
+      await readDuckdbRowsAfterShutdown<{rowCount: number}>(
+        result.duckdbPath,
+        'SELECT count(*)::INTEGER AS rowCount FROM sample',
+      ),
+    ).toEqual([{rowCount: 5000}])
+  } finally {
+    rmSync(stopRequestDirectory, {force: true, recursive: true})
     removeDuckdbFiles(result.duckdbPath)
   }
 })

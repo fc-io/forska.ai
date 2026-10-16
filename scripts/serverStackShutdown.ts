@@ -20,6 +20,7 @@ export const serverStackShutdownDefaultTimeouts: ServerStackShutdownTimeouts = {
 const duckdbOwnerForceExitMarginMs = 30_000
 const maintenanceShutdownMarginMs = 10_000
 const devServerWatchStackShutdownMarginMs = 30_000
+const devWrapperShutdownMarginMs = 30_000
 
 const getPositiveIntegerEnvValue = (value: string | undefined) => {
   const parsedValue = Number(String(value ?? '').trim())
@@ -67,6 +68,20 @@ export const getDevServerWatchStackShutdownTimeoutMs = (
   envValues: Record<string, string | undefined> = process.env,
 ) => {
   return getServerStackShutdownBudgetMs(getServerStackShutdownTimeouts(envValues)) + devServerWatchStackShutdownMarginMs
+}
+
+export const getRuntimeProfileWrapperShutdownTimeoutMs = (
+  envValues: Record<string, string | undefined> = process.env,
+) => {
+  return (
+    getDevServerWatchStackShutdownTimeoutMs(envValues)
+    + getServerStackShutdownTimeouts(envValues).forcedKillTimeoutMs
+    + devWrapperShutdownMarginMs
+  )
+}
+
+export const getDevStartShutdownTimeoutMs = (envValues: Record<string, string | undefined> = process.env) => {
+  return getRuntimeProfileWrapperShutdownTimeoutMs(envValues) + devWrapperShutdownMarginMs
 }
 
 export const stopServerStackRolesInOrder = async (stopRole: (role: ServerStackManagedRole) => Promise<void>) => {

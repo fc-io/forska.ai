@@ -38,6 +38,7 @@ import {
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {createDuckdbShuttingDownError} from './duckdbShuttingDownError.ts'
 import {getDuckdbStartupChildProcessInput} from './duckdbStartupChildProcess.ts'
+import {summarizeDuckdbStartupChildStderr} from './duckdbStartupChildStderr.ts'
 import {
   type DuckdbStartupRepairLadderTable,
   type DuckdbStartupRepairRung,
@@ -55,6 +56,11 @@ import {
   recordDuckdbTableWriteTrackerOpen,
   renewDuckdbTableWriteTrackerEpoch,
 } from './duckdbTableWriteTracker.ts'
+import {
+  type DuckdbIdleWalCheckpointOutcome,
+  duckdbLowMemoryShutdownCheckpointMaxWalBytes,
+  type DuckdbWalCheckpointRuntimeState,
+} from './duckdbWalCheckpointPolicy.ts'
 import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
 import {
@@ -69,7 +75,7 @@ import {
   registerDuckdbOwnerDemotionHandler,
   releaseCurrentDuckdbOwnerLease,
 } from './serverRuntimeRole.ts'
-import {registerServerShutdownSignalHandlers, type ServerShutdownSignal} from './serverShutdownSignals.ts'
+import {registerServerShutdownSignalHandlers, type ServerShutdownTrigger} from './serverShutdownSignals.ts'
 import {isServerShutdownInProgress, runServerShutdownHandlers} from './serverShutdownState.ts'
 
 type DuckdbRuntimeConfig = {
@@ -3005,6 +3011,7 @@ let duckdbFatalRecoveryPromise: Promise<void> | null = null
 let duckdbFailedMutatingStatementTargetTable: string | null = null
 let duckdbLastMutatingStatementTargetTable: string | null = null
 let duckdbStatementAdmissionClosed = false
+let duckdbWalSizeLoggedAtFirstOpen = false
 
 const isDuckdbRestartRequiredError = (error: unknown) => {
   const message = getNormalizedDuckdbError(error).message
@@ -5009,7 +5016,7 @@ const getDuckdbStartupPreflightError = (runtimeConfig: DuckdbRuntimeConfig, hadW
     return null
   }
 
-  const stderr = result.stderr.toString().trim()
+  const stderr = summarizeDuckdbStartupChildStderr(result.stderr.toString().trim())
   const stdout = result.stdout.toString().trim()
   const signalText = result.signalCode === null ? null : `signal=${result.signalCode}`
   const outputText = [stderr, stdout, signalText]
@@ -5080,7 +5087,7 @@ const getDuckdbStartupWalCheckpointScript = () => {
 }
 
 const getDuckdbStartupChildOutputText = (result: ReturnType<typeof globalThis.Bun.spawnSync>) => {
-  const stderr = result.stderr.toString().trim()
+  const stderr = summarizeDuckdbStartupChildStderr(result.stderr.toString().trim())
   const stdout = result.stdout.toString().trim()
   const signalText = result.signalCode === null ? null : `signal=${result.signalCode}`
 
@@ -6621,7 +6628,12 @@ export const runDuckdbServiceGracefulShutdown = async (signal: string) => {
       stopBackgroundWork: runServerShutdownHandlers,
       wait: sleepMs,
     },
-    {...getDuckdbGracefulShutdownTimeouts(process.env), shouldCheckpoint: shouldCloseRuntime, signal},
+    {
+      ...getDuckdbGracefulShutdownTimeouts(process.env),
+      lowMemoryCheckpointMaxWalBytes: shouldCloseRuntime ? undefined : duckdbLowMemoryShutdownCheckpointMaxWalBytes,
+      shouldCheckpoint: shouldCloseRuntime,
+      signal,
+    },
   )
 }
 
@@ -6639,7 +6651,7 @@ export const registerDuckdbShutdownHooks = () => {
     log: (entry) => {
       return entry.severity === 'ERROR' ? writeRuntimeFailureLogEvent(entry) : writeRuntimeOperatorLogEvent(entry)
     },
-    runShutdown: async (signal: ServerShutdownSignal) => {
+    runShutdown: async (signal: ServerShutdownTrigger) => {
       return runDuckdbServiceGracefulShutdown(signal)
     },
   })
@@ -6747,6 +6759,32 @@ const cleanupFailedDuckdbStart = async (params: {
   return closeError
 }
 
+const logDuckdbWalSizeAtFirstOpen = (runtimeConfig: DuckdbRuntimeConfig) => {
+  if (duckdbWalSizeLoggedAtFirstOpen || runtimeConfig.databasePath === ':memory:') {
+    return
+  }
+
+  duckdbWalSizeLoggedAtFirstOpen = true
+  const wal = getDuckdbWalFileStatSnapshot(runtimeConfig.databasePath)
+  const walBytes = wal.sizeBytes ?? 0
+  const writeLogEvent = walBytes > 0 ? writeRuntimeOperatorLogEvent : writeRuntimeLogEvent
+
+  writeLogEvent({
+    attrs: {
+      checkpointThreshold: runtimeConfig.checkpointThreshold,
+      databasePath: runtimeConfig.databasePath,
+      memoryLimit: runtimeConfig.memoryLimit,
+      walBytes,
+      walExists: wal.exists,
+      walModifiedAt: wal.modifiedAtMs === null ? null : new Date(wal.modifiedAtMs).toISOString(),
+      walPath: wal.path,
+    },
+    event: 'duckdb.startup.wal-size',
+    message: `[duckdb] startup WAL ${wal.exists ? `${walBytes} bytes` : 'absent'} for ${runtimeConfig.databasePath}`,
+    severity: 'INFO',
+  })
+}
+
 const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
   const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
 
@@ -6782,6 +6820,7 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
   const ownerLease = await ensureCurrentDuckdbOwnerLease()
 
   try {
+    logDuckdbWalSizeAtFirstOpen(runtimeConfig)
     await runDuckdbStartupWalPreflight(runtimeConfig)
     assertDuckdbAcceptingWork('DuckDB open after startup preflight')
     duckdbInstance = await createDuckdbInstance(runtimeConfig)
@@ -8631,6 +8670,56 @@ export const runDuckdbMaintenance = async (
             await runDuckdbStatementDirect(statement)
           })
         })
+      })
+    },
+  })
+}
+
+export const isDuckdbAutoCheckpointDeferred = () => {
+  return getDuckdbRuntimeConfigValue().checkpointThreshold === `${duckdbLowMemoryDeferredCheckpointThresholdMiB}MiB`
+}
+
+const hasDuckdbWritesInFlightForWalCheckpoint = () => {
+  return (
+    isServerShutdownInProgress()
+    || duckdbStatementAdmissionClosed
+    || duckdbServiceState.startupPromise !== null
+    || duckdbServiceState.controlTransactionDepth > 0
+    || getActiveDuckdbExclusiveWorkSnapshot() !== null
+  )
+}
+
+export const getDuckdbWalCheckpointRuntimeState = (): DuckdbWalCheckpointRuntimeState => {
+  return {
+    runtimeOpen: duckdbServiceState.duckdbInstance !== null,
+    walBytes: getDuckdbWalBytesForShutdown(),
+    writesInFlight: hasDuckdbWritesInFlightForWalCheckpoint(),
+  }
+}
+
+const runDuckdbIdleWalCheckpointWork = async (): Promise<DuckdbIdleWalCheckpointOutcome> => {
+  if (duckdbServiceState.duckdbInstance === null || duckdbServiceState.controlTransactionDepth > 0) {
+    return 'skipped-writes-in-flight'
+  }
+
+  await withDuckdbAppendBarrier(async () => {
+    await runDuckdbStatementDirect('CHECKPOINT')
+  })
+
+  return 'completed'
+}
+
+export const runDuckdbIdleWalCheckpoint = async (): Promise<DuckdbIdleWalCheckpointOutcome> => {
+  return withDuckdbWorkloadContext({
+    getResultMetrics: getDuckdbNoWorkloadResultMetrics,
+    operation: 'maintenance',
+    queue: 'main',
+    queueDepthAtStart: duckdbServiceState.duckdbPendingCount,
+    work: async () => {
+      await waitForDuckdbAppendBarrier()
+
+      return withNormalizedDuckdbError(() => {
+        return enqueueDuckdbSerializedBackgroundWork(runDuckdbIdleWalCheckpointWork)
       })
     },
   })

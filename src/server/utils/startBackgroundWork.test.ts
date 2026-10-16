@@ -7,6 +7,7 @@ import {expect, test} from 'bun:test'
 const runStartBackgroundWork = (input: {
   activeDuckdbExclusiveWork?: boolean
   appendQueueDepth?: number
+  autoCheckpointDeferred?: boolean
   backgroundQueueDepth?: number
   defaultMaintenanceDuckdbMemoryLimit?: string
   disableServerMutations?: boolean
@@ -20,6 +21,7 @@ const runStartBackgroundWork = (input: {
   rssBytes?: number
   runShutdownHandlersAfterStart?: boolean
   waitAfterStartMs?: number
+  walBytes?: number
 }) => {
   const duckdbPath = join(tmpdir(), `forska-start-background-work-${process.pid}-${Date.now()}.duckdb`)
   const resultPath = join(tmpdir(), `forska-start-background-work-${process.pid}-${Date.now()}.json`)
@@ -141,6 +143,17 @@ const runStartBackgroundWork = (input: {
                 main: {queueDepth: input.foregroundQueueDepth ?? 0},
               }
             },
+            getDuckdbWalCheckpointRuntimeState: () => {
+              calls.push('getDuckdbWalCheckpointRuntimeState')
+              return {runtimeOpen: true, walBytes: input.walBytes ?? 0, writesInFlight: false}
+            },
+            isDuckdbAutoCheckpointDeferred: () => {
+              return input.autoCheckpointDeferred === true
+            },
+            runDuckdbIdleWalCheckpoint: async () => {
+              calls.push('runDuckdbIdleWalCheckpoint')
+              return 'completed'
+            },
           }
         })
         void mock.module(requestAttemptCloseoutBackfillSchedulerModulePath, () => {
@@ -233,6 +246,8 @@ const runStartBackgroundWork = (input: {
                 input.reviewServingRebuildChunkBatchMaxRssBytes,
               ),
             }),
+        FORSKA_DUCKDB_WAL_CHECKPOINT_MIN_INTERVAL_MS: '0',
+        FORSKA_DUCKDB_WAL_CHECKPOINT_POLL_INTERVAL_MS: '10',
         FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_POLL_INTERVAL_MS: '10',
         FORSKA_REVIEW_SERVING_PROJECTOR_PAUSE_RECOVERY_QUEUE_RESAMPLE_DELAY_MS: '1',
       },
@@ -324,6 +339,40 @@ test('startBackgroundWork defers nonessential DuckDB maintenance under low-memor
     'duckdbOwnerConnectionHeartbeat',
     'reviewServingProjectorWorkerHeartbeat:60000:16:1:1:1500:5033164800:4278190080:default:false',
   ])
+})
+
+test('startBackgroundWork checkpoints an oversized WAL on a deferred-checkpoint owner and stops on shutdown', () => {
+  const result = runStartBackgroundWork({
+    autoCheckpointDeferred: true,
+    duckdbMemoryLimit: '6400MiB',
+    role: 'maintenance-worker',
+    runShutdownHandlersAfterStart: true,
+    waitAfterStartMs: 60,
+    walBytes: 128 * 1024 * 1024,
+  })
+  const shutdownIndex = result.calls.indexOf('shutdown-errors:0')
+
+  expect(result.calls.slice(0, 3)).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'duckdb.wal-checkpoint.scheduler-started',
+  ])
+  expect(result.calls).toContain('runDuckdbIdleWalCheckpoint')
+  expect(result.calls).toContain('duckdb.wal-checkpoint.completed')
+  expect(shutdownIndex).toBe(result.calls.length - 1)
+})
+
+test('startBackgroundWork leaves WAL checkpoints to DuckDB when its auto-checkpoint threshold is not deferred', () => {
+  const result = runStartBackgroundWork({
+    autoCheckpointDeferred: false,
+    duckdbMemoryLimit: '20GB',
+    role: 'maintenance-worker',
+    waitAfterStartMs: 60,
+    walBytes: 128 * 1024 * 1024,
+  })
+
+  expect(result.calls).not.toContain('duckdb.wal-checkpoint.scheduler-started')
+  expect(result.calls).not.toContain('getDuckdbWalCheckpointRuntimeState')
 })
 
 test('startBackgroundWork bounds the projector at the eight GiB owner boundary', () => {

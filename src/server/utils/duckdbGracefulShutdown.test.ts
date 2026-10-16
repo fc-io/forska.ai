@@ -16,6 +16,7 @@ type ShutdownScenario = {
   idleAfterInterrupt?: boolean
   runtimeOpen?: boolean
   walBytesAfterCheckpoint?: number
+  walBytesBeforeCheckpoint?: number
 }
 
 type FakeTimer = {atMs: number; resolve: () => void}
@@ -84,7 +85,7 @@ const createShutdownHarness = (scenario: ShutdownScenario = {}) => {
       calls.push(`close-admission@${clock.nowMs}`)
     },
     getWalBytes: () => {
-      return state.checkpointed ? (scenario.walBytesAfterCheckpoint ?? 0) : 4096
+      return state.checkpointed ? (scenario.walBytesAfterCheckpoint ?? 0) : (scenario.walBytesBeforeCheckpoint ?? 4096)
     },
     interruptActiveWork: () => {
       state.interrupted = true
@@ -282,6 +283,45 @@ test('graceful shutdown skips the checkpoint for a closed runtime and for the lo
       return entry.event === 'duckdb.shutdown.checkpoint-skipped'
     })?.attrs,
   ).toMatchObject({skipReason: 'low-memory-runtime'})
+})
+
+test('a low-memory runtime checkpoints a WAL at or below the small-WAL cap and skips anything larger', async () => {
+  const capBytes = 256 * 1024 * 1024
+  const lowMemoryOptions = {...shutdownOptions, lowMemoryCheckpointMaxWalBytes: capBytes, shouldCheckpoint: false}
+  const atCapHarness = createShutdownHarness({walBytesBeforeCheckpoint: capBytes})
+  const overCapHarness = createShutdownHarness({walBytesBeforeCheckpoint: capBytes + 1})
+  const emptyWalHarness = createShutdownHarness({walBytesBeforeCheckpoint: 0})
+
+  const atCapResult = await runDuckdbGracefulShutdown(atCapHarness.dependencies, lowMemoryOptions)
+  const overCapResult = await runDuckdbGracefulShutdown(overCapHarness.dependencies, lowMemoryOptions)
+  const emptyWalResult = await runDuckdbGracefulShutdown(emptyWalHarness.dependencies, lowMemoryOptions)
+
+  expect(atCapResult).toEqual({checkpoint: 'completed', checkpointAttempts: 1, drain: 'idle', walBytes: 0})
+  expect(atCapHarness.calls).toContain('checkpoint@0:admission-closed=true')
+  expect(overCapResult).toMatchObject({checkpoint: 'skipped', walBytes: capBytes + 1})
+  expect(
+    overCapHarness.logs.find((entry) => {
+      return entry.event === 'duckdb.shutdown.checkpoint-skipped'
+    })?.attrs,
+  ).toMatchObject({skipReason: 'low-memory-runtime', walBytes: capBytes + 1})
+  expect(emptyWalResult).toMatchObject({checkpoint: 'skipped', walBytes: 0})
+})
+
+test('the small-WAL size is read after the drain so writes committed while draining count toward the cap', async () => {
+  const capBytes = 1024
+  const harness = createShutdownHarness({busyUntilMs: 5_000, walBytesBeforeCheckpoint: 512})
+  const getWalBytes = harness.dependencies.getWalBytes
+  harness.dependencies.getWalBytes = () => {
+    return harness.clock.nowMs >= 5_000 ? capBytes * 2 : getWalBytes()
+  }
+
+  const result = await runDuckdbGracefulShutdown(harness.dependencies, {
+    ...shutdownOptions,
+    lowMemoryCheckpointMaxWalBytes: capBytes,
+    shouldCheckpoint: false,
+  })
+
+  expect(result).toMatchObject({checkpoint: 'skipped', walBytes: capBytes * 2})
 })
 
 test('graceful shutdown timeouts default to 45s drain, 15s rollback and 120s checkpoint and accept env overrides', () => {

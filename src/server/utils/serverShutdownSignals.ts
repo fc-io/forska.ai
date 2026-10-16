@@ -5,6 +5,7 @@ import {
 } from './serverShutdownState.ts'
 
 export type ServerShutdownSignal = 'SIGINT' | 'SIGTERM'
+export type ServerShutdownTrigger = ServerShutdownSignal | 'parent-exited' | 'stop-request'
 
 type ServerShutdownSignalSource = {on: (signal: ServerShutdownSignal, listener: () => void) => unknown}
 
@@ -19,13 +20,16 @@ export type ServerShutdownSignalHandlersInput = {
   exit: (code: number) => Promise<void> | void
   forceExitAfterMs: number
   log: (entry: ServerShutdownSignalLogEntry) => void
-  runShutdown: (signal: ServerShutdownSignal) => Promise<unknown>
+  runShutdown: (signal: ServerShutdownTrigger) => Promise<unknown>
   signalSource?: ServerShutdownSignalSource
 }
 
-const serverShutdownSignals: ServerShutdownSignal[] = ['SIGINT', 'SIGTERM']
+type ServerShutdownRequestFallback = {exit: (code: number) => void}
 
-const startServerShutdownForceExitTimer = (input: ServerShutdownSignalHandlersInput, signal: ServerShutdownSignal) => {
+const serverShutdownSignals: ServerShutdownSignal[] = ['SIGINT', 'SIGTERM']
+let registeredServerShutdownInput: ServerShutdownSignalHandlersInput | null = null
+
+const startServerShutdownForceExitTimer = (input: ServerShutdownSignalHandlersInput, signal: ServerShutdownTrigger) => {
   return setTimeout(() => {
     input.log({
       attrs: {forceExitAfterMs: input.forceExitAfterMs, signal},
@@ -37,7 +41,7 @@ const startServerShutdownForceExitTimer = (input: ServerShutdownSignalHandlersIn
   }, input.forceExitAfterMs)
 }
 
-const runServerShutdownForSignal = (input: ServerShutdownSignalHandlersInput, signal: ServerShutdownSignal) => {
+const runServerShutdownForSignal = (input: ServerShutdownSignalHandlersInput, signal: ServerShutdownTrigger) => {
   const forceExitTimer = startServerShutdownForceExitTimer(input, signal)
 
   void input.runShutdown(signal).then(
@@ -58,7 +62,7 @@ const runServerShutdownForSignal = (input: ServerShutdownSignalHandlersInput, si
   )
 }
 
-const logIgnoredServerShutdownSignal = (input: ServerShutdownSignalHandlersInput, signal: ServerShutdownSignal) => {
+const logIgnoredServerShutdownSignal = (input: ServerShutdownSignalHandlersInput, signal: ServerShutdownTrigger) => {
   input.log({
     attrs: {firstSignal: getServerShutdownSignal(), signal},
     event: 'server.shutdown.signal-ignored',
@@ -67,7 +71,7 @@ const logIgnoredServerShutdownSignal = (input: ServerShutdownSignalHandlersInput
   })
 }
 
-const handleServerShutdownSignal = (input: ServerShutdownSignalHandlersInput, signal: ServerShutdownSignal) => {
+const handleServerShutdownSignal = (input: ServerShutdownSignalHandlersInput, signal: ServerShutdownTrigger) => {
   if (!markServerShutdownStarted(signal)) {
     logIgnoredServerShutdownSignal(input, signal)
     return
@@ -76,11 +80,32 @@ const handleServerShutdownSignal = (input: ServerShutdownSignalHandlersInput, si
   runServerShutdownForSignal(input, signal)
 }
 
+export const requestServerShutdown = (
+  trigger: ServerShutdownTrigger,
+  fallback: ServerShutdownRequestFallback = {
+    exit: (code) => {
+      process.exit(code)
+    },
+  },
+) => {
+  if (registeredServerShutdownInput === null) {
+    fallback.exit(0)
+    return
+  }
+
+  handleServerShutdownSignal(registeredServerShutdownInput, trigger)
+}
+
+export const resetServerShutdownRequestInputForTests = () => {
+  registeredServerShutdownInput = null
+}
+
 export const registerServerShutdownSignalHandlers = (input: ServerShutdownSignalHandlersInput) => {
   if (!markServerShutdownSignalHandlersRegistered()) {
     return false
   }
 
+  registeredServerShutdownInput = input
   const signalSource = input.signalSource ?? process
 
   serverShutdownSignals.map((signal) => {
