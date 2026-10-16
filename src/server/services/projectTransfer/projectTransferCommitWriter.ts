@@ -87,6 +87,7 @@ import {
   mergeProjectTransferPerformanceMetrics,
   type ProjectTransferPerformanceMetrics,
 } from './projectTransferPerformanceMetrics.ts'
+import type {ProjectTransferCommitWriterStepProgress} from './projectTransferProgressWeights.ts'
 import type {ProjectTransferPackageWarning, ProjectTransferPayloadKey} from './projectTransferSchemas.ts'
 import {
   getProjectTransferTargetStateDirtyTokenService,
@@ -106,12 +107,22 @@ type ProjectTransferCommitWriterDatabase = ProjectTransferCommitWriterTx & {
   ) => Promise<T>
 }
 
+type ProjectTransferCommitWriterStepKey =
+  | 'articles'
+  | 'history'
+  | 'humanReviews'
+  | 'judgments'
+  | 'prepare'
+  | 'projectArticles'
+  | 'routes'
+
 export type ProjectTransferCommitWriterInput = {
   commitId: string
   cwd?: string
   database?: ProjectTransferCommitWriterDatabase
   envValues?: Record<string, string | undefined>
   now?: Date
+  onStep?: (step: ProjectTransferCommitWriterStepProgress) => Promise<void> | void
   operationTables?: ProjectTransferOperationTableSet
   payloads: Partial<ProjectTransferPayloadByKey>
   plan: ProjectTransferImportPlanArtifact
@@ -6863,11 +6874,78 @@ const insertReviewRows = async ({
       })
 }
 
+const getCommitWriterSteps = (payloads: Partial<ProjectTransferPayloadByKey>) => {
+  const rowSteps: {key: ProjectTransferCommitWriterStepKey; label: string; rows: number}[] = [
+    {key: 'articles', label: 'articles', rows: payloads.articles?.length ?? 0},
+    {
+      key: 'routes',
+      label: 'import routes',
+      rows: (payloads.projectImportRoutes?.length ?? 0) + (payloads.articleImportRoutes?.length ?? 0),
+    },
+    {key: 'projectArticles', label: 'project articles', rows: payloads.projectArticles?.length ?? 0},
+    {
+      key: 'judgments',
+      label: 'judgments',
+      rows: (payloads.judgments?.length ?? 0) + (payloads.judgmentAssessments?.length ?? 0),
+    },
+    {
+      key: 'humanReviews',
+      label: 'human judgments and reviews',
+      rows:
+        (payloads.humanJudgments?.length ?? 0)
+        + (payloads.humanJudgmentSummaries?.length ?? 0)
+        + (payloads.reviews?.length ?? 0),
+    },
+  ]
+  const plannedRows = rowSteps.reduce((total, step) => {
+    return total + step.rows
+  }, 0)
+
+  return [
+    {key: 'prepare' as const, label: 'id maps and dependencies', rows: plannedRows},
+    ...rowSteps,
+    {key: 'history' as const, label: 'import history', rows: 0},
+  ]
+}
+
+const getCommitWriterStepReporter = ({
+  onStep,
+  payloads,
+}: {
+  onStep?: ProjectTransferCommitWriterInput['onStep']
+  payloads: Partial<ProjectTransferPayloadByKey>
+}) => {
+  const steps = getCommitWriterSteps(payloads)
+  const totalRows = steps.reduce((total, step) => {
+    return total + step.rows
+  }, 0)
+
+  return async (key: ProjectTransferCommitWriterStepKey) => {
+    const index = steps.findIndex((step) => {
+      return step.key === key
+    })
+    const completedRows = steps.slice(0, index).reduce((total, step) => {
+      return total + step.rows
+    }, 0)
+
+    await onStep?.({
+      completedRows,
+      count: steps.length,
+      index: index + 1,
+      key,
+      label: steps[index]?.label ?? key,
+      rows: steps[index]?.rows ?? 0,
+      totalRows,
+    })
+  }
+}
+
 const writeProjectTransferCommitAppTablesTx = async ({
   commitId,
   cwd,
   envValues,
   now,
+  onStep,
   operationTables,
   payloads,
   plan,
@@ -6890,6 +6968,9 @@ const writeProjectTransferCommitAppTablesTx = async ({
   const humanJudgmentSummaries = payloads.humanJudgmentSummaries ?? []
   const reviews = payloads.reviews ?? []
   const importedAt = now ?? new Date()
+  const reportWriterStep = getCommitWriterStepReporter({onStep, payloads})
+
+  await reportWriterStep('prepare')
   const planWithCommitIdMaps = getProjectTransferPlanWithCommitIdMaps({
     commitId,
     now: importedAt,
@@ -7004,6 +7085,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
       commitIdMaps: materializedPlan.commitIdMaps,
       promotion,
     })
+    await reportWriterStep('articles')
     await assertNoArticleIdConflicts({articles, matches: materializedPlan.targetPlan.articleMatches, tx})
     await insertProjectPromptRows(tx, projectPromptRows, materializedPlan.commitIdMaps, importedAt)
     await insertCreatedArticles({articleIdBySourceId, context: setBasedContext, now: importedAt, promotion, tx})
@@ -7018,6 +7100,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
       now: importedAt,
       tx,
     })
+    await reportWriterStep('routes')
     await insertProjectImportRoutes({
       commitIdMaps: materializedPlan.commitIdMaps,
       context: setBasedContext,
@@ -7049,6 +7132,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
       records: articleImportRouteReviewServingRecords,
       tx,
     })
+    await reportWriterStep('projectArticles')
     await insertProjectArticles({
       articleIdBySourceId,
       articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
@@ -7058,6 +7142,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
       projectId: createdProject.id,
       tx,
     })
+    await reportWriterStep('judgments')
     const judgmentIdBySourceId =
       setBasedContext === null
         ? await writeMaterializedJudgments({
@@ -7093,6 +7178,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
       rows: judgmentAssessmentRows,
       tx,
     })
+    await reportWriterStep('humanReviews')
     assertNoHumanReviewPlanExtras({humanJudgments, humanReviewPlan, humanSummaries: humanJudgmentSummaries, reviews})
     const humanJudgmentRows = getHumanJudgmentRows({
       articleIdBySourceId,
@@ -7140,6 +7226,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
       rows: reviewRows,
       tx,
     })
+    await reportWriterStep('history')
     const importWarnings = getCommitImportWarnings({
       articleRoutePlan: materializedPlan.targetPlan.articleRoutePlan,
       judgmentPlan,

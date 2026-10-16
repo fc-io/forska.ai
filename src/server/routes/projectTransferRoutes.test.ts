@@ -7,6 +7,7 @@ import {Elysia} from 'elysia'
 
 import type {ProjectTransferSessionRecord} from '../../db/schemaTypes.ts'
 import {hasActiveProjectTransferBackgroundActivity} from '../services/projectTransfer/projectTransferBackgroundActivity.ts'
+import {getProjectTransferOverallProgress} from '../services/projectTransfer/projectTransferProgressWeights.ts'
 import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
 type RouteTestApp = {handle: (request: Request) => Promise<Response> | Response}
@@ -1125,13 +1126,19 @@ test('project transfer import upload streams to upload.zip and persists public m
   )
   const text = await response.text()
   const body = JSON.parse(text) as {
-    data: {state: string; upload: {byteLength: number; checksumSha256: string; fileName: string}; uploadPath?: string}
+    data: {
+      progress: {overall?: {operation: string; percent: number; stepFraction: number | null}} | null
+      state: string
+      upload: {byteLength: number; checksumSha256: string; fileName: string}
+      uploadPath?: string
+    }
     error: string | null
   }
 
   expect(response.status).toBe(200)
   expect(body.error).toBe(null)
   expect(body.data.state).toBe('queued')
+  expect(body.data.progress?.overall).toMatchObject({operation: 'analyze', percent: 3, stepFraction: 1})
   expect(body.data.upload).toEqual(getUploadMetadata('zip-body'))
   expect(readFileSync(uploadPackagePath, 'utf8')).toBe('zip-body')
   expect(text).not.toContain('uploadPath')
@@ -1354,6 +1361,36 @@ test.each(['app_table_writes', 'revalidation'])(
     expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
   },
 )
+
+test('project transfer import get serves writer progress from the artifact as committing with the overall block', async () => {
+  const sessionId = getRouteTestSessionId('import-get-commit-overall-artifact')
+  const overall = getProjectTransferOverallProgress({operation: 'commit', step: 'loadPayloads', stepFraction: 0.5})
+  const app = await getProjectTransferApp()
+  mkdirSync(getImportRootPath(sessionId), {recursive: true})
+  writeFileSync(
+    getImportProgressPath(sessionId),
+    JSON.stringify({
+      completedItems: 8,
+      message: 'Loaded package payload judgments',
+      overall,
+      phase: 'staging_load',
+      planRevision: 2,
+      status: 'running',
+      totalItems: 16,
+      updatedAt: '2030-01-01T00:00:10.000Z',
+    }),
+  )
+
+  const response = await getRouteResponse(app, `/api/projects/import/${sessionId}`, 'GET')
+  const body = (await response.json()) as {
+    data: {progress: {overall: unknown; phase: string}; state: string}
+    error: string | null
+  }
+
+  expect(response.status).toBe(200)
+  expect(body).toMatchObject({data: {progress: {overall, phase: 'staging_load'}, state: 'committing'}, error: null})
+  expect(getProjectTransferSessionMock).not.toHaveBeenCalled()
+})
 
 test('project transfer import get reads completed import artifacts before the session repository', async () => {
   const app = await getProjectTransferApp()
@@ -1742,14 +1779,23 @@ test('project transfer import analyze claims queued uploads and writes an inline
   expect(routeState.sessions[inlineAnalyzeSessionId]?.ownerToken).toBeNull()
   expect(routeState.sessions[inlineAnalyzeSessionId]?.packageFingerprint).toBe('analyzed-fingerprint')
   expect(routeState.sessions[inlineAnalyzeSessionId]?.progressJson).toMatchObject({
+    overall: {operation: 'analyze', percent: 100, step: {key: 'finalize'}},
     phase: 'analyze',
     status: 'completed',
   })
   expect(JSON.parse(readFileSync(getImportProgressPath(inlineAnalyzeSessionId), 'utf8'))).toMatchObject({
+    overall: {operation: 'analyze', percent: 100},
     phase: 'analyze',
     status: 'completed',
   })
   expect(transitionProjectTransferSessionStateMock).toHaveBeenCalledTimes(2)
+  expect(
+    transitionProjectTransferSessionStateMock.mock.calls.map((call) => {
+      const overall = (call[0] as {progress?: {overall?: {percent: number; step: {key: string}}}}).progress?.overall
+
+      return `${overall?.step.key}:${overall?.percent}`
+    }),
+  ).toEqual(['zipScan:3', 'zipScan:3'])
   expect(updateProjectTransferSessionPlanRevisionMock).toHaveBeenCalledWith(
     expect.objectContaining({nextOwnerToken: null, packageFingerprint: 'analyzed-fingerprint'}),
   )
@@ -1848,87 +1894,116 @@ test('project transfer import analyze returns accepted for explicit large packag
   expect(typeof body.data.ownerToken).toBe('string')
 })
 
-test('project transfer import resolve updates the durable dependency plan and commit returns completed session data', async () => {
-  routeState.sessions[resolveSessionId] = getImportSessionRecord({
-    id: resolveSessionId,
-    planRevision: 1,
-    planSummaryJson: {
-      blockerCount: 1,
-      conflictCounts: getFinalConflictCounts(),
-      dependencyStatuses: {},
-      overlapCounts: getFinalOverlapCounts(),
-      warningCount: 0,
-    },
-    state: 'awaiting_resolution',
-  })
-  mkdirSync(getImportRootPath(resolveSessionId), {recursive: true})
-  await globalThis.Bun.write(getImportPlanPath(resolveSessionId), '{}')
-  const app = await getProjectTransferApp()
+test.each(['legacy', 'stale-commit'])(
+  'project transfer import resolve completes %s progress and commit returns completed session data',
+  async (previousOperation) => {
+    routeState.sessions[resolveSessionId] = getImportSessionRecord({
+      id: resolveSessionId,
+      progressJson:
+        previousOperation === 'stale-commit'
+          ? {
+              phase: 'revalidation',
+              status: 'completed',
+              overall: {
+                operation: 'commit',
+                percent: 35,
+                step: {index: 2, count: 6, key: 'revalidation', label: 'Revalidating', startPercent: 7, endPercent: 67},
+                stepFraction: 0.5,
+              },
+            }
+          : null,
+      planRevision: 1,
+      planSummaryJson: {
+        blockerCount: 1,
+        conflictCounts: getFinalConflictCounts(),
+        dependencyStatuses: {},
+        overlapCounts: getFinalOverlapCounts(),
+        warningCount: 0,
+      },
+      state: 'awaiting_resolution',
+    })
+    mkdirSync(getImportRootPath(resolveSessionId), {recursive: true})
+    await globalThis.Bun.write(getImportPlanPath(resolveSessionId), '{}')
+    const app = await getProjectTransferApp()
 
-  const resolveResponse = await app.handle(
-    new Request(`http://localhost/api/projects/import/${resolveSessionId}/resolve-dependencies`, {
-      body: JSON.stringify({
-        planRevision: 1,
-        selectedProviderConnections: [
-          {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-provider-1'},
-        ],
+    const resolveResponse = await app.handle(
+      new Request(`http://localhost/api/projects/import/${resolveSessionId}/resolve-dependencies`, {
+        body: JSON.stringify({
+          planRevision: 1,
+          selectedProviderConnections: [
+            {sourceProviderConnectionId: 'provider-connection-1', targetProviderConnectionId: 'target-provider-1'},
+          ],
+        }),
+        headers: {'content-type': 'application/json'},
+        method: 'POST',
       }),
-      headers: {'content-type': 'application/json'},
-      method: 'POST',
-    }),
-  )
-  const resolveBody = (await resolveResponse.json()) as {
-    data: {planRevision: number; planSummary: {dependencyStatuses: Record<string, string>}; state: string}
-    error: string | null
-  }
-  const completion = {
-    importWarnings: [],
-    packageFingerprint: 'fingerprint-import',
-    projectId: 'imported-project-1',
-    projectName: 'Imported Project',
-    status: 'completed' as const,
-    targetProjectId: 'imported-project-1',
-    targetProjectName: 'Imported Project',
-    transferHistoryId: 'history-import-resolve',
-  }
-  routeState.commitResult = {
-    completion,
-    history: null,
-    session: {...routeState.sessions[resolveSessionId], completionPayloadJson: completion, state: 'completed'},
-    status: 'completed',
-    statusCode: 200,
-  }
-  const commitResponse = await app.handle(
-    new Request(`http://localhost/api/projects/import/${resolveSessionId}/commit`, {
-      body: JSON.stringify({expectedPlanRevision: 1}),
-      headers: {'content-type': 'application/json'},
-      method: 'POST',
-    }),
-  )
-  const commitBody = (await commitResponse.json()) as {
-    data: {completion: typeof completion; state: string}
-    error: string | null
-  }
+    )
+    const resolveBody = (await resolveResponse.json()) as {
+      data: {
+        planRevision: number
+        planSummary: {dependencyStatuses: Record<string, string>}
+        progress: {overall?: {operation: string; percent: number; step: {key: string}}} | null
+        state: string
+      }
+      error: string | null
+    }
+    const completion = {
+      importWarnings: [],
+      packageFingerprint: 'fingerprint-import',
+      projectId: 'imported-project-1',
+      projectName: 'Imported Project',
+      status: 'completed' as const,
+      targetProjectId: 'imported-project-1',
+      targetProjectName: 'Imported Project',
+      transferHistoryId: 'history-import-resolve',
+    }
+    routeState.commitResult = {
+      completion,
+      history: null,
+      session: {...routeState.sessions[resolveSessionId], completionPayloadJson: completion, state: 'completed'},
+      status: 'completed',
+      statusCode: 200,
+    }
+    const commitResponse = await app.handle(
+      new Request(`http://localhost/api/projects/import/${resolveSessionId}/commit`, {
+        body: JSON.stringify({expectedPlanRevision: 1}),
+        headers: {'content-type': 'application/json'},
+        method: 'POST',
+      }),
+    )
+    const commitBody = (await commitResponse.json()) as {
+      data: {completion: typeof completion; state: string}
+      error: string | null
+    }
 
-  expect(resolveResponse.status).toBe(200)
-  expect(resolveBody).toMatchObject({
-    data: {
-      planRevision: 2,
-      planSummary: {dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'}},
-      state: 'ready_to_commit',
-    },
-    error: null,
-  })
-  expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledTimes(1)
-  expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledWith(expect.objectContaining({deferPlanWrite: true}))
-  expect(writeProjectTransferDependencyPlanMock).toHaveBeenCalledWith(expect.objectContaining({plan: {}}))
-  expect(commitResponse.status).toBe(200)
-  expect(commitBody).toMatchObject({data: {completion, state: 'completed'}, error: null})
-  expect(commitProjectTransferImportSessionMock).toHaveBeenCalledWith({
-    request: {expectedPlanRevision: 1},
-    sessionId: resolveSessionId,
-  })
-})
+    expect(resolveResponse.status).toBe(200)
+    expect(resolveBody).toMatchObject({
+      data: {
+        planRevision: 2,
+        planSummary: {dependencyStatuses: {'model:model-1': 'resolved', 'provider:provider-connection-1': 'resolved'}},
+        state: 'ready_to_commit',
+      },
+      error: null,
+    })
+    expect(resolveBody.data.progress?.overall).toMatchObject({
+      operation: 'analyze',
+      percent: 100,
+      step: {key: 'finalize'},
+    })
+    expect(JSON.parse(readFileSync(getImportProgressPath(resolveSessionId), 'utf8')) as unknown).toMatchObject({
+      overall: {percent: 100},
+    })
+    expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledTimes(1)
+    expect(resolveProjectTransferDependenciesMock).toHaveBeenCalledWith(expect.objectContaining({deferPlanWrite: true}))
+    expect(writeProjectTransferDependencyPlanMock).toHaveBeenCalledWith(expect.objectContaining({plan: {}}))
+    expect(commitResponse.status).toBe(200)
+    expect(commitBody).toMatchObject({data: {completion, state: 'completed'}, error: null})
+    expect(commitProjectTransferImportSessionMock).toHaveBeenCalledWith({
+      request: {expectedPlanRevision: 1},
+      sessionId: resolveSessionId,
+    })
+  },
+)
 
 test('project transfer routes carry inline export bytes through import analyze resolve and commit', async () => {
   const app = await getProjectTransferApp()

@@ -47,10 +47,9 @@ test('project transfer heavy DuckDB flows carry workload contexts', () => {
     commitAppWritesSource.indexOf('return database.transaction('),
   )
   expect(commitAppWritesSource).not.toContain('runner: tx')
-  expect(commitSource).toContain(
-    'await writeCommitProgressArtifact({progress: heartbeatProgress, runtimeOptions, sessionId})',
-  )
-  expect(commitSource).toContain('await Promise.all(pendingHeartbeats)')
+  expect(commitSource).toContain('state.artifact ??= scheduler')
+  expect(commitSource).toContain('state.lease ??= refreshClaimedCommitHeartbeat(')
+  expect(commitSource).toContain('await Promise.all([state.artifact, state.lease])')
   expect(commitWriterSource).toContain('projectTransferCommitTransactionWorkloadContext')
 })
 
@@ -77,7 +76,7 @@ test('project transfer exclusive DuckDB work stays scoped to heavy import phases
   expect(analyzeSource).toContain('input.runner === undefined')
   expect(analyzeSource).toContain('Waiting for DuckDB maintenance work to pause')
   expect(analyzeSource).toContain('const analyzeProjectTransferImportPackageCore = async')
-  expect(analyzeSource).toContain('return analyzeProjectTransferImportPackageCore(input, exclusiveWorkLease)')
+  expect(analyzeSource).toContain('return analyzeProjectTransferImportPackageCore(context, exclusiveWorkLease)')
   expect(analyzeSource.match(/runWithDuckdbExclusiveWork\(/gu)).toHaveLength(1)
   expect(analyzeSource).toContain('return analyze(lease)')
   expect(analyzeSource).toContain(': analyze(null)')

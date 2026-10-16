@@ -31,6 +31,7 @@ import type {
   ProjectTransferPayloadByKey,
   ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
+import type {ProjectTransferTargetAnalysisProgress} from './projectTransferProgressWeights.ts'
 import type {ProjectTransferPackageWarning} from './projectTransferSchemas.ts'
 import type {ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {projectTransferAnalyzeOperationWorkloadContext} from './projectTransferWorkloadContext.ts'
@@ -40,7 +41,12 @@ export type ProjectTransferAnalyzeTargetRunner = {
   run?: (statement: string, workloadContext?: DuckdbWorkloadContext) => Promise<void>
 }
 
+export type ProjectTransferAnalyzeTargetProgressCallback = (
+  progress: ProjectTransferTargetAnalysisProgress,
+) => Promise<void> | void
+
 type ProjectTransferAnalyzeTargetInput = {
+  onProgress?: ProjectTransferAnalyzeTargetProgressCallback
   operationTables?: ProjectTransferOperationTableSet
   packageFingerprint: string | null
   payloads: Partial<ProjectTransferPayloadByKey>
@@ -2244,6 +2250,7 @@ const getTargetOverlapCounts = ({
 }
 
 export const getProjectTransferAnalyzeTargetPlan = async ({
+  onProgress,
   operationTables,
   packageFingerprint,
   payloads,
@@ -2255,6 +2262,8 @@ export const getProjectTransferAnalyzeTargetPlan = async ({
   const importedProject = payloads.project ?? null
   const prompts = payloads.prompts ?? []
 
+  await onProgress?.({step: 'setup', stepFraction: 0})
+
   return withProjectTransferTargetAnalysisTables({
     articles,
     operationTables,
@@ -2263,8 +2272,10 @@ export const getProjectTransferAnalyzeTargetPlan = async ({
     work: async (analysisTables) => {
       const duplicateDetection = await getProjectTransferDuplicateImportDetection({packageFingerprint, runner})
       const articleReferenceBlockers = getArticleReferenceBlockers({articles, assetManifestEntries})
+      await onProgress?.({step: 'articleMatch', stepFraction: 0})
       const articleMatchAnalysis = await getArticleMatchAnalysis({analysisTables, articles, runner})
       await replaceProjectTransferArticleMatchPlanTable({analysisTables, plans: articleMatchAnalysis.plans, runner})
+      await onProgress?.({step: 'articleUpdate', stepFraction: 0})
       const articleUpdateAnalysis = await getArticleUpdatePlan({
         analysisTables,
         articleMatches: articleMatchAnalysis.plans,
@@ -2274,6 +2285,7 @@ export const getProjectTransferAnalyzeTargetPlan = async ({
         runner,
         targetArticleBySource: articleMatchAnalysis.targetArticleBySource,
       })
+      await onProgress?.({step: 'routes', stepFraction: 0})
       const promptAnalysis = await getPromptPlan({
         analysisTables,
         projectPrompts: payloads.projectPrompts ?? [],
@@ -2298,6 +2310,7 @@ export const getProjectTransferAnalyzeTargetPlan = async ({
         ...articleMatchAnalysis.blockers,
         ...articleUpdateAnalysis.blockers,
       ]
+      await onProgress?.({step: 'assets', stepFraction: 0})
       const assetPromotionPlan = getAssetPromotionPlan({
         articleMatches: articleMatchAnalysis.plans,
         articleUpdatePlan: articleUpdateAnalysis.updatePlan,
@@ -2314,11 +2327,13 @@ export const getProjectTransferAnalyzeTargetPlan = async ({
         projectRoutePlan: routePlan.projectRoutePlan,
         promptPlan: promptAnalysis.promptPlan,
       }
+      await onProgress?.({step: 'fidelity', stepFraction: 0})
       const fidelityValidation = await getProjectTransferFidelityValidation({
         payloads,
         runner,
         targetPlan: baseTargetPlan,
       })
+      await onProgress?.({step: 'fidelity', stepFraction: 1})
       const overlapCounts = {
         ...getTargetOverlapCounts({
           articleMatches: articleMatchAnalysis.plans,
@@ -2353,6 +2368,7 @@ export const getProjectTransferAnalyzeTargetPlanWithOperationTables = async ({
   cwd,
   envValues,
   layout,
+  onProgress,
   operationId,
   packageFingerprint,
   payloads,
@@ -2368,6 +2384,7 @@ export const getProjectTransferAnalyzeTargetPlanWithOperationTables = async ({
     workloadContext: projectTransferAnalyzeOperationWorkloadContext,
     work: ({runner: operationRunner, tables}) => {
       return getProjectTransferAnalyzeTargetPlan({
+        onProgress,
         operationTables: tables,
         packageFingerprint,
         payloads,

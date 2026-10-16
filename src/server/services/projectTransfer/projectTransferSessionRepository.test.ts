@@ -605,6 +605,7 @@ test('project transfer ready transitions validate the explicitly persisted plan 
 
 test('project transfer session commit claims are single-flight and owner-token fenced', () => {
   const result = runSessionRepositoryScript<{
+    completionPercent: number
     completionOwner: string | null
     completionProjectId: string | null
     firstClaimExpiresAt: string | null
@@ -680,6 +681,7 @@ test('project transfer session commit claims are single-flight and owner-token f
     const current = await sessionRepository.getProjectTransferSession({sessionId: 'session-commit-claim'})
 
     console.log(JSON.stringify({
+      completionPercent: completion?.progressJson?.overall?.percent,
       completionOwner: completion?.ownerToken ?? null,
       completionProjectId: completion?.completionPayloadJson?.projectId ?? null,
       firstClaimExpiresAt: firstClaim?.expiresAt ? new Date(firstClaim.expiresAt).toISOString() : null,
@@ -695,6 +697,7 @@ test('project transfer session commit claims are single-flight and owner-token f
     }))
   `)
 
+  expect(result.completionPercent).toBe(100)
   expect(result.firstClaimOwner).toBe('owner-a')
   expect(result.firstClaimHeartbeatAt).toBe('2026-05-21T12:30:00.000Z')
   expect(result.firstClaimExpiresAt).toBe('2026-05-21T13:00:00.000Z')

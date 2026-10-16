@@ -39,6 +39,7 @@ import {
   resolveProjectTransferTempWritablePath,
   validateProjectTransferPromotionWritablePath,
 } from './projectTransferPaths.ts'
+import {getProjectTransferCompletedOverallProgress} from './projectTransferProgressWeights.ts'
 import {
   getProjectTransferExportTempLayout,
   getProjectTransferImportTempLayout,
@@ -903,6 +904,7 @@ const getRecoveredAnalyzeProgress = ({
 
   return {
     completedRows: rowCount,
+    overall: getProjectTransferCompletedOverallProgress('analyze'),
     performanceMetrics: analysis.performanceMetrics,
     phase: 'analyze',
     planRevision: plan.planRevision,

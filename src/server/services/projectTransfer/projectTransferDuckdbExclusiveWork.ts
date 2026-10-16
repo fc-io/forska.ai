@@ -102,7 +102,7 @@ export const updateActiveDuckdbExclusiveWorkProgress = (progress: ProjectTransfe
     completedRows: progress.completedRows ?? progress.rowCountProcessed ?? null,
     lastProgressedAt: progress.updatedAt,
     message: progress.message ?? undefined,
-    percent: progress.percent ?? null,
+    percent: progress.overall?.percent ?? progress.percent ?? null,
     totalRows: progress.totalRows ?? progress.rowCountTotal ?? null,
   })
 }

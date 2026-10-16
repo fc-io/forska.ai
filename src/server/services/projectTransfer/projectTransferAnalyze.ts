@@ -88,6 +88,18 @@ import {
   type ProjectTransferPerformancePhaseTiming,
 } from './projectTransferPerformanceMetrics.ts'
 import {
+  createProjectTransferOverallProgressTracker,
+  createProjectTransferProgressPublisher,
+  type ProjectTransferOverallProgressStepUpdate,
+  type ProjectTransferOverallProgressTracker,
+} from './projectTransferProgressPublisher.ts'
+import {
+  getProjectTransferOverallProgressStepLabel,
+  getProjectTransferTargetAnalysisFraction,
+  type ProjectTransferTargetAnalysisProgress,
+  projectTransferTargetAnalysisStepShares,
+} from './projectTransferProgressWeights.ts'
+import {
   getProjectTransferPayloadFormatForSchemaVersion,
   getProjectTransferPayloadKeysForSchemaVersion,
   getProjectTransferPayloadPathForSchemaVersion,
@@ -119,6 +131,7 @@ import {
   type ProjectTransferZipJsEntry,
   type ProjectTransferZipJsModule,
   type ProjectTransferZipReadEntry,
+  type ProjectTransferZipReadProgress,
   readProjectTransferZipPackage,
 } from './projectTransferZip.ts'
 
@@ -184,6 +197,8 @@ type ProjectTransferImportAnalyzeInput = ProjectTransferAnalyzeRuntimeOptions & 
   dependencyResolutionRepositories?: ProjectTransferDependencyResolutionRepositories
   layout: ProjectTransferImportTempLayout
   onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void> | void
+  onSessionProgress?: (progress: ProjectTransferProgressPayload) => unknown
+  progressThrottleMs?: number
   ownerToken?: string
   planRevision: number
   runner?: ProjectTransferAnalyzeTargetRunner
@@ -191,6 +206,27 @@ type ProjectTransferImportAnalyzeInput = ProjectTransferAnalyzeRuntimeOptions & 
   uploadMetadata?: ProjectTransferUploadMetadataPayload | null
   zipModule?: ProjectTransferZipJsModule
 }
+
+type ProjectTransferImportAnalyzeProgressContext = {
+  input: ProjectTransferImportAnalyzeInput
+  overall: ProjectTransferOverallProgressTracker<'analyze'>
+  scheduler: ReturnType<typeof createProjectTransferProgressPublisher>
+}
+
+type ProjectTransferImportAnalyzeProgressFields = {
+  bytesProcessed?: number | null
+  bytesTotal?: number | null
+  completedItems?: number | null
+  message?: string | null
+  phase: ProjectTransferProgressPayload['phase']
+  rowCountProcessed?: number | null
+  rowCountTotal?: number | null
+  status: ProjectTransferProgressPayload['status']
+  totalItems?: number | null
+  warningCount?: number | null
+}
+
+type ProjectTransferPayloadParseProgress = {completedBytes: number; totalBytes: number}
 
 type JsonMetrics = {depth: number; memberCount: number}
 
@@ -927,6 +963,7 @@ const parseAndStageNdjsonPayloadEntry = async ({
   entry,
   extractionRootPath,
   key,
+  onBytesParsed,
   runtimeOptions,
   schemaVersion,
 }: {
@@ -934,6 +971,7 @@ const parseAndStageNdjsonPayloadEntry = async ({
   entry: ProjectTransferZipReadEntry
   extractionRootPath: string
   key: ProjectTransferPackagePayloadKey
+  onBytesParsed?: (byteLength: number) => Promise<void> | void
   runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
   schemaVersion: ProjectTransferManifest['schemaVersion']
 }): Promise<ProjectTransferStagedPayloadParse> => {
@@ -959,8 +997,7 @@ const parseAndStageNdjsonPayloadEntry = async ({
   const afterChunks = await getByteChunks(entry.bytes).reduce<Promise<ProjectTransferNdjsonStreamState>>(
     async (statePromise, chunk) => {
       const state = await statePromise
-
-      return processStagedNdjsonText({
+      const nextState = await processStagedNdjsonText({
         artifactKey,
         hash,
         key,
@@ -969,6 +1006,10 @@ const parseAndStageNdjsonPayloadEntry = async ({
         stream,
         text: decoder.decode(chunk, {stream: true}),
       })
+
+      await onBytesParsed?.(chunk.byteLength)
+
+      return nextState
     },
     Promise.resolve(initialState),
   )
@@ -1106,17 +1147,34 @@ const parseAndStageJsonPayloadEntry = async ({
   }
 }
 
+const parseAndStageJsonPayloadEntryWithProgress = async (input: {
+  artifactKey: ProjectTransferPayloadKey
+  entry: ProjectTransferZipReadEntry
+  extractionRootPath: string
+  key: ProjectTransferPackagePayloadKey
+  onBytesParsed?: (byteLength: number) => Promise<void> | void
+  runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
+  schemaVersion: ProjectTransferManifest['schemaVersion']
+}) => {
+  const parsed = await parseAndStageJsonPayloadEntry(input)
+
+  await input.onBytesParsed?.(input.entry.uncompressedSize)
+
+  return parsed
+}
+
 const parseAndStagePayloadEntry = (input: {
   artifactKey: ProjectTransferPayloadKey
   entry: ProjectTransferZipReadEntry
   extractionRootPath: string
   key: ProjectTransferPackagePayloadKey
+  onBytesParsed?: (byteLength: number) => Promise<void> | void
   runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
   schemaVersion: ProjectTransferManifest['schemaVersion']
 }) => {
   const format = getProjectTransferPayloadFormatForSchemaVersion({key: input.key, schemaVersion: input.schemaVersion})
 
-  return format === 'ndjson' ? parseAndStageNdjsonPayloadEntry(input) : parseAndStageJsonPayloadEntry(input)
+  return format === 'ndjson' ? parseAndStageNdjsonPayloadEntry(input) : parseAndStageJsonPayloadEntryWithProgress(input)
 }
 
 const parsePackageOnlyPayloadEntry = ({
@@ -1275,18 +1333,49 @@ const assertPayloadChecksum = ({
   return undefined
 }
 
+const getPayloadParseByteReporter = ({
+  entriesByPath,
+  manifest,
+  onProgress,
+  packageKeys,
+}: {
+  entriesByPath: Map<string, ProjectTransferZipReadEntry>
+  manifest: ProjectTransferManifest
+  onProgress?: (progress: ProjectTransferPayloadParseProgress) => Promise<void> | void
+  packageKeys: readonly ProjectTransferPackagePayloadKey[]
+}) => {
+  const progress: ProjectTransferPayloadParseProgress = {
+    completedBytes: 0,
+    totalBytes: sumNumbers(
+      packageKeys.map((key) => {
+        const path = manifest.payloads[key]?.path
+
+        return path === undefined ? 0 : (entriesByPath.get(path)?.uncompressedSize ?? 0)
+      }),
+    ),
+  }
+
+  return async (byteLength: number) => {
+    progress.completedBytes = Math.min(progress.totalBytes, progress.completedBytes + byteLength)
+    await onProgress?.({...progress})
+  }
+}
+
 const parsePayloads = ({
   entriesByPath,
   extractionRootPath,
   manifest,
+  onProgress,
   runtimeOptions,
 }: {
   entriesByPath: Map<string, ProjectTransferZipReadEntry>
   extractionRootPath: string
   manifest: ProjectTransferManifest
+  onProgress?: (progress: ProjectTransferPayloadParseProgress) => Promise<void> | void
   runtimeOptions: ProjectTransferAnalyzeRuntimeOptions
 }) => {
   const packageKeys = getProjectTransferPayloadKeysForSchemaVersion(manifest.schemaVersion)
+  const onBytesParsed = getPayloadParseByteReporter({entriesByPath, manifest, onProgress, packageKeys})
 
   return packageKeys
     .reduce<
@@ -1373,9 +1462,14 @@ const parsePayloads = ({
                 entry,
                 extractionRootPath,
                 key,
+                onBytesParsed,
                 runtimeOptions,
                 schemaVersion: manifest.schemaVersion,
               })
+
+        if (artifactKey === null) {
+          await onBytesParsed(entry.uncompressedSize)
+        }
         const payload = stagedPayload.payload
         const recordCount = stagedPayload.metadata.recordCount
         const byteLengthBlocker =
@@ -2011,21 +2105,24 @@ const getAnalyzeDependencyResolutionRepositories = (
 }
 
 const getAnalyzePlanWithAutoResolvedDependencies = async ({
-  input,
+  context,
   payloads,
   plan,
 }: {
-  input: ProjectTransferImportAnalyzeInput
+  context: ProjectTransferImportAnalyzeProgressContext
   payloads: Partial<ProjectTransferPayloadByKey>
   plan: ProjectTransferImportPlanArtifact
 }) => {
+  const input = context.input
+
   if (input.autoResolveDependencies !== true || hasOnlyReadyDependencyStatuses(plan.summary)) {
     return {dependencyResolutionTiming: null, plan, planSummary: plan.summary}
   }
 
   await publishImportAnalyzeProgress({
-    input,
+    context,
     message: 'Resolving import dependencies',
+    overallStep: {step: 'dependencies', stepFraction: 0},
     phase: 'dependency_resolution',
     status: 'running',
     warningCount: plan.summary.warningCount,
@@ -2047,8 +2144,9 @@ const getAnalyzePlanWithAutoResolvedDependencies = async ({
   }
 
   await publishImportAnalyzeProgress({
-    input,
+    context,
     message: 'Dependency resolution completed',
+    overallStep: {step: 'dependencies', stepFraction: 1},
     phase: 'dependency_resolution',
     status: 'completed',
     warningCount: result.planSummary.warningCount,
@@ -2522,33 +2620,32 @@ const getProgressPercent = (processed: number | null, total: number | null) => {
   return processed !== null && total !== null && total > 0 ? Math.min(100, Math.floor((processed / total) * 100)) : null
 }
 
-const publishImportAnalyzeProgress = async ({
+const getImportAnalyzeProgress = ({
   bytesProcessed = null,
   bytesTotal = null,
+  completedItems = null,
   input,
   message,
+  overall,
   phase,
   rowCountProcessed = null,
   rowCountTotal = null,
   status,
+  totalItems = null,
   warningCount = null,
-}: {
-  bytesProcessed?: number | null
-  bytesTotal?: number | null
+}: ProjectTransferImportAnalyzeProgressFields & {
   input: ProjectTransferImportAnalyzeInput
-  message?: string | null
-  phase: ProjectTransferProgressPayload['phase']
-  rowCountProcessed?: number | null
-  rowCountTotal?: number | null
-  status: ProjectTransferProgressPayload['status']
-  warningCount?: number | null
+  overall: ProjectTransferProgressPayload['overall']
 }) => {
   const now = new Date().toISOString()
   const percent = getProgressPercent(bytesProcessed, bytesTotal)
-  const progress = {
+
+  return {
     ...(bytesProcessed === null ? {} : {bytesProcessed, completedBytes: bytesProcessed}),
     ...(bytesTotal === null ? {} : {bytesTotal, totalBytes: bytesTotal}),
+    ...(completedItems === null || totalItems === null ? {} : {completedItems, totalItems}),
     ...(message === undefined ? {} : {message}),
+    ...(overall === null || overall === undefined ? {} : {overall}),
     ...(percent === null ? {} : {percent}),
     phase,
     planRevision: input.planRevision,
@@ -2559,9 +2656,129 @@ const publishImportAnalyzeProgress = async ({
     uploadMetadata: input.uploadMetadata ?? null,
     ...(warningCount === null ? {} : {warningCount}),
   } satisfies ProjectTransferProgressPayload
+}
 
+const publishImportAnalyzeProgressPayload = async (
+  input: ProjectTransferImportAnalyzeInput,
+  progress: ProjectTransferProgressPayload,
+) => {
   updateActiveDuckdbExclusiveWorkProgress(progress)
   await input.onProgress?.(progress)
+}
+
+const getImportAnalyzeProgressContext = (
+  input: ProjectTransferImportAnalyzeInput,
+): ProjectTransferImportAnalyzeProgressContext => {
+  return {
+    input,
+    overall: createProjectTransferOverallProgressTracker('analyze'),
+    scheduler: createProjectTransferProgressPublisher({
+      throttleMs: input.progressThrottleMs,
+      writeArtifact: (progress) => {
+        return publishImportAnalyzeProgressPayload(input, progress)
+      },
+      writeSession: input.onSessionProgress,
+    }),
+  }
+}
+
+const publishImportAnalyzeProgress = ({
+  context,
+  overallStep,
+  throttled = false,
+  ...fields
+}: ProjectTransferImportAnalyzeProgressFields & {
+  context: ProjectTransferImportAnalyzeProgressContext
+  overallStep: ProjectTransferOverallProgressStepUpdate<'analyze'>
+  throttled?: boolean
+}) => {
+  const progress = getImportAnalyzeProgress({
+    ...fields,
+    input: context.input,
+    overall: context.overall.update(overallStep),
+  })
+  return context.scheduler.publish(progress, {throttled})
+}
+
+const getZipScanFraction = (progress: ProjectTransferZipReadProgress) => {
+  return progress.totalBytes > 0
+    ? progress.completedBytes / progress.totalBytes
+    : progress.totalEntries > 0
+      ? progress.completedEntries / progress.totalEntries
+      : 1
+}
+
+const publishZipScanProgress = ({
+  context,
+  packageByteLength,
+  progress,
+}: {
+  context: ProjectTransferImportAnalyzeProgressContext
+  packageByteLength: number
+  progress: ProjectTransferZipReadProgress
+}) => {
+  const fraction = Math.min(1, getZipScanFraction(progress))
+
+  return publishImportAnalyzeProgress({
+    bytesProcessed: Math.floor(packageByteLength * fraction),
+    bytesTotal: packageByteLength,
+    completedItems: Math.min(progress.completedEntries, progress.totalEntries),
+    context,
+    message: 'Scanning package archive',
+    overallStep: {step: 'zipScan', stepFraction: fraction},
+    phase: 'package_scan',
+    status: 'running',
+    throttled: true,
+    totalItems: progress.totalEntries,
+  })
+}
+
+const publishPayloadParseProgress = ({
+  context,
+  expandedBytes,
+  progress,
+}: {
+  context: ProjectTransferImportAnalyzeProgressContext
+  expandedBytes: number
+  progress: ProjectTransferPayloadParseProgress
+}) => {
+  return publishImportAnalyzeProgress({
+    bytesProcessed: Math.min(expandedBytes, progress.completedBytes),
+    bytesTotal: expandedBytes,
+    context,
+    message: 'Parsing package payloads',
+    overallStep: {
+      step: 'payloadParse',
+      stepFraction: progress.totalBytes > 0 ? progress.completedBytes / progress.totalBytes : 1,
+    },
+    phase: 'staging_load',
+    status: 'running',
+    throttled: true,
+  })
+}
+
+const publishTargetAnalysisProgress = ({
+  context,
+  progress,
+  rowCountTotal,
+  warningCount,
+}: {
+  context: ProjectTransferImportAnalyzeProgressContext
+  progress: ProjectTransferTargetAnalysisProgress
+  rowCountTotal: number
+  warningCount: number
+}) => {
+  return publishImportAnalyzeProgress({
+    context,
+    message: getProjectTransferOverallProgressStepLabel(projectTransferTargetAnalysisStepShares, progress.step),
+    overallStep: {step: 'targetAnalysis', stepFraction: getProjectTransferTargetAnalysisFraction(progress)},
+    phase: 'analyze',
+    rowCountProcessed: 0,
+    rowCountTotal,
+    status: 'running',
+    throttled: true,
+    warningCount,
+  })
 }
 
 const getProjectTransferAsyncOutcome = <T>(operation: () => Promise<T>) => {
@@ -2578,29 +2795,17 @@ const getProjectTransferAsyncOutcome = <T>(operation: () => Promise<T>) => {
 }
 
 const runTargetAnalysisWithProgressHeartbeat = async <T>({
-  input,
+  context,
   operation,
-  rowCountTotal,
-  warningCount,
 }: {
-  input: ProjectTransferImportAnalyzeInput
+  context: ProjectTransferImportAnalyzeProgressContext
   operation: () => Promise<T>
-  rowCountTotal: number
-  warningCount: number
 }) => {
   const heartbeatOutcomes: Promise<ProjectTransferAsyncOutcome<void>>[] = []
   const interval = setInterval(() => {
     heartbeatOutcomes.push(
       getProjectTransferAsyncOutcome(() => {
-        return publishImportAnalyzeProgress({
-          input,
-          message: 'Analyzing target project state',
-          phase: 'analyze',
-          rowCountProcessed: 0,
-          rowCountTotal,
-          status: 'running',
-          warningCount,
-        })
+        return context.scheduler.heartbeat()
       }),
     )
   }, targetAnalysisProgressHeartbeatIntervalMs)
@@ -2643,9 +2848,10 @@ const releaseProjectTransferAnalyzeArchiveBuffers = (
 }
 
 const analyzeProjectTransferImportPackageCore = async (
-  input: ProjectTransferImportAnalyzeInput,
+  context: ProjectTransferImportAnalyzeProgressContext,
   exclusiveWorkLease: ProjectTransferDuckdbExclusiveWorkLease | null,
 ): Promise<ProjectTransferImportAnalyzeResult> => {
+  const input = context.input
   const runtimeOptions = {cwd: input.cwd, envValues: input.envValues}
   const rootPath = resolveProjectTransferTempWritablePath({...runtimeOptions, pathValue: input.layout.rootPath})
   await mkdir(rootPath, {recursive: true})
@@ -2673,11 +2879,13 @@ const analyzeProjectTransferImportPackageCore = async (
   await publishImportAnalyzeProgress({
     bytesProcessed: 0,
     bytesTotal: packageBytes.byteLength,
-    input,
+    context,
     message: 'Scanning package archive',
+    overallStep: {step: 'zipScan', stepFraction: 0},
     phase: 'package_scan',
     status: 'running',
   })
+  const packageByteLength = packageBytes.byteLength
   const zipScan = await measureProjectTransferPhase('zipScan', () => {
     return readProjectTransferZipPackage({
       beforeReadEntries: (entries) => {
@@ -2689,14 +2897,18 @@ const analyzeProjectTransferImportPackageCore = async (
         })
       },
       bytes: packageBytes,
+      onEntryRead: (progress) => {
+        return publishZipScanProgress({context, packageByteLength, progress})
+      },
       zipModule: input.zipModule,
     })
   })
   await publishImportAnalyzeProgress({
     bytesProcessed: packageBytes.byteLength,
     bytesTotal: packageBytes.byteLength,
-    input,
+    context,
     message: 'Package archive scan completed',
+    overallStep: {step: 'zipScan', stepFraction: 1},
     phase: 'package_scan',
     status: 'completed',
   })
@@ -2750,8 +2962,9 @@ const analyzeProjectTransferImportPackageCore = async (
   await publishImportAnalyzeProgress({
     bytesProcessed: 0,
     bytesTotal: expandedBytes,
-    input,
+    context,
     message: 'Loading package rows into staging',
+    overallStep: {step: 'payloadParse', stepFraction: 0},
     phase: 'staging_load',
     status: 'running',
   })
@@ -2764,7 +2977,15 @@ const analyzeProjectTransferImportPackageCore = async (
   })
   const entriesByPath = getEntryMap(zipPackage.entries)
   const parsedMeasurement = await measureProjectTransferPhase('payloadParse', async () => {
-    return parsePayloads({entriesByPath, extractionRootPath: stagingLayout.extractedPath, manifest, runtimeOptions})
+    return parsePayloads({
+      entriesByPath,
+      extractionRootPath: stagingLayout.extractedPath,
+      manifest,
+      onProgress: (progress) => {
+        return publishPayloadParseProgress({context, expandedBytes, progress})
+      },
+      runtimeOptions,
+    })
   })
   const parsed = parsedMeasurement.value
   const archiveEntries = releaseProjectTransferAnalyzeArchiveBuffers(zipPackage.entries)
@@ -2773,14 +2994,16 @@ const analyzeProjectTransferImportPackageCore = async (
   await publishImportAnalyzeProgress({
     bytesProcessed: expandedBytes,
     bytesTotal: expandedBytes,
-    input,
+    context,
     message: 'Package staging load completed',
+    overallStep: {step: 'payloadParse', stepFraction: 1},
     phase: 'staging_load',
     status: 'completed',
   })
   await publishImportAnalyzeProgress({
-    input,
+    context,
     message: 'Validating package fingerprint',
+    overallStep: {step: 'payloadParse', stepFraction: 1},
     phase: 'fingerprint_validation',
     status: 'running',
   })
@@ -2805,16 +3028,18 @@ const analyzeProjectTransferImportPackageCore = async (
   })
   const packageContractBlockers = [...parsed.blockers, ...semanticBlockers]
   await publishImportAnalyzeProgress({
-    input,
+    context,
     message: 'Package fingerprint validation completed',
+    overallStep: {step: 'payloadParse', stepFraction: 1},
     phase: 'fingerprint_validation',
     status: 'completed',
     warningCount: parsed.warnings.length,
   })
   const packageRowCount = getPackageRowCount(packageCounts)
   await publishImportAnalyzeProgress({
-    input,
+    context,
     message: 'Waiting for DuckDB maintenance work to pause',
+    overallStep: {step: 'targetAnalysis', stepFraction: 0},
     phase: 'analyze',
     rowCountProcessed: 0,
     rowCountTotal: packageRowCount,
@@ -2822,8 +3047,16 @@ const analyzeProjectTransferImportPackageCore = async (
     warningCount: parsed.warnings.length,
   })
   const targetState = await getTargetStateDirtyTokenSnapshotForPlan(input.runner)
+  const onTargetAnalysisProgress = (progress: ProjectTransferTargetAnalysisProgress) => {
+    return publishTargetAnalysisProgress({
+      context,
+      progress,
+      rowCountTotal: packageRowCount,
+      warningCount: parsed.warnings.length,
+    })
+  }
   const targetAnalysisMeasurement = await runTargetAnalysisWithProgressHeartbeat({
-    input,
+    context,
     operation: () => {
       return input.runner === undefined
         ? measureProjectTransferPhase('targetAnalysis', () => {
@@ -2831,25 +3064,26 @@ const analyzeProjectTransferImportPackageCore = async (
               cwd: input.cwd,
               envValues: input.envValues,
               layout: stagingLayout,
+              onProgress: onTargetAnalysisProgress,
               packageFingerprint,
               payloads: parsed.payloads,
             })
           })
         : measureProjectTransferPhase('targetAnalysis', () => {
             return getProjectTransferAnalyzeTargetPlan({
+              onProgress: onTargetAnalysisProgress,
               packageFingerprint,
               payloads: parsed.payloads,
               runner: input.runner,
             })
           })
     },
-    rowCountTotal: packageRowCount,
-    warningCount: parsed.warnings.length,
   })
   const targetAnalysis = targetAnalysisMeasurement.value
   await publishImportAnalyzeProgress({
-    input,
+    context,
     message: 'Target project analysis completed',
+    overallStep: {step: 'targetAnalysis', stepFraction: 1},
     phase: 'analyze',
     rowCountProcessed: packageRowCount,
     rowCountTotal: packageRowCount,
@@ -2857,8 +3091,9 @@ const analyzeProjectTransferImportPackageCore = async (
     warningCount: parsed.warnings.length + targetAnalysis.packageWarnings.length,
   })
   await publishImportAnalyzeProgress({
-    input,
+    context,
     message: 'Planning import changes',
+    overallStep: {step: 'targetAnalysis', stepFraction: 1},
     phase: 'analyze',
     rowCountProcessed: packageRowCount,
     rowCountTotal: packageRowCount,
@@ -2911,7 +3146,7 @@ const analyzeProjectTransferImportPackageCore = async (
   })
   await exclusiveWorkLease?.release()
   const resolvedAnalyzePlan = await getAnalyzePlanWithAutoResolvedDependencies({
-    input,
+    context,
     payloads: parsed.payloads,
     plan: initialPlan,
   })
@@ -2924,8 +3159,9 @@ const analyzeProjectTransferImportPackageCore = async (
     }),
   )
   await publishImportAnalyzeProgress({
-    input,
+    context,
     message: 'Finalizing import analysis artifacts',
+    overallStep: {step: 'finalize', stepFraction: 0},
     phase: 'analyze',
     rowCountProcessed: packageRowCount,
     rowCountTotal: packageRowCount,
@@ -3028,23 +3264,28 @@ const analyzeProjectTransferImportPackageCore = async (
 export const analyzeProjectTransferImportPackage = async (
   input: ProjectTransferImportAnalyzeInput,
 ): Promise<ProjectTransferImportAnalyzeResult> => {
+  const context = getImportAnalyzeProgressContext(input)
   const analyze = (exclusiveWorkLease: ProjectTransferDuckdbExclusiveWorkLease | null) => {
-    return analyzeProjectTransferImportPackageCore(input, exclusiveWorkLease)
+    return analyzeProjectTransferImportPackageCore(context, exclusiveWorkLease)
   }
 
-  return input.runner === undefined
-    ? runWithDuckdbExclusiveWork(
-        {
-          estimatedRows: null,
-          kind: 'project_transfer_import',
-          message: 'Scanning and staging import package',
-          ownerToken: input.ownerToken,
-          phase: 'analyze',
-          sessionId: input.sessionId,
-        },
-        (lease) => {
-          return analyze(lease)
-        },
-      )
-    : analyze(null)
+  return (
+    input.runner === undefined
+      ? runWithDuckdbExclusiveWork(
+          {
+            estimatedRows: null,
+            kind: 'project_transfer_import',
+            message: 'Scanning and staging import package',
+            ownerToken: input.ownerToken,
+            phase: 'analyze',
+            sessionId: input.sessionId,
+          },
+          (lease) => {
+            return analyze(lease)
+          },
+        )
+      : analyze(null)
+  ).finally(() => {
+    return context.scheduler.close()
+  })
 }
