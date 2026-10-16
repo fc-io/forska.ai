@@ -6,6 +6,7 @@ import type {
 } from '../../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../appQueryHelpers.ts'
+import {getProjectTransferCompletedOverallProgress} from './projectTransferProgressWeights.ts'
 import {
   assertProjectTransferSessionId,
   isProjectTransferStateForDirection,
@@ -137,6 +138,7 @@ type UpdateProjectTransferSessionProgressParams = ProjectTransferOwnerTokenCondi
 }
 
 type PersistProjectTransferSessionCompletionParams = {
+  progress?: ProjectTransferProgressPayload
   completionPayload: ProjectTransferCompletionPayload
   expectedPlanRevision?: number
   now?: Date
@@ -763,7 +765,12 @@ const persistProjectTransferSessionCompletion = async (params: PersistProjectTra
     nextState: 'completed',
     now: params.now,
     packageFingerprint: params.completionPayload.packageFingerprint ?? null,
-    progress: null,
+    progress: params.progress ?? {
+      phase: 'commit',
+      status: 'completed',
+      overall: getProjectTransferCompletedOverallProgress('commit'),
+      updatedAt: getNow(params.now).toISOString(),
+    },
     error: null,
     runner: params.runner,
     sessionId: params.sessionId,

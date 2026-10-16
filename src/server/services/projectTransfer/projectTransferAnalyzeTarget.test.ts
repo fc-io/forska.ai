@@ -219,14 +219,28 @@ test('analyzes target rows with staged joins and recomputed prompt hashes', asyn
       )}, 'Set-Based Route', TRUE)`,
     )
 
+    const targetProgress: {step: string; stepFraction: number}[] = []
     const result = await getProjectTransferAnalyzeTargetPlanWithOperationTables({
       cwd,
       layout,
+      onProgress: (progress) => {
+        targetProgress.push(progress)
+      },
       operationId: 'target-set-based',
       packageFingerprint: null,
       payloads,
     })
     const [articleMatch] = result.targetPlan.articleMatches
+
+    expect(targetProgress).toEqual([
+      {step: 'setup', stepFraction: 0},
+      {step: 'articleMatch', stepFraction: 0},
+      {step: 'articleUpdate', stepFraction: 0},
+      {step: 'routes', stepFraction: 0},
+      {step: 'assets', stepFraction: 0},
+      {step: 'fidelity', stepFraction: 0},
+      {step: 'fidelity', stepFraction: 1},
+    ])
     const [promptPlan] = result.targetPlan.promptPlan
     const [projectRoute] = result.targetPlan.projectRoutePlan
 

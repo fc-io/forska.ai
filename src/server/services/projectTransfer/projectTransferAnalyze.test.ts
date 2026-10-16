@@ -9,6 +9,7 @@ import {expect, test} from 'bun:test'
 import {analyzeProjectTransferImportPackage} from './projectTransferAnalyze.ts'
 import type {ProjectTransferAnalyzeTargetRunner} from './projectTransferAnalyzeTarget.ts'
 import {writeProjectTransferCanonicalJsonArtifact} from './projectTransferCanonicalJsonArtifact.ts'
+import {type ProjectTransferProgressPayload, validateProjectTransferProgressUpdate} from './projectTransferContracts.ts'
 import {
   getProjectTransferCanonicalJson,
   getProjectTransferPackageFingerprint,
@@ -890,6 +891,82 @@ test('auto-resolves provider and model dependencies during analyze when enabled'
   }
 })
 
+test('publishes one monotonic overall analyze percent across every phase', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const progressEvents: ProjectTransferProgressPayload[] = []
+    const queryState = {delayed: false}
+    const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd, useZipModule: false})
+    const runner: ProjectTransferAnalyzeTargetRunner = {
+      queryJson: async <T>(_statement: string): Promise<T[]> => {
+        if (!queryState.delayed) {
+          queryState.delayed = true
+          await new Promise((resolve) => {
+            setTimeout(resolve, 1_100)
+          })
+        }
+
+        return []
+      },
+    }
+
+    await analyzeProjectTransferImportPackage({
+      autoResolveDependencies: true,
+      availableDiskBytes: 10_000_000_000,
+      cwd,
+      dependencyResolutionRepositories: {
+        listProviderConnections: async () => {
+          return []
+        },
+      },
+      layout,
+      onProgress: (progress) => {
+        progressEvents.push(progress)
+      },
+      planRevision: 1,
+      runner,
+      uploadMetadata,
+      zipModule,
+    })
+
+    const percents = progressEvents.map((progress) => {
+      return progress.overall?.percent ?? -1
+    })
+    const stepKeys = progressEvents.reduce<string[]>((keys, progress) => {
+      const key = progress.overall?.step.key ?? 'missing'
+
+      return keys.at(-1) === key ? keys : [...keys, key]
+    }, [])
+
+    expect(
+      progressEvents.every((progress) => {
+        return progress.overall?.operation === 'analyze'
+      }),
+    ).toBe(true)
+    expect(percents[0]).toBe(3)
+    expect(percents.at(-1)).toBe(95)
+    expect(
+      percents.every((percent, index) => {
+        return index === 0 || percent >= (percents[index - 1] ?? 0)
+      }),
+    ).toBe(true)
+    expect(stepKeys).toEqual(['zipScan', 'payloadParse', 'targetAnalysis', 'dependencies', 'finalize'])
+    expect(
+      progressEvents.find((progress) => {
+        return progress.message === 'Loading target analysis tables'
+      })?.overall,
+    ).toMatchObject({percent: 56, step: {key: 'targetAnalysis'}})
+    expect(
+      progressEvents.every((progress, index) => {
+        return validateProjectTransferProgressUpdate({next: progress, previous: progressEvents[index - 1] ?? null}).ok
+      }),
+    ).toBe(true)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
 test('refreshes the atomic progress artifact while target analysis remains pending', async () => {
   const cwd = getRuntimeRoot()
   const originalSetInterval = globalThis.setInterval
@@ -951,7 +1028,7 @@ test('refreshes the atomic progress artifact while target analysis remains pendi
       onProgress: async (progress) => {
         await writeProjectTransferCanonicalJsonArtifact({filePath: progressPath, value: progress})
 
-        if (progress.message === 'Analyzing target project state') {
+        if (targetQueryPaused) {
           heartbeatPublishedCount += 1
           const resolvePublished = heartbeatPublishedCount === 1 ? resolveFirstHeartbeat : resolveSecondHeartbeat
           resolvePublished()
@@ -976,6 +1053,7 @@ test('refreshes the atomic progress artifact while target analysis remains pendi
       updatedAt: string
     }
 
+    releaseHeartbeatUpdates()
     await new Promise((resolve) => {
       setTimeout(resolve, 5)
     })
@@ -988,8 +1066,8 @@ test('refreshes the atomic progress artifact while target analysis remains pendi
     }
 
     expect(heartbeatPublishedCount).toBe(2)
-    expect(firstHeartbeat).toMatchObject({message: 'Analyzing target project state', status: 'running'})
-    expect(secondHeartbeat).toMatchObject({message: 'Analyzing target project state', status: 'running'})
+    expect(firstHeartbeat).toMatchObject({message: 'Waiting for DuckDB maintenance work to pause', status: 'running'})
+    expect(secondHeartbeat).toMatchObject({message: firstHeartbeat.message, status: 'running'})
     expect(new Date(secondHeartbeat.updatedAt).getTime()).toBeGreaterThan(new Date(firstHeartbeat.updatedAt).getTime())
     expect(clearedIntervalCount).toBe(0)
 
@@ -1746,3 +1824,103 @@ test.each(['canonical', 'noncanonical'] as const)(
     }
   },
 )
+
+test('real DuckDB analyze progress publishes without waiting on its open transaction', async () => {
+  const cwd = getRuntimeRoot()
+  const databaseRoot = getRuntimeRoot()
+  try {
+    const {uploadMetadata} = await writeAnalyzeUpload({cwd, useZipModule: false})
+    const script = `
+      const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+      const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+      const {getProjectTransferSessionRepository} = await import('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
+      const {analyzeProjectTransferImportPackage} = await import('./src/server/services/projectTransfer/projectTransferAnalyze.ts')
+      const {getProjectTransferImportTempLayout} = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
+      const {writeFile, readFile} = await import('node:fs/promises')
+      const {join} = await import('node:path')
+      await migrateDuckdb()
+      const repository = getProjectTransferSessionRepository()
+      const sessionId = 'analyze-session-1'
+      const layout = getProjectTransferImportTempLayout(sessionId)
+      await repository.createProjectTransferSession({direction: 'import', expiresAt: new Date(Date.now() + 60000), id: sessionId, state: 'analyzing'})
+      const {isDuckdbExclusiveWorkLeaseContext} = await import('./src/server/utils/duckdbExclusiveWork.ts')
+      const {getProjectTransferCompletedOverallProgress} = await import('./src/server/services/projectTransfer/projectTransferProgressWeights.ts')
+      const sessionContexts = []
+      const written = []
+      const timeout = setTimeout(() => { console.error('ANALYZE_PROGRESS_TIMEOUT', JSON.stringify(written)); process.exit(124) }, 15000)
+      const result = await analyzeProjectTransferImportPackage({
+        availableDiskBytes: 10000000000,
+        cwd: process.env.PROGRESS_TEST_ROOT,
+        layout,
+        planRevision: 1,
+        progressThrottleMs: 0,
+        uploadMetadata: JSON.parse(process.env.PROGRESS_TEST_UPLOAD),
+        onProgress: async (progress) => {
+          const path = join(process.env.PROGRESS_TEST_ROOT, layout.progressPath)
+          await writeFile(path, JSON.stringify(progress))
+          written.push(JSON.parse(await readFile(path, 'utf8')).overall.percent)
+          if (progress.message === 'Waiting for DuckDB maintenance work to pause') await new Promise(resolve => setTimeout(resolve, 1100))
+        },
+        onSessionProgress: (progress) => {
+          sessionContexts.push(isDuckdbExclusiveWorkLeaseContext())
+          return repository.updateProjectTransferSessionProgress({sessionId, progress})
+        },
+      })
+      const completed = {...(await repository.getProjectTransferSession({sessionId})).progressJson, status: 'completed', overall: getProjectTransferCompletedOverallProgress('analyze')}
+      await writeFile(join(process.env.PROGRESS_TEST_ROOT, layout.progressPath), JSON.stringify(completed))
+      written.push(JSON.parse(await readFile(join(process.env.PROGRESS_TEST_ROOT, layout.progressPath), 'utf8')).overall.percent)
+      await repository.updateProjectTransferSessionProgress({sessionId, progress: completed})
+      clearTimeout(timeout)
+      console.log(JSON.stringify({written, sessionContexts, final: (await repository.getProjectTransferSession({sessionId})).progressJson.overall.percent, analyzed: !!result.plan}))
+      await getAppDatabaseService().close()
+    `
+    const child = globalThis.Bun.spawn([process.execPath, '-e', script], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        DUCKDB_PATH: join(databaseRoot, 'progress.duckdb'),
+        DUCKDB_MEMORY_LIMIT: '512MB',
+        SERVER_ROLE: 'dev-single',
+        API_SERVER_PORT: '39991',
+        VITE_PORT: '39992',
+        PROGRESS_TEST_ROOT: cwd,
+        PROGRESS_TEST_UPLOAD: JSON.stringify(uploadMetadata),
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const kill = setTimeout(() => {
+      child.kill()
+    }, 45000)
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    clearTimeout(kill)
+    expect({exitCode, error: exitCode === 0 ? '' : stderr.slice(-2000)}).toEqual({exitCode: 0, error: ''})
+    const result = JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}') as {
+      written: number[]
+      sessionContexts: boolean[]
+      final: number
+      analyzed: boolean
+    }
+    expect(result.analyzed).toBe(true)
+    expect(result.written).toEqual(
+      [...result.written].sort((a, b) => {
+        return a - b
+      }),
+    )
+    expect(result.written.at(-1)).toBe(100)
+    expect(result.final).toBe(100)
+    expect(result.sessionContexts.length).toBeGreaterThan(0)
+    expect(
+      result.sessionContexts.every((insideLease) => {
+        return !insideLease
+      }),
+    ).toBe(true)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+    rmSync(databaseRoot, {force: true, recursive: true})
+  }
+}, 60000)

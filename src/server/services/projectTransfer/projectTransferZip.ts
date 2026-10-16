@@ -109,9 +109,17 @@ export type ProjectTransferZipWrittenFilePackage = {
   uncompressedSize: number
 }
 
+export type ProjectTransferZipReadProgress = {
+  completedBytes: number
+  completedEntries: number
+  totalBytes: number
+  totalEntries: number
+}
+
 type ProjectTransferZipReadOptions = {
   beforeReadEntries?: (entries: readonly ProjectTransferZipJsEntry[]) => void
   bytes: Uint8Array
+  onEntryRead?: (progress: ProjectTransferZipReadProgress) => Promise<void> | void
   zipModule?: ProjectTransferZipJsModule
 }
 
@@ -1414,9 +1422,35 @@ const readProjectTransferZipEntryFromCentralDirectoryEntry = (
   }
 }
 
+const getProjectTransferZipEntryReadReporter = ({
+  entries,
+  onEntryRead,
+}: {
+  entries: readonly ProjectTransferZipJsEntry[]
+  onEntryRead?: (progress: ProjectTransferZipReadProgress) => Promise<void> | void
+}) => {
+  const progress: ProjectTransferZipReadProgress = {
+    completedBytes: 0,
+    completedEntries: 0,
+    totalBytes: entries.reduce((totalBytes, entry) => {
+      return totalBytes + (entry.uncompressedSize ?? 0)
+    }, 0),
+    totalEntries: entries.length,
+  }
+
+  return async (entry: ProjectTransferZipReadEntry) => {
+    progress.completedBytes += entry.uncompressedSize
+    progress.completedEntries += 1
+    await onEntryRead?.({...progress})
+
+    return entry
+  }
+}
+
 const readProjectTransferStoredZipPackage = async ({
   beforeReadEntries,
   bytes,
+  onEntryRead,
 }: ProjectTransferZipReadOptions): Promise<ProjectTransferZipReadPackage> => {
   const zipEnd = readProjectTransferZipEnd(bytes)
   const centralDirectoryEntries = readProjectTransferZipCentralDirectoryEntries(bytes, zipEnd)
@@ -1437,9 +1471,17 @@ const readProjectTransferStoredZipPackage = async ({
   )
   beforeReadEntries?.(zipEntries)
 
-  const entries = centralDirectoryEntries.map((entry) => {
-    return readProjectTransferZipEntryFromCentralDirectoryEntry(bytes, entry)
-  })
+  const reportEntryRead = getProjectTransferZipEntryReadReporter({entries: zipEntries, onEntryRead})
+  const entries = await centralDirectoryEntries.reduce<Promise<ProjectTransferZipReadEntry[]>>(
+    async (previous, entry) => {
+      const readEntries = await previous
+
+      readEntries.push(await reportEntryRead(readProjectTransferZipEntryFromCentralDirectoryEntry(bytes, entry)))
+
+      return readEntries
+    },
+    Promise.resolve([]),
+  )
   const manifest = assertProjectTransferZipHasManifest(entries)
 
   return {entries, manifest}
@@ -1448,6 +1490,7 @@ const readProjectTransferStoredZipPackage = async ({
 const readProjectTransferZipPackageWithModule = async ({
   beforeReadEntries,
   bytes,
+  onEntryRead,
   zipModule,
 }: ProjectTransferZipReadOptions & {zipModule: ProjectTransferZipJsModule}): Promise<ProjectTransferZipReadPackage> => {
   const zipReader = new zipModule.ZipReader(new zipModule.Uint8ArrayReader(bytes), {
@@ -1470,9 +1513,10 @@ const readProjectTransferZipPackageWithModule = async ({
     )
     beforeReadEntries?.(zipEntries)
 
+    const reportEntryRead = getProjectTransferZipEntryReadReporter({entries: zipEntries, onEntryRead})
     const entries = await Promise.all(
       zipEntries.map((entry) => {
-        return readProjectTransferZipEntryData(entry, zipModule)
+        return readProjectTransferZipEntryData(entry, zipModule).then(reportEntryRead)
       }),
     )
     const manifest = assertProjectTransferZipHasManifest(entries)

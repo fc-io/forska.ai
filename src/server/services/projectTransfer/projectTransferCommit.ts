@@ -44,6 +44,7 @@ import {
   type ProjectTransferCompletionPayload,
   type ProjectTransferExecutionMode,
   type ProjectTransferImportCompletionPayload,
+  type ProjectTransferOverallProgress,
   type ProjectTransferPlanBlocker,
   type ProjectTransferPlanSummary,
   type ProjectTransferProgressPayload,
@@ -92,6 +93,21 @@ import {
   projectTransferMetricUnavailable,
   type ProjectTransferPerformanceMetrics,
 } from './projectTransferPerformanceMetrics.ts'
+import {
+  createProjectTransferOverallProgressTracker,
+  createProjectTransferProgressPublisher,
+  type ProjectTransferOverallProgressTracker,
+} from './projectTransferProgressPublisher.ts'
+import {
+  getProjectTransferCommitWriterFraction,
+  getProjectTransferOverallProgressStepLabel,
+  getProjectTransferRevalidationFraction,
+  getProjectTransferTargetAnalysisFraction,
+  type ProjectTransferCommitWriterStepProgress,
+  type ProjectTransferRevalidationProgress,
+  type ProjectTransferTargetAnalysisProgress,
+  projectTransferTargetAnalysisStepShares,
+} from './projectTransferProgressWeights.ts'
 import {projectTransferPayloadKeys, projectTransferPayloadPathByKey} from './projectTransferSchemas.ts'
 import {getProjectTransferImportTempLayout, type ProjectTransferImportTempLayout} from './projectTransferSession.ts'
 import {getProjectTransferSessionRepository} from './projectTransferSessionRepository.ts'
@@ -136,6 +152,8 @@ type ProjectTransferCommitRepositories = {
 }
 
 export type ProjectTransferCommitInput = RuntimePathOptions & {
+  heartbeatIntervalMs?: number
+  progressThrottleMs?: number
   now?: Date
   repositories?: ProjectTransferCommitRepositories
   request: ProjectTransferCommitRequest
@@ -152,9 +170,25 @@ type ProjectTransferCommitRevalidationInput = RuntimePathOptions & {
   analysis: ProjectTransferImportAnalysisArtifact
   layout: ProjectTransferImportTempLayout
   nextPlanRevision: number
+  onProgress?: (progress: ProjectTransferRevalidationProgress) => Promise<void> | void
   plan: ProjectTransferImportPlanArtifact
   repositories?: Pick<ProjectTransferCommitRepositories, 'analyzeTargetRunner' | 'dependencyRepositories'>
   sessionId?: string
+}
+
+export type ProjectTransferCommitProgressOptions = {persist?: 'artifact' | 'session'; throttled?: boolean}
+
+type ProjectTransferCommitProgressPublisher = (
+  progress: ProjectTransferProgressPayload,
+  options?: ProjectTransferCommitProgressOptions,
+) => Promise<void>
+
+type ProjectTransferCommitProgressContext = {
+  getActiveProgress: () => ProjectTransferProgressPayload
+  overall: ProjectTransferOverallProgressTracker<'commit'>
+  publish: ProjectTransferCommitProgressPublisher
+  publishSessionProgress: (progress: ProjectTransferProgressPayload) => Promise<ProjectTransferSessionRecord | null>
+  scheduler: ReturnType<typeof createProjectTransferProgressPublisher>
 }
 
 type ProjectTransferCommitRevalidationResult = {
@@ -177,7 +211,8 @@ type ProjectTransferCommitAppTableWriteInput = RuntimePathOptions & {
   artifacts: ProjectTransferCommitArtifacts
   commitId: string
   now: Date
-  onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void>
+  onProgress?: ProjectTransferCommitProgressPublisher
+  overallProgress?: ProjectTransferOverallProgressTracker<'commit'>
   schemaVersion: number
   sessionId: string
 }
@@ -486,7 +521,9 @@ const readExtractedPayloads = async (
   input: RuntimePathOptions & {
     artifacts?: ProjectTransferCommitArtifacts
     layout: ProjectTransferImportTempLayout
-    onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void>
+    onPayloadRead?: (progress: {completedItems: number; totalItems: number}) => Promise<void> | void
+    onProgress?: ProjectTransferCommitProgressPublisher
+    overallProgress?: ProjectTransferOverallProgressTracker<'commit'>
     phaseStartedAt?: Date
     retainCompactJudgments?: boolean
   },
@@ -508,6 +545,7 @@ const readExtractedPayloads = async (
           includeBytes: false,
           message: `Loading package payload ${formatCommitPayloadKey(key)}`,
           now: new Date(),
+          overall: input.overallProgress?.update({step: 'loadPayloads', stepFraction: index / totalItems}),
           percent: getPercentFromCounts({completed: index, total: totalItems}),
           phase: 'staging_load',
           phaseStartedAt,
@@ -515,12 +553,15 @@ const readExtractedPayloads = async (
           status: 'running',
           totalItems,
         }),
+        {throttled: index > 0},
       )
     }
 
     payloads[key] = (await (input.retainCompactJudgments && key === 'judgments'
       ? readCompactExtractedJudgments(input)
       : readExtractedPayload({...input, key}))) as ProjectTransferPayload
+
+    await input.onPayloadRead?.({completedItems: index + 1, totalItems})
 
     if (input.artifacts && input.onProgress) {
       await input.onProgress(
@@ -531,6 +572,7 @@ const readExtractedPayloads = async (
           includeBytes: false,
           message: `Loaded package payload ${formatCommitPayloadKey(key)}`,
           now: new Date(),
+          overall: input.overallProgress?.update({step: 'loadPayloads', stepFraction: (index + 1) / totalItems}),
           percent: getPercentFromCounts({completed: index + 1, total: totalItems}),
           phase: 'staging_load',
           phaseStartedAt,
@@ -538,6 +580,7 @@ const readExtractedPayloads = async (
           status: index + 1 === totalItems ? 'completed' : 'running',
           totalItems,
         }),
+        {throttled: index + 1 < totalItems},
       )
     }
 
@@ -988,6 +1031,30 @@ const getPlanWithCommitRevalidationContext = ({
   }
 }
 
+const getRevalidationPayloadReporter = (onProgress: ProjectTransferCommitRevalidationInput['onProgress']) => {
+  return {
+    onPayloadRead: ({completedItems, totalItems}: {completedItems: number; totalItems: number}) => {
+      return onProgress?.({
+        message: 'Reading staged payloads',
+        part: 'payloads',
+        partFraction: completedItems / totalItems,
+      })
+    },
+  }
+}
+
+const getRevalidationTargetAnalysisReporter = (onProgress: ProjectTransferCommitRevalidationInput['onProgress']) => {
+  return {
+    onProgress: (progress: ProjectTransferTargetAnalysisProgress) => {
+      return onProgress?.({
+        message: getProjectTransferOverallProgressStepLabel(projectTransferTargetAnalysisStepShares, progress.step),
+        part: 'targetAnalysis',
+        partFraction: getProjectTransferTargetAnalysisFraction(progress),
+      })
+    },
+  }
+}
+
 const getTableWriteEpochFields = (targetState: ProjectTransferTargetStateDirtyTokenSnapshot | null | undefined) => {
   const tableWrites = targetState?.tableWrites
 
@@ -1034,6 +1101,7 @@ export const revalidateProjectTransferCommitPlan = async ({
   analysis,
   layout,
   nextPlanRevision,
+  onProgress,
   plan,
   repositories,
   sessionId,
@@ -1048,8 +1116,13 @@ export const revalidateProjectTransferCommitPlan = async ({
   }
 
   const revalidate = async (analyzeTargetRunner?: ProjectTransferAnalyzeTargetRunner) => {
-    const payloads = await readExtractedPayloads({...runtimeOptions, layout})
+    const payloads = await readExtractedPayloads({
+      ...runtimeOptions,
+      layout,
+      ...getRevalidationPayloadReporter(onProgress),
+    })
     const freshTarget = await getProjectTransferAnalyzeTargetPlan({
+      ...getRevalidationTargetAnalysisReporter(onProgress),
       packageFingerprint: analysis.packageFingerprint,
       payloads,
       runner: getCommitAnalyzeTargetRunner({analyzeTargetRunner, repositories}),
@@ -1065,6 +1138,7 @@ export const revalidateProjectTransferCommitPlan = async ({
       )
     }
 
+    await onProgress?.({message: 'Revalidating dependencies', part: 'dependencies', partFraction: 0})
     const dependencyResult = await revalidateProjectTransferResolvedDependencies({
       nextPlanRevision,
       payloads,
@@ -1115,6 +1189,7 @@ const getCommitProgress = ({
   includeRows = true,
   message,
   now,
+  overall,
   phase = 'commit',
   phaseStartedAt,
   percent,
@@ -1132,6 +1207,7 @@ const getCommitProgress = ({
   includeRows?: boolean
   message: string
   now: Date
+  overall?: ProjectTransferOverallProgress | null
   phase?: ProjectTransferProgressPayload['phase']
   phaseStartedAt?: Date
   percent?: number | null
@@ -1150,6 +1226,7 @@ const getCommitProgress = ({
     ...(completedItems === undefined || totalItems === undefined ? {} : {completedItems, totalItems}),
     ...(includeRows ? {completedRows, rowCountProcessed: completedRows, rowCountTotal: totalRows, totalRows} : {}),
     message,
+    ...(overall === undefined || overall === null ? {} : {overall}),
     ...(percent === undefined || percent === null ? {} : {percent}),
     performanceMetrics,
     phase,
@@ -1269,6 +1346,7 @@ const persistPostClaimStalePlan = async ({
   commitId,
   nextPlan,
   now,
+  overall,
   ownerToken,
   repositories,
   runtimeOptions,
@@ -1278,6 +1356,7 @@ const persistPostClaimStalePlan = async ({
   commitId: string
   nextPlan: ProjectTransferImportPlanArtifact
   now: Date
+  overall?: ProjectTransferOverallProgress | null
   ownerToken: string
   repositories: Required<Pick<ProjectTransferCommitRepositories, 'sessionRepository'>>
   runtimeOptions: RuntimePathOptions
@@ -1289,6 +1368,7 @@ const persistPostClaimStalePlan = async ({
     includeRows: false,
     message: 'Import plan changed; review the updated plan',
     now: new Date(),
+    overall,
     phase: 'revalidation',
     planRevision: nextPlan.planRevision,
     status: 'completed',
@@ -1311,10 +1391,41 @@ const persistPostClaimStalePlan = async ({
   return reopened
 }
 
+const publishCommitRevalidationProgress = ({
+  artifacts,
+  claimed,
+  progress,
+  revalidationProgress,
+}: {
+  artifacts: ProjectTransferCommitArtifacts
+  claimed: ProjectTransferSessionRecord
+  progress: ProjectTransferCommitProgressContext
+  revalidationProgress: ProjectTransferRevalidationProgress
+}) => {
+  return progress.publish(
+    getCommitProgress({
+      artifacts,
+      includeBytes: false,
+      includeRows: false,
+      message: `Commit revalidation: ${revalidationProgress.message}`,
+      now: new Date(),
+      overall: progress.overall.update({
+        step: 'revalidation',
+        stepFraction: getProjectTransferRevalidationFraction(revalidationProgress),
+      }),
+      phase: 'revalidation',
+      planRevision: claimed.planRevision,
+      status: 'running',
+    }),
+    {throttled: true},
+  )
+}
+
 const runClaimedCommitRevalidation = async ({
   artifacts,
   claimed,
   inputRepositories,
+  progress,
   repositories,
   runtimeOptions,
 }: ProjectTransferClaimedCommitInput) => {
@@ -1324,11 +1435,15 @@ const runClaimedCommitRevalidation = async ({
       analysis: artifacts.analysis,
       layout: artifacts.layout,
       nextPlanRevision: claimed.planRevision + 1,
+      onProgress: (revalidationProgress) => {
+        return publishCommitRevalidationProgress({artifacts, claimed, progress, revalidationProgress})
+      },
       plan: artifacts.plan,
       repositories: inputRepositories,
       sessionId: claimed.id,
     })
   })
+  progress.scheduler.cancelPending()
   const {changed, performanceMetrics, plan, ready} = revalidationMeasurement.value
 
   return {
@@ -1429,22 +1544,38 @@ const getProjectTransferCommitOperationDatabase = (
   }
 }
 
+const getCommitWriterStepProgress = ({
+  artifacts,
+  overallProgress,
+  step,
+}: {
+  artifacts: ProjectTransferCommitArtifacts
+  overallProgress?: ProjectTransferOverallProgressTracker<'commit'>
+  step: ProjectTransferCommitWriterStepProgress
+}) => {
+  return getCommitProgress({
+    artifacts,
+    includeBytes: false,
+    includeRows: false,
+    message: `Writing imported project data: ${step.label} (${step.index}/${step.count})`,
+    now: new Date(),
+    overall: overallProgress?.update({step: 'writeTables', stepFraction: getProjectTransferCommitWriterFraction(step)}),
+    phase: 'app_table_writes',
+    planRevision: artifacts.plan.planRevision,
+    status: 'running',
+  })
+}
+
 const runProjectTransferCommitAppTableWrites = async ({
   artifacts,
   commitId,
   now,
   onProgress,
+  overallProgress,
   schemaVersion,
   sessionId,
   ...runtimeOptions
-}: RuntimePathOptions & {
-  artifacts: ProjectTransferCommitArtifacts
-  commitId: string
-  now: Date
-  onProgress?: (progress: ProjectTransferProgressPayload) => Promise<void>
-  schemaVersion: number
-  sessionId: string
-}): Promise<ProjectTransferCommitAppWriteResult> => {
+}: ProjectTransferCommitAppTableWriteInput): Promise<ProjectTransferCommitAppWriteResult> => {
   const stagingLoadStartedAt = new Date()
   await onProgress?.(
     getCommitProgress({
@@ -1454,6 +1585,7 @@ const runProjectTransferCommitAppTableWrites = async ({
       includeBytes: false,
       message: 'Loading package payloads',
       now: stagingLoadStartedAt,
+      overall: overallProgress?.update({step: 'loadPayloads', stepFraction: 0}),
       percent: 0,
       phase: 'staging_load',
       phaseStartedAt: stagingLoadStartedAt,
@@ -1468,6 +1600,7 @@ const runProjectTransferCommitAppTableWrites = async ({
       artifacts,
       layout: artifacts.layout,
       onProgress,
+      overallProgress,
       phaseStartedAt: stagingLoadStartedAt,
       retainCompactJudgments: true,
     })
@@ -1485,6 +1618,7 @@ const runProjectTransferCommitAppTableWrites = async ({
       includeRows: false,
       message: assetPromotionItemCount === 0 ? 'No package assets to promote' : 'Asset promotion running',
       now: assetPromotionStartedAt,
+      overall: overallProgress?.update({step: 'prepare', stepFraction: 0}),
       percent: assetPromotionItemCount === 0 ? 100 : 0,
       phase: 'asset_promotion',
       phaseStartedAt: assetPromotionStartedAt,
@@ -1512,6 +1646,10 @@ const runProjectTransferCommitAppTableWrites = async ({
                 ? 'Asset promotion running'
                 : `Promoted asset ${progress.currentPackagePath}`,
             now: new Date(),
+            overall: overallProgress?.update({
+              step: 'prepare',
+              stepFraction: progress.totalItems > 0 ? progress.completedItems / progress.totalItems / 2 : 0.5,
+            }),
             percent: getPercentFromCounts({completed: progress.completedItems, total: progress.totalItems}),
             phase: 'asset_promotion',
             phaseStartedAt: assetPromotionStartedAt,
@@ -1519,6 +1657,7 @@ const runProjectTransferCommitAppTableWrites = async ({
             status: progress.completedItems === progress.totalItems ? 'completed' : 'running',
             totalItems: progress.totalItems,
           }),
+          {throttled: progress.completedItems > 0 && progress.completedItems < progress.totalItems},
         )
       },
       plan: artifacts.plan,
@@ -1535,6 +1674,7 @@ const runProjectTransferCommitAppTableWrites = async ({
         includeRows: false,
         message: 'Asset promotion completed',
         now: new Date(),
+        overall: overallProgress?.update({step: 'prepare', stepFraction: 0.5}),
         phase: 'asset_promotion',
         phaseStartedAt: assetPromotionStartedAt,
         percent: 100,
@@ -1549,6 +1689,7 @@ const runProjectTransferCommitAppTableWrites = async ({
         includeBytes: false,
         message: 'Writing imported project data',
         now: new Date(),
+        overall: overallProgress?.update({step: 'prepare', stepFraction: 0.5}),
         phase: 'app_table_writes',
         planRevision: artifacts.plan.planRevision,
         status: 'running',
@@ -1582,6 +1723,12 @@ const runProjectTransferCommitAppTableWrites = async ({
                 commitId,
                 database: getProjectTransferCommitOperationDatabase(tx),
                 now,
+                onStep: (step) => {
+                  return onProgress?.(getCommitWriterStepProgress({artifacts, overallProgress, step}), {
+                    persist: 'artifact',
+                    throttled: true,
+                  })
+                },
                 operationTables: tables,
                 payloads,
                 plan: planWithCommitIdMaps,
@@ -1593,6 +1740,19 @@ const runProjectTransferCommitAppTableWrites = async ({
           },
         })
       },
+    )
+    await onProgress?.(
+      getCommitProgress({
+        artifacts,
+        completedRows: getCommitRowCount(artifacts.plan),
+        includeBytes: false,
+        message: 'Finishing imported project data',
+        now: new Date(),
+        overall: overallProgress?.update({step: 'finish', stepFraction: 0}),
+        phase: 'app_table_writes',
+        planRevision: artifacts.plan.planRevision,
+        status: 'running',
+      }),
     )
     const phaseMetrics = getProjectTransferPerformanceMetrics({
       benchmark: {
@@ -1663,20 +1823,20 @@ const settleCompletionSideEffect = async <TValue>(operation: Promise<TValue>) =>
 type ProjectTransferCommitRepositorySet = ReturnType<typeof getRepositorySet>
 
 type ProjectTransferClaimedCommitInput = {
+  heartbeatIntervalMs?: number
   artifacts: ProjectTransferCommitArtifacts
   claimed: ProjectTransferSessionRecord
   commitId: string
   inputRepositories?: ProjectTransferCommitRepositories
   now: Date
   ownerToken: string
+  progress: ProjectTransferCommitProgressContext
   repositories: ProjectTransferCommitRepositorySet
   runtimeOptions: RuntimePathOptions
   sessionId: string
 }
 
 type ProjectTransferClaimedCommitRevalidation = Awaited<ReturnType<typeof runClaimedCommitRevalidation>>
-
-type ProjectTransferPublishCommitProgress = (progress: ProjectTransferProgressPayload) => Promise<void>
 
 const requestPostImportReviewServingBuild = ({
   completion,
@@ -1696,16 +1856,13 @@ const updateClaimedCommitProgress = async ({
   ownerToken,
   progress,
   repositories,
-  runtimeOptions,
   sessionId,
 }: {
   ownerToken: string
   progress: ProjectTransferProgressPayload
   repositories: ProjectTransferCommitRepositorySet
-  runtimeOptions: RuntimePathOptions
   sessionId: string
 }) => {
-  await writeCommitProgressArtifact({progress, runtimeOptions, sessionId})
   const updated = await repositories.sessionRepository.transitionProjectTransferSessionState({
     expectedOwnerToken: ownerToken,
     expectedState: 'committing',
@@ -1722,81 +1879,128 @@ const updateClaimedCommitProgress = async ({
   return updated
 }
 
-const refreshClaimedCommitHeartbeat = async ({
+const getCommitProgressContext = ({
+  initialProgress,
+  overall,
   ownerToken,
-  progress,
   repositories,
   runtimeOptions,
   sessionId,
+  throttleMs,
 }: {
+  initialProgress: ProjectTransferProgressPayload
+  overall: ProjectTransferOverallProgressTracker<'commit'>
   ownerToken: string
-  progress: ProjectTransferProgressPayload
   repositories: ProjectTransferCommitRepositorySet
   runtimeOptions: RuntimePathOptions
   sessionId: string
-}) => {
-  const heartbeatProgress = {...progress, updatedAt: new Date().toISOString()}
+  throttleMs?: number
+}): ProjectTransferCommitProgressContext => {
+  const scheduler = createProjectTransferProgressPublisher({
+    initialProgress,
+    throttleMs,
+    writeArtifact: async (progress) => {
+      updateActiveDuckdbExclusiveWorkProgress(progress)
+      await writeCommitProgressArtifact({progress, runtimeOptions, sessionId})
+    },
+    writeSession: async (progress) => {
+      const updated = await updateClaimedCommitProgress({ownerToken, progress, repositories, sessionId})
+      if (updated === null) throw new Error('Project transfer import commit ownership was lost while updating progress')
+    },
+  })
+  const publishSessionProgress = async (progress: ProjectTransferProgressPayload) => {
+    await scheduler.publish(progress, {persist: 'artifact'})
+    await scheduler.flush()
+    return updateClaimedCommitProgress({
+      ownerToken,
+      progress: scheduler.getLastWritten() ?? progress,
+      repositories,
+      sessionId,
+    })
+  }
 
-  await writeCommitProgressArtifact({progress: heartbeatProgress, runtimeOptions, sessionId})
+  return {
+    getActiveProgress: () => {
+      return scheduler.getLastWritten() ?? initialProgress
+    },
+    overall,
+    publish: scheduler.publish,
+    publishSessionProgress,
+    scheduler,
+  }
+}
+
+const refreshClaimedCommitHeartbeat = async ({
+  ownerToken,
+  repositories,
+  sessionId,
+}: {
+  ownerToken: string
+  repositories: ProjectTransferCommitRepositorySet
+  sessionId: string
+}) => {
   const heartbeat = await repositories.sessionRepository.transitionProjectTransferSessionState({
     expectedOwnerToken: ownerToken,
     expectedState: 'committing',
     nextOwnerLeaseMs: 60_000,
     nextOwnerToken: ownerToken,
     nextState: 'committing',
-    progress: heartbeatProgress,
     sessionId,
   })
-
-  if (heartbeat === null) {
-    throw new Error(`Project transfer commit session ownership was lost: ${sessionId}`)
-  }
-
-  return heartbeat
+  if (heartbeat === null) throw new Error(`Project transfer commit session ownership was lost: ${sessionId}`)
 }
 
 const runClaimedCommitHeartbeatOperation = async <TValue>({
-  getProgress,
+  heartbeatIntervalMs = commitWorkerHeartbeatIntervalMs,
   operation,
   ownerToken,
   repositories,
-  runtimeOptions,
+  scheduler,
   sessionId,
 }: {
-  getProgress: () => ProjectTransferProgressPayload
+  heartbeatIntervalMs?: number
   operation: () => Promise<TValue>
   ownerToken: string
   repositories: ProjectTransferCommitRepositorySet
-  runtimeOptions: RuntimePathOptions
+  scheduler: ReturnType<typeof createProjectTransferProgressPublisher>
   sessionId: string
 }) => {
-  const pendingHeartbeats: Promise<void>[] = []
-  const interval = setInterval(() => {
-    pendingHeartbeats.push(
-      refreshClaimedCommitHeartbeat({
-        ownerToken,
-        progress: getProgress(),
-        repositories,
-        runtimeOptions,
-        sessionId,
-      }).catch((error) => {
-        logProjectTransferCommitHeartbeatError(sessionId, error)
-      }),
-    )
-  }, commitWorkerHeartbeatIntervalMs)
-
-  try {
-    return await operation()
-  } finally {
-    clearInterval(interval)
-    await Promise.all(pendingHeartbeats)
+  const state = {
+    artifact: null as Promise<void> | null,
+    lease: null as Promise<void> | null,
+    error: null as {cause: unknown} | null,
   }
+  const recordFailure = (cause: unknown) => {
+    state.error ??= {cause}
+    logProjectTransferCommitHeartbeatError(sessionId, cause)
+  }
+  const interval = setInterval(() => {
+    state.artifact ??= scheduler
+      .heartbeat()
+      .catch(recordFailure)
+      .finally(() => {
+        state.artifact = null
+      })
+    state.lease ??= refreshClaimedCommitHeartbeat({ownerToken, repositories, sessionId})
+      .catch(recordFailure)
+      .finally(() => {
+        state.lease = null
+      })
+  }, heartbeatIntervalMs)
+
+  const result = await operation().finally(async () => {
+    clearInterval(interval)
+    await Promise.all([state.artifact, state.lease])
+  })
+  if (state.error !== null) throw state.error.cause
+  return result
 }
 
 const failClaimedCommit = async ({
   artifacts,
   error,
   ownerToken,
+  progressContext,
   repositories,
   runtimeOptions,
   sessionId,
@@ -1804,16 +2008,19 @@ const failClaimedCommit = async ({
   artifacts: ProjectTransferCommitArtifacts
   error: unknown
   ownerToken: string
+  progressContext?: ProjectTransferCommitProgressContext
   repositories: ProjectTransferCommitRepositorySet
   runtimeOptions: RuntimePathOptions
   sessionId: string
 }) => {
+  await settleCompletionSideEffect(progressContext?.scheduler.close() ?? Promise.resolve())
   const now = new Date()
   const progress = getCommitProgress({
     artifacts,
     completedBytes: getExtractedAssetBytes(artifacts.analysis),
     message: retryableCommitFailureMessage,
     now,
+    overall: progressContext?.overall.getCurrent(),
     percent: 100,
     planRevision: artifacts.plan.planRevision,
     status: 'failed',
@@ -1843,6 +2050,7 @@ const failClaimedPostClaimCommit = async ({
   artifacts,
   error,
   ownerToken,
+  progressContext,
   repositories,
   runtimeOptions,
   sessionId,
@@ -1851,13 +2059,14 @@ const failClaimedPostClaimCommit = async ({
   artifacts: ProjectTransferCommitArtifacts
   error: unknown
   ownerToken: string
+  progressContext?: ProjectTransferCommitProgressContext
   repositories: ProjectTransferCommitRepositorySet
   runtimeOptions: RuntimePathOptions
   sessionId: string
   statusCode?: number
 }): Promise<ProjectTransferCommitResult> => {
   await settleCompletionSideEffect(
-    failClaimedCommit({artifacts, error, ownerToken, repositories, runtimeOptions, sessionId}),
+    failClaimedCommit({artifacts, error, ownerToken, progressContext, repositories, runtimeOptions, sessionId}),
   )
 
   return {error: error instanceof Error ? error.message : String(error), status: 'error', statusCode}
@@ -1867,10 +2076,12 @@ const getClaimedCommitRevalidationProgress = ({
   artifacts,
   claimed,
   message,
+  overall,
 }: {
   artifacts: ProjectTransferCommitArtifacts
   claimed: ProjectTransferSessionRecord
   message: string
+  overall: ProjectTransferOverallProgress
 }) => {
   return getCommitProgress({
     artifacts,
@@ -1878,6 +2089,7 @@ const getClaimedCommitRevalidationProgress = ({
     includeRows: false,
     message,
     now: new Date(),
+    overall,
     phase: 'revalidation',
     planRevision: claimed.planRevision,
     status: 'running',
@@ -1887,12 +2099,10 @@ const getClaimedCommitRevalidationProgress = ({
 const writeRevalidatedClaimedCommit = async ({
   input,
   lease,
-  publishProgress,
   revalidation,
 }: {
   input: ProjectTransferClaimedCommitInput
   lease: ProjectTransferDuckdbExclusiveWorkLease
-  publishProgress: ProjectTransferPublishCommitProgress
   revalidation: ProjectTransferClaimedCommitRevalidation
 }) => {
   const artifacts = {...input.artifacts, plan: revalidation.plan}
@@ -1904,7 +2114,8 @@ const writeRevalidatedClaimedCommit = async ({
       artifacts,
       commitId: input.commitId,
       now: input.now,
-      onProgress: publishProgress,
+      onProgress: input.progress.publish,
+      overallProgress: input.progress.overall,
       schemaVersion: getAnalysisSchemaVersion(artifacts.analysis),
       ...input.runtimeOptions,
       sessionId: input.sessionId,
@@ -1937,13 +2148,7 @@ const writeRevalidatedClaimedCommit = async ({
       }
 }
 
-const runClaimedCommitExclusiveWork = ({
-  input,
-  publishProgress,
-}: {
-  input: ProjectTransferClaimedCommitInput
-  publishProgress: ProjectTransferPublishCommitProgress
-}) => {
+const runClaimedCommitExclusiveWork = (input: ProjectTransferClaimedCommitInput) => {
   return runWithDuckdbExclusiveWork(
     {
       estimatedRows: getCommitRowCount(input.artifacts.plan),
@@ -1954,19 +2159,22 @@ const runClaimedCommitExclusiveWork = ({
       sessionId: input.sessionId,
     },
     async (lease) => {
-      await publishProgress(
+      await input.progress.publish(
         getClaimedCommitRevalidationProgress({
           artifacts: input.artifacts,
           claimed: input.claimed,
           message: 'Commit revalidation running',
+          overall: input.progress.overall.update({step: 'revalidation', stepFraction: 0}),
         }),
       )
 
+      await input.progress.scheduler.flush()
       const revalidation = await runClaimedCommitRevalidation(input)
+      await input.progress.scheduler.flush()
 
       return revalidation.stale
         ? {plan: revalidation.plan, status: 'stale' as const}
-        : writeRevalidatedClaimedCommit({input, lease, publishProgress, revalidation})
+        : writeRevalidatedClaimedCommit({input, lease, revalidation})
     },
   )
 }
@@ -1978,11 +2186,13 @@ const reopenClaimedCommitStalePlan = async ({
   input: ProjectTransferClaimedCommitInput
   plan: ProjectTransferImportPlanArtifact
 }): Promise<ProjectTransferCommitResult> => {
+  await input.progress.scheduler.close()
   const reopened = await persistPostClaimStalePlan({
     artifacts: input.artifacts,
     commitId: input.commitId,
     nextPlan: plan,
     now: input.now,
+    overall: input.progress.overall.getCurrent(),
     ownerToken: input.ownerToken,
     repositories: input.repositories,
     runtimeOptions: input.runtimeOptions,
@@ -1994,6 +2204,7 @@ const reopenClaimedCommitStalePlan = async ({
         artifacts: input.artifacts,
         error: 'Project transfer commit could not reopen claimed stale plan',
         ownerToken: input.ownerToken,
+        progressContext: input.progress,
         repositories: input.repositories,
         runtimeOptions: input.runtimeOptions,
         sessionId: input.sessionId,
@@ -2005,33 +2216,19 @@ const reopenClaimedCommitStalePlan = async ({
 const runClaimedProjectTransferImportCommit = async (
   input: ProjectTransferClaimedCommitInput,
 ): Promise<ProjectTransferCommitResult> => {
-  const {claimed, ownerToken, repositories, runtimeOptions, sessionId} = input
+  const {claimed, ownerToken, progress, repositories, runtimeOptions, sessionId} = input
 
   try {
     const waitingProgress = getClaimedCommitRevalidationProgress({
       artifacts: input.artifacts,
       claimed,
       message: 'Waiting for DuckDB maintenance work to pause',
+      overall: progress.overall.update({step: 'waitForDuckdb', stepFraction: null}),
     })
-    let activeProgress = waitingProgress
-    const publishProgress = async (progress: ProjectTransferProgressPayload) => {
-      activeProgress = progress
-      updateActiveDuckdbExclusiveWorkProgress(progress)
-      const updated = await updateClaimedCommitProgress({ownerToken, progress, repositories, runtimeOptions, sessionId})
-
-      if (updated === null) {
-        throw new Error('Project transfer import commit ownership was lost while updating progress')
-      }
-    }
-    const progressed = await updateClaimedCommitProgress({
-      ownerToken,
-      progress: waitingProgress,
-      repositories,
-      runtimeOptions,
-      sessionId,
-    })
+    const progressed = await progress.publishSessionProgress(waitingProgress)
 
     if (progressed === null) {
+      await progress.scheduler.close()
       return {
         error: 'Project transfer import commit ownership was lost before revalidation',
         status: 'error',
@@ -2040,15 +2237,13 @@ const runClaimedProjectTransferImportCommit = async (
     }
 
     const outcome = await runClaimedCommitHeartbeatOperation({
-      getProgress: () => {
-        return activeProgress
-      },
+      heartbeatIntervalMs: input.heartbeatIntervalMs,
       operation: () => {
-        return runClaimedCommitExclusiveWork({input, publishProgress})
+        return runClaimedCommitExclusiveWork(input)
       },
       ownerToken,
       repositories,
-      runtimeOptions,
+      scheduler: progress.scheduler,
       sessionId,
     })
 
@@ -2069,21 +2264,23 @@ const runClaimedProjectTransferImportCommit = async (
       completedRows: getCommitRowCount(artifacts.plan),
       message: 'Commit transaction completed',
       now: completionNow,
+      overall: progress.overall.complete(),
       percent: 100,
       performanceMetrics: completedPerformanceMetrics,
       planRevision: claimed.planRevision,
       status: 'completed',
     })
 
-    await settleCompletionSideEffect(
-      updateClaimedCommitProgress({ownerToken, progress: completedProgress, repositories, runtimeOptions, sessionId}),
-    )
+    await progress.publishSessionProgress(completedProgress)
+    await progress.scheduler.close()
+    const persistedCompletedProgress = progress.getActiveProgress()
 
     const completedSession = await settleCompletionSideEffect(
       repositories.sessionRepository.persistProjectTransferSessionCompletion({
         completionPayload: writeResult.completion,
+        progress: persistedCompletedProgress,
         expectedPlanRevision: claimed.planRevision,
-        now: completionNow,
+        now: new Date(persistedCompletedProgress.updatedAt ?? completionNow),
         ownerToken,
         sessionId,
       }),
@@ -2107,13 +2304,23 @@ const runClaimedProjectTransferImportCommit = async (
     }
   } catch (error) {
     await settleCompletionSideEffect(
-      failClaimedCommit({artifacts: input.artifacts, error, ownerToken, repositories, runtimeOptions, sessionId}),
+      failClaimedCommit({
+        artifacts: input.artifacts,
+        error,
+        ownerToken,
+        progressContext: progress,
+        repositories,
+        runtimeOptions,
+        sessionId,
+      }),
     )
     return getCommitErrorResult(error)
   }
 }
 
 export const commitProjectTransferImportSession = async ({
+  heartbeatIntervalMs,
+  progressThrottleMs,
   now: inputNow,
   repositories: inputRepositories,
   request,
@@ -2210,12 +2417,14 @@ export const commitProjectTransferImportSession = async ({
 
   const commitId = repositories.getCommitId()
   const ownerToken = repositories.getOwnerToken()
+  const overallProgress = createProjectTransferOverallProgressTracker('commit')
   const claimProgress = getCommitProgress({
     artifacts,
     includeBytes: false,
     includeRows: false,
     message: 'Commit revalidation running',
     now,
+    overall: overallProgress.update({step: 'waitForDuckdb', stepFraction: null}),
     phase: 'revalidation',
     planRevision: revision.planRevision,
     status: 'running',
@@ -2247,12 +2456,22 @@ export const commitProjectTransferImportSession = async ({
   await writeCommitProgressArtifact({progress: claimProgress, runtimeOptions, sessionId})
 
   const claimedCommitInput: ProjectTransferClaimedCommitInput = {
+    heartbeatIntervalMs,
     artifacts,
     claimed,
     commitId,
     inputRepositories,
     now,
     ownerToken,
+    progress: getCommitProgressContext({
+      throttleMs: progressThrottleMs,
+      initialProgress: claimProgress,
+      overall: overallProgress,
+      ownerToken,
+      repositories,
+      runtimeOptions,
+      sessionId,
+    }),
     repositories,
     runtimeOptions,
     sessionId,

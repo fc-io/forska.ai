@@ -27,6 +27,7 @@ import {
 } from './projectTransferCommit.ts'
 import {getProjectTransferPlanWithCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {assertProjectTransferCommitTargetStateUnchanged} from './projectTransferCommitWriteGuard.ts'
+import {type ProjectTransferProgressPayload, validateProjectTransferProgressUpdate} from './projectTransferContracts.ts'
 import {
   getActiveDuckdbExclusiveWorkSnapshot,
   hasActiveDuckdbExclusiveWork,
@@ -56,6 +57,9 @@ setDefaultTimeout(120_000)
 
 type MutableSessionRepository = NonNullable<ProjectTransferCommitInput['repositories']>['sessionRepository']
 type RevalidateInput = Parameters<NonNullable<NonNullable<ProjectTransferCommitInput['repositories']>['revalidate']>>[0]
+type AppTableWriteInput = Parameters<
+  NonNullable<NonNullable<ProjectTransferCommitInput['repositories']>['runAppTableWrites']>
+>[0]
 
 const getCompleteTargetStateTokens = (overrides?: Partial<Record<ProjectTransferTargetStateSafetySurface, number>>) => {
   return projectTransferTargetStateSafetySurfaces.reduce<
@@ -626,6 +630,7 @@ const getNoopHistoryRepository = () => {
 }
 
 const runCommit = async ({
+  beforeAppTableWrites,
   cwd,
   onAppTableWrites,
   reclaimRevalidationMemory,
@@ -638,6 +643,7 @@ const runCommit = async ({
   sessionId = 'commit-session',
   startBackgroundCommit,
 }: {
+  beforeAppTableWrites?: (input: AppTableWriteInput) => Promise<void>
   cwd: string
   onAppTableWrites?: () => Promise<void> | void
   reclaimRevalidationMemory?: NonNullable<ProjectTransferCommitInput['repositories']>['reclaimRevalidationMemory']
@@ -662,7 +668,7 @@ const runCommit = async ({
       reclaimRevalidationMemory,
       revalidate,
       requestReviewServingBuild,
-      runAppTableWrites: async () => {
+      runAppTableWrites: async (input) => {
         await onAppTableWrites?.()
         expect(getActiveDuckdbExclusiveWorkSnapshot()).toMatchObject({
           admissionState: 'running',
@@ -671,6 +677,7 @@ const runCommit = async ({
           phase: 'commit',
           sessionId,
         })
+        await beforeAppTableWrites?.(input)
 
         const completion = {
           finalCounts: {articles: 0, judgments: 0, prompts: 0, reviews: 0, routes: 0, warnings: 0},
@@ -753,22 +760,37 @@ test('project transfer commit loads frozen artifacts and claims with server gene
       commitId: 'commit-generated',
       nextOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {phase: 'revalidation', planRevision: 1, status: 'running'},
+      progress: {
+        overall: {operation: 'commit', percent: 0, step: {index: 1, key: 'waitForDuckdb'}, stepFraction: null},
+        phase: 'revalidation',
+        planRevision: 1,
+        status: 'running',
+      },
     })
     expect(fake.calls.transition[1]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {message: 'Waiting for DuckDB maintenance work to pause', phase: 'revalidation', status: 'running'},
+      progress: {
+        message: 'Waiting for DuckDB maintenance work to pause',
+        overall: {percent: 0, step: {key: 'waitForDuckdb'}, stepFraction: null},
+        phase: 'revalidation',
+        status: 'running',
+      },
     })
     expect(fake.calls.transition[2]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {message: 'Commit revalidation running', phase: 'revalidation', status: 'running'},
+      progress: {
+        message: 'Commit revalidation running',
+        overall: {percent: 2, step: {index: 2, key: 'revalidation'}, stepFraction: 0},
+        phase: 'revalidation',
+        status: 'running',
+      },
     })
     expect(fake.calls.transition[3]).toMatchObject({
       expectedOwnerToken: 'owner-generated',
       nextState: 'committing',
-      progress: {percent: 100, phase: 'commit', status: 'completed'},
+      progress: {overall: {percent: 100, step: {key: 'finish'}}, percent: 100, phase: 'commit', status: 'completed'},
     })
     expect(fake.calls.persist).toHaveLength(1)
     expect((fake.calls.persist[0] as {now: Date}).now.toISOString()).toBe(
@@ -782,6 +804,123 @@ test('project transfer commit loads frozen artifacts and claims with server gene
     expect(planArtifactExists).toBe(false)
     expect(completionArtifactExists).toBe(true)
     expect(progressArtifactExists).toBe(true)
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+const getTransitionProgress = (calls: readonly unknown[]) => {
+  return calls.map((call) => {
+    return (call as {progress: ProjectTransferProgressPayload}).progress
+  })
+}
+
+const getWriterArtifactProgress = (input: AppTableWriteInput): ProjectTransferProgressPayload => {
+  return {
+    message: 'Writing imported project data: articles (2/7)',
+    overall: input.overallProgress?.update({step: 'writeTables', stepFraction: 0.5}),
+    phase: 'app_table_writes',
+    status: 'running',
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+test('project transfer commit publishes one monotonic overall create percent through every phase', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 1, summary})
+    const layout = await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const writerProgress: {artifact: ProjectTransferProgressPayload; transitionCount: number}[] = []
+    const result = await runCommit({
+      beforeAppTableWrites: async (input) => {
+        const transitionCount = fake.calls.transition.length
+
+        await input.onProgress?.(getWriterArtifactProgress(input), {persist: 'artifact'})
+        writerProgress.push({
+          artifact: JSON.parse(
+            await readFile(join(cwd, layout.progressPath), 'utf8'),
+          ) as ProjectTransferProgressPayload,
+          transitionCount: fake.calls.transition.length - transitionCount,
+        })
+      },
+      cwd,
+      repository: fake.repository,
+      revalidate: async (input) => {
+        await input.onProgress?.({message: 'Reading staged payloads', part: 'payloads', partFraction: 0})
+        await input.onProgress?.({message: 'Matching package articles', part: 'targetAnalysis', partFraction: 0.3})
+        await new Promise((resolve) => {
+          setTimeout(resolve, 1_100)
+        })
+        return {changed: false, plan, ready: true}
+      },
+    })
+    const progress = getTransitionProgress(fake.calls.transition)
+    const percents = progress.map((entry) => {
+      return entry.overall?.percent ?? -1
+    })
+
+    expect(result.status).toBe('completed')
+    expect(
+      progress.every((entry) => {
+        return entry.overall?.operation === 'commit'
+      }),
+    ).toBe(true)
+    expect(
+      progress.map((entry) => {
+        return entry.overall?.step.key
+      }),
+    ).toEqual(['waitForDuckdb', 'waitForDuckdb', 'revalidation', 'revalidation', 'finish'])
+    expect(percents).toEqual([0, 0, 2, 10.1, 100])
+    expect(progress[1]?.overall?.stepFraction).toBeNull()
+    expect(progress[3]).toMatchObject({
+      message: 'Commit revalidation: Matching package articles',
+      phase: 'revalidation',
+    })
+    expect(progress.at(-1)).toMatchObject({phase: 'commit', status: 'completed'})
+    expect(
+      progress.every((entry, index) => {
+        return validateProjectTransferProgressUpdate({next: entry, previous: progress[index - 1] ?? null}).ok
+      }),
+    ).toBe(true)
+    expect(writerProgress).toHaveLength(1)
+    expect(writerProgress[0]?.transitionCount).toBe(0)
+    expect(writerProgress[0]?.artifact).toMatchObject({
+      overall: {operation: 'commit', percent: 68.5, step: {key: 'writeTables'}},
+      phase: 'app_table_writes',
+    })
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project transfer commit keeps the last overall percent when a claimed commit fails', async () => {
+  const cwd = getRuntimeRoot()
+
+  try {
+    const summary = getReadySummary()
+    const plan = getPlan({planRevision: 1, summary})
+    await writeArtifacts({analysis: getAnalysis(1), cwd, plan, sessionId: 'commit-session'})
+    const fake = getFakeSessionRepository(getSession({planSummaryJson: summary}))
+    const result = await runCommit({
+      beforeAppTableWrites: async (input) => {
+        await input.onProgress?.(getWriterArtifactProgress(input))
+        throw new Error('writer failed')
+      },
+      cwd,
+      repository: fake.repository,
+      revalidate: async () => {
+        return {changed: false, plan, ready: true}
+      },
+    })
+    const progress = getTransitionProgress(fake.calls.transition)
+
+    expect(result).toMatchObject({error: 'writer failed', status: 'error'})
+    expect(progress.at(-2)?.overall?.percent).toBe(68.5)
+    expect(progress.at(-1)).toMatchObject({overall: {operation: 'commit', percent: 68.5}, status: 'failed'})
+    expect(fake.getSession().state).toBe('failed')
   } finally {
     rmSync(cwd, {force: true, recursive: true})
   }
@@ -2262,6 +2401,14 @@ test('project transfer commit returns completed import history before expiry han
 
 test('project transfer commit writer creates project rows and preserves safe package semantics', () => {
   const result = runCommitWriterScript<{
+    writerSteps: Array<{
+      completedRows: number
+      count: number
+      index: number
+      key: string
+      rows: number
+      totalRows: number
+    }>
     articleImportRouteCount: number
     articleRows: Array<{
       articleId: string | null
@@ -2465,9 +2612,13 @@ test('project transfer commit writer creates project rows and preserves safe pac
         },
       ],
     }
+    const writerSteps = []
     const writeResult = await writeProjectTransferCommitAppTables({
       commitId: 'commit-writer',
       now,
+      onStep: (step) => {
+        writerSteps.push(step)
+      },
       payloads: {
         articleImportRoutes: [
           {
@@ -2561,9 +2712,31 @@ test('project transfer commit writer creates project rows and preserves safe pac
       reviewChangeDeltaRows,
       targetProjectId: writeResult.projectId,
       warningCodes: writeResult.importWarnings.map((warning) => warning.code),
+      writerSteps,
     }))
   `)
 
+  expect(
+    result.writerSteps.map((step) => {
+      return step.key
+    }),
+  ).toEqual(['prepare', 'articles', 'routes', 'projectArticles', 'judgments', 'humanReviews', 'history'])
+  expect(
+    result.writerSteps.map((step) => {
+      return step.index
+    }),
+  ).toEqual([1, 2, 3, 4, 5, 6, 7])
+  expect(
+    result.writerSteps.every((step, index, steps) => {
+      return (
+        step.count === 7
+        && step.totalRows === steps[0]?.totalRows
+        && step.completedRows <= step.totalRows
+        && step.completedRows >= (steps[index - 1]?.completedRows ?? 0)
+      )
+    }),
+  ).toBe(true)
+  expect(result.writerSteps[1]).toMatchObject({completedRows: result.writerSteps[0]?.rows, key: 'articles', rows: 2})
   expect(result.projectRow).toMatchObject({
     archived: false,
     humanJudgmentMode: 'prompt',
@@ -5846,4 +6019,103 @@ test('project transfer commit writer blocks extra target assessment state on reu
   expect(result.errorMessage).toContain('has assessment state missing from package')
   expect(result.projectCount).toBe(0)
   expect(result.assessmentCount).toBe(1)
+})
+
+test('real DuckDB commit completes with writer callbacks and lease heartbeats inside transactions', () => {
+  const result = runCommitWriterScript<{
+    status: string
+    writerSteps: string[]
+    heartbeatDuringWrite: boolean
+    percents: number[]
+    inlinePercent: number
+    recordPercent: number
+    artifactPercent: number
+  }>(`
+    const {commitProjectTransferImportSession} = await import('./src/server/services/projectTransfer/projectTransferCommit.ts')
+    const {getProjectTransferSessionRepository} = await import('./src/server/services/projectTransfer/projectTransferSessionRepository.ts')
+    const {getProjectTransferImportTempLayout} = await import('./src/server/services/projectTransfer/projectTransferSession.ts')
+    const {mkdir, writeFile, readFile} = await import('node:fs/promises')
+    const {join, dirname} = await import('node:path')
+    const repository = getProjectTransferSessionRepository()
+    const sessionId = 'progress-commit'
+    const cwd = process.env.PROJECT_TRANSFER_TEST_RUNTIME_ROOT
+    const layout = getProjectTransferImportTempLayout(sessionId)
+    const plan = {...getBasePlan({}, dependencyResolution), packageFingerprint: 'fingerprint-commit'}
+    const analysis = ${JSON.stringify(getAnalysis(1))}
+    await mkdir(join(cwd, layout.rootPath), {recursive: true})
+    await writeFile(join(cwd, layout.planPath), JSON.stringify(plan))
+    await writeFile(join(cwd, layout.analysisPath), JSON.stringify(analysis))
+    await repository.createProjectTransferSession({id: sessionId, direction: 'import', state: 'analyzing', expiresAt: new Date(Date.now() + 60000)})
+    await repository.updateProjectTransferSessionPlanRevision({sessionId, expectedPlanRevision: 0, nextState: 'ready_to_commit', planSummary: plan.summary, packageFingerprint: 'fingerprint-commit'})
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const writerSteps = []
+    const percents = []
+    let heartbeatDuringWrite = false
+    let pendingLeaseWrites = 0
+    const timeout = setTimeout(() => { console.error('COMMIT_PROGRESS_TIMEOUT', JSON.stringify({writerSteps, heartbeatDuringWrite})); process.exit(124) }, 30000)
+    const committed = await commitProjectTransferImportSession({
+      cwd, sessionId, request: {planRevision: 1}, progressThrottleMs: 0, heartbeatIntervalMs: 5,
+      repositories: {
+        sessionRepository: {...repository, transitionProjectTransferSessionState: async (params) => {
+          const renewsLease = !!params.nextOwnerLeaseMs
+          if (renewsLease) pendingLeaseWrites += 1
+          try {
+            return await repository.transitionProjectTransferSessionState(params)
+          } finally {
+            if (renewsLease) pendingLeaseWrites -= 1
+          }
+        }},
+        requestReviewServingBuild: async () => {},
+        reclaimRevalidationMemory: async () => {},
+        revalidate: async (input) => {
+          if (input.onProgress) await database.transaction(async (tx) => {
+            await tx.run('SELECT 1')
+            await input.onProgress({message: 'Reading payloads', part: 'payloads', partFraction: 0.5})
+            await input.onProgress({message: 'Matching target', part: 'targetAnalysis', partFraction: 0.5})
+          })
+          return {changed: false, ready: true, plan}
+        },
+        runAppTableWrites: async (input) => {
+          const written = await writeProjectTransferCommitAppTables({
+            commitId: input.commitId, sessionId, plan, schemaVersion: 1,
+            payloads: {models: [getModelPayload()], project: getProjectPayload({humanJudgmentMode: 'prompt', useTitle: true, useAbstract: true, useFulltext: false, useFulltextNoImages: false})},
+            promotion: {articleCreates: [], articleFieldFills: [], manifest: {createdAt: new Date().toISOString(), promotions: [], sessionId, updatedAt: new Date().toISOString()}, promotionPathByPackagePath: {}},
+            onStep: async (step) => {
+              writerSteps.push(step.key)
+              if (writerSteps.length === 1) {
+                await new Promise(resolve => setTimeout(resolve, process.env.PROGRESS_BASELINE ? 15100 : 40))
+                heartbeatDuringWrite = pendingLeaseWrites > 0
+              }
+              await input.onProgress({phase: 'app_table_writes', status: 'running', overall: input.overallProgress.update({step: 'writeTables', stepFraction: step.index / step.count}), updatedAt: new Date().toISOString()}, {persist: 'artifact'})
+              percents.push(JSON.parse(await readFile(join(cwd, layout.progressPath), 'utf8')).overall.percent)
+            },
+          })
+          return written
+        },
+      },
+    })
+    clearTimeout(timeout)
+    const record = await repository.getProjectTransferSession({sessionId})
+    const artifact = JSON.parse(await readFile(join(cwd, layout.progressPath), 'utf8'))
+    if (committed.status !== 'completed') throw new Error(JSON.stringify(committed))
+    console.log(JSON.stringify({status: committed.status, writerSteps, heartbeatDuringWrite, percents, inlinePercent: committed.session.progressJson.overall.percent, recordPercent: record.progressJson.overall.percent, artifactPercent: artifact.overall.percent}))
+  `)
+  expect(result.status).toBe('completed')
+  expect(result.writerSteps).toEqual([
+    'prepare',
+    'articles',
+    'routes',
+    'projectArticles',
+    'judgments',
+    'humanReviews',
+    'history',
+  ])
+  expect(result.heartbeatDuringWrite).toBe(true)
+  expect(result.percents).toEqual(
+    [...result.percents].sort((a, b) => {
+      return a - b
+    }),
+  )
+  expect([result.inlinePercent, result.recordPercent, result.artifactPercent]).toEqual([100, 100, 100])
 })

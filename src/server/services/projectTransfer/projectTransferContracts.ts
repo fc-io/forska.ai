@@ -162,6 +162,7 @@ export type ProjectTransferValidationResult = {ok: true} | {error: string; ok: f
 
 export type ProjectTransferProgressPhase =
   | 'analyze'
+  | 'app_table_writes'
   | 'cleanup'
   | 'commit'
   | 'dependency_resolution'
@@ -178,6 +179,26 @@ export type ProjectTransferProgressPhase =
   | 'upload'
 
 export type ProjectTransferProgressStatus = 'completed' | 'failed' | 'pending' | 'running'
+
+export const projectTransferOverallProgressOperations = ['analyze', 'commit'] as const
+
+export type ProjectTransferOverallProgressOperation = (typeof projectTransferOverallProgressOperations)[number]
+
+export type ProjectTransferOverallProgressStep = {
+  count: number
+  endPercent: number
+  index: number
+  key: string
+  label: string
+  startPercent: number
+}
+
+export type ProjectTransferOverallProgress = {
+  operation: ProjectTransferOverallProgressOperation
+  percent: number
+  step: ProjectTransferOverallProgressStep
+  stepFraction: number | null
+}
 
 export type ProjectTransferStagingProgressPayload = {
   artifactByteLengths?: Record<string, number>
@@ -240,6 +261,7 @@ export type ProjectTransferProgressPayload = {
   completedRows?: number | null
   expiresAt?: string | null
   message?: string | null
+  overall?: ProjectTransferOverallProgress | null
   percent?: number | null
   performanceMetrics?: ProjectTransferPerformanceMetrics
   phase: ProjectTransferProgressPhase
@@ -566,6 +588,60 @@ const validateMonotonicProgressCounts = ({
     : {ok: true}
 }
 
+const isPercentValue = (value: unknown): value is number => {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
+}
+
+const isOverallProgressStep = (step: unknown) => {
+  return (
+    isRecord(step)
+    && Number.isInteger(step.index)
+    && Number.isInteger(step.count)
+    && (step.index as number) >= 1
+    && (step.index as number) <= (step.count as number)
+    && typeof step.key === 'string'
+    && typeof step.label === 'string'
+    && isPercentValue(step.startPercent)
+    && isPercentValue(step.endPercent)
+    && step.startPercent <= step.endPercent
+  )
+}
+
+const isOverallProgress = (overall: unknown) => {
+  return (
+    isRecord(overall)
+    && projectTransferOverallProgressOperations.includes(overall.operation as ProjectTransferOverallProgressOperation)
+    && isPercentValue(overall.percent)
+    && (overall.stepFraction === null
+      || (typeof overall.stepFraction === 'number' && overall.stepFraction >= 0 && overall.stepFraction <= 1))
+    && isOverallProgressStep(overall.step)
+  )
+}
+
+const validateOverallProgress = (payload: ProjectTransferProgressPayload): ProjectTransferValidationResult => {
+  return payload.overall === null || payload.overall === undefined || isOverallProgress(payload.overall)
+    ? {ok: true}
+    : {error: 'Project transfer progress field overall is invalid', ok: false}
+}
+
+const validateMonotonicOverallProgress = ({
+  next,
+  previous,
+}: {
+  next: ProjectTransferProgressPayload
+  previous: ProjectTransferProgressPayload | null
+}): ProjectTransferValidationResult => {
+  const previousOverall = previous?.status === 'running' ? (previous.overall ?? null) : null
+  const nextOverall = next.overall ?? null
+
+  return previousOverall !== null
+    && nextOverall !== null
+    && previousOverall.operation === nextOverall.operation
+    && nextOverall.percent < previousOverall.percent
+    ? {error: 'Project transfer progress field overall.percent must be monotonic', ok: false}
+    : {ok: true}
+}
+
 const validateRequiredCountRecord = ({
   counts,
   label,
@@ -690,9 +766,12 @@ export const validateProjectTransferProgressUpdate = ({
   next: ProjectTransferProgressPayload
   previous: ProjectTransferProgressPayload | null
 }): ProjectTransferValidationResult => {
-  const countValidation = validateProgressCounts(next)
-
-  return countValidation.ok ? validateMonotonicProgressCounts({next, previous}) : countValidation
+  return getFirstFailedValidation([
+    validateProgressCounts(next),
+    validateOverallProgress(next),
+    validateMonotonicProgressCounts({next, previous}),
+    validateMonotonicOverallProgress({next, previous}),
+  ])
 }
 
 export const validateProjectTransferDependencyStatuses = (

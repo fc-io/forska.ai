@@ -12,6 +12,7 @@ import {
   type ProjectTransferZipJsEntry,
   type ProjectTransferZipJsModule,
   type ProjectTransferZipJsUint8ArrayWriter,
+  type ProjectTransferZipReadProgress,
   readProjectTransferZipPackage,
   writeProjectTransferZipPackage,
   writeProjectTransferZipPackageToFile,
@@ -372,6 +373,54 @@ test('reads STORE entry bytes as read-only views backed by the source archive', 
   expect(read.entries[1]?.bytes).toEqual(articleBytes)
   expect(read.entries[1]?.bytes.buffer).toBe(written.bytes.buffer)
   expect(read.entries[1]?.compressedSize).toBe(articleBytes.byteLength)
+})
+
+test('reports cumulative uncompressed bytes for every read entry', async () => {
+  const manifestBytes = getBytes('{"schemaVersion":1}')
+  const articleBytes = getBytes('article-one')
+  const written = await writeProjectTransferZipPackage({
+    entries: [
+      {bytes: manifestBytes, path: 'manifest.json'},
+      {bytes: articleBytes, path: 'assets/articles/article-1.txt'},
+    ],
+  })
+  const storedProgress: ProjectTransferZipReadProgress[] = []
+  const moduleProgress: ProjectTransferZipReadProgress[] = []
+  const {zipModule} = getFakeZipModule([
+    getFakeZipEntry({chunks: [manifestBytes], filename: 'manifest.json', uncompressedSize: manifestBytes.byteLength}),
+    getFakeZipEntry({
+      chunks: [articleBytes],
+      filename: 'assets/articles/article-1.txt',
+      uncompressedSize: articleBytes.byteLength,
+    }),
+  ])
+
+  await readProjectTransferZipPackage({
+    bytes: written.bytes,
+    onEntryRead: (progress) => {
+      storedProgress.push(progress)
+    },
+  })
+  await readProjectTransferZipPackage({
+    bytes: getBytes('fake-archive'),
+    onEntryRead: async (progress) => {
+      moduleProgress.push(progress)
+    },
+    zipModule,
+  })
+
+  const totalBytes = manifestBytes.byteLength + articleBytes.byteLength
+
+  expect(storedProgress).toEqual([
+    {completedBytes: manifestBytes.byteLength, completedEntries: 1, totalBytes, totalEntries: 2},
+    {completedBytes: totalBytes, completedEntries: 2, totalBytes, totalEntries: 2},
+  ])
+  expect(
+    moduleProgress.map((progress) => {
+      return progress.completedEntries
+    }),
+  ).toEqual([1, 2])
+  expect(moduleProgress.at(-1)).toEqual({completedBytes: totalBytes, completedEntries: 2, totalBytes, totalEntries: 2})
 })
 
 test('reads project-transfer packages using writer bytes for counters and checksums instead of advisory sizes', async () => {

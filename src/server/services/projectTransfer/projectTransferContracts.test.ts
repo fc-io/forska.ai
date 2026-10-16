@@ -5,6 +5,7 @@ import {
   getProjectTransferExportExecutionMode,
   getProjectTransferImportAnalyzeExecutionMode,
   parseProjectTransferCompletionPayload,
+  parseProjectTransferProgressPayload,
   projectTransferCancellationRules,
   projectTransferConflictCountKeys,
   type ProjectTransferDependencyStatus,
@@ -22,6 +23,7 @@ import {
   validateProjectTransferReadyDependencyStatuses,
   validateProjectTransferResourceGates,
 } from './projectTransferContracts.ts'
+import {getProjectTransferOverallProgress} from './projectTransferProgressWeights.ts'
 import {
   projectTransferCurrentManifestSchemaVersion,
   projectTransferManifestSchemaVersion,
@@ -338,6 +340,84 @@ test('keeps progress monotonic and cancellation cleanup writer-only', () => {
     requiresWriterOwnerToken: true,
     state: 'expired',
   })
+})
+
+test('keeps overall progress monotonic across phases of the same operation', () => {
+  const targetAnalysis = getProjectTransferOverallProgress({
+    operation: 'analyze',
+    step: 'targetAnalysis',
+    stepFraction: 0.5,
+  })
+  const zipScan = getProjectTransferOverallProgress({operation: 'analyze', step: 'zipScan', stepFraction: 1})
+  const commitStart = getProjectTransferOverallProgress({operation: 'commit', step: 'revalidation', stepFraction: 0})
+
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {overall: zipScan, phase: 'staging_load', status: 'running'},
+      previous: {overall: targetAnalysis, phase: 'analyze', status: 'running'},
+    }),
+  ).toEqual({error: 'Project transfer progress field overall.percent must be monotonic', ok: false})
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {overall: targetAnalysis, phase: 'analyze', status: 'running'},
+      previous: {overall: zipScan, phase: 'package_scan', status: 'running'},
+    }),
+  ).toEqual({ok: true})
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {overall: commitStart, phase: 'revalidation', status: 'running'},
+      previous: {overall: targetAnalysis, phase: 'analyze', status: 'running'},
+    }),
+  ).toEqual({ok: true})
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {overall: commitStart, phase: 'revalidation', status: 'running'},
+      previous: {overall: {...commitStart, percent: 80}, phase: 'app_table_writes', status: 'failed'},
+    }),
+  ).toEqual({ok: true})
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {overall: {...zipScan, percent: 101}, phase: 'package_scan', status: 'running'},
+      previous: null,
+    }),
+  ).toEqual({error: 'Project transfer progress field overall is invalid', ok: false})
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {overall: {...zipScan, step: {...zipScan.step, index: 7}}, phase: 'package_scan', status: 'running'},
+      previous: null,
+    }),
+  ).toEqual({error: 'Project transfer progress field overall is invalid', ok: false})
+})
+
+test('parses and validates progress payloads written before the overall block existed', () => {
+  const legacyProgress = parseProjectTransferProgressPayload(
+    JSON.stringify({completedRows: 3, phase: 'analyze', rowCountTotal: 9, status: 'running', totalRows: 9}),
+  )
+
+  expect(legacyProgress).toEqual({
+    completedRows: 3,
+    phase: 'analyze',
+    rowCountTotal: 9,
+    status: 'running',
+    totalRows: 9,
+  })
+  expect(legacyProgress?.overall).toBeUndefined()
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {
+        overall: getProjectTransferOverallProgress({operation: 'analyze', step: 'targetAnalysis', stepFraction: 0}),
+        phase: 'analyze',
+        status: 'running',
+      },
+      previous: legacyProgress,
+    }),
+  ).toEqual({ok: true})
+  expect(
+    validateProjectTransferProgressUpdate({
+      next: {completedRows: 4, phase: 'analyze', status: 'running', totalRows: 9},
+      previous: legacyProgress,
+    }),
+  ).toEqual({ok: true})
 })
 
 test('locks export progress and direction-aware completion contracts', () => {
