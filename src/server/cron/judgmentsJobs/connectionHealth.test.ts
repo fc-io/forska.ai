@@ -160,6 +160,41 @@ test('keeps Codex transient upstream resets out of the outage path', () => {
   ).toBe('healthy')
 })
 
+test('keeps Claude Code CLI failures prompt-scoped even when their text looks like a network outage', () => {
+  const error = Object.assign(new Error('Claude Code request timed out after 600000 ms and was killed'), {
+    code: 'claude_code_transient_failure',
+  })
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: 'claude-code://cli', endpointPath: null, providerKind: 'claude-code'},
+    error,
+  })
+
+  expect(failure.kind).toBe('other')
+  expect(failure.shouldPauseConnection).toBe(false)
+  expect(isConnectionError(error)).toBe(false)
+})
+
+test('builds a probe-free endpoint availability key for the Claude Code CLI', () => {
+  const key = getEndpointAvailabilityKey({
+    effectiveBaseURL: 'claude-code://cli',
+    modelProvider: 'claude-code',
+    providerConnectionId: 'connection-claude',
+  })
+  const misconfiguredKey = getEndpointAvailabilityKey({
+    effectiveBaseURL: 'claude-code://elsewhere/path',
+    modelProvider: 'claude-code',
+  })
+
+  expect(key).toEqual({
+    endpointAvailabilityKey: 'connection-claude::claude-code://cli',
+    endpointIdentity: 'claude-code://cli',
+    misconfiguration: null,
+    providerKey: 'connection-claude',
+    shouldSkipHttpProbe: true,
+  })
+  expect(misconfiguredKey.misconfiguration).toContain('claude-code://cli')
+})
+
 test('keeps Codex transient turn timeouts out of the outage path', () => {
   const error = Object.assign(new Error('The operation timed out.'), {code: 'codex_transient_turn_failure'})
   const rawCodexTurnTimeout = new Error('codex app-server: turn timeout')

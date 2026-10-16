@@ -76,6 +76,14 @@ const isCodexProvider = (provider: string): boolean => {
   return provider === 'codex'
 }
 
+const isClaudeCodeProvider = (provider: string): boolean => {
+  return provider === 'claude-code'
+}
+
+const isLocalCliProvider = (provider: string): boolean => {
+  return isCodexProvider(provider) || isClaudeCodeProvider(provider)
+}
+
 const getErrorMessage = (error: unknown): string => {
   return error instanceof Error ? error.message : String(error)
 }
@@ -90,6 +98,14 @@ const getCodexPlaceholderBaseUrl = (): string => {
 
 const getCodexPromptRuntime = (): PromptRuntime => {
   return {modelBaseUrl: getCodexPlaceholderBaseUrl(), modelProvider: 'codex', modelWorkerUrls: []}
+}
+
+const getClaudeCodePromptRuntime = (): PromptRuntime => {
+  return {modelBaseUrl: 'claude-code://cli', modelProvider: 'claude-code', modelWorkerUrls: []}
+}
+
+const getLocalCliPromptRuntime = (provider: string): PromptRuntime => {
+  return isClaudeCodeProvider(provider) ? getClaudeCodePromptRuntime() : getCodexPromptRuntime()
 }
 
 const ownerBackedRuntimeLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
@@ -140,8 +156,8 @@ const getLocalPromptRuntime = async ({
 }): Promise<PromptRuntime | null> => {
   const provider = normalizeProvider(jobInfo.modelProvider)
 
-  if (isCodexProvider(provider)) {
-    return getCodexPromptRuntime()
+  if (isLocalCliProvider(provider)) {
+    return getLocalCliPromptRuntime(provider)
   }
 
   if (!jobInfo.modelBaseUrl) {
@@ -237,9 +253,9 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
 
   const provider = normalizeProvider(jobInfo.modelProvider)
 
-  if (isCodexProvider(provider)) {
+  if (isLocalCliProvider(provider)) {
     const claimedRows = await sqliteService.claimReadyPromptsWithoutLease(jobId, serverJobId, limit)
-    const runtime = getCodexPromptRuntime()
+    const runtime = getLocalCliPromptRuntime(provider)
 
     return claimedRows.map((prompt) => {
       return {
@@ -266,7 +282,7 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
     providerKind: provider,
   })
 
-  if (!isCodexProvider(provider) && !runtime.baseURL) {
+  if (!isLocalCliProvider(provider) && !runtime.baseURL) {
     console.error('Prompt missing required matched model baseURL:', {
       jobId,
       modelName: jobInfo.modelName,
@@ -452,8 +468,8 @@ export const getReadyPromptRuntime = async (jobId: string): Promise<PromptRuntim
 
   const provider = normalizeProvider(jobInfo.modelProvider)
 
-  if (isCodexProvider(provider)) {
-    return getCodexPromptRuntime()
+  if (isLocalCliProvider(provider)) {
+    return getLocalCliPromptRuntime(provider)
   }
 
   const runtime = await getModelRuntime({
@@ -463,7 +479,7 @@ export const getReadyPromptRuntime = async (jobId: string): Promise<PromptRuntim
     providerKind: provider,
   })
 
-  if (!isCodexProvider(provider) && !runtime.baseURL) {
+  if (!isLocalCliProvider(provider) && !runtime.baseURL) {
     console.error('Prompt missing required matched model baseURL:', {
       jobId,
       modelName: jobInfo.modelName,

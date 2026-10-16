@@ -21,7 +21,12 @@ import {
   type ProviderConnection,
   supportsRuntimeWorkerUrls,
 } from '../+admin/+models/providerConnectionsClient.ts'
-import {getCodexOnboardingUiState} from '../+admin/+models/providerUiState.ts'
+import {
+  getClaudeCodeOnboardingUiState,
+  getClaudeCodeProviderState,
+  getCodexOnboardingUiState,
+} from '../+admin/+models/providerUiState.ts'
+import {ClaudeCodeLoginCard} from './claudeCodeLoginCard.tsx'
 import {getProviderCatalogOptions, type ProviderCatalogOption} from './providerCatalogUi.ts'
 
 type ConnectionFormState = {
@@ -175,6 +180,22 @@ const AddProviderPage = () => {
         return connection.providerKind === 'codex'
       }) ?? null
     )
+  }
+
+  const existingClaudeCodeConnection = () => {
+    return (
+      connections().find((connection) => {
+        return connection.providerKind === 'claude-code'
+      }) ?? null
+    )
+  }
+
+  const claudeCodeOnboardingUiState = () => {
+    return getClaudeCodeOnboardingUiState({
+      existingClaudeCodeConnection: existingClaudeCodeConnection(),
+      providerAuth: providerAuth(),
+      providerKind: connectionForm.providerKind,
+    })
   }
 
   const authFields = () => {
@@ -443,7 +464,7 @@ const AddProviderPage = () => {
             </div>
 
             <div class="space-y-6">
-              <Show when={!shouldHideCodexConnectCard()}>
+              <Show when={!shouldHideCodexConnectCard() && !claudeCodeOnboardingUiState().shouldHideConnectCard}>
                 <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
                   <div class="mb-4">
                     <h2 class="text-lg font-semibold text-gray-900">
@@ -509,6 +530,24 @@ const AddProviderPage = () => {
                     </Button>
                   </div>
                 </div>
+              </Show>
+
+              <Show when={connectionForm.providerKind === 'claude-code'}>
+                <ClaudeCodeLoginCard
+                  authError={authError()}
+                  canCreateProvider={claudeCodeOnboardingUiState().canCreateProvider}
+                  existingConnection={existingClaudeCodeConnection()}
+                  isChecking={isLoadingAuth()}
+                  isCreating={createConnectionMutation.isPending || isFinishingAuth()}
+                  message={providerAuth()?.message ?? null}
+                  onCreate={() => {
+                    return void submitConnectionForm()
+                  }}
+                  onRecheck={() => {
+                    return void loadProviderAuth()
+                  }}
+                  status={getClaudeCodeProviderState(providerAuth())}
+                />
               </Show>
 
               <Show when={connectionForm.providerKind === 'codex'}>

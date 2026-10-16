@@ -23,11 +23,13 @@ const getProviderConnectionAuthMode = ({
 }): string | null => {
   return providerKind === 'codex'
     ? 'codex-cli'
-    : getTrimmedValue(apiKeyVariable)
-      ? 'env'
-      : getTrimmedValue(baseURL)
-        ? 'none'
-        : null
+    : providerKind === 'claude-code'
+      ? 'claude-cli'
+      : getTrimmedValue(apiKeyVariable)
+        ? 'env'
+        : getTrimmedValue(baseURL)
+          ? 'none'
+          : null
 }
 
 const getProviderConnectionConfigJson = (workerUrls: string[] | null | undefined): string | null => {

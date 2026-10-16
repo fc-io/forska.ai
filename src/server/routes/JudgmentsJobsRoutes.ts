@@ -722,6 +722,15 @@ const getCodexOwnerBackedRuntime = (): OwnerBackedRuntimeResolution => {
   }
 }
 
+const getClaudeCodeOwnerBackedRuntime = (): OwnerBackedRuntimeResolution => {
+  return {
+    resolvedRuntime: {modelBaseUrl: 'claude-code://cli', modelProvider: 'claude-code', modelWorkerUrls: []},
+    runtimeMatchReason: 'manual-provider',
+    runtimeMatchStatus: 'matched',
+    runtimeResolutionMode: 'manual',
+  }
+}
+
 const getOwnerBackedRuntimeMatch = async ({
   baseURL,
   modelName,
@@ -735,6 +744,10 @@ const getOwnerBackedRuntimeMatch = async ({
 }): Promise<OwnerBackedRuntimeResolution> => {
   if (providerKind === 'codex') {
     return getCodexOwnerBackedRuntime()
+  }
+
+  if (providerKind === 'claude-code') {
+    return getClaudeCodeOwnerBackedRuntime()
   }
 
   const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})

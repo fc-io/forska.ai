@@ -49,12 +49,14 @@ export const getProviderConnectedMessage = ({
   const tested =
     catalog.kind === 'codex'
       ? 'checked CLI login, app-server readiness, and model listing'
-      : catalog.kind === 'openai'
-          || catalog.kind === 'anthropic'
-          || catalog.kind === 'google'
-          || catalog.kind === 'openrouter'
-        ? 'checked credentials and model listing'
-        : 'checked endpoint reachability and model listing'
+      : catalog.kind === 'claude-code'
+        ? 'checked CLI version, login status, and model listing'
+        : catalog.kind === 'openai'
+            || catalog.kind === 'anthropic'
+            || catalog.kind === 'google'
+            || catalog.kind === 'openrouter'
+          ? 'checked credentials and model listing'
+          : 'checked endpoint reachability and model listing'
   const listing = modelCount === 1 ? 'listed 1 model' : `listed ${modelCount} models`
 
   return `${catalog.label} test passed: ${tested}; ${listing}.`

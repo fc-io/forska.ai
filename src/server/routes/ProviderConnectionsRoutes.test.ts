@@ -77,7 +77,7 @@ const state = {
     return [
       {
         authMode: 'api-key',
-        baseURL: 'https://api.example.com/v1',
+        baseURL: 'https://api.example.com/v1' as string | null,
         config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
         createdAt: null,
         enabled: true,
@@ -89,7 +89,7 @@ const state = {
         maxInflightRequests: null,
         models: [],
         providerKind: 'openrouter',
-        secretRef: 'keychain:provider-connection:test',
+        secretRef: 'keychain:provider-connection:test' as string | null,
         updatedAt: null,
       },
     ]
@@ -239,6 +239,15 @@ const registerModuleMocks = () => {
             supportsDiscovery: true,
             supportsWorkerUrls: false,
           },
+          {
+            defaultBaseURL: null,
+            description: 'mock',
+            kind: 'claude-code',
+            label: 'Claude Code',
+            requiresApiKey: false,
+            supportsDiscovery: true,
+            supportsWorkerUrls: false,
+          },
         ]
       },
       getProviderCatalogEntry: (providerKind: string) => {
@@ -252,23 +261,29 @@ const registerModuleMocks = () => {
               supportsDiscovery: true,
               supportsWorkerUrls: false,
             }
-          : providerKind === 'codex'
+          : providerKind === 'codex' || providerKind === 'claude-code'
             ? {
                 defaultBaseURL: null,
                 description: 'mock',
-                kind: 'codex',
-                label: 'Codex App',
+                kind: providerKind,
+                label: providerKind === 'codex' ? 'Codex App' : 'Claude Code',
                 requiresApiKey: false,
                 supportsDiscovery: true,
                 supportsWorkerUrls: false,
               }
             : null
       },
+      isClaudeCodeProvider: (providerKind: string) => {
+        return providerKind === 'claude-code'
+      },
       isCodexProvider: (providerKind: string) => {
         return providerKind === 'codex'
       },
+      isLocalCliProvider: (providerKind: string) => {
+        return providerKind === 'codex' || providerKind === 'claude-code'
+      },
       normalizeProviderKind: (providerKind: string) => {
-        return providerKind as 'codex' | 'openrouter' | 'unknown'
+        return providerKind as 'claude-code' | 'codex' | 'openrouter' | 'unknown'
       },
     }
   })
@@ -368,6 +383,27 @@ test('provider connections route round-trips maxInflightRequests on create', asy
   expect(response.status).toBe(200)
   expect(body.data.connection.maxInflightRequests).toBe(3)
   expect(state.createProviderConnection).toHaveBeenCalledWith(expect.objectContaining({maxInflightRequests: 3}))
+})
+
+test('provider connections route creates a Claude Code connection without a base URL or secret', async () => {
+  state.createProviderConnection.mockClear()
+  state.storeProviderSecret.mockClear()
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections', {
+      body: JSON.stringify({baseURL: 'http://ignored.example', label: 'Claude Code', providerKind: 'claude-code'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {connection: {baseURL: string | null; providerKind: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.connection).toMatchObject({baseURL: null, providerKind: 'claude-code'})
+  expect(state.createProviderConnection).toHaveBeenCalledWith(
+    expect.objectContaining({baseURL: null, maxInflightRequests: null, providerKind: 'claude-code', secretRef: null}),
+  )
+  expect(state.storeProviderSecret).not.toHaveBeenCalled()
 })
 
 test('provider connections route rejects invalid maxInflightRequests on create', async () => {
@@ -637,6 +673,46 @@ test('provider connections route exposes the current runtime/global inflight def
   expect(response.status).toBe(200)
   expect(body.data.connections[0]?.effectiveMaxInflightRequests).toBe(12)
   expect(state.getJudgmentsCapacity).toHaveBeenCalledWith(1)
+})
+
+test('provider connections route exposes the Claude Code inflight default when no override is saved', async () => {
+  const previousMaxInflight = process.env.FORSKA_CLAUDE_CODE_MAX_INFLIGHT
+
+  delete process.env.FORSKA_CLAUDE_CODE_MAX_INFLIGHT
+  state.listProviderConnections.mockImplementationOnce(async () => {
+    return [
+      {
+        authMode: 'claude-cli',
+        baseURL: null,
+        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
+        createdAt: null,
+        enabled: true,
+        hasSecret: false,
+        id: 'connection-claude-code',
+        label: 'Claude Code',
+        lastCheckedAt: null,
+        lastError: null,
+        maxInflightRequests: null,
+        models: [],
+        providerKind: 'claude-code',
+        secretRef: null,
+        updatedAt: null,
+      },
+    ]
+  })
+
+  try {
+    const app = await loadRoutes()
+    const response = await app.handle(new Request('http://localhost/api/provider-connections'))
+    const body = (await response.json()) as {data: {connections: Array<{effectiveMaxInflightRequests: number}>}}
+
+    expect(response.status).toBe(200)
+    expect(body.data.connections[0]?.effectiveMaxInflightRequests).toBe(4)
+  } finally {
+    if (previousMaxInflight !== undefined) {
+      process.env.FORSKA_CLAUDE_CODE_MAX_INFLIGHT = previousMaxInflight
+    }
+  }
 })
 
 test('provider connections route exposes shared endpoint availability diagnostics', async () => {

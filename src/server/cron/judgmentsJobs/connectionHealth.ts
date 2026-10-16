@@ -1,3 +1,4 @@
+import {isClaudeCodeFailureCode} from '../../providers/claudeCodeFailureCodes.ts'
 import {
   getJudgmentEndpointAvailability,
   recordJudgmentEndpointFailure,
@@ -220,6 +221,10 @@ const isCodexTransientPromptError = ({
   )
 }
 
+const isClaudeCodePromptScopedError = (error: unknown): boolean => {
+  return isClaudeCodeFailureCode(getErrorCode(error))
+}
+
 const getLikelyCause = ({
   endpointPath,
   kind,
@@ -349,27 +354,29 @@ export const classifyConnectionFailure = ({
   })
   const kind: ConnectionFailureKind = isCircuitOpenError(error)
     ? 'circuit_open'
-    : statusCode === 429
-      ? 'rate_limited'
-      : isCodexWebsocketForbidden
+    : isClaudeCodePromptScopedError(error)
+      ? 'other'
+      : statusCode === 429
         ? 'rate_limited'
-        : isCodexInitializeTimeout
-          ? 'network_unavailable'
-          : isCodexTransientUpstream || isCodexTransientPrompt
-            ? 'other'
-            : isRequiredOpenAICompatibleEndpoint && statusCode === 404
-              ? 'endpoint_unavailable'
-              : isRequiredOpenAICompatibleEndpoint && (statusCode === 405 || statusCode === 501)
-                ? 'endpoint_misconfigured'
-                : statusCode === 408
-                  ? 'network_unavailable'
-                  : statusCode != null && statusCode >= 500
-                    ? 'endpoint_unavailable'
-                    : statusCode != null && statusCode >= 400
-                      ? 'other'
-                      : isNetworkError(error)
-                        ? 'network_unavailable'
-                        : 'other'
+        : isCodexWebsocketForbidden
+          ? 'rate_limited'
+          : isCodexInitializeTimeout
+            ? 'network_unavailable'
+            : isCodexTransientUpstream || isCodexTransientPrompt
+              ? 'other'
+              : isRequiredOpenAICompatibleEndpoint && statusCode === 404
+                ? 'endpoint_unavailable'
+                : isRequiredOpenAICompatibleEndpoint && (statusCode === 405 || statusCode === 501)
+                  ? 'endpoint_misconfigured'
+                  : statusCode === 408
+                    ? 'network_unavailable'
+                    : statusCode != null && statusCode >= 500
+                      ? 'endpoint_unavailable'
+                      : statusCode != null && statusCode >= 400
+                        ? 'other'
+                        : isNetworkError(error)
+                          ? 'network_unavailable'
+                          : 'other'
   const likelyCause = getLikelyCause({endpointPath, kind, statusCode})
 
   return {
