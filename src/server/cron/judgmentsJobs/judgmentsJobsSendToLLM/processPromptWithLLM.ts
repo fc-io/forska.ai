@@ -5,7 +5,7 @@ import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromp
 import {getSystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
 import type {StoredProviderInvocationContext} from '../../../providers/providerInvocationService.ts'
-import {getProviderModelMetadataPromptTokenLimit} from '../../../providers/providerModelMetadata.ts'
+import {getModelContext, getModelContextWindowMissingError} from '../../../providers/providerModelCapabilities.ts'
 import {escapeSqlString} from '../../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appReadOnlyDatabaseService.ts'
 import {getJudgeWorkerReadOnlyAppQueryService} from '../../../services/getAppReadOnlyQueryService.ts'
@@ -108,8 +108,7 @@ const cachedArticleLookups = new Map<string, Promise<ArticleRecord | null>>()
 const cachedOwnerBackedPromptLookups = new Map<string, Promise<{article: ArticleRecord; prompt: PromptDefinition}>>()
 const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 
-const DEFAULT_MODEL_CONTEXT = 32768
-const DEFAULT_PROMPT_TOKEN_LIMIT = Math.max(0, DEFAULT_MODEL_CONTEXT - MAX_COMPLETION_TOKENS)
+const modelContextWindowMissingRetryAfterMs = 60_000
 export const maxRecoverablePromptExtraRetries = 1
 export const promptPreparationConcurrencyBounds = {maximum: 512, minimum: 2} as const
 
@@ -131,8 +130,34 @@ export const getPromptPreparationConcurrencyLimit = ({
   return Math.min(promptPreparationConcurrencyBounds.maximum, dynamicLimit)
 }
 
-const getModelContext = (metadataJson: unknown): number => {
-  return getProviderModelMetadataPromptTokenLimit(metadataJson, MAX_COMPLETION_TOKENS) ?? DEFAULT_PROMPT_TOKEN_LIMIT
+const getPromptModelContext = (promptToProcess: PromptToProcess): number | null => {
+  const modelContextInput = {
+    model: {
+      metadataJson: promptToProcess.modelMetadataJson,
+      providerKind: normalizeProviderKind(promptToProcess.modelProvider),
+      remoteModelId: promptToProcess.modelName,
+    },
+    modelName: promptToProcess.modelName,
+    providerConnectionId: promptToProcess.providerConnectionId,
+    reservedCompletionTokens: MAX_COMPLETION_TOKENS,
+  }
+  const modelContextWindowError = getModelContextWindowMissingError(modelContextInput)
+
+  if (modelContextWindowError) {
+    processPromptFailureLogger.error(
+      `llm.prompt.modelContextWindowMissing.${promptToProcess.jobId}`,
+      `[llm] ${modelContextWindowError.message}`,
+      {
+        component: processPromptComponent,
+        event: 'modelContextWindowMissing',
+        jobId: promptToProcess.jobId,
+        modelId: promptToProcess.modelId,
+        recordId: promptToProcess.recordId,
+      },
+    )
+  }
+
+  return modelContextWindowError ? null : getModelContext(modelContextInput)
 }
 
 const getOwnerBackedProviderInvocationContext = (promptToProcess: PromptToProcess): StoredProviderInvocationContext => {
@@ -855,7 +880,7 @@ const getPromptPreparationCloseoutReason = (error: unknown): PromptCloseoutReaso
 
 export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Effect.Effect<void, unknown> => {
   const startTime = Date.now()
-  const modelContext = getModelContext(promptToProcess.modelMetadataJson)
+  const modelContext = getPromptModelContext(promptToProcess)
   let terminalState: PromptTerminalState = {kind: 'ready', retryAfterMs: null}
 
   return Effect.scoped(
@@ -875,6 +900,11 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
     ).pipe(
       Effect.flatMap(() => {
         return Effect.promise(async () => {
+          if (modelContext === null) {
+            terminalState = {kind: 'ready', retryAfterMs: modelContextWindowMissingRetryAfterMs}
+            return undefined
+          }
+
           const prepared = await withPromptPreparationPermit(promptToProcess, () => {
             return preparePrompt(promptToProcess, modelContext)
           }).catch((error) => {

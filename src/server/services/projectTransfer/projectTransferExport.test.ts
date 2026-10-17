@@ -174,7 +174,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     invalidFulltextMessage: string | null
     judgmentAssessmentIds: string[]
     judgmentInputSignature: {
-      model: {modelOptions: {thinking: string | null}; promptTokenLimit: number}
+      model: {modelOptions: {thinking: string | null}; promptTokenLimit: number | null}
       provider: {transportFamily: string | null}
       request: {
         invocationTemperature: number
@@ -1306,7 +1306,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.summaryReviewIds).toEqual(['review-summary'])
   expect(result.judgmentProvenanceKind).toBe('currentReviewRows')
   expect(result.judgmentInputSignature).toMatchObject({
-    model: {modelOptions: {thinking: 'medium'}, promptTokenLimit: 28768},
+    model: {modelOptions: {thinking: 'medium'}, promptTokenLimit: null},
     provider: {transportFamily: 'codex-app'},
     request: {
       invocationTemperature: 0.2,

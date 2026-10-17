@@ -2,6 +2,7 @@ import {existsSync} from 'node:fs'
 
 import type {SystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
 import {getProviderConnectionConfigFromJson} from '../../../providers/providerDbUtils.ts'
+import {getModelContextWindowMissingError} from '../../../providers/providerModelCapabilities.ts'
 import {resolveProviderConnectionRuntimeMatch} from '../../../providers/providerRuntimeMatchResolver.ts'
 import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appReadOnlyDatabaseService.ts'
@@ -109,6 +110,35 @@ const getLocalCliPromptRuntime = (provider: string): PromptRuntime => {
 }
 
 const ownerBackedRuntimeLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const modelContextWindowClaimLogger = createRateLimitedLogger({sink: 'both', windowMs: 60_000})
+
+const isModelContextWindowMissingForClaim = ({
+  jobId,
+  modelMetadataJson,
+  modelName,
+  modelProvider,
+}: {
+  jobId: string
+  modelMetadataJson: unknown
+  modelName: string
+  modelProvider: string
+}): boolean => {
+  const modelContextWindowError = getModelContextWindowMissingError({
+    model: {metadataJson: modelMetadataJson, providerKind: normalizeProvider(modelProvider), remoteModelId: modelName},
+    modelName,
+    providerConnectionId: null,
+  })
+
+  if (modelContextWindowError) {
+    modelContextWindowClaimLogger.warn(
+      `judgmentsJobs.modelContextWindow.claimGated.${jobId}`,
+      `[getAndUpdateReadyPrompts] claims held back: ${modelContextWindowError.message}`,
+      {component: 'getAndUpdateReadyPrompts', event: 'modelContextWindowClaimGated', jobId},
+    )
+  }
+
+  return modelContextWindowError !== null
+}
 
 const getOwnerRuntimeMissingLogKey = (jobId: string, jobInfo: OwnerBackedJudgmentJobInfo): string => {
   return [
@@ -251,6 +281,10 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
     return []
   }
 
+  if (isModelContextWindowMissingForClaim({...jobInfo, jobId})) {
+    return []
+  }
+
   const provider = normalizeProvider(jobInfo.modelProvider)
 
   if (isLocalCliProvider(provider)) {
@@ -342,6 +376,10 @@ const getOwnerBackedReadyRows = async (
       return []
     }
 
+    if (isModelContextWindowMissingForClaim({...jobInfo, jobId})) {
+      return []
+    }
+
     const runtime = getOwnerBackedPromptRuntime(jobId, jobInfo)
 
     if (!runtime) {
@@ -391,7 +429,7 @@ const getOwnerBackedReadyRows = async (
       const sqliteService = getJudgmentJobSqliteService()
       const localJobInfo = await sqliteService.getJobInfo(jobId)
 
-      if (!localJobInfo) {
+      if (!localJobInfo || isModelContextWindowMissingForClaim({...localJobInfo, jobId})) {
         return []
       }
 

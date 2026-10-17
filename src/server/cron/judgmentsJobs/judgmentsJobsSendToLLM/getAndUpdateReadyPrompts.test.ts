@@ -140,8 +140,9 @@ test('claims ready rows from the per-job SQLite queue', async () => {
       )
     `)
     await runDatabase(`
-      INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-      VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+      INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, metadata_json)
+      VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE,
+      '{"discovery":{"contextWindow":{"inputTokens":32768,"outputTokens":null,"totalTokens":32768}}}')
     `)
     await runDatabase(`
       INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
@@ -309,7 +310,7 @@ test('owner-backed codex prompts bypass runtime autodetect', async () => {
               jobId: 'job-codex',
               modelBaseUrl: 'unused',
               modelId: 'model-unused',
-              modelMetadataJson: null,
+              modelMetadataJson: {discovery: {contextWindow: {inputTokens: 32768, outputTokens: null, totalTokens: 32768}}},
               modelName: 'unused',
               modelProvider: 'codex',
               modelSecretRef: null,
@@ -446,7 +447,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
               jobId: 'job-sglang',
               modelBaseUrl: 'unused',
               modelId: 'model-unused',
-              modelMetadataJson: null,
+              modelMetadataJson: {discovery: {contextWindow: {inputTokens: 32768, outputTokens: null, totalTokens: 32768}}},
               modelName: 'unused',
               modelProvider: 'sglang',
               modelSecretRef: null,
@@ -468,7 +469,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
               maxInflightRequests: 8,
               modelBaseUrl: 'http://saved-sglang:30000/v1',
               modelId: 'model-sglang',
-              modelMetadataJson: {provider: 'sglang'},
+              modelMetadataJson: {discovery: {contextWindow: {inputTokens: 32768, outputTokens: null, totalTokens: 32768}}, provider: 'sglang'},
               modelName: 'Qwen/Qwen3.5-35B-A3B',
               modelProvider: 'sglang',
               modelSecretRef: null,

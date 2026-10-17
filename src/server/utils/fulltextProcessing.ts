@@ -62,13 +62,6 @@ const CHARS_PER_TOKEN = 4
  */
 const RESERVED_FOR_PROMPT = 2000 // title, summary, question, system prompt
 
-/**
- * Default model context window (conservative estimate).
- * Most modern models have 32K+ context, but we use a safe default.
- */
-const DEFAULT_MODEL_CONTEXT = 32768
-const DEFAULT_PROMPT_TOKEN_LIMIT = DEFAULT_MODEL_CONTEXT - RESERVED_FOR_PROMPT
-
 export type TokenBudgetResult = {withinBudget: boolean; tokenCount: number; maxTokens: number}
 
 /**
@@ -78,10 +71,7 @@ export type TokenBudgetResult = {withinBudget: boolean; tokenCount: number; maxT
  * @param promptTokenLimit - The prompt-token budget available for the request
  * @returns Result indicating whether content fits and token counts
  */
-export const checkFulltextTokenBudget = (
-  fullText: string,
-  promptTokenLimit: number = DEFAULT_PROMPT_TOKEN_LIMIT,
-): TokenBudgetResult => {
+export const checkFulltextTokenBudget = (fullText: string, promptTokenLimit: number): TokenBudgetResult => {
   const maxFulltextTokens = promptTokenLimit - RESERVED_FOR_PROMPT
 
   // Estimate token count (conservative: 4 chars per token)
@@ -99,7 +89,7 @@ export const checkFulltextTokenBudget = (
  * @param options - Processing options
  * @returns Processed result with status
  */
-export type ProcessFulltextOptions = {promptTokenLimit?: number; stripImages: boolean}
+export type ProcessFulltextOptions = {promptTokenLimit: number; stripImages: boolean}
 
 export type ProcessFulltextResult = {
   processedText: string

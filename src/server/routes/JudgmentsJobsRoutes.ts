@@ -116,6 +116,11 @@ import {
   retryPendingJudgmentJobSqliteDeletes,
 } from '../services/judgmentJobDeleteService.ts'
 import {
+  assertModelContextWindowResolvable,
+  getJudgmentJobModelContextWindowClaimError,
+  getModelContextWindowErrorForRow,
+} from '../services/judgmentJobModelContextWindow.ts'
+import {
   getJudgmentJobProviderClaimGate,
   getJudgmentJobProviderHealth,
   getJudgmentJobProviderHealthMap,
@@ -954,6 +959,14 @@ const logProviderClaimGate = async (jobId: string, providerClaimGate: ProviderCl
   )
 }
 
+const logModelContextWindowClaimGate = (jobId: string, message: string): void => {
+  providerHealthLogger.warn(
+    `judgmentsJobs.modelContextWindow.claimGated.${jobId}`,
+    `[judgmentsJobs] claims held back: ${message}`,
+    {component: 'JudgmentsJobsRoutes', event: 'modelContextWindowClaimGated', jobId},
+  )
+}
+
 const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {
   const claimedBy = body?.claimedBy ?? judgmentJobServerId
   if (isJudgeWorkerPausedAfterArmedTestClaim({claimedBy})) {
@@ -964,6 +977,13 @@ const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequest
 
   if (!providerClaimGate.claimsAllowed) {
     void logProviderClaimGate(jobId, providerClaimGate)
+    return {data: {claims: []}, error: null}
+  }
+
+  const modelContextWindowError = await getJudgmentJobModelContextWindowClaimError(jobId)
+
+  if (modelContextWindowError) {
+    logModelContextWindowClaimGate(jobId, modelContextWindowError.message)
     return {data: {claims: []}, error: null}
   }
 
@@ -2116,6 +2136,24 @@ const assertProjectRuntimeModelMatch = async (projectId: string): Promise<void> 
   return assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
 }
 
+const getJudgmentJobModelContextWindowApi = (row: Parameters<typeof getModelContextWindowErrorForRow>[0]) => {
+  const error = row.remoteModelId === null && row.displayName === null ? null : getModelContextWindowErrorForRow(row)
+
+  return error
+    ? {
+        linkPath: error.linkPath,
+        linkText: error.linkText,
+        message: error.message,
+        modelName: error.modelName,
+        providerKind: error.providerKind,
+      }
+    : null
+}
+
+const assertProjectModelContextWindow = async (projectId: string): Promise<void> => {
+  return assertModelContextWindowResolvable(await getProjectModelId(projectId))
+}
+
 const getJudgingRuntimeReason = async (): Promise<string | null> => {
   if (shouldCurrentServerRunJudgingLoops()) {
     return null
@@ -3035,6 +3073,7 @@ export const judgmentsJobsRoutes = new Elysia()
 
       await assertJudgingRuntimeCanRun()
       await assertProjectRuntimeModelMatch(body.projectId)
+      await assertProjectModelContextWindow(body.projectId)
 
       const [job] = await getAppDatabaseService().queryJson<{
         id: string
@@ -3541,6 +3580,11 @@ export const judgmentsJobsRoutes = new Elysia()
           importFailureCount: number | null
           pauseRequestedAt: unknown
           projectName: string | null
+          modelDisplayName: string | null
+          modelMetadataJson: unknown
+          modelProviderConnectionId: string | null
+          modelProviderKind: string | null
+          modelRemoteModelId: string | null
           stopAfterArticles: number | null
           stopAfterTotalTokens: number | string | null
           stopAt: unknown
@@ -3571,15 +3615,41 @@ export const judgmentsJobsRoutes = new Elysia()
           COALESCE(jj.stop_when_human_answered_done, FALSE) AS stopWhenHumanAnsweredDone,
           jj.stop_reason AS stopReason,
           jj.stop_reason_at AS stopReasonAt,
-          p.name AS projectName
+          p.name AS projectName,
+          COALESCE(m.display_name, m.name) AS modelDisplayName,
+          TO_JSON(m.metadata_json) AS modelMetadataJson,
+          m.provider_connection_id AS modelProviderConnectionId,
+          pc.provider_kind AS modelProviderKind,
+          m.remote_model_id AS modelRemoteModelId
         FROM app.judgment_job jj
         INNER JOIN app.project p ON jj.project_id = p.id
+        LEFT JOIN app.model m ON m.id = p.model_id
+        LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
         WHERE p.archived = FALSE
         ORDER BY jj.created_at ASC
       `)
-        const jobsWithStopFields = jobs.map((job) => {
-          return {...job, ...getJudgmentJobStopFields(job)}
-        })
+        const jobsWithStopFields = jobs.map(
+          ({
+            modelDisplayName,
+            modelMetadataJson,
+            modelProviderConnectionId,
+            modelProviderKind,
+            modelRemoteModelId,
+            ...job
+          }) => {
+            return {
+              ...job,
+              ...getJudgmentJobStopFields(job),
+              modelContextWindow: getJudgmentJobModelContextWindowApi({
+                displayName: modelDisplayName,
+                metadataJson: modelMetadataJson,
+                providerConnectionId: modelProviderConnectionId,
+                providerKind: modelProviderKind,
+                remoteModelId: modelRemoteModelId,
+              }),
+            }
+          },
+        )
         const [sqliteHealthByJobId, providerHealthByJobId, stopProgressByJobId] = await Promise.all([
           getSqliteHealthMapForReadableRoute({db, jobs}),
           getProviderHealthMapForReadableRoute({
@@ -3834,6 +3904,7 @@ export const judgmentsJobsRoutes = new Elysia()
         await assertJudgingRuntimeCanRun()
         const {job, projectModelId} = await getJobContext({jobId: params.id})
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
+        await assertModelContextWindowResolvable(projectModelId)
 
         if (!sqliteService.hasJob(params.id)) {
           await sqliteService.initializeJob(params.id)
@@ -3919,6 +3990,7 @@ export const judgmentsJobsRoutes = new Elysia()
 
       await assertJudgmentJobStopConditionsAllowResume({jobId: params.id, update: {}})
       await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
+      await assertModelContextWindowResolvable(projectModelId)
       await resetJudgmentJobLocalSqliteState({jobId: params.id, storageState: job.storageState})
       await sqliteService.initializeJob(params.id)
       await assertJudgmentJobCanRunSqlitePreflight({jobId: params.id, quarantineReason: null, storageState: 'active'})

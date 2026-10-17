@@ -3382,9 +3382,9 @@ test('project transfer commit writer materializes imported provider and model de
     remoteModelId: 'target-remote',
     variant: null,
   })
-  expect(result.modelRow.snapshotContextLimit).toBe(32768)
+  expect(result.modelRow.snapshotContextLimit).toBe(null)
   expect(result.modelRow.snapshotModelOptionThinking).toBe(null)
-  expect(result.modelRow.snapshotPromptTokenLimit).toBe(28768)
+  expect(result.modelRow.snapshotPromptTokenLimit).toBe(null)
   expect(result.modelRow.providerConnectionId).toBe(result.providerRow.id)
   expect(result.commitMaps.modelId).toBe(result.projectRow.modelId)
   expect(result.commitMaps.providerConnectionId).toBe(result.providerRow.id)

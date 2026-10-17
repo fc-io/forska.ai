@@ -8,7 +8,7 @@ import {
 import {getSinglePromptSystemPromptForArticle} from '../../../agent/judge/judgePromptSelection.ts'
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
-import {getProviderModelMetadataPromptTokenLimit} from '../../providers/providerModelMetadata.ts'
+import {getProviderModelContextLimits} from '../../providers/providerModelCapabilities.ts'
 import type {ReviewServingFreshnessState} from '../../reviewServing/reviewServingContracts.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
@@ -16,9 +16,6 @@ import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../services/appQu
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
-
-const defaultJudgmentModelContext = 32768
-const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 
 type PromptPreviewServingRow = {
   article_summary: string | null
@@ -56,7 +53,7 @@ const getUnavailablePromptPreview = (input: {
   articleId: string | null
   articleTitle?: string | null
   diagnostics?: ReviewServingReaderResult<PromptPreviewServingRow>['diagnostics'] | null
-  reason: 'no_articles' | 'no_fulltext' | ReviewServingFreshnessState
+  reason: 'model_context_window_missing' | 'no_articles' | 'no_fulltext' | ReviewServingFreshnessState
   systemPrompt: string
   systemPromptVariant: SystemPromptVariant
 }) => {
@@ -76,11 +73,16 @@ const getUnavailablePromptPreview = (input: {
 }
 
 const getPromptPreviewProjectModel = async (params: {modelId: string; projectId: string}) => {
-  const rows = await getAppDatabaseService().queryJson<{modelMetadataJson: unknown; provider: string | null}>(
+  const rows = await getAppDatabaseService().queryJson<{
+    modelMetadataJson: unknown
+    provider: string | null
+    remoteModelId: string | null
+  }>(
     `
       SELECT
         TO_JSON(m.metadata_json) AS modelMetadataJson,
-        pc.provider_kind AS provider
+        pc.provider_kind AS provider,
+        m.remote_model_id AS remoteModelId
       FROM app.model m
       LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
       WHERE m.id = '${escapeSqlString(params.modelId)}'
@@ -305,10 +307,30 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
     }
 
     const firstArticleId = previewArticle.article_id
-    const modelContext =
-      getProviderModelMetadataPromptTokenLimit(getJsonValue(projectModel?.modelMetadataJson), MAX_COMPLETION_TOKENS)
-      ?? defaultJudgmentPromptTokenLimit
+    const modelContext = getProviderModelContextLimits({
+      model: {
+        metadataJson: getJsonValue(projectModel?.modelMetadataJson),
+        providerKind: provider,
+        remoteModelId: projectModel?.remoteModelId ?? null,
+      },
+      reservedCompletionTokens: MAX_COMPLETION_TOKENS,
+    }).promptTokenLimit
     const needsFulltext = projectRow.useFulltext || projectRow.useFulltextNoImages
+
+    if (needsFulltext && modelContext === null) {
+      return getUnavailablePromptPreview({
+        articleId: previewArticle.article_id,
+        articleTitle: previewArticle.article_title,
+        diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
+        reason: 'model_context_window_missing',
+        systemPrompt: getSinglePromptSystemPromptForArticle(
+          getScientificArticlePlaceholderRecord(),
+          provider,
+          systemPromptVariant,
+        ),
+        systemPromptVariant,
+      })
+    }
     const useMetadata = projectRow.useMetadata === true
     const previewArticleDetails =
       needsFulltext || useMetadata
@@ -320,7 +342,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         : null
     const previewFullText = previewArticleDetails?.fullText ?? null
     const fullTextResult =
-      needsFulltext && previewFullText
+      needsFulltext && previewFullText && modelContext !== null
         ? processFulltextForLLM(previewFullText, {
             promptTokenLimit: modelContext,
             stripImages: projectRow.useFulltextNoImages,

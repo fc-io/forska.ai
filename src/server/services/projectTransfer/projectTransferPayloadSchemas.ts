@@ -1651,7 +1651,7 @@ const judgmentInputSignature = {
     withinBudget: null,
   },
   kind: 'judgmentInputSignature',
-  model: {contextLimit: 32768, modelOptions: {thinking: 'medium'}, modelSignature, promptTokenLimit: 28768},
+  model: {contextLimit: null, modelOptions: {thinking: 'medium'}, modelSignature, promptTokenLimit: null},
   prompt: {
     contentHash: promptSignature.contentHash,
     originalTextDigest: '57fff23fa1930f01b7c37bb4f83ac0adbf1620b1d5d08852ac677780ffa2e338',
