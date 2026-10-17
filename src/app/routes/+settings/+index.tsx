@@ -92,6 +92,8 @@ type UpdateLocalUserInput = {
 }
 type UpdateUserResponse = {data: LocalUser}
 type StoredModelsResponse = {data: StoredModel[]}
+
+const fullTextConversionProviderKinds = ['docling', 'mineru']
 type RuntimeReadyResponse = {data: RuntimeReady}
 type RuntimeStateResponse = {data: RuntimeState}
 type ClearDatabasesResult = {
@@ -299,7 +301,7 @@ const Settings = () => {
 
   const fullTextConversionModels = () => {
     return (storedModelsQuery.data ?? []).filter((model) => {
-      return model.enabled && model.provider === 'docling'
+      return model.enabled && fullTextConversionProviderKinds.includes(model.provider)
     })
   }
 
@@ -372,7 +374,8 @@ const Settings = () => {
                   </For>
                 </select>
                 <p class="mt-2 text-xs text-gray-500">
-                  Choose a Docling provider model for PDF conversion. Manage endpoints and models on the Providers page.
+                  Choose a MinerU or Docling provider model for PDF conversion. Manage endpoints and models on the
+                  Providers page.
                 </p>
               </div>
               <div>

@@ -3,6 +3,7 @@ export type ProviderKind =
   | 'codex'
   | 'claude-code'
   | 'docling'
+  | 'mineru'
   | 'anthropic'
   | 'google'
   | 'openrouter'
@@ -58,6 +59,15 @@ const providerCatalogEntries: ProviderCatalogEntry[] = [
     label: 'Docling Serve',
     requiresApiKey: false,
     supportsDiscovery: false,
+    supportsWorkerUrls: false,
+  },
+  {
+    defaultBaseURL: 'http://127.0.0.1:8000',
+    description: 'MinerU 4 local parsing API (mineru-api) for PDF conversion',
+    kind: 'mineru',
+    label: 'MinerU',
+    requiresApiKey: false,
+    supportsDiscovery: true,
     supportsWorkerUrls: false,
   },
   {
@@ -182,6 +192,16 @@ export const isAnthropicProvider = (providerKind: string | null | undefined): bo
 
 export const isGoogleProvider = (providerKind: string | null | undefined): boolean => {
   return normalizeProviderKind(providerKind) === 'google'
+}
+
+export const fullTextConversionProviderKinds = ['docling', 'mineru'] as const
+
+export const isFullTextConversionProvider = (providerKind: string | null | undefined): boolean => {
+  const normalized = normalizeProviderKind(providerKind)
+
+  return fullTextConversionProviderKinds.some((kind) => {
+    return kind === normalized
+  })
 }
 
 export const isOpenAICompatibleProvider = (providerKind: string | null | undefined): boolean => {

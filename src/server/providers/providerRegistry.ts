@@ -6,6 +6,7 @@ import {createDoclingAdapter} from './adapters/doclingAdapter.ts'
 import {createGoogleAdapter} from './adapters/googleAdapter.ts'
 import {createLlamacppAdapter} from './adapters/llamacppAdapter.ts'
 import {createLlmstudioAdapter} from './adapters/llmstudioAdapter.ts'
+import {createMineruAdapter} from './adapters/mineruAdapter.ts'
 import {createOllamaAdapter} from './adapters/ollamaAdapter.ts'
 import {createOpenAIAdapter} from './adapters/openaiAdapter.ts'
 import {createOpenrouterAdapter} from './adapters/openrouterAdapter.ts'
@@ -30,48 +31,50 @@ const createProviderDefinition = (catalog: ProviderCatalogEntry): ProviderDefini
         ? createClaudeCodeAdapter(catalog)
         : catalog.kind === 'docling'
           ? createDoclingAdapter(catalog)
-          : catalog.kind === 'anthropic'
-            ? createAnthropicAdapter(catalog)
-            : catalog.kind === 'google'
-              ? createGoogleAdapter(catalog)
-              : catalog.kind === 'openrouter'
-                ? createOpenrouterAdapter(catalog)
-                : catalog.kind === 'ollama'
-                  ? createOllamaAdapter(catalog)
-                  : catalog.kind === 'llmstudio'
-                    ? createLlmstudioAdapter(catalog)
-                    : catalog.kind === 'llamacpp'
-                      ? createLlamacppAdapter(catalog)
-                      : catalog.kind === 'sglang'
-                        ? createSglangAdapter(catalog)
-                        : catalog.kind === 'vllm'
-                          ? createVllmAdapter(catalog)
-                          : {
-                              beginAuth: async () => {
-                                return getUnsupportedProviderAuthResult(catalog.label)
-                              },
-                              catalog,
-                              finishAuth: async () => {
-                                return getUnsupportedProviderAuthResult(catalog.label)
-                              },
-                              health: async () => {
-                                throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                              },
-                              invoke: async () => {
-                                throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                              },
-                              kind: catalog.kind,
-                              listModels: async () => {
-                                throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                              },
-                              resolveRuntimeCredentials: async () => {
-                                throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                              },
-                              testConnection: async () => {
-                                throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                              },
-                              transportFamily: 'openai-chat',
-                            }
+          : catalog.kind === 'mineru'
+            ? createMineruAdapter(catalog)
+            : catalog.kind === 'anthropic'
+              ? createAnthropicAdapter(catalog)
+              : catalog.kind === 'google'
+                ? createGoogleAdapter(catalog)
+                : catalog.kind === 'openrouter'
+                  ? createOpenrouterAdapter(catalog)
+                  : catalog.kind === 'ollama'
+                    ? createOllamaAdapter(catalog)
+                    : catalog.kind === 'llmstudio'
+                      ? createLlmstudioAdapter(catalog)
+                      : catalog.kind === 'llamacpp'
+                        ? createLlamacppAdapter(catalog)
+                        : catalog.kind === 'sglang'
+                          ? createSglangAdapter(catalog)
+                          : catalog.kind === 'vllm'
+                            ? createVllmAdapter(catalog)
+                            : {
+                                beginAuth: async () => {
+                                  return getUnsupportedProviderAuthResult(catalog.label)
+                                },
+                                catalog,
+                                finishAuth: async () => {
+                                  return getUnsupportedProviderAuthResult(catalog.label)
+                                },
+                                health: async () => {
+                                  throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                                },
+                                invoke: async () => {
+                                  throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                                },
+                                kind: catalog.kind,
+                                listModels: async () => {
+                                  throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                                },
+                                resolveRuntimeCredentials: async () => {
+                                  throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                                },
+                                testConnection: async () => {
+                                  throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                                },
+                                transportFamily: 'openai-chat',
+                              }
 }
 
 const providerDefinitions = getProviderCatalog().map((entry) => {

@@ -4,7 +4,8 @@ import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.
 import {getProviderConnectionEffectiveBaseURL} from '../providers/providerRuntimeState.ts'
 import {normalizeDuckdbMemoryLimit} from '../utils/duckdbMemoryLimit.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getDateValue, getSqlLiteral} from './appQueryHelpers.ts'
+import {getDateValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
+import {fullTextConversionProviderKinds} from './providerCatalog.ts'
 
 type UserConfigRow = {
   maintenanceWorkerDuckdbMemoryLimit: string | null
@@ -56,6 +57,7 @@ export const getLocalUserConfigWhereClauseSql = (idExpression = 'id') => {
 
 const localUserConfigWhereClause = getLocalUserConfigWhereClauseSql()
 const localUserConfigAliasWhereClause = getLocalUserConfigWhereClauseSql('uc.id')
+const fullTextConversionProviderKindsSql = getQuotedStringList([...fullTextConversionProviderKinds]).join(', ')
 
 const getNullableTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
@@ -199,7 +201,7 @@ const getValidatedFullTextConversionModelId = async (value: string | null | unde
     WHERE m.id = ${getSqlLiteral(normalizedModelId)}
       AND COALESCE(m.enabled, TRUE) = TRUE
       AND COALESCE(pc.enabled, TRUE) = TRUE
-      AND pc.provider_kind = 'docling'
+      AND pc.provider_kind IN (${fullTextConversionProviderKindsSql})
     LIMIT 1
   `)
 
@@ -299,7 +301,7 @@ const getFullTextConversionModelConfig = async (): Promise<{
     INNER JOIN app.model m ON m.id = uc.full_text_conversion_model_id
     INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE ${localUserConfigAliasWhereClause}
-      AND pc.provider_kind = 'docling'
+      AND pc.provider_kind IN (${fullTextConversionProviderKindsSql})
       AND COALESCE(m.enabled, TRUE) = TRUE
       AND COALESCE(pc.enabled, TRUE) = TRUE
     LIMIT 1

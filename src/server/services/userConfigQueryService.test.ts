@@ -50,6 +50,7 @@ const seedDoclingModelFixture = async (params: {
   connectionEnabled?: boolean
   modelEnabled?: boolean
   modelId: string
+  providerKind?: string
 }) => {
   if (!database) {
     throw new Error('Test database not initialized')
@@ -59,7 +60,7 @@ const seedDoclingModelFixture = async (params: {
     INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url, config_json)
     VALUES (
       '${params.connectionId}',
-      'docling',
+      '${params.providerKind ?? 'docling'}',
       '${params.connectionId}',
       ${params.connectionEnabled === false ? 'FALSE' : 'TRUE'},
       'none',
@@ -341,4 +342,54 @@ test('article conversion model provenance remains readable after model deletion'
 
   expect(article?.fullTextConversionModelId).toBe('article-ref-model')
   expect(article?.fullTextConversionMetadata).toEqual({modelId: 'article-ref-model'})
+})
+
+test('full text conversion model config accepts MinerU models and refuses judge-only providers', async () => {
+  if (!database || !userConfigQueryService) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  await seedDoclingModelFixture({
+    connectionId: 'config-mineru-connection',
+    modelId: 'config-mineru-model',
+    providerKind: 'mineru',
+  })
+  await seedDoclingModelFixture({
+    connectionId: 'config-sglang-connection',
+    modelId: 'config-sglang-model',
+    providerKind: 'sglang',
+  })
+  await seedUserConfig('config-mineru-model')
+
+  expect(await userConfigQueryService.getFullTextConversionModelConfig()).toMatchObject({
+    modelId: 'config-mineru-model',
+    providerKind: 'mineru',
+  })
+
+  await seedUserConfig('config-sglang-model')
+  expect(await userConfigQueryService.getFullTextConversionModelConfig()).toBeNull()
+
+  const updateError = await userConfigQueryService
+    .updateUserConfig({
+      email: localUserDefaults.email,
+      fullTextConversionModelId: 'config-sglang-model',
+      maintenanceWorkerDuckdbMemoryLimit: null,
+      name: localUserDefaults.name,
+      unpaywallEmail: null,
+    })
+    .catch((caught: unknown) => {
+      return caught
+    })
+
+  expect((updateError as Error).message).toBe('Selected PDF conversion model is not available')
+
+  const updated = await userConfigQueryService.updateUserConfig({
+    email: localUserDefaults.email,
+    fullTextConversionModelId: 'config-mineru-model',
+    maintenanceWorkerDuckdbMemoryLimit: null,
+    name: localUserDefaults.name,
+    unpaywallEmail: null,
+  })
+
+  expect(updated.fullTextConversionModelId).toBe('config-mineru-model')
 })

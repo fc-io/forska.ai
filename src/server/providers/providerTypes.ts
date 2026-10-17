@@ -8,6 +8,7 @@ export type ProviderTransportFamily =
   | 'codex-app'
   | 'docling-convert'
   | 'gemini-generate-content'
+  | 'mineru-convert'
   | 'ollama-native-discovery'
   | 'openai-chat'
   | 'openai-responses'
