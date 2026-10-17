@@ -5188,3 +5188,70 @@ test('recoverJudgmentJobLeasesOnStartup deletes orphaned lease files', async () 
   expect(existsSync(leasePath)).toBe(false)
   expect(service.hasOwnedLease(jobId)).toBe(false)
 })
+
+test('exact outbox claims page past non-exact rows at the head of the outbox', async () => {
+  const {jobId, modelId, projectId, service} = await createSqliteJobFixture('outbox-claim-window')
+  const now = new Date().toISOString()
+
+  await service.addReadyPrompts(jobId, [{articleId: 'article-exact', promptId: 'prompt-exact'}], 'server-a')
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    const insertQuarantinedRow = sqliteDatabase.query(`
+      INSERT INTO judgment_outbox (
+        job_id, queue_prompt_id, judgment_id, article_id, prompt_id, model_id,
+        use_title, use_abstract, use_fulltext, use_fulltext_no_images, is_answered, confidence_original,
+        request_attempts_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, 1, 0, 0, 1, 50, 'not-json', ?, ?)
+    `)
+
+    for (const index of [1, 2, 3]) {
+      insertQuarantinedRow.run(
+        jobId,
+        `queue-quarantined-${index}`,
+        `judgment-quarantined-${index}`,
+        `article-quarantined-${index}`,
+        'prompt-quarantined',
+        modelId,
+        now,
+        now,
+      )
+    }
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for outbox claim window test')
+  }
+
+  const exactJudgmentId = `judgment-exact-${jobId}`
+
+  await service.recordJudgmentSuccess(
+    jobId,
+    getVariantOutboxInsert({
+      articleId: claimedPrompt.articleId,
+      judgmentId: exactJudgmentId,
+      modelId,
+      projectId,
+      promptId: claimedPrompt.promptId,
+      queuePromptId: claimedPrompt.recordId,
+    }),
+  )
+
+  const claimedBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 2,
+  })
+
+  expect(
+    claimedBatch?.rows.map((row) => {
+      return row.judgmentId
+    }),
+  ).toEqual([exactJudgmentId])
+})
