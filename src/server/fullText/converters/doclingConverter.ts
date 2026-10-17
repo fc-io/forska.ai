@@ -476,7 +476,7 @@ export const getDoclingConverterVersion = (value: unknown): string => {
     .join(' ')
 }
 
-const fetchDoclingConverterVersion = async (baseURL: string): Promise<string> => {
+export const fetchDoclingConverterVersion = async (baseURL: string): Promise<string> => {
   const response = await fetch(getConverterRoute(baseURL, '/version'), {
     signal: AbortSignal.timeout(doclingVersionTimeoutMs),
   }).catch((error: unknown) => {

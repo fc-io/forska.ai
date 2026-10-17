@@ -1,5 +1,6 @@
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {type ArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
+import {getEffectiveFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   getScopedArticleCompatibilityValues,
@@ -101,6 +102,7 @@ type ProjectReviewConfig = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
 }
 
 type ProjectPromptRow = {id: string; promptHeading: string | null; originalText: string; type: string | null}
@@ -551,6 +553,7 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
         useFulltextNoImages: boolean | null
         useMetadata: boolean | null
         systemPromptVariant: string | null
+        fullTextStrategyId: string | null
       }>(
         `
         SELECT
@@ -563,7 +566,8 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
           ${getOptionalColumnSelect({alias: 'useMetadata', columnName: 'use_metadata', columnNames})},
-          ${getOptionalColumnSelect({alias: 'systemPromptVariant', columnName: 'system_prompt_variant', columnNames})}
+          ${getOptionalColumnSelect({alias: 'systemPromptVariant', columnName: 'system_prompt_variant', columnNames})},
+          ${getOptionalColumnSelect({alias: 'fullTextStrategyId', columnName: 'full_text_strategy_id', columnNames})}
         FROM app.project
         WHERE id = '${escapeSqlString(projectId)}'
         LIMIT 1
@@ -596,6 +600,7 @@ const getProjectReviewConfig = (database: AppQueryDatabaseService) => {
           useFulltextNoImages: projectConfig.useFulltextNoImages ?? false,
           useMetadata: projectConfig.useMetadata ?? false,
           systemPromptVariant: getSystemPromptVariant(projectConfig.systemPromptVariant),
+          fullTextStrategyId: getEffectiveFullTextStrategyId(projectConfig.fullTextStrategyId),
         }
       : null
   }

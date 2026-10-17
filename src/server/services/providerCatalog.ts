@@ -58,7 +58,7 @@ const providerCatalogEntries: ProviderCatalogEntry[] = [
     kind: 'docling',
     label: 'Docling Serve',
     requiresApiKey: false,
-    supportsDiscovery: false,
+    supportsDiscovery: true,
     supportsWorkerUrls: false,
   },
   {

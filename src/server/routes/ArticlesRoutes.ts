@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto'
 import {Elysia, t} from 'elysia'
 
 import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {getEffectiveFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {appendArticleReviewServingDeltasForIds} from '../reviewServing/articleReviewServingDeltaService.ts'
 import {
@@ -39,6 +40,7 @@ type ArticleJudgmentRow = {
   judgmentUseFulltextNoImages: boolean | null
   judgmentUseMetadata: boolean | null
   judgmentSystemPromptVariant: string | null
+  judgmentFullTextStrategyId: string | null
   judgmentChunkingStrategy: string | null
   judgmentIsAnswered: boolean | null
   judgmentAnsweredOriginal: string | null
@@ -105,6 +107,7 @@ const getArticleJudgmentValue = (row: ArticleJudgmentRow) => {
     useFulltextNoImages: row.judgmentUseFulltextNoImages ?? false,
     useMetadata: row.judgmentUseMetadata ?? false,
     systemPromptVariant: getSystemPromptVariant(row.judgmentSystemPromptVariant),
+    fullTextStrategyId: getEffectiveFullTextStrategyId(row.judgmentFullTextStrategyId),
     chunkingStrategy: row.judgmentChunkingStrategy,
     isAnswered: row.judgmentIsAnswered ?? false,
     answeredOriginal: row.judgmentAnsweredOriginal,
@@ -598,6 +601,8 @@ export const articlesRoutes = new Elysia()
           j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
           j.use_metadata AS judgmentUseMetadata,
           j.system_prompt_variant AS judgmentSystemPromptVariant,
+          j.full_text_strategy_id AS judgmentFullTextStrategyId,
+      j.full_text_strategy_id AS judgmentFullTextStrategyId,
           j.chunking_strategy AS judgmentChunkingStrategy,
           j.is_answered AS judgmentIsAnswered,
           j.answered_original AS judgmentAnsweredOriginal,

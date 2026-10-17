@@ -15,6 +15,8 @@ const tempDbPath = tempRuntimeRoot.duckdbPath
 const articleServingBaseFixtureTable = ['mart', 'review_article_serving_base_v4'].join('.')
 const articleServingListModeStateFixtureTable = ['mart', 'review_article_serving_list_mode_state_v4'].join('.')
 const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url).href
+const fullTextStrategyEnvironmentModulePath = new URL('../fullText/fullTextStrategyEnvironment.ts', import.meta.url)
+  .href
 const promptPreviewRoutePath = fileURLToPath(
   new URL('./projectsRoutes/projectsRoutesGetPromptPreview.ts', import.meta.url),
 )
@@ -33,6 +35,26 @@ let runDatabase: ((statement: string) => Promise<void>) | null = null
 let testReadOnlyDatabase: {queryJson: <T>(statement: string) => Promise<T[]>} | null = null
 
 const registerModuleMocks = () => {
+  void mock.module(fullTextStrategyEnvironmentModulePath, () => {
+    return {
+      getFullTextConversionModelStrategyInputs: async () => {
+        return null
+      },
+      getFullTextStrategyEnvironment: async () => {
+        return {
+          canonicalTextVersion: 'canonical-test',
+          conversionModel: {
+            converterKind: 'mineru',
+            converterOptionsHash: 'a'.repeat(64),
+            converterVersion: '4.0.12',
+            modelLabel: 'MinerU standard',
+          },
+          figureDescription: null,
+          imageTransportVersion: null,
+        }
+      },
+    }
+  })
   void mock.module(appReadOnlyDatabaseServiceModulePath, () => {
     const getTestReadOnlyDatabase = () => {
       if (!testReadOnlyDatabase) {
@@ -304,6 +326,8 @@ const insertJudgmentJobSqliteHealthProjectionFixture = async ({
 }
 
 type CloneRerunProjectConfig = {
+  fullTextChunkPolicy?: {maxPromptTokens: number; mode: string}
+  fullTextFigureMode?: string
   modelId: string
   useAbstract: boolean
   useFulltext: boolean
@@ -330,6 +354,7 @@ const insertCloneRerunJudgmentFixture = async ({
   articleId,
   config,
   createdAt,
+  fullTextStrategyId = 'fts-none',
   judgmentId,
   projectId,
   promptId,
@@ -338,6 +363,7 @@ const insertCloneRerunJudgmentFixture = async ({
   articleId: string
   config: CloneRerunProjectConfig
   createdAt: string
+  fullTextStrategyId?: string
   judgmentId: string
   projectId: string
   promptId: string
@@ -359,6 +385,7 @@ const insertCloneRerunJudgmentFixture = async ({
       use_fulltext,
       use_fulltext_no_images,
       use_metadata,
+      full_text_strategy_id,
       is_answered,
       answered_original,
       answered_original_as_array,
@@ -377,6 +404,7 @@ const insertCloneRerunJudgmentFixture = async ({
       ${config.useFulltext ? 'TRUE' : 'FALSE'},
       ${config.useFulltextNoImages ? 'TRUE' : 'FALSE'},
       ${config.useMetadata ? 'TRUE' : 'FALSE'},
+      '${fullTextStrategyId}',
       TRUE,
       '${answer}',
       ['${answer}'],
@@ -2023,7 +2051,6 @@ test('edit route still supports full config and prompt edits before a judgment j
         ],
         useAbstract: false,
         useFulltext: false,
-        useFulltextNoImages: true,
         useTitle: false,
       }),
       headers: {'content-type': 'application/json'},
@@ -2100,7 +2127,7 @@ test('edit route still supports full config and prompt edits before a judgment j
   expect(projectRow?.useTitle).toBe(false)
   expect(projectRow?.useAbstract).toBe(false)
   expect(projectRow?.useFulltext).toBe(false)
-  expect(projectRow?.useFulltextNoImages).toBe(true)
+  expect(projectRow?.useFulltextNoImages).toBe(false)
   expect(importRouteRows).toEqual([{route: importRoute}])
   expect(promptRows).toHaveLength(1)
   expect(promptRows[0]?.promptId).not.toBe(originalPromptId)
@@ -5959,8 +5986,15 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
     {key: 'model-id', nextConfig: {...sourceConfig, modelId: 'clone-config-rerun-model-next'}},
     {key: 'use-title', nextConfig: {...sourceConfig, useTitle: false}},
     {key: 'use-abstract', nextConfig: {...sourceConfig, useAbstract: false}},
-    {key: 'use-fulltext', nextConfig: {...sourceConfig, useFulltext: true}},
-    {key: 'use-fulltext-no-images', nextConfig: {...sourceConfig, useFulltextNoImages: true}},
+    {
+      key: 'use-fulltext',
+      nextConfig: {
+        ...sourceConfig,
+        fullTextChunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+        fullTextFigureMode: 'none',
+        useFulltext: true,
+      },
+    },
     {key: 'use-metadata', nextConfig: {...sourceConfig, useMetadata: true}},
   ]
 
@@ -6054,8 +6088,13 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
           useTitle: scenario.nextConfig.useTitle,
           useAbstract: scenario.nextConfig.useAbstract,
           useFulltext: scenario.nextConfig.useFulltext,
-          useFulltextNoImages: scenario.nextConfig.useFulltextNoImages,
           useMetadata: scenario.nextConfig.useMetadata,
+          ...(scenario.nextConfig.fullTextFigureMode
+            ? {
+                fullTextChunkPolicy: scenario.nextConfig.fullTextChunkPolicy,
+                fullTextFigureMode: scenario.nextConfig.fullTextFigureMode,
+              }
+            : {}),
         }),
         headers: {'content-type': 'application/json'},
         method: 'PATCH',
@@ -6089,11 +6128,16 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
 
     expect(await getClonedJudgmentRows()).toEqual([])
 
+    const [clonedStrategyRow] = await currentQueryDatabase<{fullTextStrategyId: string | null}>(`
+      SELECT full_text_strategy_id AS fullTextStrategyId FROM app.project WHERE id = '${clonedProjectId}'
+    `)
+
     await insertCloneRerunJudgmentFixture({
       answer: 'no',
       articleId,
       config: scenario.nextConfig,
       createdAt: '2025-01-02 00:00:00+00',
+      fullTextStrategyId: clonedStrategyRow?.fullTextStrategyId ?? 'fts-none',
       judgmentId: cloneJudgmentId,
       projectId: clonedProjectId,
       promptId,

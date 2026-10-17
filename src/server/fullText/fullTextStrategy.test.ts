@@ -103,7 +103,7 @@ test('the label names converter, figure mode and chunk policy', () => {
       ...frozenInputs,
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
       converterKind: 'docling',
-      converterVersion: 'docling=2.140.0,docling-core=2.48.0,docling-serve=1.37.0',
+      converterVersion: 'docling=2.140.0 docling-core=2.48.0 docling-serve=1.37.0',
       figureMode: 'native_images',
     }),
   ).toBe('docling 1.37.0 / native images / single 24k')

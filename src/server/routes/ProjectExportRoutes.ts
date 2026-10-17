@@ -4,6 +4,7 @@ import {Elysia, t} from 'elysia'
 
 import {getArticleUrl} from '../../app/utils/getArticleUrl.ts'
 import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
+import {getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
 import {
   createReviewBulkOperationJob,
   isReviewServingSnapshotDetailReady,
@@ -54,6 +55,7 @@ type ExportReviewConfig = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   useTitle: boolean
+  fullTextStrategyId: string
 }
 type ExportArticleRow = ReviewServingExportArticleRow
 type ExportJudgmentRow = {
@@ -182,7 +184,8 @@ const getProjectReviewConfig = async (projectId: string) => {
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
-      COALESCE(use_metadata, FALSE) AS useMetadata
+      COALESCE(use_metadata, FALSE) AS useMetadata,
+      ${getProjectFullTextStrategyIdSql('app.project')} AS fullTextStrategyId
     FROM app.project
     WHERE id = ${getSqlLiteral(projectId)}
     LIMIT 1

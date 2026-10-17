@@ -147,7 +147,7 @@ test('create route returns 400 for an unparseable date', async () => {
   expect(response.text).toContain('Invalid date value provided')
 })
 
-test('create route returns 400 when both full text modes are enabled', async () => {
+test('create route returns 400 for the retired no-images flag', async () => {
   const response = await requestJson('/api/projects', 'POST', {
     modelId,
     name: 'Both full text modes project',
@@ -156,7 +156,8 @@ test('create route returns 400 when both full text modes are enabled', async () 
   })
 
   expect(response.status).toBe(400)
-  expect(response.text).toContain('Cannot enable both')
+  expect(response.text).toContain('useFulltextNoImages is replaced by fullTextFigureMode')
+  expect(await countProjectsNamed('Both full text modes project')).toBe(0)
 })
 
 test('create route returns 400 for a model that does not exist', async () => {
@@ -207,14 +208,14 @@ test('edit route returns 400 for a model that does not exist', async () => {
   expect(response.text).toContain('Selected model does not exist or is disabled')
 })
 
-test('edit route returns 400 when both full text modes are enabled', async () => {
+test('edit route returns 400 for the retired no-images flag', async () => {
   const response = await requestJson(`/api/projects/${existingProjectId}/edit`, 'PATCH', {
     useFulltext: true,
     useFulltextNoImages: true,
   })
 
   expect(response.status).toBe(400)
-  expect(response.text).toContain('Cannot enable both')
+  expect(response.text).toContain('useFulltextNoImages is replaced by fullTextFigureMode')
 })
 
 test('edit route returns 400 for a prompt original id that does not exist', async () => {
