@@ -10,23 +10,13 @@ import {
   getModelContextWindowMissingError,
   type ProviderModelCapabilityModel,
 } from '../providers/providerModelCapabilities.ts'
-import {HttpError} from '../utils/httpError.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getJsonValue, getSqlLiteral} from './appQueryHelpers.ts'
 import {normalizeProviderKind} from './providerCatalog.ts'
 
-type FullTextPreconditionModel = {
+export type FullTextPreconditionModel = {
   model: ProviderModelCapabilityModel
   modelName: string
   providerConnectionId: string | null
-}
-
-type FullTextPreconditionModelRow = {
-  displayName: string | null
-  metadataJson: unknown
-  providerConnectionId: string | null
-  providerKind: string | null
-  remoteModelId: string | null
 }
 
 type FullTextClaimGateEntry = {checkedAt: number; message: string | null}
@@ -86,53 +76,6 @@ export const getFullTextJudgingPreconditionError = async ({
     ?? (await getNativeImagesModelPreconditionError(model, strategy))
     ?? (await getFullTextJudgingFigureDescriptionConfigError(strategy))
   )
-}
-
-const getModelFromRow = (row: FullTextPreconditionModelRow): FullTextPreconditionModel => {
-  return {
-    model: {
-      metadataJson: getJsonValue(row.metadataJson),
-      providerKind: row.providerKind,
-      remoteModelId: row.remoteModelId,
-    },
-    modelName: row.displayName ?? row.remoteModelId ?? 'unknown model',
-    providerConnectionId: row.providerConnectionId,
-  }
-}
-
-const getPreconditionModel = async (modelId: string): Promise<FullTextPreconditionModel | null> => {
-  const [row] = await getAppDatabaseService().queryJson<FullTextPreconditionModelRow>(`
-    SELECT
-      COALESCE(m.display_name, m.name) AS displayName,
-      TO_JSON(m.metadata_json) AS metadataJson,
-      m.provider_connection_id AS providerConnectionId,
-      pc.provider_kind AS providerKind,
-      m.remote_model_id AS remoteModelId
-    FROM app.model m
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-    WHERE m.id = ${getSqlLiteral(modelId)}
-    LIMIT 1
-  `)
-
-  return row ? getModelFromRow(row) : null
-}
-
-export const assertFullTextJudgingPreconditions = async ({
-  fullTextStrategyId,
-  modelId,
-}: {
-  fullTextStrategyId: string
-  modelId: string
-}): Promise<void> => {
-  const model =
-    isReservedFullTextStrategyId(fullTextStrategyId) && fullTextStrategyId !== FULL_TEXT_STRATEGY_LEGACY
-      ? null
-      : await getPreconditionModel(modelId)
-  const message = model ? await getFullTextJudgingPreconditionError({fullTextStrategyId, model}) : null
-
-  if (message) {
-    throw new HttpError(409, message)
-  }
 }
 
 const getFullTextClaimErrorFromJobInfo = async (jobId: string): Promise<string | null> => {

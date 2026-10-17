@@ -293,24 +293,6 @@ const registerJudgeWorkerHeartbeat = async () => {
   })
 }
 
-const insertJudgingFullTextStrategy = async (id: string, label: string) => {
-  if (!runDatabase) {
-    throw new Error('Test app not initialized')
-  }
-
-  await runDatabase(`
-    INSERT INTO app.full_text_strategy (id, label, inputs)
-    VALUES ('${id}', '${label}', '${JSON.stringify({
-      canonicalTextVersion: 'canonical-v1',
-      chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
-      figureMode: 'none',
-    })}'::JSON)
-    ON CONFLICT (id) DO NOTHING
-  `)
-}
-
 const insertProjectFixture = async ({
   connectionId,
   modelId,
@@ -5612,8 +5594,11 @@ test('job create, resume and start-clean write the project full-text strategy be
   const secondStrategyId = 'fts-fedcba9876543210'
 
   await insertProjectFixture({connectionId, modelId, projectId})
-  await insertJudgingFullTextStrategy(firstStrategyId, 'MinerU 4 · figures: none · single chunk')
-  await insertJudgingFullTextStrategy(secondStrategyId, 'MinerU 4 · figures: none · single chunk 2')
+  await runDatabase(`
+    INSERT INTO app.full_text_strategy (id, label, inputs)
+    VALUES ('${firstStrategyId}', 'MinerU 4 · figures: none · single chunk', '{}'::JSON)
+    ON CONFLICT (id) DO NOTHING
+  `)
   await runDatabase(`
     UPDATE app.project
     SET use_fulltext = TRUE, full_text_strategy_id = '${firstStrategyId}'
@@ -5682,13 +5667,10 @@ test('resuming a job created before strategy tracking fills the job and job_info
   const connectionId = `legacy-strategy-job-connection-${suffix}`
   const jobId = `legacy-strategy-job-${suffix}`
 
-  const strategyId = 'fts-00000000000001e9'
-
   await insertProjectFixture({connectionId, modelId, projectId})
-  await insertJudgingFullTextStrategy(strategyId, 'MinerU 4 · figures: none · single 24k')
   await runDatabase(`
     UPDATE app.project
-    SET use_fulltext = TRUE, full_text_strategy_id = '${strategyId}'
+    SET use_fulltext = TRUE, full_text_strategy_id = 'fts-legacy-v0'
     WHERE id = '${projectId}'
   `)
   await runDatabase(`
@@ -5711,54 +5693,6 @@ test('resuming a job created before strategy tracking fills the job and job_info
   const response = await patchJudgmentJobStatus(jobId, 'running')
 
   expect(response?.status).toBe(200)
-  expect(await getJudgmentJobFullTextStrategyId(jobId)).toBe(strategyId)
-  expect(sqliteService.getStoredFullTextStrategyId(jobId)).toBe(strategyId)
-})
-
-test('job create and resume refuse legacy full-text projects and model windows below the chunk policy', async () => {
-  if (!app || !runDatabase) {
-    throw new Error('Test app not initialized')
-  }
-
-  const suffix = Date.now()
-  const projectId = `fulltext-precondition-project-${suffix}`
-  const modelId = `fulltext-precondition-model-${suffix}`
-  const connectionId = `fulltext-precondition-connection-${suffix}`
-  const wideStrategyId = 'fts-0000000000096000'
-
-  await insertProjectFixture({connectionId, modelId, projectId})
-  await runDatabase(`
-    INSERT INTO app.full_text_strategy (id, label, inputs)
-    VALUES ('${wideStrategyId}', 'single 96k', '${JSON.stringify({
-      canonicalTextVersion: 'canonical-v1',
-      chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
-      figureMode: 'none',
-    })}'::JSON)
-  `)
-
-  const createJob = () => {
-    return app?.handle(
-      new Request('http://localhost/api/judgmentsjobs', {
-        body: JSON.stringify({projectId}),
-        headers: {'content-type': 'application/json'},
-        method: 'POST',
-      }),
-    )
-  }
-
-  await runDatabase(
-    `UPDATE app.project SET use_fulltext = TRUE, full_text_strategy_id = 'fts-legacy-v0' WHERE id = '${projectId}'`,
-  )
-  const legacyResponse = await createJob()
-
-  expect(legacyResponse?.status).toBe(409)
-  expect(await legacyResponse?.text()).toContain('Choose a figure mode and a chunk policy')
-
-  await runDatabase(`UPDATE app.project SET full_text_strategy_id = '${wideStrategyId}' WHERE id = '${projectId}'`)
-  const narrowModelResponse = await createJob()
-
-  expect(narrowModelResponse?.status).toBe(409)
-  expect(await narrowModelResponse?.text()).toContain('32768-token input window, smaller than the project')
+  expect(await getJudgmentJobFullTextStrategyId(jobId)).toBe('fts-legacy-v0')
+  expect(sqliteService.getStoredFullTextStrategyId(jobId)).toBe('fts-legacy-v0')
 })

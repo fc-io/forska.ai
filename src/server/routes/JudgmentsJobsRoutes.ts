@@ -118,10 +118,7 @@ import {
   markJudgmentJobSqliteDeletePendingTx,
   retryPendingJudgmentJobSqliteDeletes,
 } from '../services/judgmentJobDeleteService.ts'
-import {
-  assertFullTextJudgingPreconditions,
-  getJudgmentJobFullTextClaimError,
-} from '../services/judgmentJobFullTextPreconditions.ts'
+import {getJudgmentJobFullTextClaimError} from '../services/judgmentJobFullTextPreconditions.ts'
 import {
   assertModelContextWindowResolvable,
   getJudgmentJobModelContextWindowClaimError,
@@ -2241,22 +2238,6 @@ const assertProjectModelContextWindow = async (projectId: string): Promise<void>
   return assertModelContextWindowResolvable(await getProjectModelId(projectId))
 }
 
-const assertProjectFullTextJudgingPreconditions = async (projectId: string): Promise<void> => {
-  const [project] = await getAppDatabaseService().queryJson<{fullTextStrategyId: string}>(`
-    SELECT ${getProjectFullTextStrategyIdSql('p')} AS fullTextStrategyId
-    FROM app.project p
-    WHERE p.id = ${getSqlLiteral(projectId)}
-    LIMIT 1
-  `)
-
-  return project
-    ? assertFullTextJudgingPreconditions({
-        fullTextStrategyId: project.fullTextStrategyId,
-        modelId: await getProjectModelId(projectId),
-      })
-    : undefined
-}
-
 const getJudgingRuntimeReason = async (): Promise<string | null> => {
   if (shouldCurrentServerRunJudgingLoops()) {
     return null
@@ -3179,7 +3160,6 @@ export const judgmentsJobsRoutes = new Elysia()
       await assertJudgingRuntimeCanRun()
       await assertProjectRuntimeModelMatch(body.projectId)
       await assertProjectModelContextWindow(body.projectId)
-      await assertProjectFullTextJudgingPreconditions(body.projectId)
 
       const [job] = await getAppDatabaseService().queryJson<{
         id: string
@@ -4029,7 +4009,6 @@ export const judgmentsJobsRoutes = new Elysia()
         const {job, projectFullTextStrategyId, projectModelId} = await getJobContext({jobId: params.id})
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
         await assertModelContextWindowResolvable(projectModelId)
-        await assertFullTextJudgingPreconditions({fullTextStrategyId: job.fullTextStrategyId, modelId: projectModelId})
 
         if (!sqliteService.hasJob(params.id)) {
           await sqliteService.initializeJob(params.id)
@@ -4119,7 +4098,6 @@ export const judgmentsJobsRoutes = new Elysia()
       await assertJudgmentJobStopConditionsAllowResume({jobId: params.id, update: {}})
       await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
       await assertModelContextWindowResolvable(projectModelId)
-      await assertFullTextJudgingPreconditions({fullTextStrategyId: projectFullTextStrategyId, modelId: projectModelId})
       await resetJudgmentJobLocalSqliteState({jobId: params.id, storageState: job.storageState})
       await sqliteService.initializeJob(params.id)
       await assertJudgmentJobCanRunSqlitePreflight({jobId: params.id, quarantineReason: null, storageState: 'active'})
