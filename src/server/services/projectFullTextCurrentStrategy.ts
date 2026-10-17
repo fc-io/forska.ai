@@ -1,5 +1,5 @@
-import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
+import {getApiReadOnlyAppDatabaseService} from './appReadOnlyDatabaseService.ts'
 import {
   getStoredStrategyFromRow,
   type ProjectFullTextGateProjectRow,
@@ -18,6 +18,10 @@ export type ProjectFullTextCurrentStrategy = {
   jobStatus: string | null
   judgmentCount: number
   storedStrategy: ProjectFullTextGateStoredStrategy
+}
+
+export const getProjectFullTextValidationReader = (): CurrentStrategyRunner => {
+  return getApiReadOnlyAppDatabaseService()
 }
 
 export const getProjectVisibleJudgmentCount = async (runner: CurrentStrategyRunner, projectId: string) => {
@@ -40,7 +44,7 @@ export const getProjectVisibleJudgmentCount = async (runner: CurrentStrategyRunn
 
 export const getProjectFullTextCurrentStrategy = async (
   projectId: string,
-  runner: CurrentStrategyRunner = getAppDatabaseService(),
+  runner: CurrentStrategyRunner = getProjectFullTextValidationReader(),
 ): Promise<ProjectFullTextCurrentStrategy | null> => {
   const [row] = await runner.queryJson<CurrentProjectStrategyRow>(`
     SELECT

@@ -11,6 +11,7 @@ import {
 } from '../../services/judgmentJobFullTextGate.ts'
 import {
   getProjectFullTextCurrentStrategy,
+  getProjectFullTextValidationReader,
   type ProjectFullTextCurrentStrategy,
 } from '../../services/projectFullTextCurrentStrategy.ts'
 import {
@@ -78,6 +79,7 @@ const getCurrentProjectStrategyPayload = (current: ProjectFullTextCurrentStrateg
 export const projectsRoutesPostFullTextValidation = new Elysia().post(
   '/api/projects/full-text-validation',
   async ({body}) => {
+    const reader = getProjectFullTextValidationReader()
     const resolution = await getProjectFullTextResolution(
       {
         fullTextChunkPolicy: body.fullTextChunkPolicy ?? null,
@@ -85,8 +87,9 @@ export const projectsRoutesPostFullTextValidation = new Elysia().post(
         useFulltext: body.useFulltext,
       },
       body.modelId ?? null,
+      reader,
     )
-    const current = body.projectId ? await getProjectFullTextCurrentStrategy(body.projectId) : null
+    const current = body.projectId ? await getProjectFullTextCurrentStrategy(body.projectId, reader) : null
     const strategyChangeWithJob = getStrategyChangeWithJob(current, resolution)
 
     return {

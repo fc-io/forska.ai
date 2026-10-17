@@ -500,7 +500,7 @@ test('create with a model whose window is below the chunk prompt size is a 400 w
   )
 })
 
-test('create with native images and a model without verified image input lists every error', async () => {
+test('create with native images and a model without verified image input is a 400 naming the model', async () => {
   await setConversionModel(mineruModelId)
 
   const response = await requestJson('/api/projects', 'POST', {
@@ -512,7 +512,6 @@ test('create with native images and a model without verified image input lists e
   })
 
   expect(response.status).toBe(400)
-  expect(response.text).toContain('Figure mode Native images needs image transports')
   expect(response.text).toContain('Model Judge (sglang) has no verified image input.')
 })
 

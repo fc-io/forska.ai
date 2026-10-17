@@ -93,7 +93,7 @@ test('the figure-description capability is resolved image input on an image tran
   )
   const unverified = getFullTextModelStatusFromRow(vlmRow(null), 'figure_description')
   const textOnlyTransport = getFullTextModelStatusFromRow(
-    vlmRow(null, {providerKind: 'codex', providerLabel: 'Codex'}),
+    vlmRow(null, {providerKind: 'mineru', providerLabel: 'MinerU'}),
     'figure_description',
   )
 
@@ -108,7 +108,7 @@ test('the figure-description capability is resolved image input on an image tran
     state: 'unverified',
   })
   expect(textOnlyTransport.capability).toMatchObject({
-    detail: 'The codex transport cannot send images.',
+    detail: 'The mineru transport cannot send images.',
     state: 'missing',
   })
 })

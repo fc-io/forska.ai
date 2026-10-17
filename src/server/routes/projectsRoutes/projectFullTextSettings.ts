@@ -113,8 +113,9 @@ const getDisabledProjectFullTextResolution = (): ProjectFullTextResolution => {
 const getEnabledProjectFullTextResolution = async (
   selection: ProjectFullTextSelection,
   modelId: string | null,
+  runner?: ProjectFullTextQueryRunner,
 ): Promise<ProjectFullTextResolution> => {
-  const gate = await getProjectFullTextGateForSelection({modelId, selection})
+  const gate = await getProjectFullTextGateForSelection({modelId, runner, selection})
 
   return {
     errors: gate.errors,
@@ -129,9 +130,10 @@ const getEnabledProjectFullTextResolution = async (
 export const getProjectFullTextResolution = async (
   selection: ProjectFullTextSelection,
   modelId: string | null,
+  runner?: ProjectFullTextQueryRunner,
 ): Promise<ProjectFullTextResolution> => {
   return selection.useFulltext
-    ? getEnabledProjectFullTextResolution(selection, modelId)
+    ? getEnabledProjectFullTextResolution(selection, modelId, runner)
     : getDisabledProjectFullTextResolution()
 }
 
