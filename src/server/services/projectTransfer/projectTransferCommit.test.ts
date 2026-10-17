@@ -3999,7 +3999,7 @@ test('project transfer commit writer rejects placeholder plans that would reuse 
     `Project transfer commit writer: import plan would create a new model for package model "target-model-name" (source-model), but existing model snapshot ${result.snapshotModelId} on provider connection ${result.snapshotProviderId} already matches it, most likely created by an earlier import of this package; 1 planned judgment was checked against a new model instead of it and could duplicate judgments already stored for it. Rerun the import analysis before committing.`,
   )
   expect(result.physicalKeyError).toBe(
-    `Project transfer commit writer: target judgment physical key already exists for source-snapshot-judgment: existing judgment ${result.firstJudgmentId} has the same article target-snapshot-article (existing row reused by this import), prompt target-snapshot-prompt (existing row reused by this import), model ${result.snapshotModelId} (existing row reused by this import for package model source-model), content flags, system prompt variant and delete generation, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step.`,
+    `Project transfer commit writer: target judgment physical key already exists for source-snapshot-judgment: existing judgment ${result.firstJudgmentId} has the same article target-snapshot-article (existing row reused by this import), prompt target-snapshot-prompt (existing row reused by this import), model ${result.snapshotModelId} (existing row reused by this import for package model source-model), content flags, system prompt variant, full-text strategy and delete generation, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step.`,
   )
   expect(result.judgmentCount).toBe(1)
   expect(result.projectCount).toBe(1)
@@ -4458,6 +4458,7 @@ test('project transfer commit writer blocks duplicate project prompt remaps befo
 test('project transfer set-based commit preserves judgment ids and counts from compact app payloads', () => {
   const result = runCommitWriterScript<{
     completionJudgmentCount: number
+    fullTextStrategyId: string
     humanJudgmentRow: {answer: string | null; articleId: string; projectId: string; promptId: string}
     humanSummaryRow: {answer: string | null; articleId: string; origin: string; projectId: string}
     judgmentIdBySourceId: Record<string, string>
@@ -4468,6 +4469,7 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       confidenceOriginal: number
       deleteGeneration: number
       deletedAt: string | null
+      fullTextStrategyId: string
       id: string
       isAnswered: boolean
       projectId: string
@@ -4477,7 +4479,12 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       useMetadata: boolean
     }
     reusedAssessmentCount: number
-    reusedJudgmentRow: {snapshotProjectModelName: string | null; systemPromptVariant: string; useMetadata: boolean}
+    reusedJudgmentRow: {
+      fullTextStrategyId: string
+      snapshotProjectModelName: string | null
+      systemPromptVariant: string
+      useMetadata: boolean
+    }
     reviewRow: {
       articleId: string
       opened: boolean
@@ -4581,6 +4588,20 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       sourcePromptId: 'source-prompt-decision',
       updatedAt: '2026-05-03T00:00:00.000Z',
     })
+    const {getFullTextStrategy} = await import('./src/server/fullText/fullTextStrategy.ts')
+    const fullTextStrategy = getFullTextStrategy({
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 48000, mode: 'chunked'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'mineru-options-hash',
+      converterVersion: '4.0.0',
+      figureDescriptionModelId: null,
+      figureDescriptionPromptVersion: null,
+      figureMode: 'none',
+      imageTransportVersion: null,
+      promptLayoutVersion: 'layout-v1',
+      tokenizerId: 'o200k_base',
+    })
     const newJudgmentPayload = getJudgmentPayload('source-judgment-new', 'source-decision-new', 'new-answer', null, 'exported-new-label')
     const reusedJudgmentPayload = getJudgmentPayload('source-judgment-reuse', 'source-decision-reuse', 'reuse-answer', 77, 'exported-reuse-label')
     const stagedNewJudgmentPayload = {
@@ -4589,6 +4610,7 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       answeredOriginalAsArray: ['new-answer-staged'],
       explanation: 'new-answer-staged explanation',
       contentSettings: {...settings, useMetadata: true},
+      fullTextStrategyId: fullTextStrategy.id,
       quotes: [{quote: 'new-answer-staged quote'}],
       systemPromptVariant: 'screening_v1',
     }
@@ -4797,7 +4819,7 @@ test('project transfer set-based commit preserves judgment ids and counts from c
         {sourceJudgmentId: reusedJudgmentPayload.sourceJudgmentId},
       ],
       models: [getModelPayload()],
-      project: getProjectPayload(settings),
+      project: {...getProjectPayload(settings), fullTextStrategies: [fullTextStrategy]},
       projectArticles: [
         {
           provenance: {sourceArticleId: 'source-decision-new', sourceProjectId: 'source-project'},
@@ -4841,8 +4863,8 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       })
     })
     const targetNewArticleId = writeResult.articleIdBySourceId['source-decision-new']
-    const [newJudgmentRow] = await database.queryJson("SELECT id, article_id AS articleId, project_id AS projectId, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, is_answered AS isAnswered, answered_original AS answeredOriginal, confidence_original AS confidenceOriginal, delete_generation::INTEGER AS deleteGeneration, deleted_at AS deletedAt, system_prompt_variant AS systemPromptVariant, use_metadata AS useMetadata FROM app.judgment WHERE article_id = '" + targetNewArticleId + "'")
-    const [reusedJudgmentRow] = await database.queryJson("SELECT snapshot_project_model_name AS snapshotProjectModelName, system_prompt_variant AS systemPromptVariant, use_metadata AS useMetadata FROM app.judgment WHERE id = 'target-judgment-reuse'")
+    const [newJudgmentRow] = await database.queryJson("SELECT id, article_id AS articleId, project_id AS projectId, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, is_answered AS isAnswered, answered_original AS answeredOriginal, confidence_original AS confidenceOriginal, delete_generation::INTEGER AS deleteGeneration, deleted_at AS deletedAt, system_prompt_variant AS systemPromptVariant, use_metadata AS useMetadata, full_text_strategy_id AS fullTextStrategyId FROM app.judgment WHERE article_id = '" + targetNewArticleId + "'")
+    const [reusedJudgmentRow] = await database.queryJson("SELECT snapshot_project_model_name AS snapshotProjectModelName, system_prompt_variant AS systemPromptVariant, use_metadata AS useMetadata, full_text_strategy_id AS fullTextStrategyId FROM app.judgment WHERE id = 'target-judgment-reuse'")
     const [newAssessmentRow] = await database.queryJson("SELECT judgment_id AS judgmentId, assessment_is_correct AS assessmentIsCorrect FROM app.judgment_assessment WHERE judgment_id = '" + newJudgmentRow.id + "'")
     const [reusedAssessmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment_assessment WHERE judgment_id = 'target-judgment-reuse'")
     const [humanJudgmentRow] = await database.queryJson("SELECT project_id AS projectId, article_id AS articleId, prompt_id AS promptId, answer FROM app.judgment_human WHERE project_id = '" + writeResult.projectId + "'")
@@ -4851,6 +4873,7 @@ test('project transfer set-based commit preserves judgment ids and counts from c
 
     console.log(JSON.stringify({
       completionJudgmentCount: writeResult.completion.finalCounts.judgments,
+      fullTextStrategyId: fullTextStrategy.id,
       humanJudgmentRow,
       humanSummaryRow,
       judgmentIdBySourceId: writeResult.commitIdMaps.judgmentIdBySourceId,
@@ -4877,6 +4900,8 @@ test('project transfer set-based commit preserves judgment ids and counts from c
     systemPromptVariant: 'screening_v1',
     useMetadata: true,
   })
+  expect(result.newJudgmentRow.fullTextStrategyId).toBe(result.fullTextStrategyId)
+  expect(result.reusedJudgmentRow.fullTextStrategyId).toBe('fts-none')
   expect(result.completionJudgmentCount).toBe(2)
   expect(result.judgmentIdBySourceId).toEqual({
     'source-judgment-new': result.newJudgmentRow.id,
@@ -5297,7 +5322,7 @@ test('project transfer commit writer blocks active judgment review-visible confl
   `)
 
   expect(result.errorMessage).toBe(
-    "Project transfer commit writer: target judgment review-visible key already exists for source-conflict-judgment: existing active judgment target-visible-conflict is review-visible for the same article target-conflict-article (existing row reused by this import), prompt target-prompt-conflict (existing row reused by this import), model target-model (existing row reused by this import for package model source-model), content flags and system prompt variant, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step.",
+    "Project transfer commit writer: target judgment review-visible key already exists for source-conflict-judgment: existing active judgment target-visible-conflict is review-visible for the same article target-conflict-article (existing row reused by this import), prompt target-prompt-conflict (existing row reused by this import), model target-model (existing row reused by this import for package model source-model), content flags, system prompt variant and full-text strategy, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step.",
   )
   expect(result.projectCount).toBe(0)
   expect(result.judgmentCount).toBe(1)
@@ -5477,7 +5502,7 @@ test('project transfer set-based commit writer explains existing judgment physic
   `)
 
   expect(result.errorMessage).toBe(
-    "Project transfer commit writer: target judgment physical key already exists for source-set-judgment: existing judgment target-set-existing-judgment has the same article target-set-article (existing row reused by this import), prompt target-set-prompt (existing row reused by this import), model target-model (existing row reused by this import for package model source-model), content flags, system prompt variant and delete generation, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step.",
+    "Project transfer commit writer: target judgment physical key already exists for source-set-judgment: existing judgment target-set-existing-judgment has the same article target-set-article (existing row reused by this import), prompt target-set-prompt (existing row reused by this import), model target-model (existing row reused by this import for package model source-model), content flags, system prompt variant, full-text strategy and delete generation, but the import analysis planned to insert a new judgment (the target changed after the analysis, or the analysis mapped a different article, prompt or model). Rerun the import analysis; if it repeats, map the package's provider and model to existing ones in the dependencies step.",
   )
   expect(result.projectCount).toBe(0)
   expect(result.judgmentCount).toBe(1)
@@ -5880,6 +5905,450 @@ test('project transfer commit writer stores use_metadata from the package and re
       useMetadata: true,
     },
   ])
+})
+
+test('project transfer commit writer stores the full-text strategy, upserts its definition and maps old packages to legacy', () => {
+  const result = runCommitWriterScript<{
+    deltaJudgmentIds: string[]
+    judgmentRows: Array<{answeredOriginal: string; articleId: string; fullTextStrategyId: string}>
+    oldProjectRow: {
+      fullTextChunkPolicy: string | null
+      fullTextFigureMode: string | null
+      fullTextStrategyId: string | null
+    }
+    projectRow: {
+      fullTextChunkPolicy: string | null
+      fullTextFigureMode: string | null
+      fullTextStrategyId: string | null
+    }
+    strategyId: string
+    strategyJudgmentId: string
+    strategyLabel: string
+    strategyRows: Array<{id: string; inputs: string; label: string}>
+  }>(`
+    const {getFullTextStrategy} = await import('./src/server/fullText/fullTextStrategy.ts')
+    const strategy = getFullTextStrategy({
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 48000, mode: 'chunked'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'mineru-options-hash',
+      converterVersion: '4.0.0',
+      figureDescriptionModelId: null,
+      figureDescriptionPromptVersion: null,
+      figureMode: 'none',
+      imageTransportVersion: null,
+      promptLayoutVersion: 'layout-v1',
+      tokenizerId: 'o200k_base',
+    })
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Strategy prompt?', null, 'Strategy', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-prompt-strategy', 'Strategy prompt?', NULL, 'Strategy', 'system', '" + promptHash + "', FALSE)")
+    await database.run("INSERT INTO app.article (id, article_title) VALUES ('target-strategy-article', 'Strategy Article'), ('target-old-article', 'Old Package Article')")
+    await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, full_text_strategy_id, is_answered, answered_original, answered_original_as_array, confidence_original, explanation, quotes, delete_generation, deleted_at) VALUES ('target-legacy-full-text-judgment', 'target-strategy-article', 'target-prompt-strategy', 'target-model', TRUE, TRUE, TRUE, FALSE, 'fts-legacy-v0', TRUE, 'existing-legacy', ['existing-legacy'], 50, 'Existing legacy full text', CAST('[]' AS JSON), 0, NULL)")
+    const contentSettings = {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useTitle: true}
+    const legacySettings = {humanJudgmentMode: 'prompt', ...contentSettings}
+    const strategySettings = {
+      ...legacySettings,
+      fullTextChunkPolicy: {maxPromptTokens: 48000, mode: 'chunked'},
+      fullTextFigureMode: 'none',
+      fullTextStrategyId: strategy.id,
+    }
+    const getArticlePayload = (sourceArticleId, articleTitle) => ({
+      articleTitle,
+      identifierInputs: [],
+      provenance: {sourceArticleId},
+      signature: {identifierKeys: [], title: articleTitle},
+      sourceArticleId,
+    })
+    const getArticleMatch = (sourceArticleId, selectedTargetArticleId) => ({
+      action: 'reuse',
+      candidates: [],
+      conflicts: [],
+      identifierKeys: [],
+      packageArticleId: null,
+      selectedTargetArticleId,
+      sourceArticleId,
+    })
+    const getProjectArticlePayload = (sourceArticleId) => ({
+      provenance: {sourceArticleId, sourceProjectId: 'source-project'},
+      signature: {},
+      sourceArticleId,
+      sourceProjectArticleId: 'source-project-article-' + sourceArticleId,
+      sourceProjectId: 'source-project',
+    })
+    const getJudgmentPlanEntry = (sourceJudgmentId, targetArticleId) => ({
+      action: 'insert',
+      conflictCodes: [],
+      inputSignatureMatches: true,
+      physicalKey: sourceJudgmentId + '-physical',
+      provenanceKind: 'currentReviewRows',
+      reviewVisibleKey: sourceJudgmentId + '-visible',
+      sourceJudgmentId,
+      targetArticleId,
+      targetJudgmentId: 'new:judgment:' + sourceJudgmentId,
+      targetModelId: 'target-model',
+      targetPromptId: 'target-prompt-strategy',
+    })
+    const getJudgmentPayload = (sourceJudgmentId, sourceArticleId, answer) => ({
+      answeredOriginal: answer,
+      answeredOriginalAsArray: [answer],
+      confidenceOriginal: 80,
+      contentSettings,
+      deleteGeneration: 0,
+      explanation: answer + ' explanation',
+      isAnswered: true,
+      judgmentInputSignature: {},
+      judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      provenance: {sourceArticleId, sourceModelId: 'source-model', sourcePromptId: 'source-strategy-prompt'},
+      quotes: [],
+      signature: {},
+      sourceArticleId,
+      sourceJudgmentId,
+      sourceModelId: 'source-model',
+      sourcePromptId: 'source-strategy-prompt',
+    })
+    const projectPrompts = [
+      {
+        archived: false,
+        enabled: true,
+        order: 0,
+        provenance: {sourceProjectId: 'source-project', sourcePromptId: 'source-strategy-prompt'},
+        signature: {},
+        sourceProjectId: 'source-project',
+        sourceProjectPromptId: 'source-strategy-project-prompt',
+        sourcePromptId: 'source-strategy-prompt',
+      },
+    ]
+    const prompts = [
+      {
+        archived: false,
+        contentHash: promptHash,
+        originalText: 'Strategy prompt?',
+        promptHeading: 'Strategy',
+        provenance: {sourcePromptId: 'source-strategy-prompt'},
+        signature: {},
+        sourcePromptId: 'source-strategy-prompt',
+        transformedText: null,
+        type: 'system',
+      },
+    ]
+    const getTargetPlan = (judgmentPlan) => ({
+      articleMatches: [
+        getArticleMatch('source-strategy-article', 'target-strategy-article'),
+        getArticleMatch('source-old-article', 'target-old-article'),
+      ],
+      judgmentPlan,
+      projectPromptPlan: [
+        {
+          enabled: true,
+          metadata: {archived: false},
+          order: 0,
+          sourceProjectPromptId: 'source-strategy-project-prompt',
+          sourcePromptId: 'source-strategy-prompt',
+          targetPromptId: 'target-prompt-strategy',
+        },
+      ],
+      promptPlan: [
+        {
+          action: 'reuse',
+          computedContentHash: promptHash,
+          packageContentHash: promptHash,
+          sourcePromptId: 'source-strategy-prompt',
+          targetPromptId: 'target-prompt-strategy',
+        },
+      ],
+    })
+    const getPromotion = (sessionId) => ({
+      articleCreates: [],
+      articleFieldFills: [],
+      manifest: {createdAt: now.toISOString(), promotions: [], sessionId, updatedAt: now.toISOString()},
+      promotionPathByPackagePath: {},
+    })
+    const writeResult = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-full-text-strategy',
+      now,
+      payloads: {
+        articles: [
+          getArticlePayload('source-strategy-article', 'Strategy Article'),
+          getArticlePayload('source-old-article', 'Old Package Article'),
+        ],
+        judgments: [
+          {
+            ...getJudgmentPayload('source-strategy-judgment', 'source-strategy-article', 'strategy-answer'),
+            fullTextStrategyId: strategy.id,
+          },
+          getJudgmentPayload('source-old-package-judgment', 'source-old-article', 'old-package-answer'),
+        ],
+        models: [getModelPayload()],
+        project: {...getProjectPayload(strategySettings), fullTextStrategies: [strategy]},
+        projectArticles: [getProjectArticlePayload('source-strategy-article'), getProjectArticlePayload('source-old-article')],
+        projectPrompts,
+        prompts,
+      },
+      plan: getBasePlan(
+        getTargetPlan([
+          getJudgmentPlanEntry('source-strategy-judgment', 'target-strategy-article'),
+          getJudgmentPlanEntry('source-old-package-judgment', 'target-old-article'),
+        ]),
+        dependencyResolution,
+      ),
+      promotion: getPromotion('session-full-text-strategy'),
+      schemaVersion: 1,
+      sessionId: 'session-full-text-strategy',
+    })
+    const oldWriteResult = await writeProjectTransferCommitAppTables({
+      commitId: 'commit-old-full-text-package',
+      now,
+      payloads: {
+        articles: [getArticlePayload('source-old-article', 'Old Package Article')],
+        judgments: [],
+        models: [getModelPayload()],
+        project: getProjectPayload(legacySettings),
+        projectArticles: [getProjectArticlePayload('source-old-article')],
+        projectPrompts,
+        prompts,
+      },
+      plan: getBasePlan(getTargetPlan([]), dependencyResolution),
+      promotion: getPromotion('session-old-full-text-package'),
+      schemaVersion: 1,
+      sessionId: 'session-old-full-text-package',
+    })
+    const getProjectRow = async (projectId) => {
+      const [row] = await database.queryJson("SELECT full_text_figure_mode AS fullTextFigureMode, CAST(full_text_chunk_policy AS VARCHAR) AS fullTextChunkPolicy, full_text_strategy_id AS fullTextStrategyId FROM app.project WHERE id = '" + projectId + "'")
+      return row
+    }
+    const judgmentRows = await database.queryJson("SELECT id, article_id AS articleId, answered_original AS answeredOriginal, full_text_strategy_id AS fullTextStrategyId FROM app.judgment WHERE prompt_id = 'target-prompt-strategy' ORDER BY article_id ASC, answered_original ASC")
+    const strategyRows = await database.queryJson("SELECT id, label, CAST(inputs AS VARCHAR) AS inputs FROM app.full_text_strategy ORDER BY id ASC")
+    const deltaRows = await database.queryJson("SELECT judgment_id AS judgmentId FROM app.review_change_delta WHERE change_kind = 'judgment.llm.created' AND project_id = '" + writeResult.projectId + "' ORDER BY judgment_id ASC")
+
+    console.log(JSON.stringify({
+      deltaJudgmentIds: deltaRows.map((row) => row.judgmentId),
+      judgmentRows: judgmentRows.map(({answeredOriginal, articleId, fullTextStrategyId}) => ({answeredOriginal, articleId, fullTextStrategyId})),
+      oldProjectRow: await getProjectRow(oldWriteResult.projectId),
+      projectRow: await getProjectRow(writeResult.projectId),
+      strategyId: strategy.id,
+      strategyJudgmentId: judgmentRows.find((row) => row.answeredOriginal === 'strategy-answer')?.id ?? '',
+      strategyLabel: strategy.label,
+      strategyRows,
+    }))
+  `)
+
+  expect(result.projectRow).toEqual({
+    fullTextChunkPolicy: '{"maxPromptTokens":48000,"mode":"chunked"}',
+    fullTextFigureMode: 'none',
+    fullTextStrategyId: result.strategyId,
+  })
+  expect(result.oldProjectRow).toEqual({
+    fullTextChunkPolicy: null,
+    fullTextFigureMode: 'none',
+    fullTextStrategyId: 'fts-legacy-v0',
+  })
+  expect(result.judgmentRows).toEqual([
+    {answeredOriginal: 'old-package-answer', articleId: 'target-old-article', fullTextStrategyId: 'fts-legacy-v0'},
+    {answeredOriginal: 'existing-legacy', articleId: 'target-strategy-article', fullTextStrategyId: 'fts-legacy-v0'},
+    {answeredOriginal: 'strategy-answer', articleId: 'target-strategy-article', fullTextStrategyId: result.strategyId},
+  ])
+  expect(result.strategyRows).toHaveLength(1)
+  expect(result.strategyRows[0]).toMatchObject({id: result.strategyId, label: result.strategyLabel})
+  expect(JSON.parse(result.strategyRows[0]?.inputs ?? '{}')).toMatchObject({
+    converterKind: 'mineru',
+    figureMode: 'none',
+  })
+  expect(result.deltaJudgmentIds).toEqual([result.strategyJudgmentId])
+})
+
+test('project transfer analysis and commit writer agree on judgments that differ only in full-text strategy', () => {
+  const result = runCommitWriterScript<{
+    analysis: Array<{
+      action: string
+      conflictCodes: string[]
+      physicalKey: string
+      sourceJudgmentId: string
+      targetJudgmentId: string
+    }>
+    judgmentRows: Array<{answeredOriginal: string; fullTextStrategyId: string; id: string}>
+    strategyId: string
+  }>(`
+    const {getFullTextStrategy} = await import('./src/server/fullText/fullTextStrategy.ts')
+    const {getProjectTransferFidelityValidation} = await import('./src/server/services/projectTransfer/projectTransferFidelityValidation.ts')
+    const strategy = getFullTextStrategy({
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 48000, mode: 'chunked'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'mineru-options-hash',
+      converterVersion: '4.0.0',
+      figureDescriptionModelId: null,
+      figureDescriptionPromptVersion: null,
+      figureMode: 'none',
+      imageTransportVersion: null,
+      promptLayoutVersion: 'layout-v1',
+      tokenizerId: 'o200k_base',
+    })
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Parity prompt?', null, 'Parity', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-prompt-parity', 'Parity prompt?', NULL, 'Parity', 'system', '" + promptHash + "', FALSE)")
+    await database.run("INSERT INTO app.article (id, article_title) VALUES ('target-parity-article', 'Parity Article')")
+    await database.run("INSERT INTO app.judgment (id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, full_text_strategy_id, is_answered, answered_original, answered_original_as_array, confidence_original, explanation, quotes, delete_generation, deleted_at) VALUES ('target-legacy-parity-judgment', 'target-parity-article', 'target-prompt-parity', 'target-model', TRUE, TRUE, TRUE, FALSE, 'fts-legacy-v0', TRUE, 'legacy-answer', ['legacy-answer'], 80, 'legacy-answer explanation', CAST('[]' AS JSON), 0, NULL)")
+    const contentSettings = {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useTitle: true}
+    const getJudgmentPayload = (sourceJudgmentId, answer) => ({
+      answeredOriginal: answer,
+      answeredOriginalAsArray: [answer],
+      confidenceOriginal: 80,
+      contentSettings,
+      deleteGeneration: 0,
+      explanation: answer + ' explanation',
+      isAnswered: true,
+      judgmentInputSignature: {},
+      judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+      provenance: {sourceArticleId: 'source-parity-article', sourceModelId: 'source-model', sourcePromptId: 'source-parity-prompt'},
+      quotes: [],
+      signature: {},
+      sourceArticleId: 'source-parity-article',
+      sourceJudgmentId,
+      sourceModelId: 'source-model',
+      sourcePromptId: 'source-parity-prompt',
+    })
+    const judgments = [
+      getJudgmentPayload('source-legacy-parity-judgment', 'legacy-answer'),
+      {...getJudgmentPayload('source-strategy-parity-judgment', 'strategy-answer'), fullTextStrategyId: strategy.id},
+    ]
+    const project = {
+      ...getProjectPayload({
+        ...contentSettings,
+        fullTextChunkPolicy: {maxPromptTokens: 48000, mode: 'chunked'},
+        fullTextFigureMode: 'none',
+        fullTextStrategyId: strategy.id,
+        humanJudgmentMode: 'prompt',
+      }),
+      fullTextStrategies: [strategy],
+    }
+    const targetPlan = {
+      articleMatches: [{action: 'reuse', candidates: [], conflicts: [], identifierKeys: [], packageArticleId: null, selectedTargetArticleId: 'target-parity-article', sourceArticleId: 'source-parity-article'}],
+      articleRoutePlan: [],
+      articleUpdatePlan: [],
+      assetPromotionPlan: [],
+      duplicateImportMatches: [],
+      projectPromptPlan: [],
+      projectRoutePlan: [],
+      promptPlan: [{action: 'reuse', computedContentHash: promptHash, packageContentHash: promptHash, sourcePromptId: 'source-parity-prompt', targetPromptId: 'target-prompt-parity'}],
+    }
+    const fidelity = await getProjectTransferFidelityValidation({
+      dependencyResolution,
+      payloads: {judgments, models: [getModelPayload()], project},
+      runner: database,
+      targetPlan,
+    })
+    await writeProjectTransferCommitAppTables({
+      commitId: 'commit-strategy-parity',
+      now,
+      payloads: {
+        articles: [{articleTitle: 'Parity Article', identifierInputs: [], provenance: {sourceArticleId: 'source-parity-article'}, signature: {identifierKeys: [], title: 'Parity Article'}, sourceArticleId: 'source-parity-article'}],
+        judgments,
+        models: [getModelPayload()],
+        project,
+        projectArticles: [],
+        projectPrompts: [],
+        prompts: [{archived: false, contentHash: promptHash, originalText: 'Parity prompt?', promptHeading: 'Parity', provenance: {sourcePromptId: 'source-parity-prompt'}, signature: {}, sourcePromptId: 'source-parity-prompt', transformedText: null, type: 'system'}],
+      },
+      plan: getBasePlan({...targetPlan, judgmentPlan: fidelity.targetPlan.judgmentPlan}, dependencyResolution),
+      promotion: {articleCreates: [], articleFieldFills: [], manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-strategy-parity', updatedAt: now.toISOString()}, promotionPathByPackagePath: {}},
+      schemaVersion: 1,
+      sessionId: 'session-strategy-parity',
+    })
+    const judgmentRows = await database.queryJson("SELECT id, answered_original AS answeredOriginal, full_text_strategy_id AS fullTextStrategyId FROM app.judgment WHERE prompt_id = 'target-prompt-parity' ORDER BY answered_original ASC")
+
+    console.log(JSON.stringify({
+      analysis: fidelity.targetPlan.judgmentPlan.map(({action, conflictCodes, physicalKey, sourceJudgmentId, targetJudgmentId}) => ({action, conflictCodes, physicalKey, sourceJudgmentId, targetJudgmentId})),
+      judgmentRows,
+      strategyId: strategy.id,
+    }))
+  `)
+  const [legacyPlan, strategyPlan] = result.analysis
+
+  expect(
+    result.analysis.map(({action, conflictCodes, sourceJudgmentId}) => {
+      return {action, conflictCodes, sourceJudgmentId}
+    }),
+  ).toEqual([
+    {action: 'reuse', conflictCodes: [], sourceJudgmentId: 'source-legacy-parity-judgment'},
+    {action: 'insert', conflictCodes: [], sourceJudgmentId: 'source-strategy-parity-judgment'},
+  ])
+  expect(legacyPlan?.targetJudgmentId).toBe('target-legacy-parity-judgment')
+  expect(legacyPlan?.physicalKey).toContain('|fts-legacy-v0|0')
+  expect(strategyPlan?.physicalKey).toContain(`|${result.strategyId}|0`)
+  expect(legacyPlan?.physicalKey).not.toBe(strategyPlan?.physicalKey)
+  expect(
+    result.judgmentRows.map(({answeredOriginal, fullTextStrategyId}) => {
+      return {answeredOriginal, fullTextStrategyId}
+    }),
+  ).toEqual([
+    {answeredOriginal: 'legacy-answer', fullTextStrategyId: 'fts-legacy-v0'},
+    {answeredOriginal: 'strategy-answer', fullTextStrategyId: result.strategyId},
+  ])
+  expect(result.judgmentRows[0]?.id).toBe('target-legacy-parity-judgment')
+})
+
+test('project transfer commit writer rejects judgments whose full-text strategy the package does not define', () => {
+  const result = runCommitWriterScript<{error: string | null}>(`
+    await database.run("INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode) VALUES ('target-provider', 'openai', 'Target Provider', TRUE, 'none')")
+    await database.run("INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('target-model', 'target-provider', 'target-model-name', 'target-remote', 'Target Model', 'manual', TRUE)")
+    const promptHash = computePromptContentHash('Strategy prompt?', null, 'Strategy', 'system')
+    await database.run("INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived) VALUES ('target-prompt-strategy', 'Strategy prompt?', NULL, 'Strategy', 'system', '" + promptHash + "', FALSE)")
+    await database.run("INSERT INTO app.article (id, article_title) VALUES ('target-strategy-article', 'Strategy Article')")
+    const contentSettings = {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useTitle: true}
+    const error = await catchMessage(() => writeProjectTransferCommitAppTables({
+      commitId: 'commit-undefined-strategy',
+      now,
+      payloads: {
+        articles: [{articleTitle: 'Strategy Article', identifierInputs: [], provenance: {sourceArticleId: 'source-strategy-article'}, signature: {identifierKeys: [], title: 'Strategy Article'}, sourceArticleId: 'source-strategy-article'}],
+        judgments: [
+          {
+            answeredOriginal: 'yes',
+            answeredOriginalAsArray: ['yes'],
+            confidenceOriginal: 80,
+            contentSettings,
+            deleteGeneration: 0,
+            explanation: 'undefined strategy',
+            fullTextStrategyId: 'fts-0123456789abcdef',
+            isAnswered: true,
+            judgmentInputSignature: {},
+            judgmentInputSignatureProvenance: {kind: 'currentReviewRows', version: 1},
+            provenance: {sourceArticleId: 'source-strategy-article', sourceModelId: 'source-model', sourcePromptId: 'source-strategy-prompt'},
+            quotes: [],
+            signature: {},
+            sourceArticleId: 'source-strategy-article',
+            sourceJudgmentId: 'source-undefined-strategy-judgment',
+            sourceModelId: 'source-model',
+            sourcePromptId: 'source-strategy-prompt',
+          },
+        ],
+        models: [getModelPayload()],
+        project: getProjectPayload({humanJudgmentMode: 'prompt', ...contentSettings}),
+        projectArticles: [],
+        projectPrompts: [],
+        prompts: [{archived: false, contentHash: promptHash, originalText: 'Strategy prompt?', promptHeading: 'Strategy', provenance: {sourcePromptId: 'source-strategy-prompt'}, signature: {}, sourcePromptId: 'source-strategy-prompt', transformedText: null, type: 'system'}],
+      },
+      plan: getBasePlan(
+        {
+          articleMatches: [{action: 'reuse', candidates: [], conflicts: [], identifierKeys: [], packageArticleId: null, selectedTargetArticleId: 'target-strategy-article', sourceArticleId: 'source-strategy-article'}],
+          judgmentPlan: [{action: 'insert', conflictCodes: [], inputSignatureMatches: true, physicalKey: 'undefined-physical', provenanceKind: 'currentReviewRows', reviewVisibleKey: 'undefined-visible', sourceJudgmentId: 'source-undefined-strategy-judgment', targetArticleId: 'target-strategy-article', targetJudgmentId: 'new:judgment:source-undefined-strategy-judgment', targetModelId: 'target-model', targetPromptId: 'target-prompt-strategy'}],
+          promptPlan: [{action: 'reuse', computedContentHash: promptHash, packageContentHash: promptHash, sourcePromptId: 'source-strategy-prompt', targetPromptId: 'target-prompt-strategy'}],
+        },
+        dependencyResolution,
+      ),
+      promotion: {articleCreates: [], articleFieldFills: [], manifest: {createdAt: now.toISOString(), promotions: [], sessionId: 'session-undefined-strategy', updatedAt: now.toISOString()}, promotionPathByPackagePath: {}},
+      schemaVersion: 1,
+      sessionId: 'session-undefined-strategy',
+    }))
+
+    console.log(JSON.stringify({error}))
+  `)
+
+  expect(result.error).toBe(
+    'Project transfer commit writer: judgments use full-text strategies the package does not define: fts-0123456789abcdef',
+  )
 })
 
 test('project transfer commit writer blocks extra target assessment state on reused judgments', () => {

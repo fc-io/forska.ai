@@ -278,7 +278,7 @@ const checkParityWithDuckdb = async () => {
     expect(result.targetPlan.judgmentPlan).toHaveLength(321)
     expect(result.targetPlan.humanReviewPlan).toHaveLength(321)
     expect(createHash('sha256').update(JSON.stringify(result)).digest('hex')).toBe(
-      'eb252c7287c0032ff23414c4dea1e57ab4d694892d9869d32c0a8811b37c8ce8',
+      'a84bedbfbe7f0e1be68806d98187bd2edbb07c32eb7b6c78f528513f5093f2dc',
     )
   } finally {
     await database.close()

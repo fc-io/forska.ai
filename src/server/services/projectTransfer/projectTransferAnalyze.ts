@@ -746,6 +746,7 @@ const getCompactJudgmentAnalysisRecord = (record: Record<string, unknown>): Proj
     ...getOptionalAnalysisField(record, 'chunkingStrategy'),
     contentSettings: record.contentSettings,
     ...getOptionalAnalysisField(record, 'deleteGeneration'),
+    ...getOptionalAnalysisField(record, 'fullTextStrategyId'),
     [projectTransferJudgmentAnalysisFieldSignatureDigestField]: getProjectTransferJudgmentAnalysisFieldSignatureDigest(
       record as ProjectTransferPayloadRecord,
     ),

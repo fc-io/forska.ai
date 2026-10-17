@@ -6,6 +6,12 @@ import {
 } from '../../../agent/judge/systemPromptVariant.ts'
 import type {ProjectTransferHistoryRecord} from '../../../db/schemaTypes.ts'
 import {
+  FULL_TEXT_STRATEGY_LEGACY,
+  FULL_TEXT_STRATEGY_NONE,
+  type FullTextStrategy,
+} from '../../fullText/fullTextStrategy.ts'
+import {upsertFullTextStrategy} from '../../fullText/fullTextStrategyRepository.ts'
+import {
   appendArticleReviewServingDeltas,
   appendArticleReviewServingDeltasForIds,
   type ArticleReviewServingFieldName,
@@ -74,12 +80,24 @@ import {
   type ProjectTransferImportedSnapshotSourceModel,
   type ProjectTransferImportedSnapshotSourceProvider,
 } from './projectTransferImportedSnapshotReuse.ts'
+import {
+  getProjectTransferJudgmentKeyColumnsSql,
+  getProjectTransferJudgmentKeyMatchSql,
+  getProjectTransferJudgmentPhysicalKey,
+  getProjectTransferJudgmentReviewVisibleKey,
+  projectTransferJudgmentPhysicalKeyColumns,
+  projectTransferJudgmentReviewVisibleKeyColumns,
+} from './projectTransferJudgmentIdentityKey.ts'
 import type {ProjectTransferOperationTableSet} from './projectTransferOperationTables.ts'
-import type {
-  ProjectTransferArticlePayloadRecord,
-  ProjectTransferPayloadByKey,
-  ProjectTransferPayloadRecord,
-  ProjectTransferProjectPayload,
+import {
+  assertProjectTransferFullTextStrategies,
+  getProjectTransferJudgmentFullTextStrategyId,
+  getProjectTransferProjectFullTextSettings,
+  getProjectTransferUndefinedFullTextStrategyIds,
+  type ProjectTransferArticlePayloadRecord,
+  type ProjectTransferPayloadByKey,
+  type ProjectTransferPayloadRecord,
+  type ProjectTransferProjectPayload,
 } from './projectTransferPayloadSchemas.ts'
 import {
   getProjectTransferPerformanceMetrics,
@@ -201,6 +219,7 @@ type TargetJudgmentRow = {
   confidenceOriginal: number | null
   deleteGeneration: number | null
   explanation: string | null
+  fullTextStrategyId: string
   id: string
   isAnswered: boolean | null
   quotes: unknown
@@ -231,6 +250,7 @@ type JudgmentCommitRow = {
   createdAt: Date
   deleteGeneration: number
   explanation: string | null
+  fullTextStrategyId: string
   id: string
   modelId: string
   promptId: string
@@ -255,6 +275,7 @@ type JudgmentTargetConflict = {
 type JudgmentTargetConflictText = {conflict: JudgmentTargetConflict; targets: string}
 type ProjectTransferInsertedJudgmentDeltaRow = {
   articleId: string
+  fullTextStrategyId: string
   id: string
   modelId: string
   projectId: string
@@ -1343,16 +1364,57 @@ const getTargetModelId = ({
 const getProjectSettings = (project: ProjectTransferProjectPayload) => {
   const settings: Record<string, unknown> = isRecord(project.settings) ? project.settings : {}
   const humanJudgmentMode = settings.humanJudgmentMode === 'summary' ? 'summary' : 'prompt'
+  const useFulltext = getBoolean(settings.useFulltext, false)
+  const useFulltextNoImages = getBoolean(settings.useFulltextNoImages, false)
 
   return {
+    ...getProjectTransferProjectFullTextSettings(settings, {useFulltext, useFulltextNoImages}),
     humanJudgmentMode,
     systemPromptVariant: isSystemPromptVariant(settings.systemPromptVariant) ? settings.systemPromptVariant : null,
     useAbstract: getBoolean(settings.useAbstract, true),
-    useFulltext: getBoolean(settings.useFulltext, false),
-    useFulltextNoImages: getBoolean(settings.useFulltextNoImages, false),
+    useFulltext,
+    useFulltextNoImages,
     useMetadata: getBoolean(settings.useMetadata, false),
     useTitle: getBoolean(settings.useTitle, true),
   }
+}
+
+const assertFullTextStrategiesDefined = ({
+  label,
+  referencedIds,
+  strategies,
+}: {
+  label: string
+  referencedIds: readonly (string | null)[]
+  strategies: readonly FullTextStrategy[]
+}) => {
+  const undefinedIds = getProjectTransferUndefinedFullTextStrategyIds({referencedIds, strategies})
+
+  return undefinedIds.length === 0
+    ? undefined
+    : failCommitWriter(`${label} use full-text strategies the package does not define: ${undefinedIds.join(', ')}`)
+}
+
+const upsertImportedFullTextStrategies = async ({
+  project,
+  tx,
+}: {
+  project: ProjectTransferProjectPayload
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const strategies = assertProjectTransferFullTextStrategies(project.fullTextStrategies, 'project.fullTextStrategies')
+
+  assertFullTextStrategiesDefined({
+    label: 'project settings',
+    referencedIds: [getProjectSettings(project).fullTextStrategyId],
+    strategies,
+  })
+  await strategies.reduce<Promise<void>>(async (previous, strategy) => {
+    await previous
+    await upsertFullTextStrategy(tx, strategy)
+  }, Promise.resolve())
+
+  return strategies
 }
 
 const insertImportedProject = async ({
@@ -1384,6 +1446,9 @@ const insertImportedProject = async ({
       use_fulltext,
       use_fulltext_no_images,
       use_metadata,
+      full_text_figure_mode,
+      full_text_chunk_policy,
+      full_text_strategy_id,
       date_from,
       date_to,
       archived,
@@ -1401,6 +1466,9 @@ const insertImportedProject = async ({
       ${getSqlLiteral(settings.useFulltext)},
       ${getSqlLiteral(settings.useFulltextNoImages)},
       ${getSqlLiteral(settings.useMetadata)},
+      ${getSqlLiteral(settings.fullTextFigureMode)},
+      ${getJsonLiteral(settings.fullTextChunkPolicy)},
+      ${getSqlLiteral(settings.fullTextStrategyId)},
       ${getNullableDateLiteral(project.dateFrom)},
       ${getNullableDateLiteral(project.dateTo)},
       FALSE,
@@ -3974,6 +4042,7 @@ const getContentSettings = (record: ProjectTransferPayloadRecord) => {
   const settings = isRecord(record.contentSettings) ? record.contentSettings : {}
 
   return {
+    fullTextStrategyId: getProjectTransferJudgmentFullTextStrategyId(record),
     systemPromptVariant: getSystemPromptVariant(record.systemPromptVariant),
     useAbstract: getBoolean(settings.useAbstract, true),
     useFulltext: getBoolean(settings.useFulltext, false),
@@ -4014,75 +4083,19 @@ const assertPlanTargetMatches = ({actual, label, planned}: {actual: string; labe
     : failCommitWriter(`${label} plan target ${planned} does not match final target ${actual}`)
 }
 
-const getJudgmentPhysicalKey = (row: {
-  articleId: string
-  deleteGeneration: number
-  modelId: string
-  promptId: string
-  systemPromptVariant: SystemPromptVariant
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  useMetadata: boolean
-  useTitle: boolean
-}) => {
-  const key = [
-    row.articleId,
-    row.promptId,
-    row.modelId,
-    String(row.useTitle),
-    String(row.useAbstract),
-    String(row.useFulltext),
-    String(row.useFulltextNoImages),
-    String(row.useMetadata),
-    String(row.deleteGeneration),
-  ].join('\u0000')
-
-  return `${key}|${row.systemPromptVariant}`
-}
-
-const getJudgmentReviewVisibleKey = (row: {
-  articleId: string
-  modelId: string
-  promptId: string
-  systemPromptVariant: SystemPromptVariant
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  useMetadata: boolean
-  useTitle: boolean
-}) => {
-  const key = [
-    row.articleId,
-    row.promptId,
-    row.modelId,
-    String(row.useTitle),
-    String(row.useAbstract),
-    String(row.useFulltext),
-    String(row.useFulltextNoImages),
-    String(row.useMetadata),
-  ].join('\u0000')
-
-  return `${key}|${row.systemPromptVariant}`
-}
-
 const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
-  return getJudgmentPhysicalKey({
-    articleId: row.articleId,
+  return getProjectTransferJudgmentPhysicalKey({
+    ...row,
     deleteGeneration: row.deleteGeneration ?? 0,
-    modelId: row.modelId,
-    promptId: row.promptId,
     systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
-    useAbstract: row.useAbstract,
-    useFulltext: row.useFulltext,
-    useFulltextNoImages: row.useFulltextNoImages,
-    useMetadata: row.useMetadata,
-    useTitle: row.useTitle,
   })
 }
 
 const getTargetJudgmentReviewVisibleKey = (row: TargetJudgmentRow) => {
-  return getJudgmentReviewVisibleKey({...row, systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant)})
+  return getProjectTransferJudgmentReviewVisibleKey({
+    ...row,
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
+  })
 }
 
 const getJudgmentFieldSignature = (row: JudgmentCommitRow) => {
@@ -4263,6 +4276,7 @@ const getTargetJudgmentRows = async ({
                   use_fulltext_no_images AS useFulltextNoImages,
                   COALESCE(use_metadata, FALSE) AS useMetadata,
                   system_prompt_variant AS systemPromptVariant,
+                  full_text_strategy_id AS fullTextStrategyId,
                   is_answered AS isAnswered,
                   answered_original AS answeredOriginal,
                   TO_JSON(answered_original_as_array) AS answeredOriginalAsArray,
@@ -4289,18 +4303,11 @@ const getTargetJudgmentRows = async ({
 }
 
 const assertNoDuplicateJudgmentRows = (rows: readonly JudgmentCommitRow[]) => {
-  assertNoDuplicateRows(
-    'judgment physical key',
-    rows.map((row) => {
-      return getJudgmentPhysicalKey(row)
-    }),
-  )
+  assertNoDuplicateRows('judgment physical key', rows.map(getProjectTransferJudgmentPhysicalKey))
 
   return assertNoDuplicateRows(
     'judgment active review-visible key',
-    rows.map((row) => {
-      return getJudgmentReviewVisibleKey(row)
-    }),
+    rows.map(getProjectTransferJudgmentReviewVisibleKey),
   )
 }
 
@@ -4346,11 +4353,11 @@ const getJudgmentTargetConflictTargets = ({
 }
 
 const getPhysicalKeyConflictText = ({conflict, targets}: JudgmentTargetConflictText) => {
-  return `target judgment physical key already exists for ${conflict.sourceJudgmentId}: existing judgment ${conflict.existingJudgmentId} has the same ${targets}, content flags, system prompt variant and delete generation`
+  return `target judgment physical key already exists for ${conflict.sourceJudgmentId}: existing judgment ${conflict.existingJudgmentId} has the same ${targets}, content flags, system prompt variant, full-text strategy and delete generation`
 }
 
 const getReviewVisibleKeyConflictText = ({conflict, targets}: JudgmentTargetConflictText) => {
-  return `target judgment review-visible key already exists for ${conflict.sourceJudgmentId}: existing active judgment ${conflict.existingJudgmentId} is review-visible for the same ${targets}, content flags and system prompt variant`
+  return `target judgment review-visible key already exists for ${conflict.sourceJudgmentId}: existing active judgment ${conflict.existingJudgmentId} is review-visible for the same ${targets}, content flags, system prompt variant and full-text strategy`
 }
 
 const getJudgmentTargetConflictMessage = ({
@@ -4415,8 +4422,8 @@ const assertJudgmentTargetsCommitSafe = async ({
   }, {})
 
   return rows.map((row) => {
-    const physicalKey = getJudgmentPhysicalKey(row)
-    const visibleKey = getJudgmentReviewVisibleKey(row)
+    const physicalKey = getProjectTransferJudgmentPhysicalKey(row)
+    const visibleKey = getProjectTransferJudgmentReviewVisibleKey(row)
     const physicalTargets = targetsByPhysicalKey[physicalKey] ?? []
     const visibleTargets = targetsByVisibleKey[visibleKey] ?? []
     const target = physicalTargets.find((targetRow) => {
@@ -4467,6 +4474,12 @@ const assertJudgmentTargetsCommitSafe = async ({
   })
 }
 
+const getJudgmentFullTextStrategyIdSql = (jsonExpression: string) => {
+  const usesFullTextSql = `${getJsonBooleanPathSql(jsonExpression, '$.contentSettings.useFulltext', false)} OR ${getJsonBooleanPathSql(jsonExpression, '$.contentSettings.useFulltextNoImages', false)}`
+
+  return `COALESCE(${getNullableJsonStringFieldSql(jsonExpression, 'fullTextStrategyId')}, CASE WHEN ${usesFullTextSql} THEN ${getSqlLiteral(FULL_TEXT_STRATEGY_LEGACY)} ELSE ${getSqlLiteral(FULL_TEXT_STRATEGY_NONE)} END)`
+}
+
 const getSetBasedJudgmentRowsSql = ({
   context,
   now,
@@ -4496,6 +4509,7 @@ const getSetBasedJudgmentRowsSql = ({
       ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useFulltextNoImages', false)} AS use_fulltext_no_images,
       ${getJsonBooleanPathSql('payload.payload_json', '$.contentSettings.useMetadata', false)} AS use_metadata,
       COALESCE(${getNullableJsonStringFieldSql('payload.payload_json', 'systemPromptVariant')}, ${getSqlLiteral(defaultSystemPromptVariant)}) AS system_prompt_variant,
+      ${getJudgmentFullTextStrategyIdSql('payload.payload_json')} AS full_text_strategy_id,
       ${getNullableJsonStringFieldSql('payload.payload_json', 'chunkingStrategy')} AS chunking_strategy,
       ${getJsonBooleanPathSql('payload.payload_json', '$.isAnswered', false)} AS is_answered,
       ${getNullableJsonStringFieldSql('payload.payload_json', 'answeredOriginal')} AS answered_original,
@@ -4646,16 +4660,7 @@ const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
     SELECT MIN(source_judgment_id) AS sourceJudgmentId
     FROM (${rowsSql}) rows
     GROUP BY
-      article_id,
-      prompt_id,
-      model_id,
-      use_title,
-      use_abstract,
-      use_fulltext,
-      use_fulltext_no_images,
-      use_metadata,
-      system_prompt_variant,
-      delete_generation
+      ${getProjectTransferJudgmentKeyColumnsSql('rows', projectTransferJudgmentPhysicalKeyColumns)}
     HAVING COUNT(*) > 1
     ORDER BY sourceJudgmentId ASC
     LIMIT 1
@@ -4664,15 +4669,7 @@ const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
     SELECT MIN(source_judgment_id) AS sourceJudgmentId
     FROM (${rowsSql}) rows
     GROUP BY
-      article_id,
-      prompt_id,
-      model_id,
-      use_title,
-      use_abstract,
-      use_fulltext,
-      use_fulltext_no_images,
-      use_metadata,
-      system_prompt_variant
+      ${getProjectTransferJudgmentKeyColumnsSql('rows', projectTransferJudgmentReviewVisibleKeyColumns)}
     HAVING COUNT(*) > 1
     ORDER BY sourceJudgmentId ASC
     LIMIT 1
@@ -4685,6 +4682,10 @@ const assertSetBasedJudgmentRowsDoNotDuplicate = async ({
   return visibleDuplicate
     ? failCommitWriter(`duplicate judgment active review-visible key after remap: ${visibleDuplicate.sourceJudgmentId}`)
     : undefined
+}
+
+const getSetBasedJudgmentTargetMatchSql = (columns: readonly string[]) => {
+  return getProjectTransferJudgmentKeyMatchSql({columns, leftAlias: 'target', rightAlias: 'rows'})
 }
 
 const assertSetBasedJudgmentTargetsCommitSafe = async ({
@@ -4708,16 +4709,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
     FROM (${rowsSql}) rows
     INNER JOIN app.judgment target
       ON target.deleted_at IS NULL
-      AND target.article_id = rows.article_id
-      AND target.prompt_id = rows.prompt_id
-      AND target.model_id = rows.model_id
-      AND target.use_title = rows.use_title
-      AND target.use_abstract = rows.use_abstract
-      AND target.use_fulltext = rows.use_fulltext
-      AND target.use_fulltext_no_images = rows.use_fulltext_no_images
-      AND target.use_metadata = rows.use_metadata
-      AND target.system_prompt_variant = rows.system_prompt_variant
-      AND target.delete_generation = rows.delete_generation
+      AND ${getSetBasedJudgmentTargetMatchSql(projectTransferJudgmentPhysicalKeyColumns)}
     WHERE rows.action = 'insert'
     ORDER BY rows.source_judgment_id ASC
     LIMIT 1
@@ -4732,15 +4724,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
     FROM (${rowsSql}) rows
     INNER JOIN app.judgment target
       ON target.deleted_at IS NULL
-      AND target.article_id = rows.article_id
-      AND target.prompt_id = rows.prompt_id
-      AND target.model_id = rows.model_id
-      AND target.use_title = rows.use_title
-      AND target.use_abstract = rows.use_abstract
-      AND target.use_fulltext = rows.use_fulltext
-      AND target.use_fulltext_no_images = rows.use_fulltext_no_images
-      AND target.use_metadata = rows.use_metadata
-      AND target.system_prompt_variant = rows.system_prompt_variant
+      AND ${getSetBasedJudgmentTargetMatchSql(projectTransferJudgmentReviewVisibleKeyColumns)}
     WHERE rows.action = 'insert'
     ORDER BY rows.source_judgment_id ASC
     LIMIT 1
@@ -4751,16 +4735,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
     LEFT JOIN app.judgment target
       ON target.id = rows.id
       AND target.deleted_at IS NULL
-      AND target.article_id = rows.article_id
-      AND target.prompt_id = rows.prompt_id
-      AND target.model_id = rows.model_id
-      AND target.use_title = rows.use_title
-      AND target.use_abstract = rows.use_abstract
-      AND target.use_fulltext = rows.use_fulltext
-      AND target.use_fulltext_no_images = rows.use_fulltext_no_images
-      AND target.use_metadata = rows.use_metadata
-      AND target.system_prompt_variant = rows.system_prompt_variant
-      AND target.delete_generation = rows.delete_generation
+      AND ${getSetBasedJudgmentTargetMatchSql(projectTransferJudgmentPhysicalKeyColumns)}
     WHERE rows.action = 'reuse'
       AND target.id IS NULL
     ORDER BY rows.source_judgment_id ASC
@@ -4771,15 +4746,7 @@ const assertSetBasedJudgmentTargetsCommitSafe = async ({
     FROM (${rowsSql}) rows
     INNER JOIN app.judgment target
       ON target.deleted_at IS NULL
-      AND target.article_id = rows.article_id
-      AND target.prompt_id = rows.prompt_id
-      AND target.model_id = rows.model_id
-      AND target.use_title = rows.use_title
-      AND target.use_abstract = rows.use_abstract
-      AND target.use_fulltext = rows.use_fulltext
-      AND target.use_fulltext_no_images = rows.use_fulltext_no_images
-      AND target.use_metadata = rows.use_metadata
-      AND target.system_prompt_variant = rows.system_prompt_variant
+      AND ${getSetBasedJudgmentTargetMatchSql(projectTransferJudgmentReviewVisibleKeyColumns)}
       AND target.id <> rows.id
     WHERE rows.action = 'reuse'
     ORDER BY rows.source_judgment_id ASC
@@ -4855,7 +4822,8 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
             ${getSqlLiteral(row.useFulltext)} AS use_fulltext,
             ${getSqlLiteral(row.useFulltextNoImages)} AS use_fulltext_no_images,
             ${getSqlLiteral(row.useMetadata)} AS use_metadata,
-            ${getSqlLiteral(row.systemPromptVariant)} AS system_prompt_variant
+            ${getSqlLiteral(row.systemPromptVariant)} AS system_prompt_variant,
+            ${getSqlLiteral(row.fullTextStrategyId)} AS full_text_strategy_id
         )
         SELECT DISTINCT project.id AS projectId
         FROM inserted_judgment
@@ -4878,6 +4846,7 @@ const appendProjectTransferJudgmentCreatedDeltas = async ({
           return {
             articleId: row.articleId,
             changeKind: 'judgment.llm.created' as const,
+            fullTextStrategyId: row.fullTextStrategyId,
             judgmentId: row.id,
             modelId: row.modelId,
             projectId: visibleProject.projectId,
@@ -4912,6 +4881,7 @@ const appendProjectTransferJudgmentCreatedDeltasSetBased = async ({
     SELECT DISTINCT
       rows.article_id AS articleId,
       'judgment.llm.created' AS changeKind,
+      rows.full_text_strategy_id AS fullTextStrategyId,
       rows.id AS judgmentId,
       rows.model_id AS modelId,
       project.id AS projectId,
@@ -5053,6 +5023,7 @@ const insertJudgmentRowsSetBased = async ({
       use_fulltext_no_images,
       use_metadata,
       system_prompt_variant,
+      full_text_strategy_id,
       chunking_strategy,
       is_answered,
       answered_original,
@@ -5079,6 +5050,7 @@ const insertJudgmentRowsSetBased = async ({
       use_fulltext_no_images,
       use_metadata,
       system_prompt_variant,
+      full_text_strategy_id,
       chunking_strategy,
       TRUE,
       answered_original,
@@ -5147,6 +5119,7 @@ const insertJudgmentRows = async ({
           use_fulltext_no_images,
           use_metadata,
           system_prompt_variant,
+          full_text_strategy_id,
           chunking_strategy,
           is_answered,
           answered_original,
@@ -5174,6 +5147,7 @@ const insertJudgmentRows = async ({
               ${getSqlLiteral(row.useFulltextNoImages)},
               ${getSqlLiteral(row.useMetadata)},
               ${getSqlLiteral(row.systemPromptVariant)},
+              ${getSqlLiteral(row.fullTextStrategyId)},
               ${getSqlLiteral(row.chunkingStrategy)},
               TRUE,
               ${getSqlLiteral(row.answeredOriginal)},
@@ -5194,6 +5168,7 @@ const insertJudgmentRows = async ({
           rows: rowChunk.map((row) => {
             return {
               articleId: row.articleId,
+              fullTextStrategyId: row.fullTextStrategyId,
               id: row.id,
               modelId: row.modelId,
               projectId,
@@ -5250,9 +5225,28 @@ const getSetBasedJudgmentIdBySourceId = ({
   }, {})
 }
 
+const getSetBasedJudgmentFullTextStrategyIds = async ({
+  context,
+  tx,
+}: {
+  context: ProjectTransferCommitWriterSetBasedContext
+  tx: ProjectTransferCommitWriterTx
+}) => {
+  const rows = await tx.queryJson<{fullTextStrategyId: string}>(`
+    SELECT DISTINCT ${getJudgmentFullTextStrategyIdSql('payload.payload_json')} AS fullTextStrategyId
+    FROM ${context.operationTables.tableNames.judgments} payload
+    ORDER BY fullTextStrategyId ASC
+  `)
+
+  return rows.map((row) => {
+    return row.fullTextStrategyId
+  })
+}
+
 const writeSetBasedJudgments = async ({
   commitIdMaps,
   context,
+  fullTextStrategies,
   judgmentPlan,
   now,
   projectId,
@@ -5260,11 +5254,17 @@ const writeSetBasedJudgments = async ({
 }: {
   commitIdMaps: ProjectTransferCommitIdMaps
   context: ProjectTransferCommitWriterSetBasedContext
+  fullTextStrategies: readonly FullTextStrategy[]
   judgmentPlan: readonly JudgmentPlanEntry[]
   now: Date
   projectId: string
   tx: ProjectTransferCommitWriterTx
 }) => {
+  assertFullTextStrategiesDefined({
+    label: 'judgments',
+    referencedIds: await getSetBasedJudgmentFullTextStrategyIds({context, tx}),
+    strategies: fullTextStrategies,
+  })
   await insertJudgmentRowsSetBased({commitIdMaps, context, now, projectId, tx})
 
   return getSetBasedJudgmentIdBySourceId({commitIdMaps, judgmentPlan})
@@ -5273,6 +5273,7 @@ const writeSetBasedJudgments = async ({
 const writeMaterializedJudgments = async ({
   articleIdBySourceId,
   commitIdMaps,
+  fullTextStrategies,
   judgmentPlan,
   judgments,
   now,
@@ -5283,6 +5284,7 @@ const writeMaterializedJudgments = async ({
 }: {
   articleIdBySourceId: Record<string, string>
   commitIdMaps: ProjectTransferCommitIdMaps
+  fullTextStrategies: readonly FullTextStrategy[]
   judgmentPlan: readonly JudgmentPlanEntry[]
   judgments: readonly ProjectTransferPayloadRecord[]
   now: Date
@@ -5299,6 +5301,13 @@ const writeMaterializedJudgments = async ({
     now,
     plan,
     promptIdBySourceId,
+  })
+  assertFullTextStrategiesDefined({
+    label: 'judgments',
+    referencedIds: rows.map((row) => {
+      return row.fullTextStrategyId
+    }),
+    strategies: fullTextStrategies,
   })
   await insertJudgmentRows({commitIdMaps, context: null, now, projectId, rows, tx})
 
@@ -7061,6 +7070,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
       unarchivePromptIds: promptMaterialization.unarchivePromptIds,
     })
     const sourceProjectId = getRequiredString(project.sourceProjectId, 'project.sourceProjectId')
+    const fullTextStrategies = await upsertImportedFullTextStrategies({project, tx})
     const createdProject = await insertImportedProject({
       models: payloads.models ?? [],
       now: importedAt,
@@ -7148,6 +7158,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
         ? await writeMaterializedJudgments({
             articleIdBySourceId,
             commitIdMaps: materializedPlan.commitIdMaps,
+            fullTextStrategies,
             judgmentPlan,
             judgments,
             now: importedAt,
@@ -7159,6 +7170,7 @@ const writeProjectTransferCommitAppTablesTx = async ({
         : await writeSetBasedJudgments({
             commitIdMaps: materializedPlan.commitIdMaps,
             context: setBasedContext,
+            fullTextStrategies,
             judgmentPlan,
             now: importedAt,
             projectId: createdProject.id,

@@ -12,11 +12,18 @@ import {
   getProjectTransferExportJudgmentInputSignature,
 } from './projectTransferExport.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
-import type {
-  ProjectTransferContentSettings,
-  ProjectTransferNormalizedContentSettings,
-  ProjectTransferPayloadByKey,
-  ProjectTransferPayloadRecord,
+import {
+  getProjectTransferJudgmentPhysicalKey,
+  getProjectTransferJudgmentReviewVisibleKey,
+} from './projectTransferJudgmentIdentityKey.ts'
+import {
+  assertProjectTransferFullTextStrategies,
+  getProjectTransferJudgmentFullTextStrategyId,
+  getProjectTransferUndefinedFullTextStrategyIds,
+  type ProjectTransferContentSettings,
+  type ProjectTransferNormalizedContentSettings,
+  type ProjectTransferPayloadByKey,
+  type ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
 
 export type ProjectTransferJudgmentConflictStatus = 'blocked' | 'clear' | 'unknown'
@@ -103,6 +110,7 @@ type TargetJudgmentRow = {
   confidenceOriginal: number | null
   deleteGeneration: number | null
   explanation: string | null
+  fullTextStrategyId: string
   isAnswered: boolean | null
   quotes: unknown
   systemPromptVariant: string
@@ -542,10 +550,6 @@ const getJudgmentSystemPromptVariant = (judgment: ProjectTransferPayloadRecord):
   return getSystemPromptVariant(judgment.systemPromptVariant)
 }
 
-const getJudgmentIdentityKey = (key: string, systemPromptVariant: SystemPromptVariant, useMetadata: boolean) => {
-  return useMetadata ? `${key}|${systemPromptVariant}|useMetadata` : `${key}|${systemPromptVariant}`
-}
-
 const getProvenanceKind = (record: ProjectTransferPayloadRecord, field: string) => {
   const provenance = getRecordField(record, field)
 
@@ -608,98 +612,61 @@ const getSignatureProvenanceCounts = (payloads: Partial<ProjectTransferPayloadBy
   }, judgmentCounts)
 }
 
-const getJudgmentPhysicalKey = ({
-  judgment,
-  targetArticleId,
-  targetModelId,
-  targetPromptId,
-}: {
+type JudgmentKeyInput = {
   judgment: ProjectTransferPayloadRecord
   targetArticleId: string | null
   targetModelId: string | null
   targetPromptId: string | null
-}) => {
-  const settings = getContentSettings(judgment)
-
-  return targetArticleId === null || targetPromptId === null || targetModelId === null
-    ? null
-    : getJudgmentIdentityKey(
-        [
-          targetArticleId,
-          targetPromptId,
-          targetModelId,
-          String(settings.useTitle),
-          String(settings.useAbstract),
-          String(settings.useFulltext),
-          String(settings.useFulltextNoImages),
-          String(getNumberField(judgment, 'deleteGeneration', 0) ?? 0),
-        ].join(':'),
-        getJudgmentSystemPromptVariant(judgment),
-        settings.useMetadata,
-      )
 }
 
-const getJudgmentReviewVisibleKey = ({
-  judgment,
-  targetArticleId,
-  targetModelId,
-  targetPromptId,
-}: {
-  judgment: ProjectTransferPayloadRecord
-  targetArticleId: string | null
-  targetModelId: string | null
-  targetPromptId: string | null
-}) => {
-  const settings = getContentSettings(judgment)
-
+const getJudgmentIdentity = ({judgment, targetArticleId, targetModelId, targetPromptId}: JudgmentKeyInput) => {
   return targetArticleId === null || targetPromptId === null || targetModelId === null
     ? null
-    : getJudgmentIdentityKey(
-        [
-          targetArticleId,
-          targetPromptId,
-          targetModelId,
-          String(settings.useTitle),
-          String(settings.useAbstract),
-          String(settings.useFulltext),
-          String(settings.useFulltextNoImages),
-        ].join(':'),
-        getJudgmentSystemPromptVariant(judgment),
-        settings.useMetadata,
-      )
+    : {
+        ...getContentSettings(judgment),
+        articleId: targetArticleId,
+        deleteGeneration: getNumberField(judgment, 'deleteGeneration', 0) ?? 0,
+        fullTextStrategyId: getProjectTransferJudgmentFullTextStrategyId(judgment),
+        modelId: targetModelId,
+        promptId: targetPromptId,
+        systemPromptVariant: getJudgmentSystemPromptVariant(judgment),
+      }
+}
+
+const getJudgmentPhysicalKey = (input: JudgmentKeyInput) => {
+  const identity = getJudgmentIdentity(input)
+
+  return identity === null ? null : getProjectTransferJudgmentPhysicalKey(identity)
+}
+
+const getJudgmentReviewVisibleKey = (input: JudgmentKeyInput) => {
+  const identity = getJudgmentIdentity(input)
+
+  return identity === null ? null : getProjectTransferJudgmentReviewVisibleKey(identity)
+}
+
+const getTargetJudgmentIdentity = (row: TargetJudgmentRow) => {
+  return {
+    articleId: row.targetArticleId,
+    deleteGeneration: row.deleteGeneration ?? 0,
+    fullTextStrategyId: row.fullTextStrategyId,
+    modelId: row.targetModelId,
+    promptId: row.targetPromptId,
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
+    useAbstract: row.useAbstract,
+    useFulltext: row.useFulltext,
+    useFulltextNoImages: row.useFulltextNoImages,
+    useMetadata: row.useMetadata,
+    useTitle: row.useTitle,
+  }
 }
 
 const getTargetJudgmentPhysicalKey = (row: TargetJudgmentRow) => {
-  return getJudgmentIdentityKey(
-    [
-      row.targetArticleId,
-      row.targetPromptId,
-      row.targetModelId,
-      String(row.useTitle),
-      String(row.useAbstract),
-      String(row.useFulltext),
-      String(row.useFulltextNoImages),
-      String(row.deleteGeneration ?? 0),
-    ].join(':'),
-    getSystemPromptVariant(row.systemPromptVariant),
-    row.useMetadata,
-  )
+  return getProjectTransferJudgmentPhysicalKey(getTargetJudgmentIdentity(row))
 }
 
 const getTargetJudgmentReviewVisibleKey = (row: TargetJudgmentRow) => {
-  return getJudgmentIdentityKey(
-    [
-      row.targetArticleId,
-      row.targetPromptId,
-      row.targetModelId,
-      String(row.useTitle),
-      String(row.useAbstract),
-      String(row.useFulltext),
-      String(row.useFulltextNoImages),
-    ].join(':'),
-    getSystemPromptVariant(row.systemPromptVariant),
-    row.useMetadata,
-  )
+  return getProjectTransferJudgmentReviewVisibleKey(getTargetJudgmentIdentity(row))
 }
 
 const getTargetJudgmentRows = async ({
@@ -743,6 +710,7 @@ const getTargetJudgmentRows = async ({
         use_fulltext_no_images AS useFulltextNoImages,
         COALESCE(use_metadata, FALSE) AS useMetadata,
         system_prompt_variant AS systemPromptVariant,
+        full_text_strategy_id AS fullTextStrategyId,
         is_answered AS isAnswered,
         answered_original AS answeredOriginal,
         TO_JSON(answered_original_as_array) AS answeredOriginalAsArray,
@@ -844,6 +812,7 @@ const getJudgmentSignature = ({
         article,
         chunkingStrategy: getNullableStringField(judgment, 'chunkingStrategy'),
         contentSettings: getContentSettings(judgment),
+        fullTextStrategyId: getProjectTransferJudgmentFullTextStrategyId(judgment),
         model,
         prompt,
         providerConnection,
@@ -961,6 +930,17 @@ const getArrayField = (value: unknown) => {
     : []
 }
 
+const getJudgmentBlockerMessage = (code: string, sourceJudgmentId: string) => {
+  const messageByCode: Record<string, string> = {
+    judgment_full_text_strategy_undefined: `${sourceJudgmentId} uses a full-text strategy that the package does not define`,
+    judgment_reused_benchmark_field_conflict: `${sourceJudgmentId} matches an existing target judgment, but its saved answer, confidence, explanation, or quotes differ from the imported judgment`,
+  }
+
+  return (
+    messageByCode[code] ?? `${sourceJudgmentId} cannot preserve its imported judgment against the final target input`
+  )
+}
+
 const getBlockersForJudgmentPlanEntry = ({
   entry,
   sourceJudgmentId,
@@ -971,10 +951,7 @@ const getBlockersForJudgmentPlanEntry = ({
   return entry.conflictCodes.map((code) => {
     return getPlanBlocker({
       code,
-      message:
-        code === 'judgment_reused_benchmark_field_conflict'
-          ? `${sourceJudgmentId} matches an existing target judgment, but its saved answer, confidence, explanation, or quotes differ from the imported judgment`
-          : `${sourceJudgmentId} cannot preserve its imported judgment against the final target input`,
+      message: getJudgmentBlockerMessage(code, sourceJudgmentId),
       scope: `judgments.${sourceJudgmentId}`,
     })
   })
@@ -1097,6 +1074,12 @@ const getJudgmentPlan = async ({
       return blocker.scope
     }),
   )
+  const undefinedFullTextStrategyIds = new Set(
+    getProjectTransferUndefinedFullTextStrategyIds({
+      referencedIds: (input.payloads.judgments ?? []).map(getProjectTransferJudgmentFullTextStrategyId),
+      strategies: assertProjectTransferFullTextStrategies(input.payloads.project?.fullTextStrategies),
+    }),
+  )
   const plan = (input.payloads.judgments ?? []).map((judgment): ProjectTransferJudgmentPlanEntry => {
     const sourceJudgmentId = getStringField(judgment, 'sourceJudgmentId')
     const sourceArticleId = getStringField(judgment, 'sourceArticleId')
@@ -1167,6 +1150,9 @@ const getJudgmentPlan = async ({
         : []),
       ...(duplicatePhysicalKeyBlockerScopes.has(`judgments.${sourceJudgmentId}`)
         ? ['judgment_package_duplicate_physical_key']
+        : []),
+      ...(undefinedFullTextStrategyIds.has(getProjectTransferJudgmentFullTextStrategyId(judgment))
+        ? ['judgment_full_text_strategy_undefined']
         : []),
       ...(inputSignatureMatches === false
         ? [targetJudgment === null ? 'judgment_input_signature_mismatch' : 'judgment_physical_key_not_equivalent']

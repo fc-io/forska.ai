@@ -1,8 +1,10 @@
 import {expect, test} from 'bun:test'
 
+import {type FullTextStrategyInputs, getFullTextStrategy} from '../../fullText/fullTextStrategy.ts'
 import {
   assertProjectTransferContentSettings,
   assertProjectTransferProjectSettings,
+  getProjectTransferJudgmentFullTextStrategyId,
   getProjectTransferPayloadFixture,
   getProjectTransferSchemaVNextFingerprintSortKey,
   normalizeProjectTransferModelVariant,
@@ -488,5 +490,144 @@ test('serializes internal payload annotations into package warnings', () => {
       expect.objectContaining({code: 'articleFullTextOmitted', scope: 'articles'}),
       expect.objectContaining({code: 'runtimeAssetPathRedacted', scope: 'articles'}),
     ]),
+  )
+})
+
+const fullTextStrategyInputs: FullTextStrategyInputs = {
+  canonicalTextVersion: 'canonical-v1',
+  chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+  converterKind: 'mineru',
+  converterOptionsHash: 'mineru-options-hash',
+  converterVersion: '4.0.0',
+  figureDescriptionModelId: null,
+  figureDescriptionPromptVersion: null,
+  figureMode: 'none',
+  imageTransportVersion: null,
+  promptLayoutVersion: 'layout-v1',
+  tokenizerId: 'o200k_base',
+}
+
+test('round-trips a project and judgment that carry a full-text strategy with its definition', () => {
+  const strategy = getFullTextStrategy(fullTextStrategyInputs)
+  const project = getProjectTransferPayloadFixture('project')
+  const judgment = getOnlyRecord(getProjectTransferPayloadFixture('judgments'))
+  const fullTextSettings = {
+    fullTextChunkPolicy: fullTextStrategyInputs.chunkPolicy,
+    fullTextFigureMode: 'none' as const,
+    fullTextStrategyId: strategy.id,
+  }
+  const strategyProject = {
+    ...project,
+    fullTextStrategies: [strategy],
+    settings: {...project.settings, ...fullTextSettings, useFulltext: true},
+  }
+  const strategyJudgments = [
+    {
+      ...judgment,
+      contentSettings: {...(judgment.contentSettings as Record<string, unknown>), useFulltext: true},
+      fullTextStrategyId: strategy.id,
+    },
+  ]
+  const parsedProject = parseProjectTransferPayload(
+    'project',
+    serializeProjectTransferPayload('project', strategyProject),
+  )
+  const parsedJudgments = parseProjectTransferPayload(
+    'judgments',
+    serializeProjectTransferPayload('judgments', strategyJudgments),
+  )
+
+  expect(getValidationError(validateProjectTransferPayload('project', strategyProject))).toBeNull()
+  expect(getValidationError(validateProjectTransferPayload('judgments', strategyJudgments))).toBeNull()
+  expect(parsedProject.fullTextStrategies).toEqual([strategy])
+  expect(assertProjectTransferProjectSettings(parsedProject.settings)).toMatchObject(fullTextSettings)
+  expect(getProjectTransferJudgmentFullTextStrategyId(getOnlyRecord(parsedJudgments))).toBe(strategy.id)
+})
+
+test('rejects undefined, tampered, reserved and partial full-text strategy data', () => {
+  const strategy = getFullTextStrategy(fullTextStrategyInputs)
+  const project = getProjectTransferPayloadFixture('project')
+  const judgment = getOnlyRecord(getProjectTransferPayloadFixture('judgments'))
+  const strategySettings = {
+    ...project.settings,
+    fullTextChunkPolicy: fullTextStrategyInputs.chunkPolicy,
+    fullTextFigureMode: 'none',
+    fullTextStrategyId: strategy.id,
+    useFulltext: true,
+  }
+  const getProjectError = (overrides: Record<string, unknown>) => {
+    return getValidationError(
+      validateProjectTransferPayload('project', {
+        ...project,
+        fullTextStrategies: [strategy],
+        settings: strategySettings,
+        ...overrides,
+      }),
+    )
+  }
+  const {fullTextChunkPolicy: _chunkPolicy, fullTextFigureMode: _figureMode, ...partialSettings} = strategySettings
+
+  expect(getProjectError({fullTextStrategies: []})).toContain(
+    `project.settings.fullTextStrategyId ${strategy.id} has no definition in project.fullTextStrategies`,
+  )
+  expect(getProjectError({fullTextStrategies: [{...strategy, id: 'fts-0000000000000000'}]})).toContain(
+    'does not match its inputs',
+  )
+  expect(getProjectError({fullTextStrategies: [strategy, {...strategy, id: 'fts-legacy-v0'}]})).toContain(
+    'fts-legacy-v0 is reserved',
+  )
+  expect(getProjectError({fullTextStrategies: [strategy, strategy]})).toContain('more than once')
+  expect(getProjectError({settings: partialSettings})).toContain(
+    'must carry fullTextStrategyId, fullTextFigureMode and fullTextChunkPolicy together',
+  )
+  expect(getProjectError({settings: {...strategySettings, fullTextFigureMode: 'pictures'}})).toContain(
+    'fullTextFigureMode must be null or one of none, descriptions, native_images',
+  )
+  expect(getProjectError({settings: {...strategySettings, fullTextChunkPolicy: {mode: 'chunked'}}})).toContain(
+    'fullTextChunkPolicy must be null or a full-text chunk policy',
+  )
+  expect(
+    getValidationError(validateProjectTransferPayload('judgments', [{...judgment, fullTextStrategyId: ''}])),
+  ).toContain('judgments[0].fullTextStrategyId must not be empty')
+})
+
+test('maps projects and judgments exported before strategy tracking to the legacy strategy or none', () => {
+  const project = getProjectTransferPayloadFixture('project')
+  const judgment = getOnlyRecord(getProjectTransferPayloadFixture('judgments'))
+  const {fullTextChunkPolicy, fullTextFigureMode, fullTextStrategyId, ...oldSettings} = project.settings
+  const oldProject = {...project, fullTextStrategies: undefined, settings: oldSettings}
+  const {fullTextStrategyId: judgmentStrategyId, ...oldJudgment} = judgment
+  const oldJudgmentContentSettings = oldJudgment.contentSettings as Record<string, unknown>
+  const getOldJudgment = (contentSettings: Record<string, unknown>) => {
+    return {...oldJudgment, contentSettings: {...oldJudgmentContentSettings, ...contentSettings}}
+  }
+
+  expect([fullTextChunkPolicy, fullTextFigureMode, fullTextStrategyId, judgmentStrategyId]).toEqual([
+    null,
+    null,
+    null,
+    'fts-none',
+  ])
+  expect(getValidationError(validateProjectTransferPayload('project', oldProject))).toBeNull()
+  expect(getValidationError(validateProjectTransferPayload('judgments', [oldJudgment]))).toBeNull()
+  expect(assertProjectTransferProjectSettings(oldSettings)).toMatchObject({
+    fullTextChunkPolicy: null,
+    fullTextFigureMode: null,
+    fullTextStrategyId: null,
+  })
+  expect(assertProjectTransferProjectSettings({...oldSettings, useFulltext: true})).toMatchObject({
+    fullTextChunkPolicy: null,
+    fullTextFigureMode: 'none',
+    fullTextStrategyId: 'fts-legacy-v0',
+  })
+  expect(assertProjectTransferProjectSettings({...oldSettings, useFulltextNoImages: true})).toMatchObject({
+    fullTextChunkPolicy: null,
+    fullTextFigureMode: 'none',
+    fullTextStrategyId: 'fts-legacy-v0',
+  })
+  expect(getProjectTransferJudgmentFullTextStrategyId(oldJudgment)).toBe('fts-none')
+  expect(getProjectTransferJudgmentFullTextStrategyId(getOldJudgment({useFulltext: true}))).toBe('fts-legacy-v0')
+  expect(getProjectTransferJudgmentFullTextStrategyId(getOldJudgment({useFulltextNoImages: true}))).toBe(
+    'fts-legacy-v0',
   )
 })

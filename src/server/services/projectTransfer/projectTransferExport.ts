@@ -17,6 +17,12 @@ import {
 } from '../../../agent/judge/systemPromptVariant.ts'
 import {type ArticleRecord} from '../../../db/schemaTypes.ts'
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
+import {
+  type FullTextStrategy,
+  type FullTextStrategyInputs,
+  getLegacyFullTextStrategyId,
+  getProjectFullTextStrategyIdSql,
+} from '../../fullText/fullTextStrategy.ts'
 import {getProviderModelContextLimits} from '../../providers/providerModelCapabilities.ts'
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {getProviderRegistryEntry} from '../../providers/providerRegistry.ts'
@@ -42,8 +48,15 @@ import {
   getProjectTransferStrongIdentifierComparisonKeys,
 } from './projectTransferIdentifierNormalization.ts'
 import {
+  getProjectTransferJudgmentKeyColumnsSql,
+  getProjectTransferJudgmentKeyMatchSql,
+  projectTransferJudgmentReviewVisibleKeyColumns,
+} from './projectTransferJudgmentIdentityKey.ts'
+import {
   assertProjectTransferPayload,
   getProjectTransferSchemaVNextFingerprintSortKey,
+  getProjectTransferUndefinedFullTextStrategyIds,
+  isProjectTransferReservedFullTextStrategyId,
   normalizeProjectTransferModelVariant,
   type ProjectTransferContentSettings,
   type ProjectTransferPackagePayloadByKey,
@@ -93,6 +106,9 @@ export type ProjectTransferExportSourceProjectSettings = {
   dateFrom: Date | null
   dateTo: Date | null
   description: string | null
+  fullTextChunkPolicy: unknown
+  fullTextFigureMode: string | null
+  fullTextStrategyId: string | null
   humanJudgmentMode: 'prompt' | 'summary'
   modelId: string | null
   name: string
@@ -245,6 +261,7 @@ type ProjectTransferExportJudgmentRow = {
   deleteGeneration: number | null
   deletedAt: unknown
   explanation: string | null
+  fullTextStrategyId: string
   isAnswered: boolean | null
   judgmentId: string
   modelId: string
@@ -366,6 +383,7 @@ type ProjectTransferExportModelRow = {
 type ProjectTransferExportContext = {
   articleImportRouteRows: ProjectTransferExportArticleImportRouteRow[]
   articleRows: ProjectTransferExportArticlePayloadRecord[]
+  fullTextStrategies: FullTextStrategy[]
   humanJudgmentRows: ProjectTransferExportHumanJudgmentRow[]
   humanJudgmentSummaryRows: ProjectTransferExportHumanJudgmentSummaryRow[]
   importRouteRows: ProjectTransferExportImportRouteRow[]
@@ -820,6 +838,7 @@ const getProjectTransferExportJudgmentCandidateWhereSql = () => {
     AND j.use_fulltext_no_images = project.use_fulltext_no_images
     AND j.use_metadata = COALESCE(project.use_metadata, FALSE)
     AND j.system_prompt_variant = COALESCE(project.system_prompt_variant, ${getSqlLiteral(defaultSystemPromptVariant)})
+    AND j.full_text_strategy_id = ${getProjectFullTextStrategyIdSql('project')}
     AND j.deleted_at IS NULL
   `
 }
@@ -835,47 +854,25 @@ const getProjectTransferExportAmbiguousJudgmentCteSql = () => {
   return `
     project_transfer_ambiguous_judgment_visible_key AS (
       SELECT
-        j.article_id,
-        j.prompt_id,
-        j.model_id,
-        j.use_title,
-        j.use_abstract,
-        j.use_fulltext,
-        j.use_fulltext_no_images,
-        j.use_metadata,
-        j.system_prompt_variant
+        ${getProjectTransferJudgmentKeyColumnsSql('j', projectTransferJudgmentReviewVisibleKeyColumns)}
       FROM app.judgment j
       INNER JOIN project_transfer_scope_article scope ON scope.article_id = j.article_id
       INNER JOIN project_transfer_source_project project ON TRUE
       INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
       WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
       GROUP BY
-        j.article_id,
-        j.prompt_id,
-        j.model_id,
-        j.use_title,
-        j.use_abstract,
-        j.use_fulltext,
-        j.use_fulltext_no_images,
-        j.use_metadata,
-        j.system_prompt_variant
+        ${getProjectTransferJudgmentKeyColumnsSql('j', projectTransferJudgmentReviewVisibleKeyColumns)}
       HAVING COUNT(*) > 1
     )
   `
 }
 
 const getProjectTransferExportJudgmentAmbiguityJoinSql = () => {
-  return `
-    ambiguous.article_id = j.article_id
-    AND ambiguous.prompt_id = j.prompt_id
-    AND ambiguous.model_id = j.model_id
-    AND ambiguous.use_title = j.use_title
-    AND ambiguous.use_abstract = j.use_abstract
-    AND ambiguous.use_fulltext = j.use_fulltext
-    AND ambiguous.use_fulltext_no_images = j.use_fulltext_no_images
-    AND ambiguous.use_metadata = j.use_metadata
-    AND ambiguous.system_prompt_variant = j.system_prompt_variant
-  `
+  return getProjectTransferJudgmentKeyMatchSql({
+    columns: projectTransferJudgmentReviewVisibleKeyColumns,
+    leftAlias: 'ambiguous',
+    rightAlias: 'j',
+  })
 }
 
 const getProjectTransferExportSettingsValue = (
@@ -928,6 +925,9 @@ export const getProjectTransferExportSourceProjectSettings = async (
     dateFrom: unknown
     dateTo: unknown
     description: string | null
+    fullTextChunkPolicy: unknown
+    fullTextFigureMode: string | null
+    fullTextStrategyId: string | null
     humanJudgmentMode: 'prompt' | 'summary' | null
     modelId: string | null
     name: string
@@ -952,6 +952,9 @@ export const getProjectTransferExportSourceProjectSettings = async (
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
       COALESCE(use_metadata, FALSE) AS useMetadata,
+      full_text_figure_mode AS fullTextFigureMode,
+      CAST(full_text_chunk_policy AS VARCHAR) AS fullTextChunkPolicy,
+      full_text_strategy_id AS fullTextStrategyId,
       date_from AS dateFrom,
       date_to AS dateTo,
       archived,
@@ -973,6 +976,9 @@ export const getProjectTransferExportSourceProjectSettings = async (
     archived: row.archived ?? false,
     createdAt: getDateValue(row.createdAt),
     description: row.description,
+    fullTextChunkPolicy: getJsonValue(row.fullTextChunkPolicy),
+    fullTextFigureMode: row.fullTextFigureMode,
+    fullTextStrategyId: row.fullTextStrategyId,
     modelId: row.modelId,
     name: row.name,
     sourceProjectId: row.sourceProjectId,
@@ -1383,15 +1389,7 @@ const getProjectTransferExportAmbiguousJudgmentWarnings = async (
     INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
     WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
     GROUP BY
-      j.article_id,
-      j.prompt_id,
-      j.model_id,
-      j.use_title,
-      j.use_abstract,
-      j.use_fulltext,
-      j.use_fulltext_no_images,
-      j.use_metadata,
-      j.system_prompt_variant
+      ${getProjectTransferJudgmentKeyColumnsSql('j', projectTransferJudgmentReviewVisibleKeyColumns)}
     HAVING COUNT(*) > 1
     ORDER BY j.article_id ASC, j.prompt_id ASC, j.model_id ASC
   `)
@@ -1460,6 +1458,7 @@ const getProjectTransferExportJudgmentRows = async (projectId: string, database:
       j.use_fulltext_no_images AS useFulltextNoImages,
       j.use_metadata AS useMetadata,
       j.system_prompt_variant AS systemPromptVariant,
+      j.full_text_strategy_id AS fullTextStrategyId,
       j.chunking_strategy AS chunkingStrategy,
       j.is_answered AS isAnswered,
       j.answered_original AS answeredOriginal,
@@ -1622,6 +1621,54 @@ const getProjectTransferExportModelRows = async (modelIds: string[], database: A
       WHERE id IN (${modelIds.map(getSqlLiteral).join(', ')})
       ORDER BY provider_connection_id ASC, remote_model_id ASC NULLS LAST, name ASC, id ASC
     `)
+}
+
+const getProjectTransferExportReferencedFullTextStrategyIds = ({
+  judgmentRows,
+  project,
+}: {
+  judgmentRows: readonly ProjectTransferExportJudgmentRow[]
+  project: ProjectTransferExportSourceProjectSettings
+}) => {
+  return getUniqueValues([
+    project.fullTextStrategyId,
+    ...judgmentRows.map((row) => {
+      return row.fullTextStrategyId
+    }),
+  ])
+    .filter((id) => {
+      return !isProjectTransferReservedFullTextStrategyId(id)
+    })
+    .sort()
+}
+
+const getProjectTransferExportFullTextStrategyRows = async (
+  strategyIds: string[],
+  database: AppQueryDatabaseService,
+) => {
+  return strategyIds.length === 0
+    ? []
+    : database.queryJson<{id: string; inputs: unknown; label: string}>(`
+      SELECT id, label, CAST(inputs AS VARCHAR) AS inputs
+      FROM app.full_text_strategy
+      WHERE id IN (${strategyIds.map(getSqlLiteral).join(', ')})
+      ORDER BY id ASC
+    `)
+}
+
+const getProjectTransferExportFullTextStrategies = async (strategyIds: string[], database: AppQueryDatabaseService) => {
+  const strategies = (await getProjectTransferExportFullTextStrategyRows(strategyIds, database)).map(
+    (row): FullTextStrategy => {
+      return {id: row.id, inputs: getJsonValue(row.inputs) as FullTextStrategyInputs, label: row.label}
+    },
+  )
+  const undefinedIds = getProjectTransferUndefinedFullTextStrategyIds({referencedIds: strategyIds, strategies})
+
+  return undefinedIds.length === 0
+    ? strategies
+    : Promise.reject(
+        new Error(`Project transfer export missing full-text strategy definitions: ${undefinedIds.join(', ')}`),
+      )
 }
 
 const getProjectTransferExportProviderConnectionRows = async (
@@ -2028,6 +2075,9 @@ const getProjectTransferExportContentSettings = (row: ProjectTransferExportConte
 
 const getProjectTransferExportProjectSettingsPayload = (project: ProjectTransferExportSourceProjectSettings) => {
   return {
+    fullTextChunkPolicy: project.fullTextChunkPolicy ?? null,
+    fullTextFigureMode: project.fullTextFigureMode,
+    fullTextStrategyId: project.fullTextStrategyId,
     humanJudgmentMode: project.humanJudgmentMode ?? 'prompt',
     ...getProjectTransferExportContentSettings(project),
     ...(project.systemPromptVariant === defaultSystemPromptVariant
@@ -2078,13 +2128,22 @@ const getProjectTransferExportArticleRecordForSignature = (
   }
 }
 
+const getProjectTransferExportFullTextStrategySignature = (
+  contentSettings: ProjectTransferContentSettings,
+  fullTextStrategyId: string,
+) => {
+  return getLegacyFullTextStrategyId(contentSettings) === fullTextStrategyId ? {} : {fullTextStrategyId}
+}
+
 const getProjectTransferExportFullTextProcessingSignature = ({
   article,
   contentSettings,
+  fullTextStrategyId,
   promptTokenLimit,
 }: {
   article: ProjectTransferExportArticlePayloadRecord
   contentSettings: ProjectTransferContentSettings
+  fullTextStrategyId: string
   promptTokenLimit: number | null
 }) => {
   const includeFullText = contentSettings.useFulltext || contentSettings.useFulltextNoImages
@@ -2097,6 +2156,7 @@ const getProjectTransferExportFullTextProcessingSignature = ({
   return {
     fullText,
     signature: {
+      ...getProjectTransferExportFullTextStrategySignature(contentSettings, fullTextStrategyId),
       maxTokens: result?.maxTokens ?? null,
       processedTextDigest: getSignatureTextDigest(result?.processedText ?? null),
       stripImages: contentSettings.useFulltextNoImages,
@@ -2223,6 +2283,7 @@ export const getProjectTransferExportJudgmentInputSignature = ({
   chunkFinalPromptDigest = null,
   chunkingStrategy,
   contentSettings,
+  fullTextStrategyId = null,
   model,
   prompt,
   providerConnection,
@@ -2233,6 +2294,7 @@ export const getProjectTransferExportJudgmentInputSignature = ({
   chunkFinalPromptDigest?: string | null
   chunkingStrategy: string | null
   contentSettings: ProjectTransferContentSettings
+  fullTextStrategyId?: string | null
   model: ProjectTransferExportModelRow
   prompt: ProjectTransferExportProjectPromptRow
   providerConnection: ProjectTransferExportProviderConnectionRow
@@ -2240,9 +2302,11 @@ export const getProjectTransferExportJudgmentInputSignature = ({
 }) => {
   const modelRequestSignature = getProjectTransferExportModelRequestSignature({model, providerConnection})
   const providerKind = providerConnection.providerKind
+  const resolvedFullTextStrategyId = fullTextStrategyId ?? getLegacyFullTextStrategyId(contentSettings)
   const fullTextProcessing = getProjectTransferExportFullTextProcessingSignature({
     article,
     contentSettings,
+    fullTextStrategyId: resolvedFullTextStrategyId,
     promptTokenLimit: modelRequestSignature.promptTokenLimit,
   })
   const articleRecord = getProjectTransferExportArticleRecordForSignature(article, fullTextProcessing.fullText)
@@ -2273,6 +2337,7 @@ export const getProjectTransferExportJudgmentInputSignature = ({
     request: {
       evidenceOutputSchemaDigest: getDigestValue(singlePromptEvidenceOutputSchema),
       evidenceSystemPromptDigest: getSignatureTextDigest(evidenceSystemPrompt),
+      fullTextStrategyId: resolvedFullTextStrategyId,
       invocationTemperature: judgmentInvocationTemperature,
       maxRetries: judgmentMaxRetries,
       outputSchemaDigest: getDigestValue(singlePromptOutputSchema),
@@ -2439,6 +2504,7 @@ const getProjectTransferExportProjectPayloadFromContext = (context: ProjectTrans
     dateFrom: context.project.dateFrom?.toISOString() ?? null,
     dateTo: context.project.dateTo?.toISOString() ?? null,
     description: context.project.description,
+    fullTextStrategies: context.fullTextStrategies,
     modelSignature,
     name: context.project.name,
     provenance: {sourceProjectId: context.project.sourceProjectId},
@@ -2627,6 +2693,7 @@ const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTra
               article,
               chunkingStrategy: row.chunkingStrategy,
               contentSettings,
+              fullTextStrategyId: row.fullTextStrategyId,
               model,
               prompt,
               providerConnection,
@@ -2644,6 +2711,7 @@ const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTra
         deleteGeneration: row.deleteGeneration ?? 0,
         deletedAt: getIsoDateValue(row.deletedAt),
         explanation: row.explanation,
+        fullTextStrategyId: row.fullTextStrategyId,
         isAnswered: row.isAnswered ?? false,
         judgmentInputSignature,
         judgmentInputSignatureProvenance: currentReviewRowsInputSignatureProvenance,
@@ -3034,9 +3102,15 @@ const getProjectTransferExportContext = async (
 
   assertProjectTransferExportProviderConnectionDependencies({providerConnectionRows, requiredProviderConnectionIds})
 
+  const fullTextStrategies = await getProjectTransferExportFullTextStrategies(
+    getProjectTransferExportReferencedFullTextStrategyIds({judgmentRows: exportedJudgmentRows, project}),
+    database,
+  )
+
   return {
     articleImportRouteRows,
     articleRows,
+    fullTextStrategies,
     humanJudgmentRows,
     humanJudgmentSummaryRows,
     importRouteRows,
