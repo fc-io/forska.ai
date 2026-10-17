@@ -90,3 +90,36 @@ test('shows the article metadata content pill off when the project does not use 
     dispose()
   }
 })
+
+const renderFullTextProject = (contentFlags: {useFulltext: boolean; useFulltextNoImages: boolean}) => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const dispose = render(() => {
+    return <ProjectDetailsInformation importRoutes={[]} project={{...getProject(), ...contentFlags}} />
+  }, container)
+
+  return {container, dispose}
+}
+
+test('shows the legacy no-images label instead of the full text pill for a legacy project', () => {
+  const {container, dispose} = renderFullTextProject({useFulltext: false, useFulltextNoImages: true})
+
+  try {
+    expect(container.textContent).toContain('full text (legacy, no images)')
+    expect(container.textContent).not.toContain('Full text off')
+    expect(container.textContent).not.toContain('no images:')
+  } finally {
+    dispose()
+  }
+})
+
+test('shows only the full text pill when the project has no legacy no-images flag', () => {
+  const {container, dispose} = renderFullTextProject({useFulltext: true, useFulltextNoImages: false})
+
+  try {
+    expect(container.textContent).toContain('Full text on')
+    expect(container.textContent).not.toContain('no images')
+  } finally {
+    dispose()
+  }
+})

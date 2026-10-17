@@ -2,6 +2,7 @@ import {format} from 'date-fns'
 import {createMemo, For, Show} from 'solid-js'
 
 import {isImportedFileRoute} from '../../../utils/importRouteUtils.ts'
+import {legacyFullTextNoImagesLabel} from '../../../utils/legacyFullTextNoImagesLabel.ts'
 import {RuntimeModelNotice} from '../runtimeModelNotice.tsx'
 
 type ProjectDetailsInformationProject = {
@@ -77,7 +78,7 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
       title: props.project.useTitle,
       abstract: props.project.useAbstract,
       fulltext: props.project.useFulltext,
-      fulltextNoImages: props.project.useFulltextNoImages,
+      legacyFulltextNoImages: props.project.useFulltextNoImages,
       metadata: props.project.useMetadata,
     }
   })
@@ -154,20 +155,22 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
           >
             Abstract {useFlags().abstract ? 'on' : 'off'}
           </span>
-          <span
-            class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-              useFlags().fulltext ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
-            }`}
+          <Show
+            when={useFlags().legacyFulltextNoImages}
+            fallback={
+              <span
+                class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                  useFlags().fulltext ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+                }`}
+              >
+                Full text {useFlags().fulltext ? 'on' : 'off'}
+              </span>
+            }
           >
-            Full text {useFlags().fulltext ? 'on' : 'off'}
-          </span>
-          <span
-            class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-              useFlags().fulltextNoImages ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
-            }`}
-          >
-            Full text - no images: {useFlags().fulltextNoImages ? 'on' : 'off'}
-          </span>
+            <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+              {legacyFullTextNoImagesLabel}
+            </span>
+          </Show>
           <span
             class={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
               useFlags().metadata ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'

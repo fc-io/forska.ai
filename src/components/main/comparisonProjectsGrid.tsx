@@ -8,6 +8,7 @@ import {
   purgeComparisonProject,
   unarchiveComparisonProject,
 } from '../../services/comparisonProjectsService'
+import {legacyFullTextNoImagesLabel} from '../../utils/legacyFullTextNoImagesLabel.ts'
 import {Button} from '../ui/button'
 
 type ComparisonProject = Awaited<ReturnType<typeof fetchComparisonProjects>>[number]
@@ -27,8 +28,8 @@ const getComparisonProjectContentUsedLabel = (comparisonProject: ComparisonProje
           ? 'Article Title'
           : 'Article Abstract'
       : null,
-    comparisonProject.useFulltext ? 'Use Full Text (with images)' : null,
-    comparisonProject.useFulltextNoImages ? 'Use Full Text (without images)' : null,
+    comparisonProject.useFulltext ? 'Use Full Text' : null,
+    comparisonProject.useFulltextNoImages ? legacyFullTextNoImagesLabel : null,
   ].filter(Boolean) as string[]
 
   return parts.length > 0 ? parts.join(' · ') : 'none'

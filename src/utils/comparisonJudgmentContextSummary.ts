@@ -5,6 +5,7 @@ import type {
   ComparisonProjectJudgmentsRow,
 } from '../services/comparisonProjectsService.ts'
 import {FULL_TEXT_STRATEGY_LEGACY, getFullTextStrategyDisplayLabel} from './fullTextStrategyOptions.ts'
+import {legacyFullTextNoImagesLabel} from './legacyFullTextNoImagesLabel.ts'
 
 export type ComparisonJudgmentContextSummariesById = Record<string, ComparisonJudgmentContextSummary>
 
@@ -33,7 +34,7 @@ const contentFlagLabels = [
   ['useTitle', 'title'],
   ['useAbstract', 'abstract'],
   ['useFulltext', 'full text'],
-  ['useFulltextNoImages', 'full text without images'],
+  ['useFulltextNoImages', legacyFullTextNoImagesLabel],
   ['useMetadata', 'metadata'],
 ] as const
 
