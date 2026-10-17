@@ -313,8 +313,9 @@ const insertProjectFixture = async ({
     VALUES ('${connectionId}', '${providerKind}', 'SGLang', TRUE, 'none')
   `)
   await runDatabase(`
-    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, metadata_json)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE,
+      '{"discovery":{"contextWindow":{"inputTokens":32768,"outputTokens":null,"totalTokens":32768}}}')
   `)
   await runDatabase(`
     INSERT INTO app.project (id, name, model_id)

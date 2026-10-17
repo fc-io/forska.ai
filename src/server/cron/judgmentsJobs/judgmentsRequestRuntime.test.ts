@@ -383,7 +383,7 @@ const createPromptToProcess = (): PromptToProcess => {
     jobId: 'job-a',
     modelBaseUrl: 'http://runtime.test/v1',
     modelId: 'model-a',
-    modelMetadataJson: null,
+    modelMetadataJson: {discovery: {contextWindow: {inputTokens: 32768, outputTokens: null, totalTokens: 32768}}},
     modelName: 'model-a',
     modelProvider: 'openai',
     modelSecretRef: null,
@@ -1957,7 +1957,13 @@ test('judge-worker prompt execution uses owner-backed snapshots instead of live 
   })
   expect(firstJudgeCall?.modelConfig.providerInvocationContext).toMatchObject({
     connection: {baseURL: 'http://runtime.test/v1', id: 'connection-a', providerKind: 'openai', secretRef: null},
-    model: {id: 'model-a', metadataJson: null, modelName: 'model-a', provider: 'openai', variant: null},
+    model: {
+      id: 'model-a',
+      metadataJson: {discovery: {contextWindow: {inputTokens: 32768, outputTokens: null, totalTokens: 32768}}},
+      modelName: 'model-a',
+      provider: 'openai',
+      variant: null,
+    },
   })
   expect(queryJson).not.toHaveBeenCalled()
   expect(getFullArticlesByIds).not.toHaveBeenCalled()
@@ -2088,7 +2094,7 @@ test('judge-worker prompt execution for a use_metadata project sends title, meta
     jobId: 'job-a',
     modelDisplayName: 'Model A',
     modelId: 'model-a',
-    modelMetadataJson: null,
+    modelMetadataJson: {discovery: {contextWindow: {inputTokens: 32768, outputTokens: null, totalTokens: 32768}}},
     modelName: 'model-a',
     modelRemoteModelId: 'model-a',
     modelSecretRef: null,

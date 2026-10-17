@@ -2,11 +2,8 @@ import {MAX_COMPLETION_TOKENS} from '../../../agent/judge.ts'
 import type {ProviderModelOptions} from '../../../utils/providerModelOptions.ts'
 import {ensureCodexProviderModel} from '../../providers/ensureCodexProviderModel.ts'
 import {getProviderConnection, listProviderConnections} from '../../providers/providerConnectionRepository.ts'
-import {
-  getProviderModelMetadataContextLength,
-  getProviderModelMetadataOptions,
-  getProviderModelMetadataPromptTokenLimit,
-} from '../../providers/providerModelMetadata.ts'
+import {getProviderModelContextLimits} from '../../providers/providerModelCapabilities.ts'
+import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {getProviderModels} from '../../providers/providerModelRepository.ts'
 import type {
   ProviderConnectionForAdmin,
@@ -194,8 +191,6 @@ type ImportedJudgment = ProjectTransferPayloadRecord & {judgmentInputSignature?:
 
 type DependencyBlockerInput = {code: string; message: string; scope: string}
 
-const defaultJudgmentModelContext = 32768
-const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 const dependencyScopePrefix = 'dependencies.'
 const dependencyPayloadKeys = [
   'articles',
@@ -696,12 +691,15 @@ const getSourceModelIdentityCandidates = (source: ImportedModel, connection: Pro
 }
 
 const getTargetModelRequestSignature = (model: ProviderModelRecord) => {
+  const contextLimits = getProviderModelContextLimits({
+    model: {metadataJson: model.metadataJson, providerKind: model.provider, remoteModelId: model.remoteModelId},
+    reservedCompletionTokens: MAX_COMPLETION_TOKENS,
+  })
+
   return {
-    contextLimit: getProviderModelMetadataContextLength(model.metadataJson) ?? defaultJudgmentModelContext,
+    contextLimit: contextLimits.contextLimit,
     modelOptions: getProviderModelMetadataOptions(model.metadataJson),
-    promptTokenLimit:
-      getProviderModelMetadataPromptTokenLimit(model.metadataJson, MAX_COMPLETION_TOKENS)
-      ?? defaultJudgmentPromptTokenLimit,
+    promptTokenLimit: contextLimits.promptTokenLimit,
   }
 }
 

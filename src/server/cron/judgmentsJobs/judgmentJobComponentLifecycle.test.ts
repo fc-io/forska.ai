@@ -135,8 +135,9 @@ test('component lifecycle crosses route, dispatch, SQLite, DuckDB, projection, d
     VALUES ('${connectionId}', 'sglang', 'Component SGLang stub', TRUE, 'none', '${providerBaseUrl}')
   `)
   await runDatabase(`
-    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-    VALUES ('${modelId}', '${connectionId}', 'component-stub', 'component-stub', 'Component stub', 'manual', TRUE)
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, metadata_json)
+    VALUES ('${modelId}', '${connectionId}', 'component-stub', 'component-stub', 'Component stub', 'manual', TRUE,
+      '{"discovery":{"contextWindow":{"inputTokens":32768,"outputTokens":null,"totalTokens":32768}}}')
   `)
   await runDatabase(`
     INSERT INTO app.project (

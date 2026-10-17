@@ -1,11 +1,8 @@
 import {MAX_COMPLETION_TOKENS} from '../../../agent/judge.ts'
 import type {ProviderModelOptions} from '../../../utils/providerModelOptions.ts'
 import {getResolvedProviderBaseURL} from '../../providers/providerConnectionHelpers.ts'
-import {
-  getProviderModelMetadataContextLength,
-  getProviderModelMetadataOptions,
-  getProviderModelMetadataPromptTokenLimit,
-} from '../../providers/providerModelMetadata.ts'
+import {getProviderModelContextLimits} from '../../providers/providerModelCapabilities.ts'
+import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {getProviderRegistryEntry} from '../../providers/providerRegistry.ts'
 import type {ProviderTransportFamily} from '../../providers/providerTypes.ts'
 import {getDefaultWorkerUrlMode} from '../../providers/providerWorkerUtils.ts'
@@ -41,21 +38,18 @@ export type ProjectTransferProviderSnapshotFingerprint = {
 
 export type ProjectTransferModelSnapshotFingerprint = {
   model: {
-    contextLimit: number
+    contextLimit: number | null
     displayName: string | null
     modelName: string | null
     modelOptions: ProviderModelOptions
     name: string
-    promptTokenLimit: number
+    promptTokenLimit: number | null
     remoteModelId: string | null
     variant: string | null
     version: string | null
   }
   provider: ProjectTransferProviderSnapshotFingerprint
 }
-
-const defaultJudgmentModelContext = 32768
-const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -141,17 +135,19 @@ export const getProjectTransferModelSnapshotFingerprint = (
   model: ProjectTransferModelSnapshotFingerprintInput,
 ): ProjectTransferModelSnapshotFingerprint => {
   const metadataJson = getJsonValue(model.metadataJson)
-  const promptTokenLimit =
-    getProviderModelMetadataPromptTokenLimit(metadataJson, MAX_COMPLETION_TOKENS) ?? defaultJudgmentPromptTokenLimit
+  const contextLimits = getProviderModelContextLimits({
+    model: {metadataJson, providerKind: model.provider.providerKind, remoteModelId: model.remoteModelId},
+    reservedCompletionTokens: MAX_COMPLETION_TOKENS,
+  })
 
   return {
     model: {
-      contextLimit: getProviderModelMetadataContextLength(metadataJson) ?? defaultJudgmentModelContext,
+      contextLimit: contextLimits.contextLimit,
       displayName: model.displayName,
       modelName: model.modelName,
       modelOptions: getProviderModelMetadataOptions(metadataJson),
       name: model.name,
-      promptTokenLimit,
+      promptTokenLimit: contextLimits.promptTokenLimit,
       remoteModelId: model.remoteModelId,
       variant: normalizeProjectTransferModelVariant(model.variant),
       version: normalizeProjectTransferModelVariant(model.version),

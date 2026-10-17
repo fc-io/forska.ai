@@ -17,11 +17,8 @@ import {
 } from '../../../agent/judge/systemPromptVariant.ts'
 import {type ArticleRecord} from '../../../db/schemaTypes.ts'
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
-import {
-  getProviderModelMetadataContextLength,
-  getProviderModelMetadataOptions,
-  getProviderModelMetadataPromptTokenLimit,
-} from '../../providers/providerModelMetadata.ts'
+import {getProviderModelContextLimits} from '../../providers/providerModelCapabilities.ts'
+import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {getProviderRegistryEntry} from '../../providers/providerRegistry.ts'
 import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
@@ -461,8 +458,6 @@ const providerSecretRedaction = {
 
 const currentReviewRowsInputSignatureProvenance = {kind: 'currentReviewRows' as const, version: 1 as const}
 const projectTransferInputSignatureVersion = 1 as const
-const defaultJudgmentModelContext = 32768
-const defaultJudgmentPromptTokenLimit = Math.max(0, defaultJudgmentModelContext - MAX_COMPLETION_TOKENS)
 const judgmentInvocationTemperature = 0.2
 const judgmentMaxRetries = 2
 const singlePromptOutputSchema = {
@@ -2090,13 +2085,14 @@ const getProjectTransferExportFullTextProcessingSignature = ({
 }: {
   article: ProjectTransferExportArticlePayloadRecord
   contentSettings: ProjectTransferContentSettings
-  promptTokenLimit: number
+  promptTokenLimit: number | null
 }) => {
   const includeFullText = contentSettings.useFulltext || contentSettings.useFulltextNoImages
   const fullText = includeFullText ? getStringValue(article.fullText) : null
-  const result = fullText
-    ? processFulltextForLLM(fullText, {promptTokenLimit, stripImages: contentSettings.useFulltextNoImages})
-    : null
+  const result =
+    fullText && promptTokenLimit !== null
+      ? processFulltextForLLM(fullText, {promptTokenLimit, stripImages: contentSettings.useFulltextNoImages})
+      : null
 
   return {
     fullText,
@@ -2155,16 +2151,20 @@ const getProjectTransferExportModelRequestSignature = ({
   model: ProjectTransferExportModelRow
   providerConnection: ProjectTransferExportProviderConnectionRow
 }) => {
-  const promptTokenLimit =
-    getProviderModelMetadataPromptTokenLimit(getJsonValue(model.metadataJson), MAX_COMPLETION_TOKENS)
-    ?? defaultJudgmentPromptTokenLimit
+  const contextLimits = getProviderModelContextLimits({
+    model: {
+      metadataJson: getJsonValue(model.metadataJson),
+      providerKind: providerConnection.providerKind,
+      remoteModelId: model.remoteModelId,
+    },
+    reservedCompletionTokens: MAX_COMPLETION_TOKENS,
+  })
 
   return {
-    contextLimit:
-      getProviderModelMetadataContextLength(getJsonValue(model.metadataJson)) ?? defaultJudgmentModelContext,
+    contextLimit: contextLimits.contextLimit,
     modelOptions: getProviderModelMetadataOptions(getJsonValue(model.metadataJson)),
     modelSignature: getProjectTransferExportModelSignature(model, providerConnection),
-    promptTokenLimit,
+    promptTokenLimit: contextLimits.promptTokenLimit,
   }
 }
 
