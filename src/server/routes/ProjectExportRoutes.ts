@@ -4,7 +4,8 @@ import {Elysia, t} from 'elysia'
 
 import {getArticleUrl} from '../../app/utils/getArticleUrl.ts'
 import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
-import {getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
+import {FULL_TEXT_STRATEGY_NONE, getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
+import {getFullTextStrategyLabelsById} from '../fullText/fullTextStrategyRepository.ts'
 import {
   createReviewBulkOperationJob,
   isReviewServingSnapshotDetailReady,
@@ -63,6 +64,7 @@ type ExportJudgmentRow = {
   answeredOriginalAsArray: unknown
   articleId: string
   explanation: string | null
+  fullTextStrategyId: string | null
   promptId: string
   quotes: unknown
 }
@@ -331,6 +333,7 @@ const getExportPromptDetails = async (input: {
 
 const getExportHeaders = (input: {
   contract: ExportContract
+  includeFullTextStrategy: boolean
   orderedPromptDetails: PromptDetails[]
   selectedMetadata: Record<string, boolean | undefined>
 }) => {
@@ -344,6 +347,7 @@ const getExportHeaders = (input: {
   if (input.selectedMetadata.includeJournal) headers.push('Journal')
   if (input.selectedMetadata.includeArticleCreatedAt) headers.push('Article Created At')
   if (input.selectedMetadata.includeArticleUpdatedAt) headers.push('Article Updated At')
+  if (input.includeFullTextStrategy) headers.push('Full-text strategy')
 
   input.orderedPromptDetails.forEach((prompt) => {
     const baseHeading = prompt.promptHeading || (prompt.originalText ?? '').substring(0, 50) || prompt.id
@@ -405,6 +409,7 @@ const getExportJudgments = async (input: {
           detail.answered_original AS answeredOriginal,
           TO_JSON(detail.answered_original_as_array) AS answeredOriginalAsArray,
           judgment.explanation AS explanation,
+          judgment.full_text_strategy_id AS fullTextStrategyId,
           judgment.quotes AS quotes,
           export_scope.source_project_order AS sourceProjectOrder,
           ROW_NUMBER() OVER (
@@ -507,8 +512,51 @@ const getExportServingSnapshotScopes = async (input: {job: ExportJobRow; sourceP
   })
 }
 
+const getExportRowFullTextStrategyLabel = (input: {
+  fullTextStrategyLabels: Map<string, string>
+  judgments: Array<ExportJudgmentRow | undefined>
+}) => {
+  return [
+    ...new Set(
+      input.judgments.flatMap((judgment) => {
+        return judgment?.fullTextStrategyId
+          ? [input.fullTextStrategyLabels.get(judgment.fullTextStrategyId) ?? judgment.fullTextStrategyId]
+          : []
+      }),
+    ),
+  ].join('; ')
+}
+
+const getExportFullTextStrategyLabels = async (snapshotScopes: ExportServingSnapshotScope[]) => {
+  const projectIds = [
+    ...new Set(
+      snapshotScopes.map((scope) => {
+        return scope.projectId
+      }),
+    ),
+  ]
+  const rows =
+    projectIds.length === 0
+      ? []
+      : await appDatabaseService.queryJson<{fullTextStrategyId: string}>(`
+          SELECT DISTINCT ${getProjectFullTextStrategyIdSql('project')} AS fullTextStrategyId
+          FROM app.project project
+          WHERE project.id IN (${getQuotedStringList(projectIds).join(', ')})
+        `)
+  const strategyIds = rows.map((row) => {
+    return row.fullTextStrategyId
+  })
+
+  return strategyIds.some((strategyId) => {
+    return strategyId !== FULL_TEXT_STRATEGY_NONE
+  })
+    ? getFullTextStrategyLabelsById(appDatabaseService, strategyIds)
+    : null
+}
+
 const buildExportCsvRows = (input: {
   articles: ExportArticleRow[]
+  fullTextStrategyLabels: Map<string, string> | null
   judgments: ExportJudgmentRow[]
   orderedPromptIds: string[]
   promptOutput: NonNullable<ExportContract['promptOutput']>
@@ -546,6 +594,16 @@ const buildExportCsvRows = (input: {
     if (input.selectedMetadata.includeJournal) row.push(getExportJournalTitle(sourceMetadata))
     if (input.selectedMetadata.includeArticleCreatedAt) row.push(formatArticleDate(article.articleCreatedAt))
     if (input.selectedMetadata.includeArticleUpdatedAt) row.push(formatArticleDate(article.articleUpdatedAt))
+    if (input.fullTextStrategyLabels) {
+      row.push(
+        getExportRowFullTextStrategyLabel({
+          fullTextStrategyLabels: input.fullTextStrategyLabels,
+          judgments: input.orderedPromptIds.map((promptId) => {
+            return judgmentsByArticleAndPrompt.get(`${article.articleId}:${promptId}`)
+          }),
+        }),
+      )
+    }
 
     input.orderedPromptIds.forEach((promptId) => {
       const judgment = judgmentsByArticleAndPrompt.get(`${article.articleId}:${promptId}`)
@@ -587,7 +645,13 @@ const buildExportCsvStream = (input: {
 
           return prompt ? [prompt] : []
         })
-        const headerRow = getExportHeaders({contract: input.contract, orderedPromptDetails, selectedMetadata})
+        const fullTextStrategyLabels = await getExportFullTextStrategyLabels(input.snapshotScopes)
+        const headerRow = getExportHeaders({
+          contract: input.contract,
+          includeFullTextStrategy: fullTextStrategyLabels !== null,
+          orderedPromptDetails,
+          selectedMetadata,
+        })
           .map(escapeCSV)
           .join(',')
 
@@ -606,6 +670,7 @@ const buildExportCsvStream = (input: {
           ])
           const batchCsvRows = buildExportCsvRows({
             articles,
+            fullTextStrategyLabels,
             judgments,
             orderedPromptIds: orderedPromptDetails.map((prompt) => {
               return prompt.id
