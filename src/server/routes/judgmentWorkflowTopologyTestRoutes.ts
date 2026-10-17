@@ -161,6 +161,7 @@ const seedTopologyFixture = async ({
       ids.projectIds.map((projectId) => {
         return {
           changedReviewConfigFields: [
+            'fullTextStrategyId',
             'modelId',
             'promptMembership',
             'systemPromptVariant',
