@@ -5,6 +5,7 @@ import {CANONICAL_TEXT_VERSION} from './canonicalFullText.ts'
 import {getConverterOptionsHash} from './converters/converterOptionsHash.ts'
 import {getFullTextConverter} from './converters/fullTextConverter.ts'
 import {FIGURE_DESCRIPTION_PROMPT_VERSION} from './figureDescriptions.ts'
+import {IMAGE_TRANSPORT_VERSION} from './fullTextStrategy.ts'
 import {
   type FullTextConversionModelStrategyInputs,
   type FullTextStrategyEnvironment,
@@ -60,6 +61,6 @@ export const getFullTextStrategyEnvironment = async (): Promise<FullTextStrategy
     canonicalTextVersion: CANONICAL_TEXT_VERSION,
     conversionModel: await getFullTextConversionModelStrategyInputs(),
     figureDescription: await getFigureDescriptionStrategyInputs(),
-    imageTransportVersion: null,
+    imageTransportVersion: IMAGE_TRANSPORT_VERSION,
   }
 }

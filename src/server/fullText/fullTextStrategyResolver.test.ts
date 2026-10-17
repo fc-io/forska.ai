@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {IMAGE_TRANSPORT_VERSION} from './fullTextStrategy.ts'
 import {
   type FullTextStrategyEnvironment,
   fullTextStrategyErrorMessages,
@@ -99,4 +100,22 @@ test('descriptions need a figure-description model and native images need image 
       {...environment, figureDescription: {modelId: 'model-vlm', promptVersion: 'fig-desc-v1'}},
     ).strategy?.inputs,
   ).toMatchObject({figureDescriptionModelId: null, figureDescriptionPromptVersion: null})
+})
+
+test('native images resolve with the shipped image transport version, which only enters native-image strategies', () => {
+  const chunkPolicy = {maxPromptTokens: 48_000, mode: 'single_only'} as const
+  const imageEnvironment = {...environment, imageTransportVersion: IMAGE_TRANSPORT_VERSION}
+  const nativeImages = resolveFullTextStrategy({chunkPolicy, figureMode: 'native_images'}, imageEnvironment)
+
+  expect(IMAGE_TRANSPORT_VERSION).toBe('img-v1')
+  expect(nativeImages.errors).toEqual([])
+  expect(nativeImages.strategy?.label).toBe('mineru 4.0.12 / native images / single 48k')
+  expect(nativeImages.strategy?.inputs).toMatchObject({
+    figureDescriptionModelId: null,
+    figureMode: 'native_images',
+    imageTransportVersion: 'img-v1',
+  })
+  expect(resolveFullTextStrategy({chunkPolicy, figureMode: 'none'}, imageEnvironment)).toEqual(
+    resolveFullTextStrategy({chunkPolicy, figureMode: 'none'}, environment),
+  )
 })
