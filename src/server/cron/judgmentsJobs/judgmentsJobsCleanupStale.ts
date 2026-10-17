@@ -1,3 +1,7 @@
+import {
+  FULL_TEXT_CHUNK_PLAN_PRUNE_BATCH_SIZE,
+  pruneOrphanedFullTextChunkPlans,
+} from '../../fullText/fullTextChunkPlanStore.ts'
 import {getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {
@@ -1918,6 +1922,25 @@ export const judgmentsJobsCleanupStale = async (
     })
 
     if (shouldStopCleanupAfterStep(telemetryPruneStep)) return finishResult()
+
+    const chunkPlanPruneStep = await runCleanupStaleStep({
+      budget,
+      name: 'prune-orphaned-full-text-chunk-plans',
+      result,
+      run: async () => {
+        const rowsChanged = await pruneOrphanedFullTextChunkPlans()
+        const exhausted = rowsChanged >= FULL_TEXT_CHUNK_PLAN_PRUNE_BATCH_SIZE
+
+        return {
+          rowsChanged,
+          skippedReason: exhausted ? 'full-text-chunk-plan-prune-row-budget-exhausted' : undefined,
+          status: exhausted ? 'partial' : 'completed',
+        }
+      },
+      usesDuckdbStep: true,
+    })
+
+    if (shouldStopCleanupAfterStep(chunkPlanPruneStep)) return finishResult()
 
     const finalizeDrainingStep = await runCleanupStaleStep({
       budget,

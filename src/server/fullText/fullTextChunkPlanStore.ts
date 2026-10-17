@@ -10,6 +10,14 @@ export type FullTextChunkPlanQueryService = Pick<
 
 export type FullTextChunkPlanKey = {articleId: string; fullTextStrategyId: string}
 
+export const FULL_TEXT_CHUNK_PLAN_PRUNE_BATCH_SIZE = 500
+
+const fullTextChunkPlanPruneWorkloadContext = {
+  fallbackIntent: 'reject' as const,
+  routeOrJobKey: 'fullText.chunkPlan.prune',
+  workloadClass: 'background.fullText.chunkPlan',
+}
+
 export type StoredFullTextChunkPlan = FullTextChunkPlanKey & {plan: FullTextChunkPlan}
 
 type StoredChunkPlanRow = {
@@ -108,4 +116,58 @@ export const storeFullTextChunkPlans = async (plans: StoredFullTextChunkPlan[]):
       chunks = EXCLUDED.chunks,
       created_at = now()
   `)
+}
+
+export const getDeleteChunkPlansForChangedCanonicalHashSql = ({
+  articleId,
+  canonicalHash,
+}: {
+  articleId: string
+  canonicalHash: string
+}): string => {
+  return `
+    DELETE FROM app.article_full_text_chunk_plan
+    WHERE article_id = ${getSqlLiteral(articleId)}
+      AND EXISTS (
+        SELECT 1
+        FROM app.article a
+        WHERE a.id = ${getSqlLiteral(articleId)}
+          AND a.full_text_canonical_hash IS DISTINCT FROM ${getSqlLiteral(canonicalHash)}
+      )
+  `
+}
+
+export const pruneOrphanedFullTextChunkPlans = async ({
+  maxRows = FULL_TEXT_CHUNK_PLAN_PRUNE_BATCH_SIZE,
+}: {maxRows?: number} = {}): Promise<number> => {
+  const database = getAppDatabaseService()
+  const orphanedKeys = await database.queryJsonBackground<FullTextChunkPlanKey>(
+    `
+    SELECT plan.article_id AS articleId, plan.full_text_strategy_id AS fullTextStrategyId
+    FROM app.article_full_text_chunk_plan plan
+    WHERE NOT EXISTS (
+        SELECT 1 FROM app.project p WHERE p.full_text_strategy_id = plan.full_text_strategy_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app.judgment_job jj WHERE jj.full_text_strategy_id = plan.full_text_strategy_id
+      )
+    ORDER BY plan.created_at ASC, plan.article_id ASC, plan.full_text_strategy_id ASC
+    LIMIT ${maxRows}
+  `,
+    {...fullTextChunkPlanPruneWorkloadContext, maxResultRows: maxRows},
+  )
+
+  if (orphanedKeys.length > 0) {
+    await database.runBackground(
+      `
+      DELETE FROM app.article_full_text_chunk_plan
+      USING (VALUES ${getKeyValuesSql(orphanedKeys)}) orphaned(article_id, full_text_strategy_id)
+      WHERE app.article_full_text_chunk_plan.article_id = orphaned.article_id
+        AND app.article_full_text_chunk_plan.full_text_strategy_id = orphaned.full_text_strategy_id
+    `,
+      fullTextChunkPlanPruneWorkloadContext,
+    )
+  }
+
+  return orphanedKeys.length
 }
