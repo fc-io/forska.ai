@@ -19,6 +19,12 @@ import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
 import {runReviewServingProjectorWorkerOnce} from '../workers/reviewServingProjectorWorker.ts'
 
 const seedTokenEnvKey = 'FORSKA_TEST_JUDGMENT_TOPOLOGY_SEED_TOKEN'
+const topologyModelMetadata = {
+  capabilityOverrides: {
+    contextWindow: {inputTokens: 32_768, totalTokens: 32_768},
+    updatedAt: '2026-10-17T00:00:00.000Z',
+  },
+}
 
 const requireTopologySeedBoundary = (token: string) => {
   const configuredToken = String(process.env[seedTokenEnvKey] ?? '')
@@ -94,10 +100,10 @@ const seedTopologyFixture = async ({
         ${sql(providerBaseUrl)}, json_object('workerUrlMode', 'manual'), 1
       );
       INSERT INTO app.model (
-        id, provider_connection_id, name, remote_model_id, display_name, source, enabled
+        id, provider_connection_id, name, remote_model_id, display_name, source, enabled, metadata_json
       ) VALUES (
         ${sql(ids.modelId)}, ${sql(ids.connectionId)}, 'topology-deterministic', 'topology-deterministic',
-        'Topology deterministic', 'manual', TRUE
+        'Topology deterministic', 'manual', TRUE, ${sql(JSON.stringify(topologyModelMetadata))}
       );
       INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata)
       VALUES
