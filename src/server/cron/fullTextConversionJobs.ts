@@ -1,6 +1,13 @@
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
+import {
+  convertArticlePdf,
+  type FullTextConversionRuntimeConfig,
+  getFullTextConversionFailureMetadata,
+  getFullTextConversionMetadata,
+  isPermanentConversionFailure,
+} from '../fullText/converters/fullTextConverter.ts'
 import {getJsonSqlLiteral} from '../providers/providerDbUtils.ts'
 import {
   appendArticleReviewServingDeltas,
@@ -15,16 +22,15 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
-import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 
 const CONVERSION_INTERVAL = '0 */2 * * * *' // Every 2 minutes
-const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes
+const CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes
 const MAX_CONVERSION_ATTEMPTS = 3
 const DEFAULT_BATCH_SIZE = 5
-const DEFAULT_CONCURRENCY = 1
+const DEFAULT_CONCURRENCY = 2
 const MAX_RUNNING_JOB_PROJECTS_PER_SCAN = 100
 const MAX_PROJECT_IMPORT_ROUTES_PER_SCAN = 100
 // Maximum number of concurrent batch runs allowed
@@ -54,7 +60,6 @@ const getConversionConcurrency = (batchSize: number): number => {
 }
 
 type ArticleForConversion = {id: string; fullTextPDF: string; fullTextConversionAttempts: number | null}
-type FullTextConversionRuntimeConfig = {baseURL: string; modelId: string; modelName: string; providerKind: string}
 
 /**
  * Get articles with PDFs that need conversion, prioritizing:
@@ -70,7 +75,7 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
   // Base conditions: has PDF, no fullText, not failed, not exceeded retry limit
   const baseConditions = [
     `a.full_text_pdf IS NOT NULL`,
-    `(a.full_text IS NULL OR a.full_text_html IS NULL)`,
+    `a.full_text IS NULL`,
     `(a.full_text_conversion_status IS NULL OR a.full_text_conversion_status != 'failed')`,
     `(a.full_text_conversion_attempts IS NULL OR a.full_text_conversion_attempts < ${MAX_CONVERSION_ATTEMPTS})`,
   ]
@@ -328,7 +333,7 @@ const convertArticles = async ({
   }
 }
 
-const convertArticle = async ({
+export const convertArticle = async ({
   article,
   runtimeConfig,
 }: {
@@ -343,11 +348,13 @@ const convertArticle = async ({
   )
 
   try {
-    const {md, html} = await convertPdfToText({
-      baseURL: runtimeConfig.baseURL,
-      localPath: article.fullTextPDF,
-      timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
+    const result = await convertArticlePdf({
+      articleId: article.id,
+      pdfPath: article.fullTextPDF,
+      runtimeConfig,
+      timeoutMs: CONVERSION_TIMEOUT_MS,
     })
+    const {html, markdown: md} = result
 
     const sourceUpdatedAt = new Date()
 
@@ -358,13 +365,9 @@ const convertArticle = async ({
             full_text_html = ${getSqlLiteral(html)},
             full_text_conversion_status = 'success',
             full_text_conversion_error = NULL,
+            full_text_assets = ${getJsonSqlLiteral(result.figures)},
             full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
-            full_text_conversion_metadata = ${getJsonSqlLiteral({
-              baseURL: runtimeConfig.baseURL,
-              modelId: runtimeConfig.modelId,
-              modelName: runtimeConfig.modelName,
-              providerKind: runtimeConfig.providerKind,
-            })},
+            full_text_conversion_metadata = ${getJsonSqlLiteral(getFullTextConversionMetadata({result, runtimeConfig}))},
             full_text_char_count = ${md.length},
             full_text_conversion_attempts = ${(article.fullTextConversionAttempts ?? 0) + 1},
             updated_at = current_timestamp
@@ -386,22 +389,16 @@ const convertArticle = async ({
         articleId: article.id,
         charCount: md.length,
         component: fullTextConversionComponent,
+        converterKind: result.converterKind,
+        converterVersion: result.converterVersion,
         durationMs: Date.now() - startTime,
+        figureCount: result.figures.length,
         modelName: runtimeConfig.modelName,
       },
     )
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
-    const msg = errorMessage.toLowerCase()
-
-    // Permanent errors
-    const isPerm =
-      (error instanceof ConversionError && error.isPermanent)
-      || msg.includes('encrypted')
-      || msg.includes('password')
-      || msg.includes('invalid pdf')
-      || msg.includes('file not found')
-
+    const isPerm = isPermanentConversionFailure(error)
     const attempts = (article.fullTextConversionAttempts ?? 0) + 1
     const isFinalFailure = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS
 
@@ -411,12 +408,7 @@ const convertArticle = async ({
       SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
           full_text_conversion_error = ${getSqlLiteral(errorMessage)},
           full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
-          full_text_conversion_metadata = ${getJsonSqlLiteral({
-            baseURL: runtimeConfig.baseURL,
-            modelId: runtimeConfig.modelId,
-            modelName: runtimeConfig.modelName,
-            providerKind: runtimeConfig.providerKind,
-          })},
+          full_text_conversion_metadata = ${getJsonSqlLiteral(getFullTextConversionFailureMetadata(runtimeConfig))},
           full_text_conversion_attempts = ${attempts},
           updated_at = current_timestamp
       WHERE id = '${escapeSqlString(article.id)}'

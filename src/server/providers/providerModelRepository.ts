@@ -11,6 +11,7 @@ import {
   getProjectTransferTargetStateDirtyTokenService,
   projectTransferProviderDependencyDirtyTokenSurfaces,
 } from '../services/projectTransfer/projectTransferTargetStateDirtyTokenService.ts'
+import {isFullTextConversionProvider} from '../services/providerCatalog.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
   type DatabaseQueryRunner,
@@ -785,7 +786,7 @@ export const assertSelectableProviderModelIds = async (
 
   const selectableRows = rows.filter((row) => {
     return (
-      row.provider !== 'docling'
+      !isFullTextConversionProvider(row.provider)
       && getProviderModelRecordFromRow({
         baseURL: null,
         connectionConfigJson: row.connectionConfigJson,

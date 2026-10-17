@@ -109,11 +109,76 @@ http://127.0.0.1:8080/v1
 
 Then click `Test`, sync or manually add models, and enable the models you want.
 
-## Optional Docling PDF Conversion
+## Optional PDF Conversion (MinerU or Docling)
 
-If you run a local Docling-compatible service, add it as a provider in `/providers`, add or sync the model, and select that model in `/settings` as the PDF conversion model.
+PDF-to-text conversion uses exactly one model, chosen in `/settings` as the PDF conversion model. It can come from a MinerU provider or a Docling provider. Forska never switches between them on its own: if the chosen server is down, conversion fails and retries later.
 
-Optional conversion worker knobs can be passed inline when starting the server:
+Every conversion stores:
+
+- `full_text`: the converter's markdown.
+- `full_text_html`: Docling's HTML. MinerU produces no HTML, so this stays empty for MinerU.
+- `full_text_assets`: the figure list `[{index, page, bbox, caption, imagePath}]`. `bbox` is in page fractions with the origin at the top left.
+- `full_text_conversion_metadata`: `converterKind`, `converterVersion`, `optionsHash` (sha256 of the exact request options), `baseURL`, `modelId` and `layoutPath`.
+
+Figure crops and the layout blocks are written to `assets/full-text-assets/<articleId>/` (`fig-N.<ext>`, `layout.json`) under the runtime root, next to `assets/article_pdfs/`. That directory is replaced on every reconversion.
+
+### MinerU 4 (local parsing API)
+
+Install MinerU into its own virtualenv, not the system Python. Tested with MinerU 4.0.12 on an M4 Pro. On macOS arm64 the install pulls in PyTorch (MPS).
+
+```bash
+mkdir -p ~/Developer/forska-tools/mineru && cd ~/Developer/forska-tools/mineru
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python 'mineru==4.0.12'
+```
+
+Start the parsing API. Forska's default MinerU base URL is `http://127.0.0.1:8000`:
+
+```bash
+~/Developer/forska-tools/mineru/.venv/bin/mineru-api --host 127.0.0.1 --port 8000 --tier standard --concurrency 2
+```
+
+- The first parse downloads about 2 GB of weights to `~/.mineru/models`:
+  - `MinerU-4_models_torch` (layout and OCR)
+  - `MinerU2.5-Pro-2605-1.2B-GGUF` (the VLM, run through llama.cpp)
+- Check that it is up: `curl http://127.0.0.1:8000/v1/health` should return `{"status":"ok","version":"4.0.12",...}`.
+- Stop it with Ctrl-C, or `pkill -f mineru-api`.
+- Use `mineru-api`, not `mineru server start`. The latter starts MinerU's document-library server, which has a different API.
+- Port 8000 is also vLLM's default. If both run, start MinerU on another port and set that base URL on the provider.
+
+Then:
+
+1. In `/providers`, add a **MinerU** provider, click `Test`, then sync models. This creates one model, `mineru-standard`, which carries the server version.
+2. Select that model in `/settings`.
+
+Request forska sends: `POST /v1/file_parse` with `tier=standard`, `ocr_mode=auto`, `page_range=` (all pages), `output_formats=markdown,middle_json,zip` and `response_format=zip`. It reads `markdown.md`, `middle_json.json` and the `images/` crops from the zip. A request that does not finish within the 10-minute conversion timeout is canceled on the server and retried later.
+
+### Docling Serve
+
+```bash
+mkdir -p ~/Developer/forska-tools/docling && cd ~/Developer/forska-tools/docling
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python docling-serve
+.venv/bin/docling-serve run --host 127.0.0.1 --port 5001
+```
+
+Then add a **Docling Serve** provider in `/providers`, add the model, and select it in `/settings`.
+
+Forska sends `POST /v1/convert/source` with a zip target. It does not rely on any server default for these options:
+
+- `to_formats: ['md','json','html']`
+- `image_export_mode: 'referenced'`, `include_images: true`, `include_page_images: false`, `images_scale: 2`
+- `do_ocr: true`, `force_ocr: false`
+- `do_table_structure: true`, `table_mode: 'accurate'`
+- `pdf_backend: 'docling_parse'`, `pipeline: 'standard'`
+- picture description, picture classification, chart extraction, code and formula enrichment all off
+- `do_pdf_heading_hierarchy: false`, `md_compact_tables: false`, `md_page_break_placeholder: ''`
+
+`converterVersion` is the list of `docling*` package versions reported by `GET /version`.
+
+### Conversion worker knobs
+
+Optional conversion worker knobs can be passed inline when starting the server. The default concurrency is 2:
 
 ```bash
 RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true FULL_TEXT_CONVERSION_BATCH_SIZE=5 FULL_TEXT_CONVERSION_CONCURRENCY=2 bun run dev:server

@@ -210,7 +210,7 @@ export const loadEnv = ({
     merged.FULL_TEXT_CONVERSION_CONCURRENCY == null
     || String(merged.FULL_TEXT_CONVERSION_CONCURRENCY).trim() === ''
   ) {
-    ;(merged as Record<string, string>).FULL_TEXT_CONVERSION_CONCURRENCY = '1'
+    ;(merged as Record<string, string>).FULL_TEXT_CONVERSION_CONCURRENCY = '2'
   }
   if (
     merged.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE == null

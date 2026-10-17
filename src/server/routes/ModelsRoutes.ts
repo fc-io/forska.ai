@@ -17,7 +17,7 @@ import {
   getCodexAppRuntimeStatus,
   startCodexAppDeviceLogin,
 } from '../providers/transports/codexAppTransport.ts'
-import {normalizeProviderKind} from '../services/providerCatalog.ts'
+import {isFullTextConversionProvider, normalizeProviderKind} from '../services/providerCatalog.ts'
 import {getInferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {providerConnectionsRoutes} from './ProviderConnectionsRoutes.ts'
@@ -392,7 +392,9 @@ const getSelectableModelsPayload = async () => {
   const storedCodexModels = await getCodexStoredModels()
   const nonCodexModels = storedModels
     .filter((model) => {
-      return model.provider !== 'anthropic' && model.provider !== 'codex' && model.provider !== 'docling'
+      return (
+        model.provider !== 'anthropic' && model.provider !== 'codex' && !isFullTextConversionProvider(model.provider)
+      )
     })
     .map(getSelectableStoredModel)
   const anthropicModels = getAnthropicSelectableModels(storedModels)

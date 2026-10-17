@@ -1,15 +1,20 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {
+  convertArticlePdf,
+  getFullTextConversionMetadata,
+  isPermanentConversionFailure,
+} from '../fullText/converters/fullTextConverter.ts'
+import {getJsonSqlLiteral} from '../providers/providerDbUtils.ts'
+import {
   appendArticleReviewServingDeltas,
   getArticleReviewServingMutationValueHash,
 } from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
-import {ConversionError, convertPdfToText} from './convertPdfToText.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 
-const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes - same as cron job
+const CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes - same as cron job
 const ensureFullTextLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const ensureFullTextWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const ensureFullTextComponent = 'ensureFullText'
@@ -130,14 +135,16 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
     const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
 
     if (!runtimeConfig) {
-      throw new Error('No Docling conversion model configured')
+      throw new Error('No PDF conversion model configured')
     }
 
-    const {md, html} = await convertPdfToText({
-      baseURL: runtimeConfig.baseURL,
-      localPath: fresh.fullTextPDF,
-      timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
+    const result = await convertArticlePdf({
+      articleId,
+      pdfPath: fresh.fullTextPDF,
+      runtimeConfig,
+      timeoutMs: CONVERSION_TIMEOUT_MS,
     })
+    const {html, markdown: md} = result
 
     await getAppDatabaseService().transaction(async (tx) => {
       const sourceUpdatedAt = new Date()
@@ -145,8 +152,11 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
         UPDATE app.article
         SET full_text = ${getSqlLiteral(md)},
             full_text_html = ${getSqlLiteral(html)},
+            full_text_assets = ${getJsonSqlLiteral(result.figures)},
             full_text_conversion_status = 'success',
             full_text_conversion_error = NULL,
+            full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
+            full_text_conversion_metadata = ${getJsonSqlLiteral(getFullTextConversionMetadata({result, runtimeConfig}))},
             full_text_char_count = ${md.length},
             full_text_conversion_attempts = ${(fresh.fullTextConversionAttempts ?? 0) + 1},
             updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
@@ -171,15 +181,7 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
   } catch (error) {
     // Classify error
     const errorMessage = error instanceof Error ? error.message : String(error)
-    const msg = errorMessage.toLowerCase()
-
-    // Permanent errors
-    const isPerm =
-      (error instanceof ConversionError && error.isPermanent)
-      || msg.includes('encrypted')
-      || msg.includes('password')
-      || msg.includes('invalid pdf')
-      || msg.includes('file not found')
+    const isPerm = isPermanentConversionFailure(error)
 
     // Get current attempts
     const [current] = await getAppDatabaseService().queryJsonBackground<{attempts: number | null}>(

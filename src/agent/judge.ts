@@ -678,6 +678,7 @@ const getProviderEndpointPath = (providerKind: string | null): string | null => 
         || providerKind === 'codex'
         || providerKind === 'claude-code'
         || providerKind === 'docling'
+        || providerKind === 'mineru'
         || providerKind === 'google'
       ? null
       : '/v1/chat/completions'

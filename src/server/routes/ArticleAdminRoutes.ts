@@ -5,6 +5,12 @@ import path from 'path'
 import {emptyArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
 import {
+  convertArticlePdf,
+  getFullTextConversionMetadata,
+  isPermanentConversionFailure,
+} from '../fullText/converters/fullTextConverter.ts'
+import {getJsonSqlLiteral} from '../providers/providerDbUtils.ts'
+import {
   appendArticleReviewServingDeltas,
   getArticleReviewServingMutationValueHash,
 } from '../reviewServing/articleReviewServingDeltaService.ts'
@@ -17,7 +23,6 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
-import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {resolveRuntimeWritablePath} from '../utils/runtimeWritablePath.ts'
 
@@ -240,7 +245,7 @@ export const articleAdminRoutes = new Elysia()
     '/api/articles/:id/convert-pdf',
     async ({params}) => {
       const {id} = params
-      const DOCLING_CONVERSION_TIMEOUT_MS = 600_000
+      const CONVERSION_TIMEOUT_MS = 600_000
       const MAX_CONVERSION_ATTEMPTS = 3
 
       const [article] = await getAppDatabaseService().queryJson<{
@@ -283,14 +288,16 @@ export const articleAdminRoutes = new Elysia()
           const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
 
           if (!runtimeConfig) {
-            throw new Error('No Docling conversion model configured')
+            throw new Error('No PDF conversion model configured')
           }
 
-          const {md, html} = await convertPdfToText({
-            baseURL: runtimeConfig.baseURL,
-            localPath: fullTextPDF,
-            timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
+          const result = await convertArticlePdf({
+            articleId: article.id,
+            pdfPath: fullTextPDF,
+            runtimeConfig,
+            timeoutMs: CONVERSION_TIMEOUT_MS,
           })
+          const {html, markdown: md} = result
           const sourceUpdatedAt = new Date()
 
           await getAppDatabaseService().transaction(async (tx) => {
@@ -298,8 +305,11 @@ export const articleAdminRoutes = new Elysia()
               UPDATE app.article
               SET full_text = ${getSqlLiteral(md)},
                   full_text_html = ${getSqlLiteral(html)},
+                  full_text_assets = ${getJsonSqlLiteral(result.figures)},
                   full_text_conversion_status = 'success',
                   full_text_conversion_error = NULL,
+                  full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
+                  full_text_conversion_metadata = ${getJsonSqlLiteral(getFullTextConversionMetadata({result, runtimeConfig}))},
                   full_text_char_count = ${md.length},
                   full_text_conversion_attempts = ${(article.fullTextConversionAttempts ?? 0) + 1},
                   updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
@@ -318,14 +328,7 @@ export const articleAdminRoutes = new Elysia()
           console.log(`[convertPdf] Success: article ${article.id} (${duration}ms, ${md.length} chars)`)
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error)
-          const msg = errorMessage.toLowerCase()
-
-          const isPerm =
-            (error instanceof ConversionError && error.isPermanent)
-            || msg.includes('encrypted')
-            || msg.includes('password')
-            || msg.includes('invalid pdf')
-            || msg.includes('file not found')
+          const isPerm = isPermanentConversionFailure(error)
 
           const attempts = (article.fullTextConversionAttempts ?? 0) + 1
           const isFinalFailure = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS

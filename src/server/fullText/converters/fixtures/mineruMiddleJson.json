@@ -1,0 +1,200 @@
+{
+ "metadata": {
+  "file_suffix": "pdf",
+  "producer": {
+   "name": "mineru",
+   "version": "4.0.12"
+  }
+ },
+ "extensions": {
+  "mineru": {
+   "tier": "standard",
+   "parse_mode": "txt"
+  }
+ },
+ "pages": [
+  {
+   "page_idx": 0,
+   "blocks": [
+    {
+     "type": "header",
+     "index": 0,
+     "bbox": [
+      0.08,
+      0.04,
+      0.368,
+      0.061
+     ],
+     "content": [
+      {
+       "type": "text",
+       "content": "frontiersFrontiers in Medicine"
+      }
+     ]
+    },
+    {
+     "type": "header",
+     "index": 1,
+     "bbox": [
+      0.734,
+      0.04,
+      0.919,
+      0.074
+     ],
+     "content": [
+      {
+       "type": "hyperlink",
+       "url": "https://www.frontiersin.org/journals/medicine#editorial-board",
+       "content": [
+        {
+         "type": "text",
+         "content": "TYPE Systematic Review PUBLISHED 13 December 2023"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "content": " "
+      },
+      {
+       "type": "hyperlink",
+       "url": "https://doi.org/10.3389/fmed.2023.1283512",
+       "content": [
+        {
+         "type": "text",
+         "content": "DOI 10.3389/fmed.2023.1283512"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "page_idx": 2,
+   "blocks": [
+    {
+     "type": "text",
+     "index": 5,
+     "bbox": [
+      0.077,
+      0.152,
+      0.492,
+      0.295
+     ],
+     "content": [
+      {
+       "type": "text",
+       "content": "Figure 1",
+       "styles": [
+        "bold"
+       ]
+      },
+      {
+       "type": "text",
+       "content": " describes the process of literature retrieval and screening. A total of 611 studies were retrieved, of which 453 were evaluated after eliminating duplications. Further, 401 studies were excluded because they did not meet the inclusion criteria, and only 6 (16–21) of the remaining 13 potential studies were ultimately included in this study. These 6 studies were published between 2000 and 2020, and included 501 patients from 6 countries, with a sample size of 20–200. The PNB procedure was achieved in one study under ultrasound guidance, in two studies under nerve stimulation and in the other three under anatomic landmarks ("
+      },
+      {
+       "type": "text",
+       "content": "Table 1",
+       "styles": [
+        "bold"
+       ]
+      },
+      {
+       "type": "text",
+       "content": ")."
+      }
+     ]
+    },
+    {
+     "type": "image",
+     "index": 10,
+     "bbox": [
+      0.082,
+      0.513,
+      0.488,
+      0.915
+     ],
+     "content": [
+      {
+       "type": "image_body",
+       "index": 10,
+       "bbox": [
+        0.082,
+        0.513,
+        0.488,
+        0.915
+       ],
+       "image_path": "images/page_2_image_10.jpg",
+       "content": ""
+      },
+      {
+       "type": "image_caption",
+       "index": 11,
+       "bbox": [
+        0.082,
+        0.9,
+        0.488,
+        0.915
+       ],
+       "content": [
+        {
+         "type": "text",
+         "content": "FIGURE 1 "
+        },
+        {
+         "type": "text",
+         "content": "PRISMA flow diagram of study selection."
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "table",
+     "index": 12,
+     "bbox": [
+      0.534,
+      0.091,
+      0.916,
+      0.915
+     ],
+     "content": [
+      {
+       "type": "table_caption",
+       "index": 11,
+       "bbox": [
+        0.508,
+        0.735,
+        0.525,
+        0.918
+       ],
+       "content": [
+        {
+         "type": "text",
+         "content": "TABLE1Characteristicsoftheincludedtrials."
+        }
+       ]
+      },
+      {
+       "type": "table_body",
+       "index": 12,
+       "bbox": [
+        0.534,
+        0.091,
+        0.916,
+        0.915
+       ],
+       "image_path": "images/page_2_table_12.jpg",
+       "content": "<table><tr><td>Study</td><td>Country</td></tr><tr><td>Xia 2023</td><td>China</td></tr></table>"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "is_full_document": true,
+ "schema": "docvortex.middle",
+ "schema_version": "2.0"
+}

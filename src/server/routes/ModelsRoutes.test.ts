@@ -456,3 +456,42 @@ test('models list keeps Anthropic thinking variants as virtual ids with provider
     version: 'high',
   })
 })
+
+test('models list excludes PDF conversion models from judge model choices', async () => {
+  const getConversionModel = (provider: 'docling' | 'mineru'): ProviderModelRecord => {
+    return {
+      ...getAnthropicBaseModel(),
+      displayName: `${provider} converter`,
+      id: `${provider}-model-1`,
+      modelName: `${provider}-standard`,
+      name: `${provider} converter`,
+      provider,
+      providerConnectionId: `${provider}-connection-1`,
+      remoteModelId: `${provider}-standard`,
+    }
+  }
+  const judgeModel: ProviderModelRecord = {
+    ...getAnthropicBaseModel(),
+    displayName: 'Qwen local',
+    id: 'sglang-model-1',
+    modelName: 'qwen',
+    name: 'Qwen local',
+    provider: 'sglang',
+    providerConnectionId: 'sglang-connection-1',
+    remoteModelId: 'qwen',
+  }
+  state.listSelectableProviderModels.mockImplementationOnce(async () => {
+    return [getConversionModel('docling'), getConversionModel('mineru'), judgeModel]
+  })
+  const app = await loadRoutes()
+  const response = await app.handle(new Request('http://localhost/api/models'))
+  const body = (await response.json()) as {data: Array<{id: string; provider: string}>}
+  const providers = body.data.map((model) => {
+    return model.provider
+  })
+
+  expect(response.status).toBe(200)
+  expect(providers).toContain('sglang')
+  expect(providers).not.toContain('docling')
+  expect(providers).not.toContain('mineru')
+})

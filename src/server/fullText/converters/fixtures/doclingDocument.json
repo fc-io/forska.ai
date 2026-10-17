@@ -1,0 +1,116 @@
+{
+  "schema_name": "DoclingDocument",
+  "version": "1.10.0",
+  "name": "paper",
+  "origin": {"mimetype": "application/pdf", "binary_hash": 1, "filename": "paper.pdf"},
+  "furniture": {"self_ref": "#/furniture", "children": [{"$ref": "#/texts/0"}], "content_layer": "furniture", "name": "_root_", "label": "unspecified"},
+  "body": {
+    "self_ref": "#/body",
+    "children": [{"$ref": "#/texts/2"}, {"$ref": "#/groups/0"}, {"$ref": "#/pictures/0"}, {"$ref": "#/tables/0"}],
+    "content_layer": "body",
+    "name": "_root_",
+    "label": "unspecified"
+  },
+  "groups": [
+    {"self_ref": "#/groups/0", "parent": {"$ref": "#/body"}, "children": [{"$ref": "#/texts/3"}], "content_layer": "body", "name": "list", "label": "list"}
+  ],
+  "texts": [
+    {
+      "self_ref": "#/texts/0",
+      "parent": {"$ref": "#/furniture"},
+      "children": [],
+      "content_layer": "furniture",
+      "label": "page_header",
+      "prov": [{"page_no": 3, "bbox": {"l": 30, "t": 790, "r": 200, "b": 780, "coord_origin": "BOTTOMLEFT"}, "charspan": [0, 19]}],
+      "orig": "Frontiers in Medicine",
+      "text": "Frontiers in Medicine"
+    },
+    {
+      "self_ref": "#/texts/1",
+      "parent": {"$ref": "#/pictures/0"},
+      "children": [],
+      "content_layer": "body",
+      "label": "caption",
+      "prov": [{"page_no": 3, "bbox": {"l": 60, "t": 495, "r": 300, "b": 480, "coord_origin": "BOTTOMLEFT"}, "charspan": [0, 44]}],
+      "orig": "FIGURE 1 PRISMA flow diagram of study selection.",
+      "text": "FIGURE 1 PRISMA flow diagram of study selection."
+    },
+    {
+      "self_ref": "#/texts/2",
+      "parent": {"$ref": "#/body"},
+      "children": [],
+      "content_layer": "body",
+      "label": "section_header",
+      "prov": [{"page_no": 3, "bbox": {"l": 60, "t": 760, "r": 200, "b": 745, "coord_origin": "BOTTOMLEFT"}, "charspan": [0, 14]}],
+      "orig": "1 Introduction",
+      "text": "1 Introduction",
+      "level": 1
+    },
+    {
+      "self_ref": "#/texts/3",
+      "parent": {"$ref": "#/groups/0"},
+      "children": [],
+      "content_layer": "body",
+      "label": "list_item",
+      "prov": [{"page_no": 3, "bbox": {"l": 60, "t": 740, "r": 300, "b": 710, "coord_origin": "BOTTOMLEFT"}, "charspan": [0, 30]}],
+      "orig": "Hemorrhoids affect many adults.",
+      "text": "Hemorrhoids affect many adults.",
+      "enumerated": false,
+      "marker": "-"
+    }
+  ],
+  "pictures": [
+    {
+      "self_ref": "#/pictures/0",
+      "parent": {"$ref": "#/body"},
+      "children": [{"$ref": "#/texts/1"}],
+      "content_layer": "body",
+      "label": "picture",
+      "prov": [{"page_no": 3, "bbox": {"l": 60, "t": 700, "r": 300, "b": 500, "coord_origin": "BOTTOMLEFT"}, "charspan": [0, 0]}],
+      "captions": [{"$ref": "#/texts/1"}],
+      "references": [],
+      "footnotes": [],
+      "image": {"mimetype": "image/png", "dpi": 144, "size": {"width": 480, "height": 400}, "uri": "artifacts/image_000000_abc.png"},
+      "annotations": []
+    },
+    {
+      "self_ref": "#/pictures/1",
+      "parent": {"$ref": "#/body"},
+      "children": [],
+      "content_layer": "body",
+      "label": "picture",
+      "prov": [{"page_no": 3, "bbox": {"l": 320, "t": 700, "r": 560, "b": 500, "coord_origin": "BOTTOMLEFT"}, "charspan": [0, 0]}],
+      "captions": [],
+      "references": [],
+      "footnotes": [],
+      "image": {"mimetype": "image/png", "dpi": 144, "size": {"width": 480, "height": 400}, "uri": "artifacts/image_000001_missing.png"},
+      "annotations": []
+    }
+  ],
+  "tables": [
+    {
+      "self_ref": "#/tables/0",
+      "parent": {"$ref": "#/body"},
+      "children": [],
+      "content_layer": "body",
+      "label": "table",
+      "prov": [{"page_no": 3, "bbox": {"l": 60, "t": 400, "r": 540, "b": 200, "coord_origin": "BOTTOMLEFT"}, "charspan": [0, 0]}],
+      "captions": [],
+      "references": [],
+      "footnotes": [],
+      "data": {
+        "table_cells": [],
+        "num_rows": 2,
+        "num_cols": 2,
+        "grid": [
+          [{"text": "Study"}, {"text": "Country"}],
+          [{"text": "Xia 2023"}, {"text": "China"}]
+        ]
+      },
+      "annotations": []
+    }
+  ],
+  "key_value_items": [],
+  "form_items": [],
+  "pages": {"3": {"size": {"width": 600, "height": 800}, "page_no": 3}}
+}
