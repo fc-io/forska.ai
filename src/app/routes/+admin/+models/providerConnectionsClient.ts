@@ -118,8 +118,36 @@ export type ProviderConnectionConfig = {
   workerUrlMode: 'manual' | 'runtime'
 }
 
+export type ProviderModelCapabilitySource = 'discovery' | 'shipped' | 'user'
+
+type ProviderModelCapabilityProvenance = {
+  source: ProviderModelCapabilitySource
+  sourceUrl: string | null
+  verifiedAt: string | null
+}
+
+export type ProviderModelContextWindowCapability = ProviderModelCapabilityProvenance & {
+  inputTokens: number | null
+  totalTokens: number | null
+}
+
+export type ProviderModelBooleanCapability = ProviderModelCapabilityProvenance & {value: boolean}
+
+export type ProviderModelCapabilities = {
+  contextWindow: ProviderModelContextWindowCapability | null
+  supportsImageInput: ProviderModelBooleanCapability | null
+  supportsPdfInput: ProviderModelBooleanCapability | null
+}
+
+export type ProviderModelCapabilityOverrides = {
+  contextWindow: {inputTokens: number; totalTokens: number | null} | null
+  supportsImageInput: boolean | null
+  supportsPdfInput: boolean | null
+}
+
 export type ProviderModel = {
   baseURL: string | null
+  capabilities?: ProviderModelCapabilities
   createdAt: string | Date | null
   displayName: string | null
   enabled: boolean
@@ -178,6 +206,7 @@ export const formatProviderMaxInflightRequests = ({
 }
 
 export type ProviderListedModel = {
+  capabilities?: ProviderModelCapabilities
   displayName: string
   metadataJson: unknown
   modelName: string
@@ -440,6 +469,22 @@ export const updateProviderModel = async (input: {
   const result = handleApiResponse<ProviderModelMutationResponse>(
     response as unknown as {data?: ProviderModelMutationResponse; error?: unknown; status?: number},
     'Failed to update model',
+  )
+
+  return result.data.model
+}
+
+export const updateProviderModelCapabilityOverrides = async ({
+  id,
+  overrides,
+}: {
+  id: string
+  overrides: ProviderModelCapabilityOverrides
+}) => {
+  const response = await apiClient.api.models({id})['capability-overrides'].patch(overrides)
+  const result = handleApiResponse<ProviderModelMutationResponse>(
+    response as unknown as {data?: ProviderModelMutationResponse; error?: unknown; status?: number},
+    'Failed to update model capabilities',
   )
 
   return result.data.model

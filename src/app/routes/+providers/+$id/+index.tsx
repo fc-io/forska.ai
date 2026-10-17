@@ -61,6 +61,7 @@ import {
   getProviderSelectionKind,
   shouldHideProviderBaseURLField,
 } from '../providerCatalogUi.ts'
+import {ProviderModelCapabilityCell} from '../providerModelCapabilityCell.tsx'
 import {ProviderRuntimeStateCard} from '../providerRuntimeStateCard.tsx'
 
 type ConnectionFormState = {
@@ -808,6 +809,7 @@ const getProviderPageModels = ({
 
     return {
       baseURL: storedModel?.baseURL ?? null,
+      capabilities: storedModel?.capabilities ?? model.capabilities,
       createdAt: storedModel?.createdAt ?? null,
       displayName: storedModel?.displayName ?? model.displayName,
       enabled: storedModel?.enabled ?? true,
@@ -1394,6 +1396,14 @@ const ProviderDetailPage = () => {
       }),
     )
   })
+
+  const getProviderPageModelCapabilities = (modelId: string) => {
+    return providerModelSourceMap().get(modelId)?.capabilities ?? null
+  }
+
+  const refetchProviderConnections = () => {
+    return providerConnectionsQuery.refetch()
+  }
 
   const hasModelDraftChanges = createMemo(() => {
     const sourceMap = providerModelSourceMap()
@@ -2150,6 +2160,9 @@ const ProviderDetailPage = () => {
                                     Variant / Options
                                   </th>
                                   <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                    Capabilities
+                                  </th>
+                                  <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                                     Enabled
                                   </th>
                                 </tr>
@@ -2291,6 +2304,13 @@ const ProviderDetailPage = () => {
                                           </div>
                                         </td>
                                         <td class="px-4 py-3 align-top">
+                                          <ProviderModelCapabilityCell
+                                            capabilities={getProviderPageModelCapabilities(model().id)}
+                                            modelId={model().persistedId}
+                                            onSaved={refetchProviderConnections}
+                                          />
+                                        </td>
+                                        <td class="px-4 py-3 align-top">
                                           <label class="inline-flex items-center gap-2 text-sm text-gray-700">
                                             <input
                                               checked={model().enabled}
@@ -2323,6 +2343,9 @@ const ProviderDetailPage = () => {
                                   Thinking
                                 </th>
                                 <th class="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                  Capabilities
+                                </th>
+                                <th class="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                                   Enabled
                                 </th>
                               </tr>
@@ -2353,6 +2376,13 @@ const ProviderDetailPage = () => {
                                             ? getProviderPageThinkingRowLabel(model())
                                             : getCompactVariantLabel(model())}
                                         </span>
+                                      </td>
+                                      <td class="px-4 py-2 align-middle">
+                                        <ProviderModelCapabilityCell
+                                          capabilities={getProviderPageModelCapabilities(model().id)}
+                                          modelId={model().persistedId}
+                                          onSaved={refetchProviderConnections}
+                                        />
                                       </td>
                                       <td class="px-4 py-2 align-middle">
                                         <label class="inline-flex items-center gap-2 text-sm text-gray-700">

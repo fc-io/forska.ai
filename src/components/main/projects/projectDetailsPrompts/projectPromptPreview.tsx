@@ -9,6 +9,8 @@ import {
 const unavailablePreviewMessages: Record<NonNullable<PromptPreview['reason']>, string> = {
   conversion_failed: 'Preview unavailable: full-text conversion failed for the first project article.',
   indexing: "Preview of the user prompt is unavailable: the project's review serving snapshot is still being built.",
+  model_context_window_missing:
+    'Preview unavailable: the project model has no verified context window. Add it on the Models page.',
   no_articles: 'Preview unavailable: this project has no articles yet.',
   no_fulltext:
     'Preview unavailable: the first project article has no full text to include for this project configuration.',

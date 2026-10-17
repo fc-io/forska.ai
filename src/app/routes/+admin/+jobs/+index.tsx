@@ -9,6 +9,7 @@ import {getTotalTokenUsage, pauseJudgmentsJob, startJudgmentsJob} from '../../..
 import {fetchProjects} from '../../../../services/projectsService'
 import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
 import {fetchProviderConnections} from '../+models/providerConnectionsClient.ts'
+import {JobsModelContextWindowBanner} from './jobsModelContextWindowBanner.tsx'
 import {
   buildJobsProviderHealthBanner,
   formatNumber,
@@ -581,6 +582,10 @@ export const AdminJobs = () => {
 
       <Suspense fallback={<JobsProviderHealthBannerFallback />}>
         <JobsProviderHealthBanner />
+      </Suspense>
+
+      <Suspense fallback={<JobsProviderHealthBannerFallback />}>
+        <JobsModelContextWindowBanner />
       </Suspense>
 
       <div class="mb-6">
