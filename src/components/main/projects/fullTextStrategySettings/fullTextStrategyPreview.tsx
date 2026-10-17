@@ -1,20 +1,23 @@
 import {For, Match, Show, splitProps, Switch} from 'solid-js'
 
-export type FullTextStrategyPreviewData = {
+export type ProjectFullTextValidation = {
   current: {judgmentCount: number; strategyId: string; strategyLabel: string} | null
   errors: string[]
+  recordStrategyOnSave: boolean
   strategyId: string | null
   strategyLabel: string | null
+  warnings: string[]
 }
 
 type FullTextStrategyPreviewProps = {
-  data: FullTextStrategyPreviewData | undefined
+  data: ProjectFullTextValidation | undefined
   isError: boolean
   isLoading: boolean
+  showErrors: boolean
   showStrategy: boolean
 }
 
-const isStrategyChangeWithJudgments = (data: FullTextStrategyPreviewData | undefined) => {
+const isStrategyChangeWithJudgments = (data: ProjectFullTextValidation | undefined) => {
   return Boolean(
     data?.current
     && data.current.judgmentCount > 0
@@ -24,19 +27,23 @@ const isStrategyChangeWithJudgments = (data: FullTextStrategyPreviewData | undef
 }
 
 export const FullTextStrategyPreview = (props: FullTextStrategyPreviewProps) => {
-  const [local] = splitProps(props, ['data', 'isError', 'isLoading', 'showStrategy'])
+  const [local] = splitProps(props, ['data', 'isError', 'isLoading', 'showErrors', 'showStrategy'])
 
   return (
     <div class="space-y-2">
       <Switch>
         <Match when={local.isLoading}>
-          <p class="text-xs text-muted-foreground">Resolving the full-text strategy…</p>
+          <p class="text-xs text-muted-foreground">Checking the full-text settings…</p>
         </Match>
         <Match when={local.isError}>
-          <p class="text-xs text-red-700">Could not resolve the full-text strategy.</p>
+          <p class="text-xs text-red-700">Could not check the full-text settings.</p>
         </Match>
-        <Match when={local.showStrategy && local.data && local.data.errors.length > 0}>
-          <ul class="text-xs text-red-700 list-disc pl-4 space-y-1" data-testid="full-text-strategy-errors">
+        <Match when={local.showErrors && local.data && local.data.errors.length > 0}>
+          <ul
+            role="alert"
+            class="text-xs text-red-700 bg-red-50 border border-red-200 rounded-md p-2 list-disc pl-6 space-y-1"
+            data-testid="full-text-strategy-errors"
+          >
             <For each={local.data?.errors ?? []}>
               {(error) => {
                 return <li>{error}</li>
@@ -53,6 +60,18 @@ export const FullTextStrategyPreview = (props: FullTextStrategyPreviewProps) => 
           </p>
         </Match>
       </Switch>
+      <Show when={(local.data?.warnings.length ?? 0) > 0}>
+        <ul
+          class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-2 list-disc pl-6 space-y-1"
+          data-testid="full-text-validation-warnings"
+        >
+          <For each={local.data?.warnings ?? []}>
+            {(warning) => {
+              return <li>{warning}</li>
+            }}
+          </For>
+        </ul>
+      </Show>
       <Show when={isStrategyChangeWithJudgments(local.data)}>
         <p
           class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-2"

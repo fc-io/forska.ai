@@ -10,6 +10,8 @@ import {
   FullTextStrategySettings,
   getFullTextSelectionError,
   getFullTextStrategySelectionPayload,
+  getFullTextValidationBlocksSubmit,
+  type ProjectFullTextValidation,
 } from '../../../components/main/projects/fullTextStrategySettings.tsx'
 import {ImportRouteGroups} from '../../../components/main/projects/importRouteGroups.tsx'
 import {RuntimeModelNotice} from '../../../components/main/runtimeModelNotice.tsx'
@@ -209,6 +211,10 @@ const CreateProject = () => {
   const [useMetadata, setUseMetadata] = createSignal(false)
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
+  const [fullTextValidation, setFullTextValidation] = createSignal<ProjectFullTextValidation | undefined>()
+  const isFullTextValidationBlocking = () => {
+    return getFullTextValidationBlocksSubmit(fullTextSelection(), fullTextValidation())
+  }
 
   const availableImportRoutes = () => {
     return importRoutesQuery.data ?? []
@@ -660,7 +666,12 @@ const CreateProject = () => {
                     <p class="text-sm font-medium text-gray-900">Use Article Abstract</p>
                   </div>
                 </label>
-                <FullTextStrategySettings selection={fullTextSelection()} onChange={setFullTextSelection} />
+                <FullTextStrategySettings
+                  modelId={selectedModelId()}
+                  selection={fullTextSelection()}
+                  onChange={setFullTextSelection}
+                  onValidationChange={setFullTextValidation}
+                />
                 <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
                   <input
                     type="checkbox"
@@ -845,7 +856,7 @@ const CreateProject = () => {
             </Show>
 
             <div class="flex gap-3 pt-4">
-              <Button type="submit" disabled={!projectName().trim() || isLoading()}>
+              <Button type="submit" disabled={!projectName().trim() || isLoading() || isFullTextValidationBlocking()}>
                 {isLoading() ? 'Creating...' : 'Create Project'}
               </Button>
               <Button as={Link} to="/projects" variant="outline">

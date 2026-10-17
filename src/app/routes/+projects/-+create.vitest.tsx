@@ -31,6 +31,8 @@ const mockState = vi.hoisted(() => {
   return {
     createPayloads: [] as unknown[],
     fullTextPreviewPayloads: [] as unknown[],
+    fullTextValidationErrorsByModelId: {} as Record<string, string[]>,
+    fullTextValidationWarnings: [] as string[],
     importRoutes: [] as MockImportRoute[],
     models: [] as MockModel[],
     prompts: [] as MockPrompt[],
@@ -49,6 +51,14 @@ const buildModels = (): MockModel[] => {
       label: 'GPT Test',
       modelName: 'gpt-test',
       name: 'GPT Test',
+      provider: 'openai-compatible',
+      version: null,
+    },
+    {
+      id: 'model-small',
+      label: 'Small Test',
+      modelName: 'small-test',
+      name: 'Small Test',
       provider: 'openai-compatible',
       version: null,
     },
@@ -79,9 +89,11 @@ const getFullTextPreview = (payload: unknown) => {
   const body = payload as {
     fullTextChunkPolicy: {maxPromptTokens: number; mode: string} | null
     fullTextFigureMode: string | null
+    modelId: string | null
     useFulltext: boolean
   }
   const errors = [
+    ...(mockState.fullTextValidationErrorsByModelId[body.modelId ?? ''] ?? []),
     body.fullTextFigureMode ? null : 'Full text needs a figure mode: choose None, Descriptions or Native images.',
     body.fullTextChunkPolicy
       ? null
@@ -93,11 +105,17 @@ const getFullTextPreview = (payload: unknown) => {
     return error !== null
   })
 
+  const validationBase = {
+    current: null,
+    errors,
+    recordStrategyOnSave: false,
+    warnings: mockState.fullTextValidationWarnings,
+  }
+
   return errors.length > 0
-    ? {current: null, errors, strategyId: null, strategyLabel: null}
+    ? {...validationBase, strategyId: null, strategyLabel: null}
     : {
-        current: null,
-        errors,
+        ...validationBase,
         strategyId: 'fts-0123456789abcdef',
         strategyLabel: `mineru 4.0.12 / none / ${body.fullTextChunkPolicy?.mode === 'chunked' ? 'chunked' : 'single'} ${(body.fullTextChunkPolicy?.maxPromptTokens ?? 0) / 1000}k`,
       }
@@ -254,7 +272,7 @@ vi.mock('../../../services/apiClient.ts', () => {
           },
         },
         projects: {
-          'full-text-strategy-preview': {
+          'full-text-validation': {
             post: async (payload: unknown) => {
               mockState.fullTextPreviewPayloads.push(payload)
               return {data: {data: getFullTextPreview(payload)}}
@@ -287,6 +305,8 @@ describe('project create route content flags', () => {
     document.body.innerHTML = ''
     mockState.createPayloads = []
     mockState.fullTextPreviewPayloads = []
+    mockState.fullTextValidationErrorsByModelId = {}
+    mockState.fullTextValidationWarnings = []
     mockState.importRoutes = []
     mockState.models = buildModels()
     mockState.prompts = []
@@ -529,7 +549,9 @@ describe('project create route content flags', () => {
       await submitCreateForm(container)
 
       expect(mockState.createPayloads).toHaveLength(0)
-      expect(container.textContent).toContain('Full text needs a figure mode and a chunk policy')
+      expect(container.textContent).toContain(
+        'Full text needs a figure mode: choose None, Descriptions or Native images. Full text needs a chunk policy',
+      )
       browserFailures.assertNoFailures()
     } finally {
       browserFailures.dispose()
@@ -586,6 +608,68 @@ describe('project create route content flags', () => {
         'Native images needs image transports',
       )
       expect(container.querySelector('[data-testid="full-text-strategy-label"]')).toBeNull()
+    } finally {
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+  test('a gate error for the selected model disables submit and clears when another model is chosen', async () => {
+    const smallWindowError =
+      "Model Small Test (openai-compatible) accepts 32,768 prompt tokens, fewer than the chunk policy's 48,000-token prompt size. Choose a smaller prompt size or another model, or correct its context window on the Models page."
+
+    mockState.fullTextValidationErrorsByModelId = {'model-small': [smallWindowError]}
+    mockState.fullTextValidationWarnings = [
+      'PDF-to-text model MinerU standard: The last health check of MinerU failed at 2026-10-17 20:15 UTC: connect ECONNREFUSED. Conversion will not run until the server is reachable.',
+    ]
+
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      const modelSelect = container.querySelector<HTMLSelectElement>('#model')
+      const submitButton = () => {
+        return container.querySelector<HTMLButtonElement>('button[type="submit"]')
+      }
+
+      setFormValue(container.querySelector<HTMLInputElement>('#project-name'), 'Gate Project')
+      getFullTextCheckbox(container)?.click()
+      await waitForUpdates()
+      await clickRadio(container, 'full-text-figure-mode', 'none')
+      await clickRadio(container, 'full-text-max-prompt-tokens', '48000')
+      await clickRadio(container, 'full-text-chunk-mode', 'chunked')
+      await waitForUpdates()
+
+      expect(submitButton()?.disabled).toBe(false)
+      expect(container.querySelector('[data-testid="full-text-validation-warnings"]')?.textContent).toContain(
+        'Conversion will not run until the server is reachable.',
+      )
+
+      if (modelSelect) {
+        modelSelect.value = 'model-small'
+        modelSelect.dispatchEvent(new Event('change', {bubbles: true}))
+      }
+      await waitForUpdates()
+      await waitForUpdates()
+
+      expect(container.querySelector('[data-testid="full-text-strategy-errors"]')?.textContent).toContain(
+        smallWindowError,
+      )
+      expect(submitButton()?.disabled).toBe(true)
+      expect(
+        mockState.fullTextPreviewPayloads.some((payload) => {
+          return (payload as {modelId?: string}).modelId === 'model-small'
+        }),
+      ).toBe(true)
+
+      if (modelSelect) {
+        modelSelect.value = 'model-1'
+        modelSelect.dispatchEvent(new Event('change', {bubbles: true}))
+      }
+      await waitForUpdates()
+      await waitForUpdates()
+
+      expect(container.querySelector('[data-testid="full-text-strategy-errors"]')).toBeNull()
+      expect(submitButton()?.disabled).toBe(false)
     } finally {
       queryClient.clear()
       dispose()

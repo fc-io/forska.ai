@@ -11,6 +11,8 @@ import {
   getFullTextSelectionError,
   getFullTextStrategySelectionFromProject,
   getFullTextStrategySelectionPayload,
+  getFullTextValidationBlocksSubmit,
+  type ProjectFullTextValidation,
 } from '../../../../components/main/projects/fullTextStrategySettings.tsx'
 import {ImportRouteGroups} from '../../../../components/main/projects/importRouteGroups.tsx'
 import {invalidateReviewsWarningsQueries} from '../../../../components/main/reviews/reviewsWarningsQuery.ts'
@@ -144,6 +146,7 @@ type ProjectUpdatePayload = {
   useFulltext?: boolean
   fullTextChunkPolicy?: FullTextChunkPolicy | null
   fullTextFigureMode?: FullTextFigureMode | null
+  recordCurrentFullTextStrategy?: boolean
   useMetadata?: boolean
 }
 
@@ -398,6 +401,7 @@ const EditProject = (): JSX.Element => {
   const [fullTextSelection, setFullTextSelection] =
     createSignal<FullTextStrategySelection>(emptyFullTextStrategySelection)
   const [useMetadata, setUseMetadata] = createSignal(false)
+  const [fullTextValidation, setFullTextValidation] = createSignal<ProjectFullTextValidation | undefined>()
   const [promptCleanupSummary, setPromptCleanupSummary] = createSignal<ProjectPromptCleanupSummary | null>(null)
 
   // Track whether we've loaded initial data to avoid overwriting local changes on refetch
@@ -524,6 +528,10 @@ const EditProject = (): JSX.Element => {
   const canEditJudgmentConfig = createMemo(() => {
     return !isJudgmentConfigLocked()
   })
+
+  const isFullTextValidationBlocking = () => {
+    return canEditJudgmentConfig() && getFullTextValidationBlocksSubmit(fullTextSelection(), fullTextValidation())
+  }
 
   const editableFieldStateClass = 'border-input'
   const lockedFieldStateClass = 'bg-gray-100 border-gray-300 text-gray-500 cursor-not-allowed opacity-60'
@@ -705,6 +713,7 @@ const EditProject = (): JSX.Element => {
         ...(payload.fullTextFigureMode !== undefined ? {fullTextFigureMode: payload.fullTextFigureMode} : {}),
         ...(payload.fullTextChunkPolicy !== undefined ? {fullTextChunkPolicy: payload.fullTextChunkPolicy} : {}),
         ...(payload.useMetadata !== undefined ? {useMetadata: payload.useMetadata} : {}),
+        ...(payload.recordCurrentFullTextStrategy ? {recordCurrentFullTextStrategy: true} : {}),
       })
 
     const result = handleApiResponse<ProjectUpdateResponse>(
@@ -810,7 +819,10 @@ const EditProject = (): JSX.Element => {
       ? getModelIdForUpdate().then((modelId) => {
           return sendUpdateRequest({...editableConfigPayload, modelId})
         })
-      : sendUpdateRequest(baseUpdatePayload)
+      : sendUpdateRequest({
+          ...baseUpdatePayload,
+          ...(fullTextValidation()?.recordStrategyOnSave ? {recordCurrentFullTextStrategy: true} : {}),
+        })
 
     void updatePromise.then(onFulfilled, onRejected)
   }
@@ -854,8 +866,8 @@ const EditProject = (): JSX.Element => {
                     <div>
                       <h3 class="font-semibold text-amber-900 mb-1">Judgment Settings Locked</h3>
                       <p class="text-amber-800 text-sm">
-                        Name, description, and prompts can still be edited. Model, article scope, dates, and content
-                        settings are locked to preserve existing judgment integrity.
+                        Name, description, and prompts can still be edited. Model, article scope, dates, content and
+                        full-text settings are locked to preserve existing judgment integrity.
                       </p>
                     </div>
                   </div>
@@ -1072,9 +1084,11 @@ const EditProject = (): JSX.Element => {
                         id: projectDetails()?.project.fullTextStrategyId ?? null,
                         label: projectDetails()?.project.fullTextStrategyLabel ?? null,
                       }}
+                      modelId={selectedModelId()}
                       projectId={projectId}
                       selection={fullTextSelection()}
                       onChange={setFullTextSelection}
+                      onValidationChange={setFullTextValidation}
                     />
                     <label
                       class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
@@ -1284,7 +1298,10 @@ const EditProject = (): JSX.Element => {
                 </Show>
 
                 <div class="flex gap-3 pt-4">
-                  <Button type="submit" disabled={!projectName().trim() || isLoading()}>
+                  <Button
+                    type="submit"
+                    disabled={!projectName().trim() || isLoading() || isFullTextValidationBlocking()}
+                  >
                     {isLoading() ? 'Updating...' : 'Update Project'}
                   </Button>
                   <Button as={Link} to="/projects" variant="outline">

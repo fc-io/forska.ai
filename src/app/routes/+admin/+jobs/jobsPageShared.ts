@@ -498,6 +498,86 @@ export const buildJobsModelContextWindowBanner = (
   return groups.length === 0 ? null : {groups, title: jobsModelContextWindowBannerTitle}
 }
 
+export type JudgmentJobFullTextGate = {errors: string[]; warnings: string[]}
+
+export type JobsFullTextGateBannerGroup = {jobs: JobsProviderHealthBannerJob[]; message: string; tone: 'amber' | 'rose'}
+
+export type JobsFullTextGateBanner = {groups: JobsFullTextGateBannerGroup[]; title: string; tone: 'amber' | 'rose'}
+
+const jobsFullTextGateBannerTitle = 'Full-text checks'
+
+const emptyJudgmentJobFullTextGate: JudgmentJobFullTextGate = {errors: [], warnings: []}
+
+export const getJobFullTextGate = (job: object | null | undefined): JudgmentJobFullTextGate => {
+  return (
+    (job as {fullTextGate?: JudgmentJobFullTextGate | null} | null | undefined)?.fullTextGate
+    ?? emptyJudgmentJobFullTextGate
+  )
+}
+
+const getJobFullTextGateMessages = (job: ProviderHealthBannerSourceJob) => {
+  const gate = getJobFullTextGate(job)
+  const contextWindowMessage = getJobModelContextWindow(job)?.message ?? null
+  const errors = gate.errors.filter((message) => {
+    return message !== contextWindowMessage
+  })
+
+  return [
+    ...errors.map((message) => {
+      return {message, tone: 'rose' as const}
+    }),
+    ...gate.warnings.map((message) => {
+      return {message, tone: 'amber' as const}
+    }),
+  ]
+}
+
+const addJobToFullTextGateBannerGroup = ({
+  group,
+  job,
+  message,
+  tone,
+}: {
+  group: JobsFullTextGateBannerGroup | undefined
+  job: ProviderHealthBannerSourceJob
+  message: string
+  tone: JobsFullTextGateBannerGroup['tone']
+}): JobsFullTextGateBannerGroup => {
+  return {jobs: [...(group?.jobs ?? []), toProviderHealthBannerJob(job)], message, tone}
+}
+
+const fullTextGateToneOrder: Record<JobsFullTextGateBannerGroup['tone'], number> = {amber: 1, rose: 0}
+
+export const buildJobsFullTextGateBanner = (
+  jobs: readonly ProviderHealthBannerSourceJob[] | null | undefined,
+): JobsFullTextGateBanner | null => {
+  const groupsByMessage = (jobs ?? []).reduce((groups, job) => {
+    return getJobFullTextGateMessages(job).reduce((nextGroups, {message, tone}) => {
+      return nextGroups.set(
+        message,
+        addJobToFullTextGateBannerGroup({group: nextGroups.get(message), job, message, tone}),
+      )
+    }, groups)
+  }, new Map<string, JobsFullTextGateBannerGroup>())
+  const groups = [...groupsByMessage.values()]
+    .map((group) => {
+      return {...group, jobs: sortBannerJobs(group.jobs)}
+    })
+    .sort((left, right) => {
+      return (
+        fullTextGateToneOrder[left.tone] - fullTextGateToneOrder[right.tone]
+        || left.message.localeCompare(right.message)
+      )
+    })
+  const tone = groups.some((group) => {
+    return group.tone === 'rose'
+  })
+    ? 'rose'
+    : 'amber'
+
+  return groups.length === 0 ? null : {groups, title: jobsFullTextGateBannerTitle, tone}
+}
+
 const providerBottleneckDetails: Record<string, {description: string; label: string}> = {
   claiming: {
     description:

@@ -33,13 +33,16 @@ import {
   formatProviderFailureMeta,
   formatProviderRecoveryNote,
   formatProviderRetryAfter,
+  getJobFullTextGate,
   getProviderFailureKindLabel,
   getProviderHealthGuidance,
   getProviderHealthTone,
   getProviderHealthToneClass,
   isRecentProviderRecovery,
+  type JudgmentJobFullTextGate,
   type JudgmentJobProviderHealth,
 } from '../jobsPageShared'
+import {hasJobFullTextGateMessages, JobFullTextGateNotice} from './jobFullTextGateNotice.tsx'
 import {JobRunControl} from './jobRunControl.tsx'
 import {JobStopReasonBanner} from './jobStopReasonBanner.tsx'
 import {JobTelemetryPanel} from './jobTelemetryPanel.tsx'
@@ -237,6 +240,7 @@ type JobData = {
   useFulltext?: boolean
   useFulltextNoImages?: boolean
   useMetadata?: boolean
+  fullTextGate?: JudgmentJobFullTextGate
   fullTextStrategyId?: string
   fullTextStrategyLabel?: string
   totalTokenUsage?: {totalTokens?: number; totalPromptTokens?: number; totalCompletionTokens?: number}
@@ -818,6 +822,9 @@ export const AdminJudgmentJobDetail = () => {
               const providerHealth = data()?.providerHealth ?? null
               return isRecentProviderRecovery(providerHealth) ? providerHealth : null
             }
+            const fullTextGate = () => {
+              return getJobFullTextGate(data())
+            }
             const liveRequestLlmCalls = () => {
               return data()?.requestStats?.liveLlmCalls ?? data()?.requestStats?.inFlight ?? 0
             }
@@ -941,6 +948,7 @@ export const AdminJudgmentJobDetail = () => {
                   <Show
                     when={
                       stopReason()
+                      || hasJobFullTextGateMessages(fullTextGate())
                       || activeProviderHealth()
                       || recentProviderRecovery()
                       || runtimeModelNotice()
@@ -973,6 +981,9 @@ export const AdminJudgmentJobDetail = () => {
                         {(providerHealth) => {
                           return <ProviderRecoveryNote health={providerHealth()} />
                         }}
+                      </Show>
+                      <Show when={hasJobFullTextGateMessages(fullTextGate())}>
+                        <JobFullTextGateNotice gate={fullTextGate()} />
                       </Show>
                       <RuntimeModelNotice class="break-words [overflow-wrap:anywhere]" notice={runtimeModelNotice()} />
                       <Show when={judgingRuntimeWarning()}>

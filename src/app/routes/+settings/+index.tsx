@@ -5,6 +5,7 @@ import {createEffect, createSignal, For, Show} from 'solid-js'
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 import {FigureDescriptionModelField} from './-figureDescriptionModelField'
+import {FullTextModelStatusNotice} from './-fullTextModelStatusNotice'
 
 type LocalUser = {
   maintenanceWorkerDuckdbMemoryLimit?: string | null
@@ -381,6 +382,7 @@ const Settings = () => {
                     }}
                   </For>
                 </select>
+                <FullTextModelStatusNotice modelId={fullTextConversionModelId()} role="pdf_conversion" />
                 <p class="mt-2 text-xs text-gray-500">
                   Choose a MinerU or Docling provider model for PDF conversion. Manage endpoints and models on the
                   Providers page.
