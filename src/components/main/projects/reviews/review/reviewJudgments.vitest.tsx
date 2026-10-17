@@ -45,3 +45,59 @@ test('ReviewJudgments shows separate AI and Human summary values while keeping A
 
   dispose()
 })
+
+test('ReviewJudgments shows the full-text execution on the chunking line', () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+
+  const dispose = render(() => {
+    return (
+      <ReviewJudgments
+        judgments={[
+          {
+            id: 'judgment-chunked',
+            promptId: 'prompt-1',
+            prompt: {id: 'prompt-1', originalText: 'Chunked prompt'},
+            answeredOriginal: 'yes',
+            chunkCount: 4,
+            chunkPlanHash: '0123456789abcdef',
+            fullTextMode: 'chunked',
+          },
+          {
+            id: 'judgment-single',
+            promptId: 'prompt-2',
+            prompt: {id: 'prompt-2', originalText: 'Single prompt'},
+            answeredOriginal: 'no',
+            chunkCount: null,
+            chunkPlanHash: null,
+            fullTextMode: 'single',
+          },
+          {
+            id: 'judgment-none',
+            promptId: 'prompt-3',
+            prompt: {id: 'prompt-3', originalText: 'Plain prompt'},
+            answeredOriginal: 'maybe',
+            fullTextMode: null,
+          },
+        ]}
+        setArticleViewToShow={() => {}}
+      />
+    )
+  }, container)
+
+  const chunkingLines = Array.from(container.querySelectorAll('div'))
+    .map((element) => {
+      return element.textContent ?? ''
+    })
+    .filter((text) => {
+      return text.startsWith('Chunking: ')
+    })
+
+  expect(chunkingLines).toEqual([
+    'Chunking: yes (full text in 4 parts, plan 01234567)',
+    'Chunking: no (full text in one request)',
+    'Chunking: no',
+  ])
+
+  dispose()
+})

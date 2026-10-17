@@ -360,6 +360,51 @@ test('project review details hydrates article, judgments, and assessments from V
   ).toEqual(['review.detail.row', 'review.detail.judgments', 'review.detail.humanJudgments'])
 })
 
+test('project review details returns full-text execution facts from the V4 detail hydration join', async () => {
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.row'
+      ? {rows: [getServingArticleRow()], status: 'accepted'}
+      : request.contractKey === 'review.detail.judgments'
+        ? {
+            rows: [
+              {
+                ...getServingJudgmentRow(),
+                chunk_count: 3,
+                chunk_plan_hash: 'chunk-plan-hash-detail-0123456789',
+                full_text_mode: 'chunked',
+              },
+              {...getServingJudgmentRow(), judgment_id: 'judgment-2', prompt_id: 'prompt-2'},
+            ],
+            status: 'accepted',
+          }
+        : {rows: [], status: 'accepted'}
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    judgments: Array<{chunkCount: number | null; chunkPlanHash: string | null; fullTextMode: string | null; id: string}>
+  }
+  const reviewServingSqlText = readFileSync('src/server/reviewServing/reviewServingSql.ts', 'utf8')
+
+  expect(response.status).toBe(200)
+  expect(
+    body.judgments.map((judgment) => {
+      return {
+        chunkCount: judgment.chunkCount,
+        chunkPlanHash: judgment.chunkPlanHash,
+        fullTextMode: judgment.fullTextMode,
+        id: judgment.id,
+      }
+    }),
+  ).toEqual([
+    {chunkCount: 3, chunkPlanHash: 'chunk-plan-hash-detail-0123456789', fullTextMode: 'chunked', id: 'judgment-1'},
+    {chunkCount: null, chunkPlanHash: null, fullTextMode: null, id: 'judgment-2'},
+  ])
+  expect(reviewServingSqlText).toContain('`llm_judgment.full_text_mode AS full_text_mode`')
+  expect(reviewServingSqlText).toContain('`llm_judgment.chunk_count AS chunk_count`')
+  expect(reviewServingSqlText).toContain('`llm_judgment.chunk_plan_hash AS chunk_plan_hash`')
+})
+
 test('project review details returns the whole abstract and the authors like the article page', async () => {
   const abstract = `${'Perioperative antimicrobial prophylaxis was assessed with the ATC/DDD methodology. '.repeat(26)}Published by Elsevier Ltd. All rights reserved.`
   const defaultQueryJson = queryJsonRef.current
@@ -622,6 +667,30 @@ test('project review details reads the article, judgments, assessments, and huma
       return statement.includes('FROM app.judgment_human judgment_human')
     }),
   ).toBe(true)
+})
+
+test('project review details returns full-text execution facts from app judgments when V4 detail state is missing', async () => {
+  rejectAllReviewServingReads()
+  appRowsRef.articleDetail = [getAppArticleDetailRow()]
+  appRowsRef.judgments = [
+    {...getAppJudgmentRow(), judgmentChunkCount: null, judgmentChunkPlanHash: null, judgmentFullTextMode: 'single'},
+  ]
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    judgments: Array<{chunkCount: number | null; chunkPlanHash: string | null; fullTextMode: string | null; id: string}>
+  }
+  const judgmentStatement = appRowsRef.statements.find((statement) => {
+    return statement.includes('AS judgmentId,')
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.judgments).toMatchObject([
+    {chunkCount: null, chunkPlanHash: null, fullTextMode: 'single', id: 'judgment-app-1'},
+  ])
+  expect(judgmentStatement).toContain('j.full_text_mode AS judgmentFullTextMode')
+  expect(judgmentStatement).toContain('j.chunk_count AS judgmentChunkCount')
+  expect(judgmentStatement).toContain('j.chunk_plan_hash AS judgmentChunkPlanHash')
 })
 
 test('project review details reads the human summary answer from app tables in summary mode when V4 detail state is missing', async () => {

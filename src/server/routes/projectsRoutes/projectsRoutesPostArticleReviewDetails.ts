@@ -11,7 +11,7 @@ import type {
   PromptRecord,
 } from '../../../db/schemaTypes.ts'
 import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadata.ts'
-import {getEffectiveFullTextStrategyId, isReservedFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
+import {getEffectiveFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {
   detailReadyReviewServingComponents,
@@ -155,7 +155,10 @@ type ServingJudgmentDetailRow = {
   prompt_order?: number | null
   prompt_type?: string | null
   chunking_strategy?: string | null
+  chunk_count?: number | null
+  chunk_plan_hash?: string | null
   confidence_original?: number | null
+  full_text_mode?: string | null
   is_answered?: boolean | null
   model_name?: string | null
   model_provider?: string | null
@@ -446,9 +449,9 @@ const getProjectReviewDetailJudgmentRows = async (params: {
         judgmentSystemPromptVariant: getSystemPromptVariant(params.projectReviewConfig.systemPromptVariant),
         judgmentFullTextStrategyId: getEffectiveFullTextStrategyId(params.projectReviewConfig.fullTextStrategyId),
         judgmentChunkingStrategy: row.chunking_strategy ?? null,
-        judgmentFullTextMode: null,
-        judgmentChunkCount: null,
-        judgmentChunkPlanHash: null,
+        judgmentFullTextMode: row.full_text_mode ?? null,
+        judgmentChunkCount: row.chunk_count ?? null,
+        judgmentChunkPlanHash: row.chunk_plan_hash ?? null,
         judgmentIsAnswered: row.is_answered ?? false,
         judgmentAnsweredOriginal: row.answered_original ?? null,
         judgmentAnsweredOriginalAsArray: row.answered_original_as_array ?? null,
@@ -467,51 +470,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
       }
     })
 
-  return {
-    judgmentRows: isReservedFullTextStrategyId(params.projectReviewConfig.fullTextStrategyId)
-      ? judgmentRows
-      : await withJudgmentFullTextExecutions(judgmentRows),
-    promptRows: [...promptRowsById.values()],
-  }
-}
-
-const withJudgmentFullTextExecutions = async (
-  rows: ProjectReviewDetailJudgmentRow[],
-): Promise<ProjectReviewDetailJudgmentRow[]> => {
-  const judgmentIds = rows.map((row) => {
-    return row.judgmentId
-  })
-  const executionRows =
-    judgmentIds.length === 0
-      ? []
-      : await getAppDatabaseService().queryJson<{
-          chunkCount: number | null
-          chunkPlanHash: string | null
-          fullTextMode: string | null
-          id: string
-        }>(`
-          SELECT id, full_text_mode AS fullTextMode, chunk_count AS chunkCount, chunk_plan_hash AS chunkPlanHash
-          FROM app.judgment
-          WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
-        `)
-  const executionById = new Map(
-    executionRows.map((row) => {
-      return [row.id, row] as const
-    }),
-  )
-
-  return rows.map((row) => {
-    const execution = executionById.get(row.judgmentId)
-
-    return execution
-      ? {
-          ...row,
-          judgmentChunkCount: execution.chunkCount === null ? null : Number(execution.chunkCount),
-          judgmentChunkPlanHash: execution.chunkPlanHash,
-          judgmentFullTextMode: execution.fullTextMode,
-        }
-      : row
-  })
+  return {judgmentRows, promptRows: [...promptRowsById.values()]}
 }
 
 const getAppHumanPromptDetailRowsSql = (params: {articleId: string; projectId: string}) => {
