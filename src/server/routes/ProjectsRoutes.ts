@@ -512,18 +512,19 @@ const getFullTextReviewConfigFields = (params: {
   useFulltext: boolean
 }): ProjectReviewConfigReviewServingField[] => {
   const currentFullText = getProjectFullTextValues(params.currentProject)
-
-  return params.fullTextResolution
+  const fields: Array<ProjectReviewConfigReviewServingField | null> = params.fullTextResolution
     ? [
-        params.useFulltext !== params.currentProject.useFulltext ? ('useFulltext' as const) : null,
-        params.currentProject.useFulltextNoImages ? ('useFulltextNoImages' as const) : null,
+        params.useFulltext !== params.currentProject.useFulltext ? 'useFulltext' : null,
+        params.currentProject.useFulltextNoImages ? 'useFulltextNoImages' : null,
         params.fullTextResolution.fullTextStrategyId !== currentFullText.fullTextStrategyId
-          ? ('fullTextStrategyId' as const)
+          ? 'fullTextStrategyId'
           : null,
-      ].filter((field): field is ProjectReviewConfigReviewServingField => {
-        return field !== null
-      })
+      ]
     : []
+
+  return fields.filter((field): field is ProjectReviewConfigReviewServingField => {
+    return field !== null
+  })
 }
 
 const getEffectiveSubmittedPromptEdits = (
