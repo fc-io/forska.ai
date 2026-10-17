@@ -10,6 +10,22 @@ const providerSyncServiceModulePath = new URL('../providers/providerSyncService.
 type ProviderModelsRoutesModule = typeof import('./ProviderModelsRoutes.ts')
 
 const state = {
+  updateProviderModelCapabilityOverrides: mock(async (input: {id: string; overrides: unknown}) => {
+    return {
+      displayName: 'GPT-6-Astra (thinking: xhigh)',
+      enabled: true,
+      id: input.id,
+      metadataJson: {capabilityOverrides: {...(input.overrides as object), updatedAt: '2026-10-17T10:00:00.000Z'}},
+      modelName: 'gpt-6-astra',
+      name: 'GPT-6-Astra (thinking: xhigh)',
+      provider: 'codex',
+      providerConnectionId: 'connection-1',
+      remoteModelId: 'gpt-6-astra',
+      source: 'manual',
+      variant: 'xhigh',
+      version: 'xhigh',
+    }
+  }),
   createProviderModel: mock(async (_input: unknown) => {
     return {
       displayName: 'Manual Model',
@@ -78,7 +94,11 @@ const registerModuleMocks = () => {
   })
 
   void mock.module(providerModelRepositoryModulePath, () => {
-    return {createProviderModel: state.createProviderModel, updateProviderModel: state.updateProviderModel}
+    return {
+      createProviderModel: state.createProviderModel,
+      updateProviderModel: state.updateProviderModel,
+      updateProviderModelCapabilityOverrides: state.updateProviderModelCapabilityOverrides,
+    }
   })
 
   void mock.module(providerSyncServiceModulePath, () => {
@@ -227,4 +247,53 @@ test('provider models route updates model enabled state and label', async () => 
   expect(body.data.model.displayName).toBe('Updated Model')
   expect(body.data.model.enabled).toBe(false)
   expect(state.updateProviderModel).toHaveBeenCalledTimes(1)
+})
+
+const patchCapabilityOverrides = (app: Awaited<ReturnType<typeof loadRoutes>>, body: Record<string, unknown>) => {
+  return app.handle(
+    new Request('http://localhost/api/models/model-1/capability-overrides', {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+}
+
+test('provider models route stores capability overrides and returns the resolved capabilities', async () => {
+  state.updateProviderModelCapabilityOverrides.mockClear()
+  const app = await loadRoutes()
+  const response = await patchCapabilityOverrides(app, {
+    contextWindow: {inputTokens: 200_000, totalTokens: 400_000},
+    supportsImageInput: null,
+    supportsPdfInput: false,
+  })
+  const body = (await response.json()) as {data: {model: {capabilities: Record<string, unknown>}}}
+
+  expect(response.status).toBe(200)
+  expect(state.updateProviderModelCapabilityOverrides).toHaveBeenCalledWith({
+    id: 'model-1',
+    overrides: {
+      contextWindow: {inputTokens: 200_000, totalTokens: 400_000},
+      supportsImageInput: null,
+      supportsPdfInput: false,
+    },
+  })
+  expect(body.data.model.capabilities).toMatchObject({
+    contextWindow: {inputTokens: 200_000, source: 'user', totalTokens: 400_000, verifiedAt: '2026-10-17'},
+    supportsImageInput: {source: 'shipped', value: true},
+    supportsPdfInput: {source: 'user', value: false},
+  })
+})
+
+test('provider models route rejects a total window below the input window', async () => {
+  state.updateProviderModelCapabilityOverrides.mockClear()
+  const app = await loadRoutes()
+  const response = await patchCapabilityOverrides(app, {
+    contextWindow: {inputTokens: 8000, totalTokens: 4000},
+    supportsImageInput: null,
+    supportsPdfInput: null,
+  })
+
+  expect(response.status).toBe(400)
+  expect(state.updateProviderModelCapabilityOverrides).not.toHaveBeenCalled()
 })

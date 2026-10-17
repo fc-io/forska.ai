@@ -4,8 +4,9 @@ import {
   getNormalizedProviderModelMetadata,
   getPersistedProviderModelMetadata,
   getProviderModelMetadataContextLength,
+  getProviderModelMetadataDiscoveredContextWindow,
+  getProviderModelMetadataDiscoveredInputSupport,
   getProviderModelMetadataOptions,
-  getProviderModelMetadataPromptTokenLimit,
   getProviderModelMetadataReasoningEfforts,
   getProviderModelMetadataSource,
   getProviderModelMetadataSupportedOptions,
@@ -202,7 +203,7 @@ test('persisted provider model metadata keeps generic model options', () => {
   expect(getProviderModelMetadataOptions(metadata)).toEqual({thinking: 'enabled'})
 })
 
-test('prompt token limit prefers explicit input window over subtracting completion reserve', () => {
+test('discovered context window reads the stored discovery window', () => {
   const metadata = {
     discovery: {
       capabilities: {reasoningEfforts: [], supportedOptions: {thinking: false}},
@@ -221,9 +222,73 @@ test('prompt token limit prefers explicit input window over subtracting completi
     options: {},
   }
 
-  expect(getProviderModelMetadataPromptTokenLimit(metadata, 4000)).toBe(200000)
+  expect(getProviderModelMetadataDiscoveredContextWindow(metadata)).toEqual({inputTokens: 200000, totalTokens: 200000})
 })
 
-test('prompt token limit falls back to total window minus completion reserve', () => {
-  expect(getProviderModelMetadataPromptTokenLimit({context_length: 32768}, 4000)).toBe(28768)
+test('discovered context window scans legacy metadata without a discovery record', () => {
+  expect(getProviderModelMetadataDiscoveredContextWindow({context_length: 32768})).toEqual({
+    inputTokens: 32768,
+    totalTokens: 32768,
+  })
+})
+
+test('discovered context window ignores capability overrides and reports null when nothing was discovered', () => {
+  expect(
+    getProviderModelMetadataDiscoveredContextWindow({
+      capabilityOverrides: {contextWindow: {inputTokens: 5000, totalTokens: 6000}, context_length: 7000},
+    }),
+  ).toEqual({inputTokens: null, totalTokens: null})
+})
+
+test('normalized metadata records image and PDF support reported by the Anthropic models API', () => {
+  const metadata = getNormalizedProviderModelMetadata({
+    listedModel: {
+      displayName: 'Claude Opus 4.7',
+      metadataJson: null,
+      modelName: 'claude-opus-4-7',
+      remoteModelId: 'claude-opus-4-7',
+      variant: null,
+      version: null,
+    },
+    providerKind: 'anthropic',
+    rawMetadata: {
+      capabilities: {image_input: {supported: true}, pdf_input: {supported: false}},
+      id: 'claude-opus-4-7',
+      max_input_tokens: 1000000,
+    },
+    source: 'provider',
+  })
+
+  expect(getProviderModelMetadataDiscoveredInputSupport(metadata)).toEqual({
+    supportsImageInput: true,
+    supportsPdfInput: false,
+  })
+  expect(getProviderModelMetadataDiscoveredContextWindow(metadata).inputTokens).toBe(1000000)
+})
+
+test('normalized metadata reads image support from Ollama capabilities, llama.cpp modalities and LM Studio types', () => {
+  const getImageSupport = (rawMetadata: unknown) => {
+    return getProviderModelMetadataDiscoveredInputSupport(
+      getNormalizedProviderModelMetadata({
+        listedModel: {
+          displayName: 'local',
+          metadataJson: null,
+          modelName: 'local',
+          remoteModelId: 'local',
+          variant: null,
+          version: null,
+        },
+        providerKind: 'ollama',
+        rawMetadata,
+        source: 'provider',
+      }),
+    ).supportsImageInput
+  }
+
+  expect(getImageSupport({capabilities: ['completion', 'vision']})).toBe(true)
+  expect(getImageSupport({capabilities: ['completion']})).toBe(false)
+  expect(getImageSupport({modalities: {vision: false}})).toBe(false)
+  expect(getImageSupport({type: 'vlm'})).toBe(true)
+  expect(getImageSupport({type: 'llm'})).toBe(false)
+  expect(getImageSupport({id: 'plain'})).toBeNull()
 })

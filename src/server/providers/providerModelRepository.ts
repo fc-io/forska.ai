@@ -23,6 +23,11 @@ import {
   type ProviderModelRow,
 } from './providerDbUtils.ts'
 import {
+  carryProviderModelCapabilityOverrides,
+  type ProviderModelCapabilityOverrides,
+  setProviderModelCapabilityOverrides,
+} from './providerModelCapabilities.ts'
+import {
   getPersistedProviderModelMetadata,
   getProviderModelMetadataOptions,
   setProviderModelMetadataOptions,
@@ -389,14 +394,17 @@ const upsertDiscoveredProviderModelsRecursively = async ({
       ? getProviderModelMetadataOptions(existingModel.metadataJson)
       : getProviderModelOptions(currentModel.metadataJson),
   )
-  const persistedMetadataJson =
-    metadataJson
-    ?? getPersistedProviderModelMetadata({
-      listedModel: currentModel,
-      metadataJson: currentModel.metadataJson,
-      providerKind: connection.providerKind,
-      source: 'provider',
-    })
+  const persistedMetadataJson = carryProviderModelCapabilityOverrides({
+    nextMetadataJson:
+      metadataJson
+      ?? getPersistedProviderModelMetadata({
+        listedModel: currentModel,
+        metadataJson: currentModel.metadataJson,
+        providerKind: connection.providerKind,
+        source: 'provider',
+      }),
+    previousMetadataJson: existingModel?.metadataJson ?? null,
+  })
   const [saved] =
     shouldPreserveReferencedModel && existingRow
       ? [existingRow]
@@ -630,6 +638,44 @@ export const updateProviderModel = async (
     })
 
     return nextRow
+  }, providerModelUpdateWorkloadContext)
+
+  if (!refreshedRow) {
+    throw new Error('Provider model not found')
+  }
+
+  return getProviderModelRecordFromRow(refreshedRow)
+}
+
+export const updateProviderModelCapabilityOverrides = async ({
+  id,
+  overrides,
+}: {
+  id: string
+  overrides: ProviderModelCapabilityOverrides
+}): Promise<ProviderModelRecord> => {
+  const refreshedRow = await getAppDatabaseService().transaction(async (databaseRunner) => {
+    const currentRow = await getProviderModelRowByIdWithRunner(databaseRunner, id)
+
+    if (!currentRow) {
+      return null
+    }
+
+    const nextMetadataJson = setProviderModelCapabilityOverrides({
+      metadataJson: getProviderModelRecordFromRow(currentRow).metadataJson,
+      overrides,
+      updatedAt: new Date().toISOString(),
+    })
+
+    await databaseRunner.run(`
+      UPDATE app.model
+      SET metadata_json = ${getJsonSqlLiteral(nextMetadataJson)},
+          updated_at = current_timestamp
+      WHERE id = ${getSqlLiteral(id)}
+    `)
+    await advanceProviderModelProjectTransferDirtyTokens({databaseRunner, reason: 'providerModel.capabilityOverrides'})
+
+    return getProviderModelRowByIdWithRunner(databaseRunner, id)
   }, providerModelUpdateWorkloadContext)
 
   if (!refreshedRow) {

@@ -3,13 +3,17 @@ import {Elysia, t} from 'elysia'
 import {getProviderModelEffectiveVariant} from '../../utils/providerModelOptions.ts'
 import {getProviderConnection} from '../providers/providerConnectionRepository.ts'
 import {getManualProviderModelMetadata} from '../providers/providerModelMetadata.ts'
-import {createProviderModel, updateProviderModel} from '../providers/providerModelRepository.ts'
+import {
+  createProviderModel,
+  updateProviderModel,
+  updateProviderModelCapabilityOverrides,
+} from '../providers/providerModelRepository.ts'
 import {syncProviderConnectionModels} from '../providers/providerSyncService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
-import {getTrimmedValue} from './providerRoutes/providerRoutesShared.ts'
+import {getProviderModelWithCapabilities, getTrimmedValue} from './providerRoutes/providerRoutesShared.ts'
 
 const providerModelRouteWorkloadContext: DuckdbWorkloadContext = {
   fallbackIntent: 'reject',
@@ -147,6 +151,44 @@ export const providerModelsRoutes = new Elysia()
           }),
         ),
         variant: t.Optional(t.String()),
+      }),
+      params: t.Object({id: t.String()}),
+    },
+  )
+  .patch(
+    '/api/models/:id/capability-overrides',
+    async ({body, params, set}) => {
+      const contextWindow = body.contextWindow
+
+      if (contextWindow?.totalTokens != null && contextWindow.totalTokens < contextWindow.inputTokens) {
+        set.status = 400
+        return {data: null, error: 'Total tokens must be at least the input tokens'}
+      }
+
+      const model = await updateProviderModelCapabilityOverrides({
+        id: params.id,
+        overrides: {
+          contextWindow: contextWindow
+            ? {inputTokens: contextWindow.inputTokens, totalTokens: contextWindow.totalTokens ?? null}
+            : null,
+          supportsImageInput: body.supportsImageInput,
+          supportsPdfInput: body.supportsPdfInput,
+        },
+      })
+
+      return {data: {model: getProviderModelWithCapabilities(model)}, error: null}
+    },
+    {
+      body: t.Object({
+        contextWindow: t.Union([
+          t.Object({
+            inputTokens: t.Integer({minimum: 1}),
+            totalTokens: t.Optional(t.Union([t.Integer({minimum: 1}), t.Null()])),
+          }),
+          t.Null(),
+        ]),
+        supportsImageInput: t.Union([t.Boolean(), t.Null()]),
+        supportsPdfInput: t.Union([t.Boolean(), t.Null()]),
       }),
       params: t.Object({id: t.String()}),
     },
