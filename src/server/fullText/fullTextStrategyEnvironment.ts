@@ -4,6 +4,7 @@ import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {CANONICAL_TEXT_VERSION} from './canonicalFullText.ts'
 import {getConverterOptionsHash} from './converters/converterOptionsHash.ts'
 import {getFullTextConverter} from './converters/fullTextConverter.ts'
+import {FIGURE_DESCRIPTION_PROMPT_VERSION} from './figureDescriptions.ts'
 import {
   type FullTextConversionModelStrategyInputs,
   type FullTextStrategyEnvironment,
@@ -46,11 +47,19 @@ export const getFullTextConversionModelStrategyInputs =
       : null
   }
 
+export const getFigureDescriptionStrategyInputs = async (): Promise<
+  FullTextStrategyEnvironment['figureDescription']
+> => {
+  const config = await getUserConfigQueryService().getFigureDescriptionModelConfig()
+
+  return config ? {modelId: config.modelId, promptVersion: FIGURE_DESCRIPTION_PROMPT_VERSION} : null
+}
+
 export const getFullTextStrategyEnvironment = async (): Promise<FullTextStrategyEnvironment> => {
   return {
     canonicalTextVersion: CANONICAL_TEXT_VERSION,
     conversionModel: await getFullTextConversionModelStrategyInputs(),
-    figureDescription: null,
+    figureDescription: await getFigureDescriptionStrategyInputs(),
     imageTransportVersion: null,
   }
 }

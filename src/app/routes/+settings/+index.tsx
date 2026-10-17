@@ -4,6 +4,7 @@ import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
+import {FigureDescriptionModelField} from './-figureDescriptionModelField'
 
 type LocalUser = {
   maintenanceWorkerDuckdbMemoryLimit?: string | null
@@ -13,6 +14,7 @@ type LocalUser = {
   email: string
   role?: string | null
   fullTextConversionModelId?: string | null
+  figureDescriptionModelId?: string | null
   unpaywallEmail?: string | null
   duckdbBin?: string | null
 }
@@ -88,6 +90,7 @@ type UpdateLocalUserInput = {
   email: string
   name: string
   fullTextConversionModelId: string
+  figureDescriptionModelId: string
   unpaywallEmail: string
 }
 type UpdateUserResponse = {data: LocalUser}
@@ -178,6 +181,7 @@ const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> 
     codexBin: getNullableString(input.codexBin),
     duckdbBin: getNullableString(input.duckdbBin),
     email: input.email,
+    figureDescriptionModelId: getNullableString(input.figureDescriptionModelId),
     fullTextConversionModelId: getNullableString(input.fullTextConversionModelId),
     name: input.name,
     unpaywallEmail: getNullableString(input.unpaywallEmail),
@@ -199,6 +203,7 @@ const Settings = () => {
   const [displayName, setDisplayName] = createSignal('')
   const [profileEmail, setProfileEmail] = createSignal('')
   const [fullTextConversionModelId, setFullTextConversionModelId] = createSignal('')
+  const [figureDescriptionModelId, setFigureDescriptionModelId] = createSignal('')
   const [unpaywallEmail, setUnpaywallEmail] = createSignal('')
   const [duckdbBin, setDuckdbBin] = createSignal('')
   const [codexBin, setCodexBin] = createSignal('')
@@ -265,6 +270,7 @@ const Settings = () => {
         setDisplayName(user.name)
         setProfileEmail(user.email)
         setFullTextConversionModelId(user.fullTextConversionModelId ?? '')
+        setFigureDescriptionModelId(user.figureDescriptionModelId ?? '')
         setUnpaywallEmail(user.unpaywallEmail ?? '')
         setDuckdbBin(user.duckdbBin ?? '')
         setCodexBin(user.codexBin ?? '')
@@ -294,6 +300,7 @@ const Settings = () => {
     setDisplayName(localUserQuery.data?.name ?? '')
     setProfileEmail(localUserQuery.data?.email ?? '')
     setFullTextConversionModelId(localUserQuery.data?.fullTextConversionModelId ?? '')
+    setFigureDescriptionModelId(localUserQuery.data?.figureDescriptionModelId ?? '')
     setUnpaywallEmail(localUserQuery.data?.unpaywallEmail ?? '')
     setDuckdbBin(localUserQuery.data?.duckdbBin ?? '')
     setCodexBin(localUserQuery.data?.codexBin ?? '')
@@ -310,6 +317,7 @@ const Settings = () => {
       displayName().trim() !== (localUserQuery.data?.name ?? '').trim()
       || profileEmail().trim() !== (localUserQuery.data?.email ?? '').trim()
       || fullTextConversionModelId().trim() !== (localUserQuery.data?.fullTextConversionModelId ?? '').trim()
+      || figureDescriptionModelId().trim() !== (localUserQuery.data?.figureDescriptionModelId ?? '').trim()
       || maintenanceWorkerDuckdbMemoryLimit().trim()
         !== (localUserQuery.data?.maintenanceWorkerDuckdbMemoryLimit ?? '').trim()
       || unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
@@ -378,6 +386,7 @@ const Settings = () => {
                   Providers page.
                 </p>
               </div>
+              <FigureDescriptionModelField value={figureDescriptionModelId()} onChange={setFigureDescriptionModelId} />
               <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">Unpaywall Email</label>
                 <input
@@ -677,6 +686,7 @@ const Settings = () => {
                     duckdbBin: duckdbBin(),
                     email: profileEmail(),
                     fullTextConversionModelId: fullTextConversionModelId(),
+                    figureDescriptionModelId: figureDescriptionModelId(),
                     name: displayName(),
                     unpaywallEmail: unpaywallEmail(),
                   })

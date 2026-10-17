@@ -384,6 +384,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['POST', '/api/articles/:id/fetch-pdf'],
       ['POST', '/api/articles/:id/upload-pdf'],
       ['POST', '/api/articles/:id/convert-pdf'],
+      ['POST', '/api/articles/:id/figure-descriptions/rebuild'],
     ],
   ),
   ...ownerDependentProduct('HumanAssessmentRoutes.ts', [
@@ -588,6 +589,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     'Single-user settings can include local paths and contact email configuration.',
     [
       ['GET', '/api/users'],
+      ['GET', '/api/users/figure-description-models'],
       ['PATCH', '/api/users'],
     ],
   ),

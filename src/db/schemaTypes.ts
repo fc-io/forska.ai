@@ -72,6 +72,7 @@ export type UserRecord = {
   maintenanceWorkerDuckdbMemoryLimit: string | null
   unpaywallEmail: string | null
   fullTextConversionModelId: string | null
+  figureDescriptionModelId: string | null
   createdAt: Date
   updatedAt: Date
 }
