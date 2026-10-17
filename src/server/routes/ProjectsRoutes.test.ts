@@ -6026,10 +6026,12 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
     VALUES ('clone-config-rerun-connection', 'sglang', 'SGLang', TRUE, 'none')
   `)
   await currentRunDatabase(`
-    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, metadata_json)
     VALUES
-      ('${sourceConfig.modelId}', 'clone-config-rerun-connection', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE),
-      ('clone-config-rerun-model-next', 'clone-config-rerun-connection', 'Qwen/Qwen3.5-32B', 'Qwen/Qwen3.5-32B', 'Qwen 32B', 'manual', TRUE)
+      ('${sourceConfig.modelId}', 'clone-config-rerun-connection', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE,
+        '{"discovery":{"contextWindow":{"inputTokens":131072,"outputTokens":null,"totalTokens":131072}}}'),
+      ('clone-config-rerun-model-next', 'clone-config-rerun-connection', 'Qwen/Qwen3.5-32B', 'Qwen/Qwen3.5-32B', 'Qwen 32B', 'manual', TRUE,
+        '{"discovery":{"contextWindow":{"inputTokens":131072,"outputTokens":null,"totalTokens":131072}}}')
   `)
 
   await scenarios.reduce(async (previous, scenario) => {

@@ -13,7 +13,6 @@ import {
 import {upsertFullTextStrategy} from '../../fullText/fullTextStrategyRepository.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getProjectFullTextGateForSelection} from '../../services/judgmentJobFullTextGate.ts'
-import {getProjectVisibleJudgmentPromptSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {HttpError} from '../../utils/httpError.ts'
 
 type ProjectFullTextQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
@@ -186,24 +185,6 @@ export const hasProjectFullTextSettingsChanged = (current: ProjectFullTextSettin
     || !isSameChunkPolicy(current.fullTextChunkPolicy, next.fullTextChunkPolicy)
     || current.fullTextStrategyId !== next.fullTextStrategyId
   )
-}
-
-export const getProjectVisibleJudgmentCount = async (runner: ProjectFullTextQueryRunner, projectId: string) => {
-  const [row] = await runner.queryJson<{judgmentCount: number | bigint | null}>(`
-    SELECT COUNT(DISTINCT judgment.id) AS judgmentCount
-    FROM app.project project
-    INNER JOIN app.project_prompt project_prompt ON project_prompt.project_id = project.id
-    INNER JOIN app.judgment judgment
-      ON ${getProjectVisibleJudgmentPromptSql({
-        judgmentAlias: 'judgment',
-        projectAlias: 'project',
-        projectPromptAlias: 'project_prompt',
-      })}
-    WHERE project.id = ${getSqlLiteral(projectId)}
-      AND judgment.deleted_at IS NULL
-  `)
-
-  return Number(row?.judgmentCount ?? 0)
 }
 
 export const getFullTextStrategyIdOrNone = (resolution: ProjectFullTextResolution) => {

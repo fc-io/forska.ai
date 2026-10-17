@@ -5,34 +5,21 @@ import {
   type FullTextStrategy,
   getFullTextStrategyDisplayLabel,
 } from '../../fullText/fullTextStrategy.ts'
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {
   fullTextStrategyChangedRemedies,
   getFullTextStrategyChangedSinceSaveMessage,
-  getStoredStrategyFromRow,
-  type ProjectFullTextGateProjectRow,
-  type ProjectFullTextGateStoredStrategy,
 } from '../../services/judgmentJobFullTextGate.ts'
+import {
+  getProjectFullTextCurrentStrategy,
+  type ProjectFullTextCurrentStrategy,
+} from '../../services/projectFullTextCurrentStrategy.ts'
 import {
   fullTextChunkPolicyBodySchema,
   fullTextFigureModeBodySchema,
   fullTextStrategyRecordableJobStatuses,
   getProjectFullTextResolution,
-  getProjectVisibleJudgmentCount,
   type ProjectFullTextResolution,
 } from './projectFullTextSettings.ts'
-
-type CurrentProjectStrategyRow = Pick<
-  ProjectFullTextGateProjectRow,
-  'fullTextStrategyId' | 'fullTextStrategyInputs' | 'fullTextStrategyStoredLabel'
-> & {jobStatus: string | null}
-
-type CurrentProjectStrategy = {
-  jobStatus: string | null
-  judgmentCount: number
-  storedStrategy: ProjectFullTextGateStoredStrategy
-}
 
 const noStrategyChangeWithJob = {recordStrategyOnSave: false, warnings: [] as string[]}
 
@@ -50,39 +37,11 @@ const getValidationStrategy = (useFulltext: boolean, resolution: ProjectFullText
       }
 }
 
-const getCurrentProjectStrategy = async (projectId: string): Promise<CurrentProjectStrategy | null> => {
-  const database = getAppDatabaseService()
-  const [row] = await database.queryJson<CurrentProjectStrategyRow>(`
-    SELECT
-      p.full_text_strategy_id AS fullTextStrategyId,
-      full_text_strategy.label AS fullTextStrategyStoredLabel,
-      TO_JSON(full_text_strategy.inputs) AS fullTextStrategyInputs,
-      (
-        SELECT jj.status
-        FROM app.judgment_job jj
-        WHERE jj.project_id = p.id
-        LIMIT 1
-      ) AS jobStatus
-    FROM app.project p
-    LEFT JOIN app.full_text_strategy full_text_strategy ON full_text_strategy.id = p.full_text_strategy_id
-    WHERE p.id = ${getSqlLiteral(projectId)}
-    LIMIT 1
-  `)
-
-  return row
-    ? {
-        jobStatus: row.jobStatus,
-        judgmentCount: await getProjectVisibleJudgmentCount(database, projectId),
-        storedStrategy: getStoredStrategyFromRow(row),
-      }
-    : null
-}
-
-const isJobStoppedForStrategyRecord = (current: CurrentProjectStrategy) => {
+const isJobStoppedForStrategyRecord = (current: ProjectFullTextCurrentStrategy) => {
   return fullTextStrategyRecordableJobStatuses.has(current.jobStatus ?? '')
 }
 
-const getStrategyChangeWithJobWarning = (current: CurrentProjectStrategy, strategy: FullTextStrategy) => {
+const getStrategyChangeWithJobWarning = (current: ProjectFullTextCurrentStrategy, strategy: FullTextStrategy) => {
   return getFullTextStrategyChangedSinceSaveMessage({
     remedy: isJobStoppedForStrategyRecord(current)
       ? fullTextStrategyChangedRemedies.editPageJobStopped
@@ -92,7 +51,10 @@ const getStrategyChangeWithJobWarning = (current: CurrentProjectStrategy, strate
   })
 }
 
-const getStrategyChangeWithJob = (current: CurrentProjectStrategy | null, resolution: ProjectFullTextResolution) => {
+const getStrategyChangeWithJob = (
+  current: ProjectFullTextCurrentStrategy | null,
+  resolution: ProjectFullTextResolution,
+) => {
   const strategy = resolution.strategy
 
   return current?.jobStatus && strategy && resolution.errors.length === 0 && strategy.id !== current.storedStrategy.id
@@ -103,7 +65,7 @@ const getStrategyChangeWithJob = (current: CurrentProjectStrategy | null, resolu
     : noStrategyChangeWithJob
 }
 
-const getCurrentProjectStrategyPayload = (current: CurrentProjectStrategy | null) => {
+const getCurrentProjectStrategyPayload = (current: ProjectFullTextCurrentStrategy | null) => {
   return current
     ? {
         judgmentCount: current.judgmentCount,
@@ -124,7 +86,7 @@ export const projectsRoutesPostFullTextValidation = new Elysia().post(
       },
       body.modelId ?? null,
     )
-    const current = body.projectId ? await getCurrentProjectStrategy(body.projectId) : null
+    const current = body.projectId ? await getProjectFullTextCurrentStrategy(body.projectId) : null
     const strategyChangeWithJob = getStrategyChangeWithJob(current, resolution)
 
     return {
