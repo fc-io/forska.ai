@@ -23,6 +23,12 @@ export type JudgmentsJobsPromptsStatus =
   | 'skipped'
 export type JudgmentsJobsPromptsSkipReason = 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'
 export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_greedy' | 'article_paragraph_greedy'
+export type JudgmentFullTextMode = 'single' | 'chunked'
+export type JudgmentFullTextExecution = {
+  chunkCount: number | null
+  chunkPlanHash: string | null
+  fullTextMode: JudgmentFullTextMode | null
+}
 export type Engine = 'sglang' | 'vllm'
 export type ModelSource = 'discovered' | 'manual'
 export type ProjectMartRefreshStatus = 'blocked_by_quarantine' | 'idle' | 'running' | 'failed' | 'paused'
@@ -478,6 +484,9 @@ export type JudgmentRecord = {
   systemPromptVariant: SystemPromptVariant
   fullTextStrategyId: string
   chunkingStrategy: JudgmentChunkingStrategy | null
+  fullTextMode: JudgmentFullTextMode | null
+  chunkCount: number | null
+  chunkPlanHash: string | null
   isAnswered: boolean
   answeredOriginal: string | null
   answeredOriginalAsArray: string[] | null
