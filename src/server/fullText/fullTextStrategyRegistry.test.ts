@@ -1,6 +1,5 @@
 import {expect, test} from 'bun:test'
 
-import {fullTextCanonicalTextVersion} from './fullTextCanonicalTextVersion.ts'
 import {getFullTextStrategy, getFullTextStrategyId, getFullTextStrategyLabel} from './fullTextStrategy.ts'
 import {fullTextStrategyRegistry, getShippedFullTextStrategyInputs} from './fullTextStrategyRegistry.ts'
 
@@ -12,7 +11,7 @@ test('every strategy the shipped constants produce is in the registry', () => {
       return entry.id
     }),
   )
-  const missingEntries = getShippedFullTextStrategyInputs(fullTextCanonicalTextVersion)
+  const missingEntries = getShippedFullTextStrategyInputs()
     .map(getFullTextStrategy)
     .filter((strategy) => {
       return !registryIds.has(strategy.id)
@@ -27,10 +26,18 @@ test('every strategy the shipped constants produce is in the registry', () => {
   ).toEqual([])
 })
 
-test('the shipped inputs are empty until the canonical text version is wired, then twelve', () => {
-  expect(getShippedFullTextStrategyInputs(null)).toEqual([])
-  expect(getShippedFullTextStrategyInputs('canonical-test')).toHaveLength(12)
-  expect(new Set(getShippedFullTextStrategyInputs('canonical-test').map(getFullTextStrategyId)).size).toBe(12)
+test('the shipped constants produce twelve distinct strategies on canonical-v1', () => {
+  const shippedInputs = getShippedFullTextStrategyInputs()
+
+  expect(shippedInputs).toHaveLength(12)
+  expect(new Set(shippedInputs.map(getFullTextStrategyId)).size).toBe(12)
+  expect(
+    new Set(
+      shippedInputs.map((inputs) => {
+        return inputs.canonicalTextVersion
+      }),
+    ),
+  ).toEqual(new Set(['canonical-v1']))
 })
 
 test('registry entries are self-consistent, unique and dated', () => {

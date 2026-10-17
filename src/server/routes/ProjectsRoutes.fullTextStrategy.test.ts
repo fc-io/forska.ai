@@ -7,7 +7,6 @@ setDefaultTimeout(120_000)
 
 const tempRuntimeRoot = createTempRuntimeRoot('projects-routes-full-text-strategy')
 const appReadOnlyDatabaseServiceModulePath = new URL('../services/appReadOnlyDatabaseService.ts', import.meta.url).href
-const canonicalTextVersionModulePath = new URL('../fullText/fullTextCanonicalTextVersion.ts', import.meta.url).href
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempRuntimeRoot.duckdbPath
@@ -66,9 +65,6 @@ const registerModuleMocks = () => {
       getApiReadOnlyAppDatabaseService: getDatabase,
       getJudgeWorkerReadOnlyAppDatabaseService: getDatabase,
     }
-  })
-  void mock.module(canonicalTextVersionModulePath, () => {
-    return {fullTextCanonicalTextVersion: 'canonical-test'}
   })
 }
 

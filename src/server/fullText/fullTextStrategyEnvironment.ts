@@ -1,9 +1,9 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
+import {CANONICAL_TEXT_VERSION} from './canonicalFullText.ts'
 import {getConverterOptionsHash} from './converters/converterOptionsHash.ts'
 import {getFullTextConverter} from './converters/fullTextConverter.ts'
-import {fullTextCanonicalTextVersion} from './fullTextCanonicalTextVersion.ts'
 import {
   type FullTextConversionModelStrategyInputs,
   type FullTextStrategyEnvironment,
@@ -48,7 +48,7 @@ export const getFullTextConversionModelStrategyInputs =
 
 export const getFullTextStrategyEnvironment = async (): Promise<FullTextStrategyEnvironment> => {
   return {
-    canonicalTextVersion: fullTextCanonicalTextVersion,
+    canonicalTextVersion: CANONICAL_TEXT_VERSION,
     conversionModel: await getFullTextConversionModelStrategyInputs(),
     figureDescription: null,
     imageTransportVersion: null,
