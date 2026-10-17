@@ -90,6 +90,7 @@ const createAcceptedClaimPrompt = (payload: JudgeWorkerCompletionPayload): Promp
     claimId: payload.claimId,
     executionSnapshotHash: payload.executionSnapshotHash,
     executionSnapshotId: payload.executionSnapshotId,
+    fullTextStrategyId: payload.fullTextStrategyId ?? 'fts-none',
     jobId: payload.jobId,
     modelBaseUrl: 'http://runtime.test/v1',
     modelId: payload.modelId,
@@ -649,6 +650,60 @@ test('completion replay discards local claims whose use_metadata contradicts the
   expect(ownerCalls).toBe(0)
   expect(row?.status).toBe('discarded_stale')
   expect(row?.lastError).toContain('snapshot claim identity mismatch for useMetadata')
+})
+
+test('judged completion replay sends the claim full-text strategy to the owner', async () => {
+  const receivedStrategies: Array<string | null | undefined> = []
+  setupJournalTest(async (request) => {
+    const body = (await request.json()) as JudgeWorkerCompletionPayload
+    receivedStrategies.push(body.fullTextStrategyId)
+
+    return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}})
+  })
+  const payload = createCompletionPayload({
+    answeredOriginal: 'yes',
+    claimId: 'claim-strategy',
+    fullTextStrategyId: 'fts-0123456789abcdef',
+    judgmentId: 'judgment-strategy',
+    queueRecordId: 'queue-strategy',
+  })
+
+  await enqueueJudgeWorkerCompletion(payload)
+  await attachTokenUseToPendingJudgeWorkerCompletion({
+    articleId: payload.articleId,
+    jobId: payload.jobId,
+    promptIds: [payload.promptId],
+    tokenUse: createTokenUse(),
+  })
+
+  expect(await replayJudgeWorkerCompletionOutbox()).toEqual({ackedCount: 1, discardedCount: 0, failedCount: 0})
+  expect(receivedStrategies).toEqual(['fts-0123456789abcdef'])
+})
+
+test('completion replay discards local claims whose full-text strategy contradicts the job without calling the owner', async () => {
+  let ownerCalls = 0
+  const {journalPath, testDirectory} = setupJournalTest(async () => {
+    ownerCalls += 1
+    return Response.json({data: {claimId: 'unexpected', queueRecordId: 'unexpected', status: 'retry'}})
+  })
+  const payload = createCompletionPayload({
+    claimId: 'claim-local-strategy',
+    fullTextStrategyId: 'fts-0123456789abcdef',
+    jobId: 'job-local-strategy',
+    queueRecordId: 'queue-local-strategy',
+    status: 'retry',
+  })
+
+  createLocalJobPrompt({claimId: payload.claimId, payload, testDirectory})
+  await enqueueJudgeWorkerCompletion(payload)
+
+  const result = await replayJudgeWorkerCompletionOutbox()
+  const row = getCompletionOutboxRow(journalPath, payload.claimId)
+
+  expect(result).toEqual({ackedCount: 0, discardedCount: 1, failedCount: 0})
+  expect(ownerCalls).toBe(0)
+  expect(row?.status).toBe('discarded_stale')
+  expect(row?.lastError).toContain('snapshot claim identity mismatch for fullTextStrategyId')
 })
 
 test('completion replay discards stale missing SQLite job database responses', async () => {

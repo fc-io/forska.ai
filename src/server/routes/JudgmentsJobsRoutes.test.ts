@@ -912,7 +912,7 @@ test('owner-backed claim snapshots resolve legacy scoped article ids through imp
           selectedImportRouteId: string
           sourceMetadata: {stage: string; studyId: string}
         }
-        contentSettings: {useMetadata: boolean}
+        contentSettings: {fullTextStrategyId: string; useMetadata: boolean}
         identity: {articleId: string; queueRecordId: string}
         snapshotVersion: number
       }
@@ -937,7 +937,8 @@ test('owner-backed claim snapshots resolve legacy scoped article ids through imp
     sourceMetadata: {stage: 'title_abstract', studyId: `study-${suffix}`},
   })
   expect(snapshotBody.data.payload.contentSettings.useMetadata).toBe(false)
-  expect(snapshotBody.data.payload.snapshotVersion).toBe(3)
+  expect(snapshotBody.data.payload.contentSettings.fullTextStrategyId).toBe('fts-none')
+  expect(snapshotBody.data.payload.snapshotVersion).toBe(4)
 
   await sqliteService.closeAll()
 })
@@ -3991,6 +3992,7 @@ test('judgment job health routes distinguish active and blocked import ownership
       lastStartedAt: string | null
       progressState: string
       workIdentity: {
+        fullTextStrategyId: string
         modelId: string
         projectId: string
         systemPromptVariant: string
@@ -4007,6 +4009,7 @@ test('judgment job health routes distinguish active and blocked import ownership
       importWork: {activeConsumerCount: number; activeWorkCount: number; outboxRowCount: number}
       progressState: string
       workIdentity: {
+        fullTextStrategyId: string
         modelId: string
         projectId: string
         systemPromptVariant: string
@@ -4027,6 +4030,7 @@ test('judgment job health routes distinguish active and blocked import ownership
           jobId: string
           progressState: string
           workIdentity: {
+            fullTextStrategyId: string
             modelId: string
             projectId: string
             systemPromptVariant: string
@@ -4059,6 +4063,7 @@ test('judgment job health routes distinguish active and blocked import ownership
     expect(activeBody.lastStartedAt).toBe(activeStartedAt)
     expect(activeBody.lastProgressedAt).toBe(activeProgressedAt)
     expect(activeBody.workIdentity).toEqual({
+      fullTextStrategyId: 'fts-none',
       modelId: activeModelId,
       projectId: activeProjectId,
       systemPromptVariant: 'legacy',
@@ -4076,6 +4081,7 @@ test('judgment job health routes distinguish active and blocked import ownership
     expect(blockedBody.importWork.activeWorkCount).toBe(0)
     expect(blockedBody.importWork.outboxRowCount).toBe(2)
     expect(blockedBody.workIdentity).toEqual({
+      fullTextStrategyId: 'fts-none',
       modelId: blockedModelId,
       projectId: blockedProjectId,
       systemPromptVariant: 'screening_v1',
@@ -5550,4 +5556,143 @@ test('deleting an existing judgments job succeeds when prompts and token usage r
 
   expect(response.status).toBe(200)
   expect(body).toContain(jobId)
+})
+
+const getJudgmentJobFullTextStrategyId = async (jobId: string) => {
+  const {getAppDatabaseService} = await import('../services/appDatabaseService.ts')
+  const [row] = await getAppDatabaseService().queryJson<{fullTextStrategyId: string | null}>(`
+    SELECT full_text_strategy_id AS fullTextStrategyId
+    FROM app.judgment_job
+    WHERE id = '${jobId}'
+  `)
+
+  return row?.fullTextStrategyId ?? null
+}
+
+const patchJudgmentJobStatus = (jobId: string, status: string) => {
+  return app?.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+      body: JSON.stringify({status}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+}
+
+test('job create, resume and start-clean write the project full-text strategy before the job runs', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const suffix = Date.now()
+  const projectId = `strategy-job-project-${suffix}`
+  const modelId = `strategy-job-model-${suffix}`
+  const connectionId = `strategy-job-connection-${suffix}`
+  const firstStrategyId = 'fts-0123456789abcdef'
+  const secondStrategyId = 'fts-fedcba9876543210'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.full_text_strategy (id, label, inputs)
+    VALUES ('${firstStrategyId}', 'MinerU 4 · figures: none · single chunk', '{}'::JSON)
+    ON CONFLICT (id) DO NOTHING
+  `)
+  await runDatabase(`
+    UPDATE app.project
+    SET use_fulltext = TRUE, full_text_strategy_id = '${firstStrategyId}'
+    WHERE id = '${projectId}'
+  `)
+
+  const createResponse = await app.handle(
+    new Request('http://localhost/api/judgmentsjobs', {
+      body: JSON.stringify({projectId}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const createBody = (await createResponse.json()) as {data: {jobId: string}}
+  const jobId = createBody.data.jobId
+  const detailsResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const detailsBody = (await detailsResponse.json()) as {fullTextStrategyId: string; fullTextStrategyLabel: string}
+
+  expect(createResponse.status).toBe(200)
+  expect(await getJudgmentJobFullTextStrategyId(jobId)).toBe(firstStrategyId)
+  expect(sqliteService.getStoredFullTextStrategyId(jobId)).toBe(firstStrategyId)
+  expect(detailsBody).toMatchObject({
+    fullTextStrategyId: firstStrategyId,
+    fullTextStrategyLabel: 'MinerU 4 · figures: none · single chunk',
+  })
+
+  await runDatabase(`UPDATE app.judgment_job SET status = 'paused' WHERE id = '${jobId}'`)
+  await runDatabase(`UPDATE app.project SET full_text_strategy_id = '${secondStrategyId}' WHERE id = '${projectId}'`)
+
+  const resumeResponse = await patchJudgmentJobStatus(jobId, 'running')
+  const resumeBody = await resumeResponse?.text()
+
+  expect(resumeResponse?.status).toBe(409)
+  expect(resumeBody).toContain(
+    `The project's full-text strategy changed since this job started (${firstStrategyId} → ${secondStrategyId}). Start the job clean to judge with the new strategy.`,
+  )
+  expect(await getJudgmentJobFullTextStrategyId(jobId)).toBe(firstStrategyId)
+
+  const startCleanResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/start-clean`, {method: 'POST'}),
+  )
+
+  expect(startCleanResponse.status).toBe(200)
+  expect(await getJudgmentJobFullTextStrategyId(jobId)).toBe(secondStrategyId)
+  expect(sqliteService.getStoredFullTextStrategyId(jobId)).toBe(secondStrategyId)
+
+  await runDatabase(`UPDATE app.judgment_job SET status = 'paused' WHERE id = '${jobId}'`)
+
+  const unchangedResumeResponse = await patchJudgmentJobStatus(jobId, 'running')
+
+  expect(unchangedResumeResponse?.status).toBe(200)
+  expect(await getJudgmentJobFullTextStrategyId(jobId)).toBe(secondStrategyId)
+})
+
+test('resuming a job created before strategy tracking fills the job and job_info strategy from the project', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const {getJudgmentJobSqlitePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const suffix = Date.now()
+  const projectId = `legacy-strategy-job-project-${suffix}`
+  const modelId = `legacy-strategy-job-model-${suffix}`
+  const connectionId = `legacy-strategy-job-connection-${suffix}`
+  const jobId = `legacy-strategy-job-${suffix}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    UPDATE app.project
+    SET use_fulltext = TRUE, full_text_strategy_id = 'fts-legacy-v0'
+    WHERE id = '${projectId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'paused')
+  `)
+  await sqliteService.initializeJob(jobId)
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase.query(`UPDATE job_info SET full_text_strategy_id = NULL`).run()
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  expect(await getJudgmentJobFullTextStrategyId(jobId)).toBeNull()
+  expect(sqliteService.getStoredFullTextStrategyId(jobId)).toBeNull()
+
+  const response = await patchJudgmentJobStatus(jobId, 'running')
+
+  expect(response?.status).toBe(200)
+  expect(await getJudgmentJobFullTextStrategyId(jobId)).toBe('fts-legacy-v0')
+  expect(sqliteService.getStoredFullTextStrategyId(jobId)).toBe('fts-legacy-v0')
 })

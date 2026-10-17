@@ -57,6 +57,7 @@ export type PromptToProcess = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant?: SystemPromptVariant | null
+  fullTextStrategyId: string
 }
 
 export type PromptRuntime = {
@@ -416,6 +417,7 @@ const getOwnerBackedReadyRows = async (
         useMetadata: jobInfo.useMetadata === true,
         useTitle: jobInfo.useTitle,
         systemPromptVariant: jobInfo.systemPromptVariant,
+        fullTextStrategyId: jobInfo.fullTextStrategyId,
       }
     })
 

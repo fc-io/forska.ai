@@ -78,6 +78,7 @@ const createJudgeSinglePromptInput = ({
   return {
     article,
     contentSettings: createContentSettings(),
+    fullTextStrategyId: 'fts-none',
     judgmentsJobId: 'job-1',
     modelConfig: createModelConfig(),
     modelContext: 200_000,

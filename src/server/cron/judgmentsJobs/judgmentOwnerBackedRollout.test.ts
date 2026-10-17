@@ -39,6 +39,7 @@ const createPrompt = (overrides: Partial<PromptToProcess> = {}): PromptToProcess
     claimId: 'claim-rollout',
     executionSnapshotHash: 'snapshot-hash-rollout',
     executionSnapshotId: 'snapshot-rollout',
+    fullTextStrategyId: 'fts-none',
     jobId: 'job-rollout',
     maxInflightRequests: null,
     modelBaseUrl: 'http://owner-runtime.test/v1',

@@ -1419,6 +1419,7 @@ test('imports SQLite-backed judgments into DuckDB in batches', async () => {
     projectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
   })
 
   expect((await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(1)
@@ -1526,6 +1527,7 @@ test('imports a screening job judgment as its own identity next to a stored lega
     projectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
     systemPromptVariant: 'screening_v1',
   })
 
@@ -1642,6 +1644,7 @@ test('imports a use_metadata job judgment as its own identity next to a stored j
     projectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
   })
 
   expect(await importOutboxBatch()).toBe(1)
@@ -1673,6 +1676,127 @@ test('imports a use_metadata job judgment as its own identity next to a stored j
     {answeredOriginal: 'yes', useMetadata: true},
   ])
   expect(deltaRows).toEqual([{judgmentId: metadataJudgment?.id ?? '', projectId}])
+})
+
+test('imports a full-text strategy job judgment as its own identity next to a stored legacy full-text judgment', async () => {
+  if (!runDatabase || !queryDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const strategyId = 'fts-0123456789abcdef'
+  const connectionId = `connection-strategy-${suffix}`
+  const modelId = `model-strategy-${suffix}`
+  const projectId = `project-strategy-${suffix}`
+  const jobId = `job-strategy-${suffix}`
+  const promptId = `prompt-strategy-${suffix}`
+  const articleId = `article-strategy-${suffix}`
+  const legacyJudgmentId = `judgment-strategy-legacy-${suffix}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (
+      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, full_text_strategy_id
+    )
+    VALUES ('${projectId}', 'SQLite Import Strategy Test', '${modelId}', TRUE, TRUE, TRUE, FALSE, '${strategyId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${jobId}-project-prompt', '${projectId}', '${promptId}', 1, TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${jobId}-project-article', '${projectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+      full_text_strategy_id, is_answered, answered_original
+    )
+    VALUES (
+      '${legacyJudgmentId}', '${articleId}', '${promptId}', '${modelId}', TRUE, TRUE, TRUE, FALSE,
+      'fts-legacy-v0', TRUE, 'no'
+    )
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimed] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimed) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  await storeSinglePromptJudgment({
+    article: {id: articleId} as ArticleRecord,
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: true,
+      useFulltextNoImages: false,
+      useMetadata: false,
+      useTitle: true,
+    },
+    fullTextStrategyId: claimed.fullTextStrategyId,
+    judgmentsJobId: jobId,
+    promptId,
+    queueRecordId: claimed.recordId,
+    modelId,
+    projectId,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+    chunkingStrategy: null,
+  })
+
+  expect(await importOutboxBatch()).toBe(1)
+
+  const rows = await queryDatabase<{answeredOriginal: string; fullTextStrategyId: string}>(`
+    SELECT answered_original AS answeredOriginal, full_text_strategy_id AS fullTextStrategyId
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+      AND prompt_id = '${promptId}'
+      AND model_id = '${modelId}'
+    ORDER BY full_text_strategy_id ASC
+  `)
+  const deltaRows = await queryDatabase<{judgmentId: string; projectId: string}>(`
+    SELECT judgment_id AS judgmentId, project_id AS projectId
+    FROM app.review_change_delta
+    WHERE article_id = '${articleId}'
+      AND prompt_id = '${promptId}'
+      AND model_id = '${modelId}'
+  `)
+  const [strategyJudgment] = await queryDatabase<{id: string}>(`
+    SELECT id
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+      AND full_text_strategy_id = '${strategyId}'
+  `)
+
+  expect(claimed.fullTextStrategyId).toBe(strategyId)
+  expect(rows).toEqual([
+    {answeredOriginal: 'yes', fullTextStrategyId: strategyId},
+    {answeredOriginal: 'no', fullTextStrategyId: 'fts-legacy-v0'},
+  ])
+  expect(deltaRows).toEqual([{judgmentId: strategyJudgment?.id ?? '', projectId}])
 })
 
 test('outbox import canonicalizes scoped external article ids before DuckDB writes', async () => {
@@ -1841,6 +1965,7 @@ test('drops orphaned SQLite-backed judgments when the article no longer exists',
     projectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
   })
 
   await runDatabase(`
@@ -1948,6 +2073,7 @@ test('skips lease-blocked SQLite jobs and imports the next available outbox batc
     projectId: importableProjectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
   })
 
   expect(await importOutboxBatch()).toBe(1)
@@ -2031,6 +2157,7 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
     projectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
   })
 
   service.completeOutboxClaim = async () => {
@@ -2154,6 +2281,7 @@ test('releases claimed SQLite outbox batches for retry when DuckDB insert fails 
     projectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
   })
 
   try {
@@ -2248,6 +2376,7 @@ test('completes drained import maintenance work after SQLite acknowledgement cra
     projectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
   })
 
   maintenanceWorkLeaseService.completeMaintenanceWorkLease = async () => {
@@ -2344,6 +2473,7 @@ test('leaves refresh acknowledgement publication to the worker when mart visibil
     projectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
   })
 
   expect(await importOutboxBatch()).toBe(1)
@@ -2410,6 +2540,7 @@ test('does not call legacy mart visibility acknowledgement during outbox import'
     projectId,
     judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
     chunkingStrategy: null,
+    fullTextStrategyId: 'fts-none',
   })
 
   refreshStateService.markArticleProjectsDirtyAtomically = async () => {

@@ -174,6 +174,7 @@ const runBenchmarkWorker = async (
         confidenceOriginal: 50,
         createdAt,
         explanation: 'benchmark',
+        fullTextStrategyId: 'fts-none',
         id: `judgment-${laneCount}-${batchIndex}-${rowIndex}-${Date.now()}`,
         isAnswered: true,
         modelId,

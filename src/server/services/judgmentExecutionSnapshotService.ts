@@ -1,5 +1,10 @@
 import {createHash, randomUUID} from 'node:crypto'
 
+import {
+  FULL_TEXT_STRATEGY_LEGACY,
+  FULL_TEXT_STRATEGY_NONE,
+  getProjectFullTextStrategyIdSql,
+} from '../fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from './appQueryHelpers.ts'
 import type {AppReadOnlyDatabaseService} from './appReadOnlyDatabaseService.ts'
@@ -33,6 +38,7 @@ type JudgmentExecutionSnapshotRow = {
   fullTextOriginalFormat: string | null
   fullTextPdf: string | null
   fullTextSource: string | null
+  fullTextStrategyId: string
   jobId: string
   modelDisplayName: string | null
   modelId: string
@@ -93,6 +99,7 @@ type StoredSnapshotRow = {
   createdBy: string | null
   executionSnapshotHash: string
   executionSnapshotId: string
+  fullTextStrategyId: string
   jobId: string
   modelId: string
   payloadJson: unknown
@@ -112,6 +119,7 @@ type SnapshotIdentityInput = {
   claimId: string
   executionSnapshotHash: string
   executionSnapshotId: string
+  fullTextStrategyId: string
   jobId: string
   modelId: string
   projectId: string
@@ -124,6 +132,11 @@ type SnapshotIdentityInput = {
   useTitle: boolean
 }
 
+const storedSnapshotFullTextStrategyIdSql = `COALESCE(
+  full_text_strategy_id,
+  CASE WHEN use_fulltext OR use_fulltext_no_images THEN '${FULL_TEXT_STRATEGY_LEGACY}' ELSE '${FULL_TEXT_STRATEGY_NONE}' END
+)`
+
 type SnapshotQueryService = Pick<ReturnType<typeof getAppDatabaseService> | AppReadOnlyDatabaseService, 'queryJson'>
 
 export type JudgmentExecutionSnapshotRecord = {
@@ -133,6 +146,7 @@ export type JudgmentExecutionSnapshotRecord = {
   createdBy: string | null
   executionSnapshotHash: string
   executionSnapshotId: string
+  fullTextStrategyId: string
   jobId: string
   modelId: string
   payload: unknown
@@ -150,6 +164,7 @@ export type JudgmentExecutionSnapshotClaim = {
   executionSnapshotHash: string
   executionSnapshotId: string
   executionSnapshotPayload?: unknown
+  fullTextStrategyId: string
   modelId: string
   projectId: string
   useAbstract: boolean
@@ -439,6 +454,7 @@ const getSnapshotRows = async (
       p.use_fulltext AS useFulltext,
       p.use_fulltext_no_images AS useFulltextNoImages,
       COALESCE(p.use_metadata, FALSE) AS useMetadata,
+      COALESCE(jj.full_text_strategy_id, ${getProjectFullTextStrategyIdSql('p')}) AS fullTextStrategyId,
       p.date_from AS dateFrom,
       p.date_to AS dateTo,
       pr.id AS promptId,
@@ -586,6 +602,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       url: row.url,
     },
     contentSettings: {
+      fullTextStrategyId: row.fullTextStrategyId,
       useAbstract: row.useAbstract,
       useFulltext: row.useFulltext,
       useFulltextNoImages: row.useFulltextNoImages,
@@ -639,7 +656,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       maxInflightRequests: row.providerMaxInflightRequests,
       secretRef: row.providerSecretRef,
     },
-    snapshotVersion: 3,
+    snapshotVersion: 4,
   }
 }
 
@@ -651,6 +668,7 @@ const toSnapshotRecord = (row: StoredSnapshotRow): JudgmentExecutionSnapshotReco
     createdBy: row.createdBy,
     executionSnapshotHash: row.executionSnapshotHash,
     executionSnapshotId: row.executionSnapshotId,
+    fullTextStrategyId: row.fullTextStrategyId,
     jobId: row.jobId,
     modelId: row.modelId,
     payload: getJsonValue(row.payloadJson),
@@ -669,6 +687,7 @@ const toSnapshotIdentity = (row: SnapshotIdentityInput): JudgmentExecutionSnapsh
   return {
     executionSnapshotHash: row.executionSnapshotHash,
     executionSnapshotId: row.executionSnapshotId,
+    fullTextStrategyId: row.fullTextStrategyId,
     modelId: row.modelId,
     projectId: row.projectId,
     useAbstract: row.useAbstract,
@@ -695,6 +714,7 @@ const getSnapshotSelectSql = () => {
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
       COALESCE(use_metadata, FALSE) AS useMetadata,
+      ${storedSnapshotFullTextStrategyIdSql} AS fullTextStrategyId,
       payload_hash AS executionSnapshotHash,
       TO_JSON(payload_json) AS payloadJson,
       created_by AS createdBy,
@@ -719,6 +739,7 @@ const getSnapshotIdentitySelectSql = () => {
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
       COALESCE(use_metadata, FALSE) AS useMetadata,
+      ${storedSnapshotFullTextStrategyIdSql} AS fullTextStrategyId,
       payload_hash AS executionSnapshotHash,
       created_by AS createdBy,
       created_at AS createdAt
@@ -756,6 +777,7 @@ const getSnapshotInsertValueSql = ({
     ${getSqlLiteral(row.useFulltext)},
     ${getSqlLiteral(row.useFulltextNoImages)},
     ${getSqlLiteral(row.useMetadata)},
+    ${getSqlLiteral(row.fullTextStrategyId)},
     ${getSqlLiteral(executionSnapshotHash)},
     ${getSqlLiteral(JSON.stringify(payload))}::JSON,
     ${getSqlLiteral(claimedBy)}
@@ -797,6 +819,7 @@ const getSnapshotIdentityForTransientRow = (row: JudgmentExecutionSnapshotRow): 
     executionSnapshotHash: getJudgmentExecutionSnapshotHash(payload),
     executionSnapshotId: randomUUID(),
     executionSnapshotPayload: payload,
+    fullTextStrategyId: row.fullTextStrategyId,
     modelId: row.modelId,
     projectId: row.projectId,
     useAbstract: row.useAbstract,
@@ -901,6 +924,7 @@ const createJudgmentExecutionSnapshotsForClaimGroup = async (
       use_fulltext,
       use_fulltext_no_images,
       use_metadata,
+      full_text_strategy_id,
       payload_hash,
       payload_json,
       created_by
@@ -920,6 +944,7 @@ const createJudgmentExecutionSnapshotsForClaimGroup = async (
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
       COALESCE(use_metadata, FALSE) AS useMetadata,
+      ${storedSnapshotFullTextStrategyIdSql} AS fullTextStrategyId,
       payload_hash AS executionSnapshotHash,
       created_by AS createdBy,
       created_at AS createdAt
@@ -1052,6 +1077,7 @@ export const isJudgmentExecutionSnapshotIdentityValid = async (input: SnapshotId
       AND use_fulltext = ${getSqlLiteral(input.useFulltext)}
       AND use_fulltext_no_images = ${getSqlLiteral(input.useFulltextNoImages)}
       AND COALESCE(use_metadata, FALSE) = ${getSqlLiteral(input.useMetadata)}
+      AND ${storedSnapshotFullTextStrategyIdSql} = ${getSqlLiteral(input.fullTextStrategyId)}
     LIMIT 1
   `)
 

@@ -92,6 +92,7 @@ const defaultRecoverPrompts = async (prompts: PromptToProcess[], _reason: string
           claimId: prompt.claimId,
           executionSnapshotHash: prompt.executionSnapshotHash,
           executionSnapshotId: prompt.executionSnapshotId,
+          fullTextStrategyId: prompt.fullTextStrategyId,
           jobId: prompt.jobId,
           modelId: prompt.modelId,
           projectId: prompt.projectId,

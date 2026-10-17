@@ -7,6 +7,7 @@ import {spawnSync, which} from 'bun'
 
 import {maximumProviderAttemptsPerJudgeDispatch} from '../../src/agent/judge.ts'
 import {maxRecoverablePromptExtraRetries} from '../../src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts'
+import {FULL_TEXT_STRATEGY_NONE} from '../../src/server/fullText/fullTextStrategy.ts'
 
 type Environment = Record<string, string | undefined>
 
@@ -82,6 +83,7 @@ export type RealCodexEvidence = {
   judgments: Array<{
     articleFixtureId: string
     contentFlags: RealCodexContentFlags
+    fullTextStrategyId: string
     modelId: string
     providerKind: string
     schemaValid: boolean
@@ -295,6 +297,7 @@ const assertEvidence = ({
       || judgment.thinking !== realCodexPinnedThinking
       || !judgment.schemaValid
       || JSON.stringify(judgment.contentFlags) !== JSON.stringify(contentFlags)
+      || judgment.fullTextStrategyId !== FULL_TEXT_STRATEGY_NONE
     ) {
       throw new Error(`Invalid durable real-Codex judgment evidence: ${JSON.stringify(judgment)}`)
     }

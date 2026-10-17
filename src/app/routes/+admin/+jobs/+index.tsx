@@ -459,6 +459,7 @@ const JudgmentsJobsTable = () => {
                             >
                               {job.projectName || 'Unknown Project'}
                             </Link>
+                            <p class="text-xs text-gray-500">Full-text strategy: {job.fullTextStrategyLabel}</p>
                             <RuntimeModelNotice notice={getJobRuntimeNotice(job)} />
                           </div>
                         </td>

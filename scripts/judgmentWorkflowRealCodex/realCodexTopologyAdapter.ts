@@ -431,6 +431,7 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
           return {
             articleFixtureId: getString(judgment.articleId, 'canonical judgment article id'),
             contentFlags,
+            fullTextStrategyId: getString(judgment.fullTextStrategyId, 'canonical judgment full-text strategy id'),
             modelId: getString(judgment.modelId, 'canonical judgment model id'),
             providerKind,
             schemaValid:

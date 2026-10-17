@@ -5,6 +5,11 @@ import {dirname} from 'node:path'
 import {Database} from 'bun:sqlite'
 
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
+import {
+  FULL_TEXT_STRATEGY_NONE,
+  getLegacyFullTextStrategyId,
+  getProjectFullTextStrategyIdSql,
+} from '../../fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
@@ -75,6 +80,7 @@ type JobInfoRow = {
   cursorLastArticleId: string | null
   cursorLastDate: unknown
   createdAt: unknown
+  fullTextStrategyId: string | null
   jobId: string
   modelBaseUrl: string | null
   modelId: string | null
@@ -106,6 +112,7 @@ type LiveModelRuntimeRow = {
 export type JudgmentJobSqliteInfo = {
   createdAt: Date
   cursor: JobCursor | null
+  fullTextStrategyId: string
   jobId: string
   modelBaseUrl: string | null
   modelId: string
@@ -140,6 +147,7 @@ type QueuePromptClaim = {
   executionSnapshotHash: string
   executionSnapshotId: string
   executionSnapshotPayload?: unknown
+  fullTextStrategyId: string
   jobId: string
   modelId: string
   projectId: string
@@ -211,6 +219,7 @@ type QueuePromptOutboxInsert = {
   confidenceOriginal: number
   createdAt: Date
   explanation: string | null
+  fullTextStrategyId?: string | null
   isAnswered: boolean
   judgmentId: string
   claimId?: string
@@ -243,6 +252,7 @@ type OutboxRow = {
   confidenceOriginal: number
   createdAt: string
   explanation: string | null
+  fullTextStrategyId: string | null
   jobId: string
   judgmentId: string
   claimId: string | null
@@ -275,6 +285,7 @@ export type JudgmentJobSqliteOutboxEntry = {
   confidenceOriginal: number
   createdAt: Date
   explanation: string | null
+  fullTextStrategyId: string
   isAnswered: boolean
   jobId: string
   judgmentId: string
@@ -404,6 +415,7 @@ export type JudgmentJobSqliteClaimedOutboxBatch = {
 type ClaimedOutboxRow = {claimId: string; rowCount: number}
 type OrphanedJudgedQueueRepairCounts = {deletedRows: number; requeuedRows: number}
 type OrphanedJudgedQueueRepairJobInfo = {
+  fullTextStrategyId: string
   modelId: string
   projectId: string
   systemPromptVariant: SystemPromptVariant
@@ -426,6 +438,7 @@ type PromptClaimIdentity = {
   claimId: string
   executionSnapshotHash: string
   executionSnapshotId: string
+  fullTextStrategyId: string
   jobId: string
   modelId: string
   projectId: string
@@ -834,6 +847,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       use_fulltext_no_images INTEGER NOT NULL,
       use_metadata INTEGER NOT NULL DEFAULT 0,
       system_prompt_variant TEXT,
+      full_text_strategy_id TEXT,
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS job_scan_state (
@@ -898,6 +912,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       use_fulltext_no_images INTEGER NOT NULL,
       use_metadata INTEGER NOT NULL DEFAULT 0,
       system_prompt_variant TEXT,
+      full_text_strategy_id TEXT,
       chunking_strategy TEXT,
       is_answered INTEGER NOT NULL,
       answered_original TEXT,
@@ -962,6 +977,20 @@ const toBoolean = (value: number | boolean | null | undefined) => {
   return value === true || value === 1
 }
 
+const getStoredFullTextStrategyId = (row: {
+  fullTextStrategyId: string | null
+  useFulltext: number | boolean | null
+  useFulltextNoImages: number | boolean | null
+}) => {
+  return (
+    row.fullTextStrategyId
+    ?? getLegacyFullTextStrategyId({
+      useFulltext: toBoolean(row.useFulltext),
+      useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+    })
+  )
+}
+
 const parseJsonText = (value: string | null) => {
   if (value == null || value === '') {
     return null
@@ -1001,6 +1030,7 @@ const judgmentJobSqliteRequiredSchema = {
     'use_fulltext',
     'use_fulltext_no_images',
     'use_metadata',
+    'full_text_strategy_id',
     'created_at',
   ],
   job_scan_state: [
@@ -1046,6 +1076,7 @@ const judgmentJobSqliteRequiredSchema = {
     'model_id',
     'use_metadata',
     'system_prompt_variant',
+    'full_text_strategy_id',
     'created_at',
     'updated_at',
     'exported_at',
@@ -1068,6 +1099,7 @@ const judgmentJobSqliteRequiredSchema = {
 const jobInfoColumns = [
   {name: 'system_prompt_variant', sql: 'TEXT'},
   {name: 'use_metadata', sql: 'INTEGER NOT NULL DEFAULT 0'},
+  {name: 'full_text_strategy_id', sql: 'TEXT'},
 ] as const
 
 const jobScanStateColumns = [
@@ -1100,6 +1132,7 @@ const judgmentOutboxColumns = [
   {name: 'request_attempts_json', sql: 'TEXT'},
   {name: 'system_prompt_variant', sql: 'TEXT'},
   {name: 'use_metadata', sql: 'INTEGER NOT NULL DEFAULT 0'},
+  {name: 'full_text_strategy_id', sql: 'TEXT'},
 ] as const
 
 const completionAckColumns = [
@@ -2497,6 +2530,7 @@ const getOrphanedJudgedQueueRepairJobInfo = (
     .query(
       `
         SELECT
+          full_text_strategy_id AS fullTextStrategyId,
           model_id AS modelId,
           project_id AS projectId,
           system_prompt_variant AS systemPromptVariant,
@@ -2511,6 +2545,7 @@ const getOrphanedJudgedQueueRepairJobInfo = (
       `,
     )
     .get(jobId) as {
+    fullTextStrategyId: string | null
     modelId: string
     projectId: string
     systemPromptVariant: string | null
@@ -2523,6 +2558,7 @@ const getOrphanedJudgedQueueRepairJobInfo = (
 
   return row
     ? {
+        fullTextStrategyId: getStoredFullTextStrategyId(row),
         modelId: row.modelId,
         projectId: row.projectId,
         systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
@@ -2577,6 +2613,7 @@ const getExistingJudgmentPairsForOrphanedQueueRows = async ({
               AND use_fulltext_no_images = ${getSqlLiteral(jobInfo.useFulltextNoImages)}
               AND use_metadata = ${getSqlLiteral(jobInfo.useMetadata)}
               AND system_prompt_variant = ${getSqlLiteral(jobInfo.systemPromptVariant)}
+              AND full_text_strategy_id = ${getSqlLiteral(jobInfo.fullTextStrategyId)}
               AND delete_generation = 0
               AND deleted_at IS NULL
               AND (${rows
@@ -2600,6 +2637,7 @@ const getOutboxEntry = (row: OutboxRow) => {
     confidenceOriginal: Number(row.confidenceOriginal ?? 0),
     createdAt: getDateValue(row.createdAt) ?? new Date(0),
     explanation: row.explanation,
+    fullTextStrategyId: getStoredFullTextStrategyId(row),
     isAnswered: true,
     jobId: row.jobId,
     judgmentId: row.judgmentId,
@@ -2899,6 +2937,7 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
       pc.base_url AS modelBaseUrl,
       TO_JSON(pc.config_json) AS providerConfigJson,
       p.system_prompt_variant AS systemPromptVariant,
+      ${getProjectFullTextStrategyIdSql('p')} AS fullTextStrategyId,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
@@ -2925,6 +2964,7 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
       cursorLastDate && row.cursorLastArticleId
         ? {lastArticleId: row.cursorLastArticleId, lastDate: cursorLastDate, priorityBucket: 0}
         : null,
+    fullTextStrategyId: row.fullTextStrategyId ?? FULL_TEXT_STRATEGY_NONE,
     jobId: row.jobId,
     modelBaseUrl: row.modelBaseUrl ?? null,
     modelId: row.modelId,
@@ -3172,6 +3212,7 @@ const getClaimableOutboxRows = (database: Database, limit: number, exactRequestA
             system_prompt_variant,
             (SELECT ji.system_prompt_variant FROM job_info ji WHERE ji.job_id = judgment_outbox.job_id)
           ) AS systemPromptVariant,
+          full_text_strategy_id AS fullTextStrategyId,
           chunking_strategy AS chunkingStrategy,
           answered_original AS answeredOriginal,
           answered_original_as_array AS answeredOriginalAsArray,
@@ -3225,6 +3266,7 @@ const getClaimedOutboxRows = (database: Database, claimId: string) => {
             system_prompt_variant,
             (SELECT ji.system_prompt_variant FROM job_info ji WHERE ji.job_id = judgment_outbox.job_id)
           ) AS systemPromptVariant,
+          full_text_strategy_id AS fullTextStrategyId,
           chunking_strategy AS chunkingStrategy,
           answered_original AS answeredOriginal,
           answered_original_as_array AS answeredOriginalAsArray,
@@ -3685,6 +3727,65 @@ const getOutboxUseMetadataFromDatabase = (
   return row ? toBoolean(row.useMetadata) : fallback === true
 }
 
+const isJobInfoFullTextStrategyMissing = (database: Database, jobId: string): boolean => {
+  const row = database
+    .query(
+      `
+        SELECT 1 AS missing
+        FROM job_info
+        WHERE job_id = ?
+          AND full_text_strategy_id IS NULL
+        LIMIT 1
+      `,
+    )
+    .get(jobId) as {missing: number} | null
+
+  return row !== null
+}
+
+const fillJobInfoFullTextStrategyId = async (jobId: string, fullTextStrategyId: string): Promise<void> => {
+  await withOwnedJobDatabase(jobId, false, (database) => {
+    database
+      .query(
+        `
+          UPDATE job_info
+          SET full_text_strategy_id = ?
+          WHERE job_id = ?
+            AND full_text_strategy_id IS NULL
+        `,
+      )
+      .run(fullTextStrategyId, jobId)
+  })
+}
+
+const getOutboxFullTextStrategyIdFromDatabase = (
+  database: Database,
+  jobId: string,
+  input: Pick<QueuePromptOutboxInsert, 'fullTextStrategyId' | 'useFulltext' | 'useFulltextNoImages'>,
+): string => {
+  const row = database
+    .query(
+      `
+        SELECT
+          full_text_strategy_id AS fullTextStrategyId,
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages
+        FROM job_info
+        WHERE job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId) as {fullTextStrategyId: string | null; useFulltext: number; useFulltextNoImages: number} | null
+
+  return getStoredFullTextStrategyId(
+    row ?? {
+      fullTextStrategyId: input.fullTextStrategyId ?? null,
+      useFulltext: input.useFulltext,
+      useFulltextNoImages: input.useFulltextNoImages,
+    },
+  )
+}
+
 const hasStoredCanonicalQueuePromptDuplicate = ({
   database,
   jobId,
@@ -3973,6 +4074,7 @@ const claimPreparedQueuePromptRows = ({
               claimId: row.preparedClaimId,
               executionSnapshotHash: row.preparedExecutionSnapshotHash,
               executionSnapshotId: row.preparedExecutionSnapshotId,
+              fullTextStrategyId: jobInfo.fullTextStrategyId,
               jobId,
               modelId: jobInfo.modelId,
               projectId: jobInfo.projectId,
@@ -4001,6 +4103,7 @@ const isSnapshotIdentityForJobInfo = (
     && identity.useFulltext === jobInfo.useFulltext
     && identity.useFulltextNoImages === jobInfo.useFulltextNoImages
     && identity.useMetadata === jobInfo.useMetadata
+    && identity.fullTextStrategyId === jobInfo.fullTextStrategyId
     && identity.useTitle === jobInfo.useTitle
   )
 }
@@ -4198,6 +4301,7 @@ const getPromptClaimIdentityFromDatabase = (
         claimId: row.claimId,
         executionSnapshotHash: row.executionSnapshotHash,
         executionSnapshotId: row.executionSnapshotId,
+        fullTextStrategyId: jobInfo.fullTextStrategyId,
         jobId,
         modelId: jobInfo.modelId,
         projectId: jobInfo.projectId,
@@ -4220,6 +4324,7 @@ const getReadyPromptIdentity = (
 ): Omit<PromptClaimIdentity, 'claimId' | 'executionSnapshotHash' | 'executionSnapshotId'> => {
   return {
     articleId: row.articleId,
+    fullTextStrategyId: jobInfo.fullTextStrategyId,
     jobId,
     modelId: jobInfo.modelId,
     projectId: jobInfo.projectId,
@@ -4246,6 +4351,7 @@ const getPromptClaimIdentityMismatch = (
     const mismatchedReadyKey = (
       [
         'articleId',
+        'fullTextStrategyId',
         'jobId',
         'modelId',
         'projectId',
@@ -4270,6 +4376,7 @@ const getPromptClaimIdentityMismatch = (
       'claimId',
       'executionSnapshotHash',
       'executionSnapshotId',
+      'fullTextStrategyId',
       'jobId',
       'modelId',
       'projectId',
@@ -4320,6 +4427,7 @@ const assertPromptClaimIdentityMatchFromDatabase = (
           claimId: row.claimId,
           executionSnapshotHash: row.executionSnapshotHash,
           executionSnapshotId: row.executionSnapshotId,
+          fullTextStrategyId: jobInfo.fullTextStrategyId,
           jobId: expected.jobId,
           modelId: jobInfo.modelId,
           projectId: jobInfo.projectId,
@@ -4362,6 +4470,7 @@ const getPromptClaimIdentityFromOutboxInsert = (
   jobId: string,
   input: QueuePromptOutboxInsert,
   jobUseMetadata: boolean,
+  jobFullTextStrategyId: string,
 ): PromptClaimIdentity | null => {
   return input.claimId && input.executionSnapshotId && input.executionSnapshotHash && input.projectId
     ? {
@@ -4369,6 +4478,7 @@ const getPromptClaimIdentityFromOutboxInsert = (
         claimId: input.claimId,
         executionSnapshotHash: input.executionSnapshotHash,
         executionSnapshotId: input.executionSnapshotId,
+        fullTextStrategyId: input.fullTextStrategyId ?? jobFullTextStrategyId,
         jobId,
         modelId: input.modelId,
         projectId: input.projectId,
@@ -5253,6 +5363,31 @@ const sqliteService = {
       }) ?? []
     )
   },
+  getStoredFullTextStrategyId: (jobId: string): string | null => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const row = database
+          .query(
+            `
+              SELECT full_text_strategy_id AS fullTextStrategyId
+              FROM job_info
+              WHERE job_id = ?
+              LIMIT 1
+            `,
+          )
+          .get(jobId) as {fullTextStrategyId: string | null} | null
+
+        return row?.fullTextStrategyId ?? null
+      }) ?? null
+    )
+  },
+  fillMissingFullTextStrategyId: async (jobId: string, fullTextStrategyId: string): Promise<void> => {
+    const isMissing = withJobDatabase(jobId, false, (database) => {
+      return isJobInfoFullTextStrategyMissing(database, jobId)
+    })
+
+    return isMissing === true ? fillJobInfoFullTextStrategyId(jobId, fullTextStrategyId) : undefined
+  },
   getJobInfo: async (jobId: string): Promise<JudgmentJobSqliteInfo | null> => {
     const storedJobInfo =
       withJobDatabase(jobId, false, (database) => {
@@ -5276,6 +5411,7 @@ const sqliteService = {
             use_fulltext_no_images AS useFulltextNoImages,
             use_metadata AS useMetadata,
             system_prompt_variant AS systemPromptVariant,
+            full_text_strategy_id AS fullTextStrategyId,
             created_at AS createdAt
           FROM job_info
           WHERE job_id = ?
@@ -5284,6 +5420,7 @@ const sqliteService = {
           )
           .get(jobId) as {
           createdAt: string
+          fullTextStrategyId: string | null
           jobId: string
           modelBaseUrl: string | null
           modelId: string
@@ -5307,6 +5444,7 @@ const sqliteService = {
           ? {
               createdAt,
               cursor: null,
+              fullTextStrategyId: getStoredFullTextStrategyId(row),
               jobId: row.jobId,
               modelBaseUrl: row.modelBaseUrl,
               modelId: row.modelId,
@@ -5892,8 +6030,9 @@ const sqliteService = {
             use_fulltext_no_images,
             use_metadata,
             system_prompt_variant,
+            full_text_strategy_id,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
           )
           .run(
@@ -5913,6 +6052,7 @@ const sqliteService = {
             Number(jobInfo.useFulltextNoImages),
             Number(jobInfo.useMetadata),
             jobInfo.systemPromptVariant,
+            jobInfo.fullTextStrategyId,
             createdAt,
           )
         seedJudgmentOutboxSequenceFromDatabase(database, jobId, importedOutboxSeqFloor)
@@ -6536,7 +6676,8 @@ const sqliteService = {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const insertedRows = database.transaction((input: QueuePromptOutboxInsert) => {
         const useMetadata = getOutboxUseMetadataFromDatabase(database, jobId, input.useMetadata)
-        const expectedIdentity = getPromptClaimIdentityFromOutboxInsert(jobId, input, useMetadata)
+        const fullTextStrategyId = getOutboxFullTextStrategyIdFromDatabase(database, jobId, input)
+        const expectedIdentity = getPromptClaimIdentityFromOutboxInsert(jobId, input, useMetadata, fullTextStrategyId)
 
         if (expectedIdentity) {
           assertPromptClaimIdentityFromDatabase(database, expectedIdentity, options)
@@ -6564,6 +6705,7 @@ const sqliteService = {
             use_fulltext_no_images,
             use_metadata,
             system_prompt_variant,
+            full_text_strategy_id,
             chunking_strategy,
             is_answered,
             answered_original,
@@ -6575,7 +6717,7 @@ const sqliteService = {
             request_attempts_json,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
           )
           .run(
@@ -6597,6 +6739,7 @@ const sqliteService = {
             Number(input.useFulltextNoImages),
             Number(useMetadata),
             getOutboxSystemPromptVariantFromDatabase(database, jobId, input.systemPromptVariant),
+            fullTextStrategyId,
             input.chunkingStrategy,
             Number(input.isAnswered),
             input.answeredOriginal,

@@ -380,6 +380,7 @@ const createPromptToProcess = (): PromptToProcess => {
     claimId: 'claim-a',
     executionSnapshotHash: 'snapshot-hash-a',
     executionSnapshotId: 'snapshot-a',
+    fullTextStrategyId: 'fts-none',
     jobId: 'job-a',
     modelBaseUrl: 'http://runtime.test/v1',
     modelId: 'model-a',
@@ -1834,6 +1835,45 @@ test('already-judged check only matches judgments of the prompt use_metadata fla
   expect(judgmentLookups).toHaveLength(2)
   expect(judgmentLookups[0]).toContain('AND use_metadata = TRUE')
   expect(judgmentLookups[1]).toContain('AND use_metadata = FALSE')
+})
+
+test('already-judged check only matches judgments of the prompt full-text strategy', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  const judgmentLookups: string[] = []
+
+  queryJson.mockImplementation(async (sql: string) => {
+    if (sql.includes('FROM app.prompt p')) {
+      return createPromptRows()
+    }
+
+    if (sql.includes('FROM app.judgment')) {
+      judgmentLookups.push(sql)
+    }
+
+    return []
+  })
+
+  await processPromptWithLLM({...createPromptToProcess(), fullTextStrategyId: 'fts-0123456789abcdef'})
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(judgmentLookups).toHaveLength(2)
+  expect(judgmentLookups[0]).toContain(`AND full_text_strategy_id = 'fts-0123456789abcdef'`)
+  expect(judgmentLookups[1]).toContain(`AND full_text_strategy_id = 'fts-none'`)
+})
+
+test('judge-worker terminal completions carry the prompt full-text strategy', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  hasJudgeWorkerCompletionIntent.mockImplementation((claimId: string) => {
+    return claimId === 'claim-a'
+  })
+
+  await processPromptWithLLM({...createPromptToProcess(), fullTextStrategyId: 'fts-0123456789abcdef'})
+
+  expect(enqueueJudgeWorkerCompletion).toHaveBeenCalledWith(
+    expect.objectContaining({claimId: 'claim-a', fullTextStrategyId: 'fts-0123456789abcdef', status: 'retry'}),
+  )
 })
 
 test('judge-worker terminal completions carry the prompt use_metadata flag', async () => {

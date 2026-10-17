@@ -237,6 +237,8 @@ type JobData = {
   useFulltext?: boolean
   useFulltextNoImages?: boolean
   useMetadata?: boolean
+  fullTextStrategyId?: string
+  fullTextStrategyLabel?: string
   totalTokenUsage?: {totalTokens?: number; totalPromptTokens?: number; totalCompletionTokens?: number}
   promptStats?: Partial<JudgmentJobPromptStats>
   requestStats?: Partial<JudgmentJobRequestStats>
@@ -1053,6 +1055,9 @@ export const AdminJudgmentJobDetail = () => {
                           }}
                         </Show>
                       </Show>
+                    </DenseMetric>
+                    <DenseMetric label="Full-text strategy">
+                      <span class="break-words">{data()?.fullTextStrategyLabel ?? 'N/A'}</span>
                     </DenseMetric>
                     <DenseMetric
                       description="Shared throughput ceiling for all jobs using this provider connection."

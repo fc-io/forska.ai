@@ -2,6 +2,7 @@ import {writeFile} from 'node:fs/promises'
 
 import {getSystemPromptVariant} from '../src/agent/judge/systemPromptVariant.ts'
 import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmentJobPaths.ts'
+import {getLegacyFullTextStrategyId} from '../src/server/fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
@@ -9,6 +10,7 @@ import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbSer
 
 type CliOptions = {jobId: string | null}
 type JobInfoRow = {
+  fullTextStrategyId: string | null
   modelId: string
   systemPromptVariant: string | null
   useAbstract: number
@@ -84,9 +86,20 @@ const getSqliteColumnNames = (sqlitePath: string, tableName: string) => {
   )
 }
 
+const getJobInfoFullTextStrategyId = (jobInfo: JobInfoRow) => {
+  return (
+    jobInfo.fullTextStrategyId
+    ?? getLegacyFullTextStrategyId({
+      useFulltext: Boolean(jobInfo.useFulltext),
+      useFulltextNoImages: Boolean(jobInfo.useFulltextNoImages),
+    })
+  )
+}
+
 const getJobInfoSql = (jobId: string, jobInfoColumnNames: Set<string>) => {
   return `
     SELECT
+      ${jobInfoColumnNames.has('full_text_strategy_id') ? 'full_text_strategy_id' : 'NULL'} AS fullTextStrategyId,
       model_id AS modelId,
       ${jobInfoColumnNames.has('system_prompt_variant') ? 'system_prompt_variant' : 'NULL'} AS systemPromptVariant,
       use_abstract AS useAbstract,
@@ -155,6 +168,7 @@ const getExistingJudgmentPairs = async ({jobInfo, rows}: {jobInfo: JobInfoRow; r
         AND use_fulltext_no_images = ${getSqlLiteral(Boolean(jobInfo.useFulltextNoImages))}
         AND use_metadata = ${getSqlLiteral(Boolean(jobInfo.useMetadata))}
         AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(jobInfo.systemPromptVariant))}
+        AND full_text_strategy_id = ${getSqlLiteral(getJobInfoFullTextStrategyId(jobInfo))}
         AND delete_generation = 0
         AND deleted_at IS NULL
         AND (${chunk

@@ -19,6 +19,7 @@ type JudgmentOutboxImportMarkerRow = {jobId: string; outboxSeq: number}
 type JudgmentOutboxImportRow = {jobId: string; outboxSeq: number}
 type StoredJudgmentIdentityRow = {
   articleId: string
+  fullTextStrategyId: string
   id: string
   modelId: string
   promptId: string
@@ -31,6 +32,7 @@ type StoredJudgmentIdentityRow = {
 }
 type VisibleJudgmentDeltaRow = {
   articleId: string
+  fullTextStrategyId: string
   judgmentId: string
   modelId: string
   projectId: string
@@ -138,6 +140,7 @@ const getJudgmentInsertRows = (entries: JudgmentJobSqliteOutboxEntry[]): Judgmen
       confidenceOriginal: entry.confidenceOriginal,
       createdAt: entry.createdAt,
       explanation: entry.explanation,
+      fullTextStrategyId: entry.fullTextStrategyId,
       id: entry.judgmentId,
       isAnswered: entry.isAnswered ?? true,
       modelId: entry.modelId,
@@ -176,6 +179,7 @@ const getJudgmentInsertValueSql = (row: JudgmentInsertRow) => {
     ${getSqlLiteral(row.useFulltextNoImages)},
     ${getSqlLiteral(row.useMetadata)},
     ${getSqlLiteral(row.systemPromptVariant)},
+    ${getSqlLiteral(row.fullTextStrategyId)},
     ${getSqlLiteral(row.chunkingStrategy)},
     ${getSqlLiteral(row.snapshotProjectId)},
     ${getSqlLiteral(row.snapshotProjectModelName)},
@@ -188,6 +192,7 @@ const getJudgmentIdentityKey = (
   row: Pick<
     StoredJudgmentIdentityRow,
     | 'articleId'
+    | 'fullTextStrategyId'
     | 'modelId'
     | 'promptId'
     | 'systemPromptVariant'
@@ -208,6 +213,7 @@ const getJudgmentIdentityKey = (
     row.useFulltextNoImages,
     row.useMetadata,
     row.systemPromptVariant,
+    row.fullTextStrategyId,
   ].join('|')
 }
 
@@ -223,7 +229,8 @@ const getStoredJudgmentIdsByIdentity = async (runner: DirtyWorkRunner, entries: 
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
       use_metadata AS useMetadata,
-      system_prompt_variant AS systemPromptVariant
+      system_prompt_variant AS systemPromptVariant,
+      full_text_strategy_id AS fullTextStrategyId
     FROM app.judgment
     WHERE ${entries
       .map((entry) => {
@@ -237,6 +244,7 @@ const getStoredJudgmentIdsByIdentity = async (runner: DirtyWorkRunner, entries: 
           AND use_fulltext_no_images = ${getSqlLiteral(entry.useFulltextNoImages)}
           AND use_metadata = ${getSqlLiteral(entry.useMetadata)}
           AND system_prompt_variant = ${getSqlLiteral(entry.systemPromptVariant)}
+          AND full_text_strategy_id = ${getSqlLiteral(entry.fullTextStrategyId)}
           AND delete_generation = 0
         )`
       })
@@ -269,6 +277,7 @@ const getVisibleJudgmentDeltaRows = async (
       use_fulltext_no_images,
       use_metadata,
       system_prompt_variant,
+      full_text_strategy_id,
       judgment_id,
       source_updated_at,
       source_mutation_key,
@@ -286,6 +295,7 @@ const getVisibleJudgmentDeltaRows = async (
             ${getSqlLiteral(entry.useFulltextNoImages)},
             ${getSqlLiteral(entry.useMetadata)},
             ${getSqlLiteral(entry.systemPromptVariant)},
+            ${getSqlLiteral(entry.fullTextStrategyId)},
             ${getSqlLiteral(judgmentId)},
             ${getTimestampLiteral(entry.updatedAt)},
             ${getSqlLiteral(`sqliteOutboxImport|${entry.jobId}|${entry.outboxSeq}|${entry.judgmentId}`)},
@@ -304,6 +314,7 @@ const getVisibleJudgmentDeltaRows = async (
       imported_judgment.use_fulltext_no_images AS useFulltextNoImages,
       imported_judgment.use_metadata AS useMetadata,
       imported_judgment.system_prompt_variant AS systemPromptVariant,
+      imported_judgment.full_text_strategy_id AS fullTextStrategyId,
       imported_judgment.judgment_id AS judgmentId,
       imported_judgment.source_updated_at AS sourceUpdatedAt,
       imported_judgment.source_mutation_key AS sourceMutationKey,
@@ -357,13 +368,14 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
       use_fulltext_no_images,
       use_metadata,
       system_prompt_variant,
+      full_text_strategy_id,
       chunking_strategy,
       snapshot_project_id,
       snapshot_project_model_name,
       created_at,
       updated_at
     ) VALUES ${getJudgmentInsertRows(entries).map(getJudgmentInsertValueSql).join(', ')}
-    ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant, delete_generation) DO NOTHING
+    ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant, full_text_strategy_id, delete_generation) DO NOTHING
     RETURNING id
   `)
   const insertedJudgmentIds = new Set(
@@ -393,6 +405,7 @@ const insertJudgments = async (runner: DirtyWorkRunner, entries: JudgmentJobSqli
     return {
       articleId: row.articleId,
       changeKind: 'judgment.llm.created' as const,
+      fullTextStrategyId: row.fullTextStrategyId,
       judgmentId: row.judgmentId,
       modelId: row.modelId,
       projectId: row.projectId,
@@ -452,6 +465,7 @@ const markComparisonServingStaleForInsertedEntries = async ({
     insertedEntries.map((entry) => {
       return {
         articleId: entry.articleId,
+        fullTextStrategyId: entry.fullTextStrategyId,
         modelId: entry.modelId,
         promptId: entry.promptId,
         systemPromptVariant: entry.systemPromptVariant,

@@ -1,3 +1,4 @@
+import {FULL_TEXT_STRATEGY_NONE} from '../src/server/fullText/fullTextStrategy.ts'
 import {
   createJudgmentWorkflowTopology,
   prepareJudgmentWorkflowMigrationBoundary,
@@ -144,6 +145,7 @@ const runScenario = async ({upgrade}: {upgrade: boolean}) => {
           || row.useFulltext
           || row.useFulltextNoImages
           || row.useMetadata === true
+          || row.fullTextStrategyId !== FULL_TEXT_STRATEGY_NONE
         )
       })
     ) {

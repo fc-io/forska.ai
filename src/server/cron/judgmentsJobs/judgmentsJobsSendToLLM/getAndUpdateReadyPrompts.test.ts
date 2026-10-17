@@ -466,6 +466,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
               useTitle: true,
             }],
             getOwnerBackedJudgmentJobInfo: async () => ({
+              fullTextStrategyId: 'fts-0123456789abcdef',
               maxInflightRequests: 8,
               modelBaseUrl: 'http://saved-sglang:30000/v1',
               modelId: 'model-sglang',
@@ -551,6 +552,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
     acceptedClaimCount: number
     listProviderConnectionCalls: number
     prompts: Array<{
+      fullTextStrategyId: string
       modelBaseUrl: string
       modelId: string
       modelProvider: string
@@ -570,6 +572,7 @@ test('owner-backed non-Codex prompts use owner-provided runtime without autodete
   })
   expect(result.prompts).toHaveLength(1)
   expect(result.prompts[0]).toMatchObject({
+    fullTextStrategyId: 'fts-0123456789abcdef',
     modelBaseUrl: 'http://owner-sglang:30000/v1',
     modelId: 'model-sglang',
     modelProvider: 'sglang',

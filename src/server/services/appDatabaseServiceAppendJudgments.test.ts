@@ -96,6 +96,7 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
 
   const buildRow = (params: {
     articleId: string
+    fullTextStrategyId?: string
     id: string
     systemPromptVariant?: JudgmentInsertRow['systemPromptVariant']
     useMetadata?: boolean
@@ -108,6 +109,7 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
       confidenceOriginal: 50,
       createdAt,
       explanation: 'because',
+      fullTextStrategyId: params.fullTextStrategyId ?? 'fts-none',
       id: params.id,
       isAnswered: true,
       modelId,
@@ -161,6 +163,20 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
   const metadataDuplicateResult = await appendJudgments([
     buildRow({articleId: articleIds[0] ?? '', id: `judgment-a-metadata-duplicate-${Date.now()}`, useMetadata: true}),
   ])
+  const strategyResult = await appendJudgments([
+    buildRow({
+      articleId: articleIds[0] ?? '',
+      fullTextStrategyId: 'fts-a1b2c3d4e5f60718',
+      id: `judgment-a-strategy-${Date.now()}`,
+    }),
+  ])
+  const strategyDuplicateResult = await appendJudgments([
+    buildRow({
+      articleId: articleIds[0] ?? '',
+      fullTextStrategyId: 'fts-a1b2c3d4e5f60718',
+      id: `judgment-a-strategy-duplicate-${Date.now()}`,
+    }),
+  ])
   const appendMetrics = getAppendMetrics()
   const [countRow] = await queryDatabase<{total: number}>(
     `SELECT COUNT(*) AS total FROM app.judgment WHERE model_id = '${modelId}'`,
@@ -179,30 +195,46 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
     GROUP BY use_metadata
     ORDER BY use_metadata
   `)
+  const strategyRows = await queryDatabase<{fullTextStrategyId: string; total: number}>(`
+    SELECT full_text_strategy_id AS fullTextStrategyId, COUNT(*)::INTEGER AS total
+    FROM app.judgment
+    WHERE model_id = '${modelId}'
+      AND article_id = '${articleIds[0] ?? ''}'
+      AND system_prompt_variant = 'legacy'
+      AND NOT use_metadata
+    GROUP BY full_text_strategy_id
+    ORDER BY full_text_strategy_id
+  `)
 
   expect(parallelTotals).toEqual({attempted: 4, inserted: 4, skipped: 0})
   expect(duplicateResult).toEqual({attempted: 1, inserted: 0, skipped: 1})
   expect(otherVariantResult).toEqual({attempted: 1, inserted: 1, skipped: 0})
   expect(metadataResult).toEqual({attempted: 1, inserted: 1, skipped: 0})
   expect(metadataDuplicateResult).toEqual({attempted: 1, inserted: 0, skipped: 1})
+  expect(strategyResult).toEqual({attempted: 1, inserted: 1, skipped: 0})
+  expect(strategyDuplicateResult).toEqual({attempted: 1, inserted: 0, skipped: 1})
   expect(variantRows).toEqual([
-    {systemPromptVariant: 'legacy', total: 5},
+    {systemPromptVariant: 'legacy', total: 6},
     {systemPromptVariant: 'screening_v1', total: 1},
   ])
   expect(metadataRows).toEqual([
-    {total: 5, useMetadata: false},
+    {total: 6, useMetadata: false},
     {total: 1, useMetadata: true},
+  ])
+  expect(strategyRows).toEqual([
+    {fullTextStrategyId: 'fts-a1b2c3d4e5f60718', total: 1},
+    {fullTextStrategyId: 'fts-none', total: 1},
   ])
   expect(appendMetrics.laneCount).toBe(2)
   expect(appendMetrics.maxQueueDepth).toBeGreaterThanOrEqual(1)
-  expect(appendMetrics.rowsAttempted).toBe(8)
-  expect(appendMetrics.rowsInserted).toBe(6)
-  expect(appendMetrics.rowsSkipped).toBe(2)
+  expect(appendMetrics.rowsAttempted).toBe(10)
+  expect(appendMetrics.rowsInserted).toBe(7)
+  expect(appendMetrics.rowsSkipped).toBe(3)
   if (appendMetrics.averageRowsPerSecondAttempted !== null) {
     expect(appendMetrics.averageRowsPerSecondAttempted).toBeGreaterThan(0)
   }
   expect(appendMetrics.queueDepth).toBe(0)
-  expect(Number(countRow?.total ?? 0)).toBe(6)
+  expect(Number(countRow?.total ?? 0)).toBe(7)
 })
 
 test('appendJudgments safely inserts quote-heavy judgment text', async () => {
@@ -248,6 +280,7 @@ test('appendJudgments safely inserts quote-heavy judgment text', async () => {
       confidenceOriginal: 50,
       createdAt,
       explanation,
+      fullTextStrategyId: 'fts-none',
       id: rowId,
       isAnswered: true,
       modelId,

@@ -1311,6 +1311,7 @@ export const judgeSinglePrompt = async ({
   claimIdentity,
   contentSettings,
   systemPromptVariant,
+  fullTextStrategyId,
 }: {
   article: ArticlesType[number]
   prompt: SinglePromptInput
@@ -1323,6 +1324,7 @@ export const judgeSinglePrompt = async ({
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
   contentSettings: ContentSettings
   systemPromptVariant?: SystemPromptVariant | null
+  fullTextStrategyId: string
 }): Promise<void> => {
   const {
     baseURL,
@@ -1500,6 +1502,7 @@ export const judgeSinglePrompt = async ({
           claimIdentity,
           contentSettings,
           systemPromptVariant,
+          fullTextStrategyId,
           judgmentsJobId,
           promptId: prompt.id,
           queueRecordId,
@@ -2159,6 +2162,7 @@ export const judgeSinglePrompt = async ({
             claimIdentity,
             contentSettings,
             systemPromptVariant,
+            fullTextStrategyId,
             judgmentsJobId,
             promptId: prompt.id,
             queueRecordId,

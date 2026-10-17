@@ -121,6 +121,7 @@ const getEntry = (
     executionSnapshotHash: null,
     executionSnapshotId: null,
     explanation: 'because',
+    fullTextStrategyId: 'fts-none',
     isAnswered: true,
     jobId: ids.jobId,
     judgmentId: ids.judgmentId,
@@ -378,6 +379,84 @@ test('dirty work stores use_metadata as its own judgment identity and fans out b
   expect(deltas).toEqual([
     {judgmentId: ids.judgmentId, projectId: ids.projectId, useMetadata: false},
     {judgmentId: metadataJudgmentId, projectId: metadataProjectId, useMetadata: true},
+  ])
+})
+
+test('dirty work stores the full-text strategy as its own judgment identity and fans out by strategy', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const ids = await seedImportFixture(`strategy-identity-${Date.now()}`)
+  const strategyId = 'fts-0123456789abcdef'
+  const strategyProjectId = `${ids.projectId}-strategy`
+  const strategyJudgmentId = `${ids.judgmentId}-strategy`
+  const duplicateStrategyJudgmentId = `${ids.judgmentId}-strategy-duplicate`
+
+  await runDatabase(`
+    INSERT INTO app.project (
+      id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, full_text_strategy_id
+    )
+    VALUES ('${strategyProjectId}', 'Strategy Project', '${ids.modelId}', TRUE, TRUE, FALSE, FALSE, '${strategyId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${strategyProjectId}-article', '${strategyProjectId}', '${ids.articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${strategyProjectId}-prompt', '${strategyProjectId}', '${ids.promptId}', 1, TRUE)
+  `)
+
+  const result = await commitJudgmentSqliteOutboxImportDirtyWork({
+    discardedEntries: [],
+    importableEntries: [
+      getEntry(ids, 1),
+      getEntry(ids, 2, {
+        fullTextStrategyId: strategyId,
+        judgmentId: strategyJudgmentId,
+        queuePromptId: `${ids.queuePromptId}-strategy`,
+      }),
+    ],
+    requestedBy: 'test-importer',
+  })
+  const duplicateResult = await commitJudgmentSqliteOutboxImportDirtyWork({
+    discardedEntries: [],
+    importableEntries: [
+      getEntry(ids, 3, {
+        fullTextStrategyId: strategyId,
+        judgmentId: duplicateStrategyJudgmentId,
+        queuePromptId: `${ids.queuePromptId}-strategy-duplicate`,
+      }),
+    ],
+    requestedBy: 'test-importer',
+  })
+  const judgments = await queryDatabase<{fullTextStrategyId: string; id: string}>(`
+    SELECT id, full_text_strategy_id AS fullTextStrategyId
+    FROM app.judgment
+    WHERE article_id = '${ids.articleId}'
+    ORDER BY full_text_strategy_id ASC
+  `)
+  const deltas = await queryDatabase<{judgmentId: string; projectId: string}>(`
+    SELECT DISTINCT judgment_id AS judgmentId, project_id AS projectId
+    FROM app.review_change_delta
+    WHERE judgment_id IN ('${ids.judgmentId}', '${strategyJudgmentId}', '${duplicateStrategyJudgmentId}')
+    ORDER BY project_id ASC
+  `)
+
+  expect(result.importedRows).toEqual([
+    {jobId: ids.jobId, outboxSeq: 1},
+    {jobId: ids.jobId, outboxSeq: 2},
+  ])
+  expect(duplicateResult.importedRows).toEqual([])
+  expect(duplicateResult.duplicateRows).toEqual([{jobId: ids.jobId, outboxSeq: 3}])
+  expect(judgments).toEqual([
+    {fullTextStrategyId: strategyId, id: strategyJudgmentId},
+    {fullTextStrategyId: 'fts-none', id: ids.judgmentId},
+  ])
+  expect(deltas).toEqual([
+    {judgmentId: ids.judgmentId, projectId: ids.projectId},
+    {judgmentId: strategyJudgmentId, projectId: strategyProjectId},
   ])
 })
 

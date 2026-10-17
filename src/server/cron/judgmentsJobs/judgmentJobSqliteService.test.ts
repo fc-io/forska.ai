@@ -46,6 +46,7 @@ const createSqliteJobFixture = async (
   prefix: string,
   systemPromptVariant: string | null = null,
   useMetadata = false,
+  {fullTextStrategyId = null, useFulltext = false}: {fullTextStrategyId?: string | null; useFulltext?: boolean} = {},
 ) => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
@@ -69,11 +70,12 @@ const createSqliteJobFixture = async (
   await runDatabase(`
     INSERT INTO app.project (
       id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata,
-      system_prompt_variant
+      system_prompt_variant, full_text_strategy_id
     )
     VALUES (
-      '${projectId}', '${prefix} fixture', '${modelId}', TRUE, TRUE, FALSE, FALSE, ${useMetadata ? 'TRUE' : 'FALSE'},
-      ${systemPromptVariant === null ? 'NULL' : `'${systemPromptVariant}'`}
+      '${projectId}', '${prefix} fixture', '${modelId}', TRUE, TRUE, ${useFulltext ? 'TRUE' : 'FALSE'}, FALSE,
+      ${useMetadata ? 'TRUE' : 'FALSE'}, ${systemPromptVariant === null ? 'NULL' : `'${systemPromptVariant}'`},
+      ${fullTextStrategyId === null ? 'NULL' : `'${fullTextStrategyId}'`}
     )
   `)
   await runDatabase(`
@@ -92,7 +94,9 @@ const getVariantOutboxInsert = (input: {
   projectId: string
   promptId: string
   queuePromptId: string
+  fullTextStrategyId?: string
   systemPromptVariant?: 'legacy' | 'screening_v1'
+  useFulltext?: boolean
   useMetadata?: boolean
 }) => {
   return {
@@ -103,6 +107,7 @@ const getVariantOutboxInsert = (input: {
     confidenceOriginal: 50,
     createdAt: new Date(),
     explanation: 'because',
+    ...(input.fullTextStrategyId === undefined ? {} : {fullTextStrategyId: input.fullTextStrategyId}),
     isAnswered: true,
     judgmentId: input.judgmentId,
     modelId: input.modelId,
@@ -116,7 +121,7 @@ const getVariantOutboxInsert = (input: {
     systemPromptVariant: input.systemPromptVariant,
     updatedAt: new Date(),
     useAbstract: true,
-    useFulltext: false,
+    useFulltext: input.useFulltext ?? false,
     useFulltextNoImages: false,
     ...(input.useMetadata === undefined ? {} : {useMetadata: input.useMetadata}),
     useTitle: true,
@@ -130,6 +135,25 @@ const getOutboxUseMetadataValues = (jobId: string) => {
     return sqliteDatabase
       .query(`SELECT judgment_id AS judgmentId, use_metadata AS useMetadata FROM judgment_outbox ORDER BY outbox_seq`)
       .all() as Array<{judgmentId: string; useMetadata: number}>
+  } finally {
+    sqliteDatabase.close(false)
+  }
+}
+
+const getSqliteFullTextStrategyIds = (jobId: string) => {
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId), {readonly: true})
+
+  try {
+    return {
+      jobInfo: sqliteDatabase.query(`SELECT full_text_strategy_id AS fullTextStrategyId FROM job_info`).all() as Array<{
+        fullTextStrategyId: string | null
+      }>,
+      outbox: sqliteDatabase
+        .query(
+          `SELECT judgment_id AS judgmentId, full_text_strategy_id AS fullTextStrategyId FROM judgment_outbox ORDER BY outbox_seq`,
+        )
+        .all() as Array<{fullTextStrategyId: string | null; judgmentId: string}>,
+    }
   } finally {
     sqliteDatabase.close(false)
   }
@@ -3017,6 +3041,155 @@ test('judgment outbox rows fall back to the completion payload use_metadata only
   )
 
   expect(getOutboxUseMetadataValues(jobId)).toEqual([{judgmentId: `${jobId}-judgment`, useMetadata: 1}])
+})
+
+test('job info, claims, claim identities and outbox rows carry the project full-text strategy', async () => {
+  const strategyId = 'fts-0123456789abcdef'
+  const strategyFixture = await createSqliteJobFixture('job-info-strategy', null, false, {
+    fullTextStrategyId: strategyId,
+    useFulltext: true,
+  })
+  const plainFixture = await createSqliteJobFixture('job-info-no-strategy')
+  const {jobId, modelId, projectId, service} = strategyFixture
+
+  expect((await service.getJobInfo(jobId))?.fullTextStrategyId).toBe(strategyId)
+  expect(service.getStoredFullTextStrategyId(jobId)).toBe(strategyId)
+  expect((await plainFixture.service.getJobInfo(plainFixture.jobId))?.fullTextStrategyId).toBe('fts-none')
+
+  await service.addReadyPrompts(
+    jobId,
+    [1, 2].map((index) => {
+      return {articleId: `job-info-strategy-article-${index}`, promptId: `job-info-strategy-prompt-${index}`}
+    }),
+    'server-a',
+  )
+
+  const [firstPrompt, secondPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 2)
+
+  if (!firstPrompt || !secondPrompt) {
+    throw new Error('Failed to claim SQLite queue prompts')
+  }
+
+  expect(firstPrompt.fullTextStrategyId).toBe(strategyId)
+  expect((await service.getPromptClaimIdentity(jobId, firstPrompt.recordId))?.fullTextStrategyId).toBe(strategyId)
+
+  const getClaimedOutboxInsert = (
+    prompt: NonNullable<typeof firstPrompt>,
+    index: number,
+    fullTextStrategyId: string | undefined,
+  ) => {
+    return {
+      ...getVariantOutboxInsert({
+        articleId: prompt.articleId,
+        fullTextStrategyId,
+        judgmentId: `${jobId}-judgment-${index}`,
+        modelId,
+        projectId,
+        promptId: prompt.promptId,
+        queuePromptId: prompt.recordId,
+        useFulltext: true,
+      }),
+      claimId: prompt.claimId,
+      executionSnapshotHash: prompt.executionSnapshotHash,
+      executionSnapshotId: prompt.executionSnapshotId,
+    }
+  }
+
+  await service.recordJudgmentSuccess(jobId, getClaimedOutboxInsert(firstPrompt, 1, undefined))
+  const mismatchError = await service
+    .recordJudgmentSuccess(jobId, getClaimedOutboxInsert(secondPrompt, 2, 'fts-legacy-v0'))
+    .then(
+      () => {
+        return null
+      },
+      (error: unknown) => {
+        return error instanceof Error ? error.message : String(error)
+      },
+    )
+
+  expect(mismatchError).toContain('snapshot claim identity mismatch for fullTextStrategyId')
+  expect(getSqliteFullTextStrategyIds(jobId).outbox).toEqual([
+    {fullTextStrategyId: strategyId, judgmentId: `${jobId}-judgment-1`},
+  ])
+
+  const batch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  expect(
+    batch?.rows.map((row) => {
+      return {fullTextStrategyId: row.fullTextStrategyId, judgmentId: row.judgmentId}
+    }),
+  ).toEqual([{fullTextStrategyId: strategyId, judgmentId: `${jobId}-judgment-1`}])
+})
+
+test('job info and outbox rows written before strategy tracking map NULL to the legacy id from their own flags', async () => {
+  const {jobId, modelId, projectId, service} = await createSqliteJobFixture('legacy-strategy', null, false, {
+    useFulltext: true,
+  })
+
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'legacy-strategy-article', promptId: 'legacy-strategy-prompt'}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    ...getVariantOutboxInsert({
+      articleId: claimedPrompt.articleId,
+      judgmentId: `${jobId}-judgment`,
+      modelId,
+      projectId,
+      promptId: claimedPrompt.promptId,
+      queuePromptId: claimedPrompt.recordId,
+      useFulltext: true,
+    }),
+    claimId: claimedPrompt.claimId,
+    executionSnapshotHash: claimedPrompt.executionSnapshotHash,
+    executionSnapshotId: claimedPrompt.executionSnapshotId,
+  })
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase.query(`UPDATE job_info SET full_text_strategy_id = NULL`).run()
+    sqliteDatabase.query(`UPDATE judgment_outbox SET full_text_strategy_id = NULL`).run()
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  expect(service.getStoredFullTextStrategyId(jobId)).toBeNull()
+  expect((await service.getJobInfo(jobId))?.fullTextStrategyId).toBe('fts-legacy-v0')
+
+  const batch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  expect(
+    batch?.rows.map((row) => {
+      return row.fullTextStrategyId
+    }),
+  ).toEqual(['fts-legacy-v0'])
+
+  await service.fillMissingFullTextStrategyId(jobId, 'fts-0123456789abcdef')
+  await service.fillMissingFullTextStrategyId(jobId, 'fts-fedcba9876543210')
+
+  expect(getSqliteFullTextStrategyIds(jobId)).toEqual({
+    jobInfo: [{fullTextStrategyId: 'fts-0123456789abcdef'}],
+    outbox: [{fullTextStrategyId: null, judgmentId: `${jobId}-judgment`}],
+  })
 })
 
 test('claims, reaps, releases, and completes outbox batches', async () => {
