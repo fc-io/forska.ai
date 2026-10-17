@@ -184,6 +184,18 @@ Optional conversion worker knobs can be passed inline when starting the server. 
 RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true FULL_TEXT_CONVERSION_BATCH_SIZE=5 FULL_TEXT_CONVERSION_CONCURRENCY=2 bun run dev:server
 ```
 
+### Figure descriptions
+
+Projects with figure mode Descriptions need an installation-wide figure-description model (Settings → Figure-description model). The selector lists only enabled models whose capability record accepts image input and whose transport can send images (OpenAI-compatible chat, OpenAI Responses, Anthropic Messages, Gemini). Codex and Claude Code cannot send images yet. None is an explicit choice and makes figure mode Descriptions unavailable.
+
+The cron `full-text-jobs-describe-figures` runs every minute when `RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true` and a figure-description model is set. It describes figures of converted articles that belong to at least one project with figure mode Descriptions, one model call per figure with prompt `fig-desc-v1`, and writes `description`, `descriptionModelId`, `descriptionPromptVersion` and `describedAt` into the article's `full_text_assets` entry. Changing the model or the prompt version re-describes. A failed figure records `descriptionError` and `descriptionAttempts` and is given up after 3 attempts, or at once when the crop is missing or not JPEG/PNG. `POST /api/articles/:id/figure-descriptions/rebuild` clears one article's descriptions and describes it again.
+
+```bash
+RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true FIGURE_DESCRIPTION_BATCH_SIZE=8 FIGURE_DESCRIPTION_CONCURRENCY=2 bun run dev:server
+```
+
+A local vision model through Ollama works, for example `ollama pull qwen3-vl:2b-instruct`, then refresh the Ollama provider's models so the model shows image input.
+
 ## Build
 
 Create a production build:
