@@ -385,6 +385,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['POST', '/api/articles/:id/upload-pdf'],
       ['POST', '/api/articles/:id/convert-pdf'],
       ['POST', '/api/articles/:id/figure-descriptions/rebuild'],
+      ['POST', '/api/articles/:id/canonical-fulltext/rebuild'],
     ],
   ),
   ...ownerDependentProduct('HumanAssessmentRoutes.ts', [
@@ -426,6 +427,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['POST', '/api/provider-connections/:id/sync-models'],
     ['POST', '/api/provider-connections/:id/models'],
     ['PATCH', '/api/models/:id'],
+    ['PATCH', '/api/models/:id/capability-overrides'],
   ]),
   ...internalRuntime('providerAdmissionLeaseRoutes.ts', [
     ['POST', '/api/provideradmissionleases/acquire'],
