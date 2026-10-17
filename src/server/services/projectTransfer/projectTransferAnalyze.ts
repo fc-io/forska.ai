@@ -743,9 +743,12 @@ const getJudgmentAnalysisProvenance = (record: Record<string, unknown>) => {
 
 const getCompactJudgmentAnalysisRecord = (record: Record<string, unknown>): ProjectTransferPayloadRecord => {
   return {
+    ...getOptionalAnalysisField(record, 'chunkCount'),
+    ...getOptionalAnalysisField(record, 'chunkPlanHash'),
     ...getOptionalAnalysisField(record, 'chunkingStrategy'),
     contentSettings: record.contentSettings,
     ...getOptionalAnalysisField(record, 'deleteGeneration'),
+    ...getOptionalAnalysisField(record, 'fullTextMode'),
     ...getOptionalAnalysisField(record, 'fullTextStrategyId'),
     [projectTransferJudgmentAnalysisFieldSignatureDigestField]: getProjectTransferJudgmentAnalysisFieldSignatureDigest(
       record as ProjectTransferPayloadRecord,
