@@ -402,3 +402,59 @@ test('the preview lists every missing input and reports no full text when it is 
     strategyLabel: 'no full text',
   })
 })
+
+test('a full-text strategy change marks comparisons linking the project stale', async () => {
+  await setConversionModel(mineruModelId)
+  await insertProject({
+    fullTextStrategyId: 'fts-legacy-v0',
+    id: 'fts-stale-project',
+    useFulltext: true,
+    useFulltextNoImages: false,
+  })
+  await getDatabase().run(`
+    INSERT INTO app.comparison_project (id, name, model_ids, compare_with_humans, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES
+      ('fts-stale-linked', 'Linked comparison', ['${judgeModelId}'], FALSE, FALSE, FALSE, TRUE, FALSE),
+      ('fts-stale-unlinked', 'Unlinked comparison', ['${judgeModelId}'], FALSE, FALSE, FALSE, TRUE, FALSE)
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id)
+    VALUES ('fts-stale-link', 'fts-stale-linked', 'fts-stale-project')
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.comparison_project_serving_generation (
+      comparison_project_id, active_generation, generation_updated_at, serving_status, serving_generation, serving_completed_at
+    )
+    VALUES
+      ('fts-stale-linked', 1, current_timestamp, 'ready', 1, current_timestamp),
+      ('fts-stale-unlinked', 1, current_timestamp, 'ready', 1, current_timestamp)
+  `)
+
+  const getServingStatuses = () => {
+    return getDatabase().queryJson<{comparisonProjectId: string; servingStatus: string}>(`
+      SELECT comparison_project_id AS comparisonProjectId, serving_status AS servingStatus
+      FROM app.comparison_project_serving_generation
+      WHERE comparison_project_id LIKE 'fts-stale-%'
+      ORDER BY comparison_project_id
+    `)
+  }
+  const nameResponse = await requestJson('/api/projects/fts-stale-project/edit', 'PATCH', {name: 'Renamed'})
+
+  expect(nameResponse.status).toBe(200)
+  expect(await getServingStatuses()).toEqual([
+    {comparisonProjectId: 'fts-stale-linked', servingStatus: 'ready'},
+    {comparisonProjectId: 'fts-stale-unlinked', servingStatus: 'ready'},
+  ])
+
+  const strategyResponse = await requestJson('/api/projects/fts-stale-project/edit', 'PATCH', {
+    fullTextChunkPolicy: chunkPolicy,
+    fullTextFigureMode: 'none',
+  })
+
+  expect(strategyResponse.status).toBe(200)
+  expect((await getStoredProject('fts-stale-project'))?.fullTextStrategyId).not.toBe('fts-legacy-v0')
+  expect(await getServingStatuses()).toEqual([
+    {comparisonProjectId: 'fts-stale-linked', servingStatus: 'stale'},
+    {comparisonProjectId: 'fts-stale-unlinked', servingStatus: 'ready'},
+  ])
+})
