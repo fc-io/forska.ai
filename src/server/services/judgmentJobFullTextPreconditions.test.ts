@@ -1,6 +1,7 @@
 import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+import type {FullTextPreconditionModel} from './judgmentJobFullTextPreconditions.ts'
 
 setDefaultTimeout(120_000)
 
@@ -45,6 +46,22 @@ const seedStrategy = async (id: string, inputs: Record<string, unknown>) => {
   `)
 }
 
+const judgeModelMetadata = {
+  capabilityOverrides: {contextWindow: {inputTokens: 32_000}, updatedAt: '2026-10-17T00:00:00.000Z'},
+}
+
+const visionModelMetadata = {discovery: {capabilities: {supportsImageInput: true}}}
+
+const getModel = (modelName: string, metadataJson: unknown): FullTextPreconditionModel => {
+  return {
+    model: {metadataJson, providerKind: 'llamacpp', remoteModelId: modelName},
+    modelName,
+    providerConnectionId: 'llama',
+  }
+}
+
+const models = {'judge-32k': getModel('judge-32k', judgeModelMetadata), 'vlm-a': getModel('vlm-a', visionModelMetadata)}
+
 const seedModel = async (id: string, metadataJson: unknown) => {
   await getDependencies().database.run(`
     INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, metadata_json)
@@ -78,15 +95,11 @@ const stringContaining = (text: string): string => {
   return expect.stringContaining(text) as unknown as string
 }
 
-const getError = (fullTextStrategyId: string, modelId = 'judge-32k') => {
-  return getDependencies()
-    .preconditions.assertFullTextJudgingPreconditions({fullTextStrategyId, modelId})
-    .then(() => {
-      return null
-    })
-    .catch((error: unknown) => {
-      return error as {message: string; status?: number}
-    })
+const getError = (fullTextStrategyId: string, modelId: keyof typeof models = 'judge-32k') => {
+  return getDependencies().preconditions.getFullTextJudgingPreconditionError({
+    fullTextStrategyId,
+    model: models[modelId],
+  })
 }
 
 beforeAll(async () => {
@@ -113,11 +126,8 @@ beforeAll(async () => {
     INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
     VALUES ('llama', 'llamacpp', 'llama', TRUE, 'none', 'http://127.0.0.1:9/v1')
   `)
-  await seedModel('judge-32k', {
-    capabilityOverrides: {contextWindow: {inputTokens: 32_000}, updatedAt: '2026-10-17T00:00:00.000Z'},
-  })
-  await seedModel('vlm-a', {discovery: {capabilities: {supportsImageInput: true}}})
-  await seedModel('vlm-b', {discovery: {capabilities: {supportsImageInput: true}}})
+  await seedModel('vlm-a', visionModelMetadata)
+  await seedModel('vlm-b', visionModelMetadata)
   await seedStrategy('fts-000000000000048a', {
     chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
     figureDescriptionModelId: null,
@@ -145,47 +155,35 @@ afterAll(async () => {
   tempRuntimeRoot.cleanup()
 })
 
-test('no-full-text jobs pass and legacy or incomplete strategies are refused with 409', async () => {
+test('no-full-text jobs pass and legacy or incomplete strategies are refused', async () => {
   expect(await getError('fts-none')).toBeNull()
-  expect(await getError('fts-legacy-v0')).toMatchObject({
-    message: stringContaining('Choose a figure mode and a chunk policy'),
-    status: 409,
-  })
-  expect(await getError('fts-0000000000000bad')).toMatchObject({
-    message: stringContaining('has no stored chunk policy and figure mode'),
-    status: 409,
-  })
-  expect(await getError('fts-00000000000unknown')).toMatchObject({status: 409})
+  expect(await getError('fts-legacy-v0')).toEqual(stringContaining('Choose a figure mode and a chunk policy'))
+  expect(await getError('fts-0000000000000bad')).toEqual(stringContaining('has no stored chunk policy and figure mode'))
+  expect(await getError('fts-00000000000unknown')).toEqual(
+    stringContaining('has no stored chunk policy and figure mode'),
+  )
 })
 
 test('a model window smaller than the chunk policy is refused with both numbers', async () => {
-  expect(await getError('fts-000000000000048a')).toMatchObject({
-    message: stringContaining('judge-32k has a 32000-token input window, smaller than the project'),
-    status: 409,
-  })
+  expect(await getError('fts-000000000000048a')).toEqual(
+    stringContaining('judge-32k has a 32000-token input window, smaller than the project'),
+  )
 })
 
 test('descriptions strategies need the installation figure-description model they were resolved with', async () => {
   await setFigureDescriptionModel(null)
-  expect(await getError('fts-000000000000024a')).toMatchObject({
-    message: stringContaining('no figure-description model is configured'),
-    status: 409,
-  })
+  expect(await getError('fts-000000000000024a')).toEqual(stringContaining('no figure-description model is configured'))
 
   await setFigureDescriptionModel('vlm-b')
-  expect(await getError('fts-000000000000024a')).toMatchObject({
-    message: stringContaining("the installation's figure-description model is model vlm-b (fig-desc-v1)"),
-    status: 409,
-  })
+  expect(await getError('fts-000000000000024a')).toEqual(
+    stringContaining("the installation's figure-description model is model vlm-b (fig-desc-v1)"),
+  )
 
   await setFigureDescriptionModel('vlm-a')
   expect(await getError('fts-000000000000024a')).toBeNull()
 })
 
 test('native-images strategies need a model that accepts images', async () => {
-  expect(await getError('fts-00000000000img24')).toMatchObject({
-    message: stringContaining('Model judge-32k cannot receive images'),
-    status: 409,
-  })
+  expect(await getError('fts-00000000000img24')).toEqual(stringContaining('Model judge-32k cannot receive images'))
   expect(await getError('fts-00000000000img24', 'vlm-a')).toBeNull()
 })
