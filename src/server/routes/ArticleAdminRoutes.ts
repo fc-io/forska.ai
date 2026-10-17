@@ -5,8 +5,11 @@ import path from 'path'
 import {emptyArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {getFigureDescriptionConcurrency} from '../cron/figureDescriptionJobs.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
-import {fullTextFigureModes} from '../fullText/canonicalFullText.ts'
-import {rebuildCanonicalFullText, storeConvertedFullText} from '../fullText/canonicalFullTextStore.ts'
+import {
+  canonicalFullTextStoredForm,
+  rebuildCanonicalFullText,
+  storeConvertedFullText,
+} from '../fullText/canonicalFullTextStore.ts'
 import {convertArticlePdf, isPermanentConversionFailure} from '../fullText/converters/fullTextConverter.ts'
 import {ensureFigureDescriptions, resetFigureDescriptions} from '../fullText/figureDescriptionStore.ts'
 import {
@@ -22,6 +25,7 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
+import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {resolveRuntimeWritablePath} from '../utils/runtimeWritablePath.ts'
 
@@ -350,16 +354,16 @@ export const articleAdminRoutes = new Elysia()
   .post(
     '/api/articles/:id/canonical-fulltext/rebuild',
     async ({body, params}) => {
-      return rebuildCanonicalFullText({articleId: params.id, figureMode: body.figureMode})
+      const requestedForm = body?.figureMode ?? canonicalFullTextStoredForm
+
+      if (requestedForm !== canonicalFullTextStoredForm) {
+        throw new HttpError(
+          400,
+          `Canonical full text is always stored with figure markers; figure mode ${requestedForm} is applied when judging. Omit figureMode or send '${canonicalFullTextStoredForm}'.`,
+        )
+      }
+
+      return rebuildCanonicalFullText({articleId: params.id})
     },
-    {
-      body: t.Object({
-        figureMode: t.Union(
-          fullTextFigureModes.map((figureMode) => {
-            return t.Literal(figureMode)
-          }),
-        ),
-      }),
-      params: t.Object({id: t.String()}),
-    },
+    {body: t.Optional(t.Object({figureMode: t.Optional(t.String())})), params: t.Object({id: t.String()})},
   )

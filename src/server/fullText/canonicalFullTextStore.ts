@@ -36,16 +36,24 @@ type StoredCanonicalArticle = {
   fullTextFigureModeBuilt: string | null
 }
 
+export const canonicalFullTextStoredForm = 'markers'
+
+export const markerFormFigureModesBuilt = [canonicalFullTextStoredForm, 'native_images'] as const
+
 export type CanonicalFullTextRebuildResult = {
   articleId: string
   changed: boolean
-  figureMode: FullTextFigureMode
+  form: typeof canonicalFullTextStoredForm
   hash: string
   stats: CanonicalFullTextStats
   version: string
 }
 
-export const conversionCanonicalFigureMode: FullTextFigureMode = 'none'
+const storedFormFigureMode: FullTextFigureMode = 'native_images'
+
+export const isMarkerFormFigureModeBuilt = (value: string | null | undefined): boolean => {
+  return (markerFormFigureModesBuilt as readonly string[]).includes(value ?? '')
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -56,7 +64,7 @@ const getCanonicalFullTextSetSql = (canonical: CanonicalFullText): string => {
     `full_text = ${getSqlLiteral(canonical.text)}`,
     `full_text_canonical_hash = ${getSqlLiteral(canonical.hash)}`,
     `full_text_canonical_version = ${getSqlLiteral(canonical.version)}`,
-    `full_text_figure_mode_built = ${getSqlLiteral(canonical.figureMode)}`,
+    `full_text_figure_mode_built = ${getSqlLiteral(canonicalFullTextStoredForm)}`,
     `full_text_char_count = ${canonical.text.length}`,
   ].join(',\n')
 }
@@ -76,7 +84,7 @@ export const storeConvertedFullText = async ({
   runtimeConfig: FullTextConversionRuntimeConfig
   workloadContext?: DuckdbWorkloadContext
 }): Promise<CanonicalFullText> => {
-  const canonical = buildCanonicalFullTextFromConversion({figureMode: conversionCanonicalFigureMode, result})
+  const canonical = buildCanonicalFullTextFromConversion({figureMode: storedFormFigureMode, result})
   const sourceUpdatedAt = new Date()
   const valueHash = getArticleReviewServingMutationValueHash({html: result.html, md: canonical.text})
 
@@ -197,7 +205,7 @@ const isStoredCanonicalCurrent = (article: StoredCanonicalArticle, canonical: Ca
   return (
     article.fullTextCanonicalHash === canonical.hash
     && article.fullTextCanonicalVersion === canonical.version
-    && article.fullTextFigureModeBuilt === canonical.figureMode
+    && isMarkerFormFigureModeBuilt(article.fullTextFigureModeBuilt)
   )
 }
 
@@ -214,7 +222,7 @@ const writeRebuiltCanonicalFullText = async (articleId: string, canonical: Canon
     await appendArticleReviewServingDeltas(tx, {
       articleId,
       changedFields: ['fullText'],
-      sourceMutationKey: `canonicalFullText.rebuild|article|${articleId}|${canonical.figureMode}|${sourceUpdatedAt.toISOString()}|${canonical.hash}`,
+      sourceMutationKey: `canonicalFullText.rebuild|article|${articleId}|${canonicalFullTextStoredForm}|${sourceUpdatedAt.toISOString()}|${canonical.hash}`,
       sourceOperation: 'update',
       sourceUpdatedAt,
     })
@@ -224,11 +232,9 @@ const writeRebuiltCanonicalFullText = async (articleId: string, canonical: Canon
 export const rebuildCanonicalFullText = async ({
   articleId,
   cwd,
-  figureMode,
 }: {
   articleId: string
   cwd?: string
-  figureMode: FullTextFigureMode
 }): Promise<CanonicalFullTextRebuildResult> => {
   const article = await getStoredCanonicalArticle(articleId)
   const {converterKind, layoutPath} = getStoredConversionInputs(articleId, article.fullTextConversionMetadata)
@@ -236,7 +242,7 @@ export const rebuildCanonicalFullText = async ({
   const canonical = buildCanonicalFullText({
     assets: getStoredAssets(articleId, article.fullTextAssets),
     converterKind,
-    figureMode,
+    figureMode: storedFormFigureMode,
     layout,
   })
   const changed = !isStoredCanonicalCurrent(article, canonical)
@@ -248,7 +254,7 @@ export const rebuildCanonicalFullText = async ({
   return {
     articleId,
     changed,
-    figureMode: canonical.figureMode,
+    form: canonicalFullTextStoredForm,
     hash: canonical.hash,
     stats: canonical.stats,
     version: canonical.version,
