@@ -16,6 +16,7 @@ import {
 } from '../../../../services/comparisonProjectsService'
 import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
+import {getComparisonProjectFullTextStrategyMixError} from '../../../../utils/comparisonProjectFullTextStrategyMix.ts'
 
 type ModelOption = {
   id: string
@@ -129,7 +130,7 @@ const getResolvedModelIdsForUpdate = async (selectedModelIds: string[], availabl
   return Array.from(new Set(resolvedModelIds))
 }
 
-const EditComparisonProjectPage = () => {
+export const EditComparisonProjectPage = () => {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const params = Route.useParams()
@@ -298,12 +299,46 @@ const EditComparisonProjectPage = () => {
 
     return reason ? `${invalidSourceProject.name}: ${reason}` : null
   })
+  const getSubmittedHumanJudgmentMode = (): HumanJudgmentMode => {
+    return compareWithHumans()
+      ? isSourceProjectBacked()
+        ? summaryModeEnabled()
+          ? 'summary'
+          : 'prompt'
+        : humanJudgmentMode()
+      : 'prompt'
+  }
+  const getSubmittedSourceProjects = () => {
+    const sourceProject = selectedSourceProject()
+
+    return sourceProject
+      ? getSubmittedHumanJudgmentMode() === 'summary'
+        ? [sourceProject, ...selectedAdditionalSourceProjects()]
+        : [sourceProject]
+      : []
+  }
+  const hasSubmittedSourceProjectSetChanged = () => {
+    const submittedIds = getSubmittedSourceProjects()
+      .map((sourceProject) => {
+        return sourceProject.id
+      })
+      .sort()
+    const savedIds = [...(comparisonProjectQuery.data?.sourceProjectIds ?? [])].sort()
+
+    return submittedIds.join(',') !== savedIds.join(',')
+  }
+  const fullTextStrategyValidationError = () => {
+    return isSourceProjectBacked() && hasSubmittedSourceProjectSetChanged()
+      ? getComparisonProjectFullTextStrategyMixError(getSubmittedSourceProjects())
+      : null
+  }
   const canSubmit = createMemo(() => {
     return Boolean(
       comparisonProjectName().trim()
       && hasComparableContentOptions()
       && (!isSourceProjectBacked() || selectedSourceProject())
       && (!summaryModeEnabled() || (!summaryModeUnavailableReason() && !additionalProjectValidationError()))
+      && !fullTextStrategyValidationError()
       && !isLoading(),
     )
   })
@@ -370,22 +405,19 @@ const EditComparisonProjectPage = () => {
       return
     }
 
+    const strategyValidationError = fullTextStrategyValidationError()
+
+    if (strategyValidationError) {
+      setError(strategyValidationError)
+      return
+    }
+
     setIsLoading(true)
 
     try {
       const sourceProject = selectedSourceProject()
-      const selectedHumanJudgmentMode = compareWithHumans()
-        ? isSourceProjectBacked()
-          ? summaryModeEnabled()
-            ? 'summary'
-            : 'prompt'
-          : humanJudgmentMode()
-        : 'prompt'
-      const selectedSourceProjects = sourceProject
-        ? selectedHumanJudgmentMode === 'summary'
-          ? [sourceProject, ...selectedAdditionalSourceProjects()]
-          : [sourceProject]
-        : []
+      const selectedHumanJudgmentMode = getSubmittedHumanJudgmentMode()
+      const selectedSourceProjects = getSubmittedSourceProjects()
       const resolvedModelIds = isSourceProjectBacked()
         ? getUniqueSourceProjectValues(selectedSourceProjects, (selectedProject) => {
             return [selectedProject.modelId]
@@ -603,6 +635,9 @@ const EditComparisonProjectPage = () => {
                                 Content: {formatContentSettings(sourceProject)}
                               </p>
                               <p class="text-xs text-muted-foreground mt-1">
+                                Full text: {sourceProject.fullTextStrategyLabel}
+                              </p>
+                              <p class="text-xs text-muted-foreground mt-1">
                                 Prompts: {sourceProject.prompts.length} · Import routes:{' '}
                                 {sourceProject.importRoutes.length}
                               </p>
@@ -684,6 +719,9 @@ const EditComparisonProjectPage = () => {
                                 Content: {formatContentSettings(sourceProject)}
                               </p>
                               <p class="text-xs text-muted-foreground mt-1">
+                                Full text: {sourceProject.fullTextStrategyLabel}
+                              </p>
+                              <p class="text-xs text-muted-foreground mt-1">
                                 Summary prompts: {getSummaryPrompts(sourceProject).length} · Import routes:{' '}
                                 {sourceProject.importRoutes.length}
                               </p>
@@ -701,6 +739,11 @@ const EditComparisonProjectPage = () => {
 
               <Show when={summaryModeEnabled() && additionalProjectValidationError()}>
                 <p class="text-sm text-red-600">{additionalProjectValidationError()}</p>
+              </Show>
+              <Show when={fullTextStrategyValidationError()}>
+                <p class="text-sm text-red-600" data-testid="comparison-full-text-strategy-error">
+                  {fullTextStrategyValidationError()}
+                </p>
               </Show>
             </Show>
 

@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {
+  buildJobsFullTextGateBanner,
   buildJobsModelContextWindowBanner,
   buildJobsProviderHealthBanner,
   formatJudgmentJobStopReason,
@@ -482,4 +483,60 @@ test('buildJobsModelContextWindowBanner groups jobs by missing-window message an
     ],
     title: 'Model context window missing',
   })
+})
+
+test('buildJobsFullTextGateBanner groups errors before warnings and skips the context-window message', () => {
+  const contextWindowMessage = 'Model Qwen (llmstudio) has no verified context window. Add it on the Models page.'
+  const windowError =
+    "Model Judge (sglang) accepts 32,768 prompt tokens, fewer than the chunk policy's 48,000-token prompt size."
+  const healthWarning =
+    'PDF-to-text model MinerU standard: The last health check of MinerU failed. Conversion will not run until the server is reachable.'
+  const banner = buildJobsFullTextGateBanner([
+    {
+      fullTextGate: {errors: [windowError], warnings: [healthWarning]},
+      id: 'job-b',
+      projectName: 'Beta',
+      status: 'paused',
+    },
+    {fullTextGate: {errors: [], warnings: [healthWarning]}, id: 'job-a', projectName: 'Alpha', status: 'running'},
+    {
+      fullTextGate: {errors: [contextWindowMessage], warnings: []},
+      id: 'job-c',
+      modelContextWindow: {
+        linkPath: null,
+        linkText: 'Models page',
+        message: contextWindowMessage,
+        modelName: 'Qwen',
+        providerKind: 'llmstudio',
+      },
+      projectName: 'Gamma',
+      status: 'paused',
+    },
+    {fullTextGate: {errors: [], warnings: []}, id: 'job-d', projectName: 'Delta', status: 'running'},
+  ] as never)
+
+  expect(banner).toEqual({
+    groups: [
+      {jobs: [{id: 'job-b', projectName: 'Beta', status: 'paused'}], message: windowError, tone: 'rose'},
+      {
+        jobs: [
+          {id: 'job-a', projectName: 'Alpha', status: 'running'},
+          {id: 'job-b', projectName: 'Beta', status: 'paused'},
+        ],
+        message: healthWarning,
+        tone: 'amber',
+      },
+    ],
+    title: 'Full-text checks',
+    tone: 'rose',
+  })
+})
+
+test('buildJobsFullTextGateBanner is amber with warnings only and absent without messages', () => {
+  expect(
+    buildJobsFullTextGateBanner([
+      {fullTextGate: {errors: [], warnings: ['warning']}, id: 'job-a', projectName: 'Alpha', status: 'paused'},
+    ] as never)?.tone,
+  ).toBe('amber')
+  expect(buildJobsFullTextGateBanner([{id: 'job-a', projectName: 'Alpha', status: 'paused'}])).toBeNull()
 })

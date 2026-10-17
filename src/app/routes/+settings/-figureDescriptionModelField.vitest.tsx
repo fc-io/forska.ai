@@ -40,6 +40,11 @@ vi.mock('../../../services/apiClient', () => {
               return optionsResponse.current
             },
           },
+          'full-text-model-status': {
+            get: async () => {
+              return {data: {data: null}}
+            },
+          },
         },
       },
     },

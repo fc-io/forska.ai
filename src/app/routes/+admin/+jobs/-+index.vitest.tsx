@@ -325,3 +325,54 @@ describe('judgment jobs list full-text strategy', () => {
     }
   })
 })
+
+describe('judgment jobs list full-text gate banner', () => {
+  test('shows gate errors as blocking and warnings separately with links to the affected jobs', async () => {
+    const windowError =
+      "Model Judge (sglang) accepts 32,768 prompt tokens, fewer than the chunk policy's 48,000-token prompt size. Choose a smaller prompt size or another model, or correct its context window on the Models page."
+    const healthWarning =
+      'PDF-to-text model MinerU standard: The last health check of MinerU failed at 2026-10-17 20:15 UTC: connect ECONNREFUSED. Conversion will not run until the server is reachable.'
+
+    mockState.jobs = [
+      {
+        ...buildJob({id: 'job-blocked', projectName: 'Blocked project', status: 'paused'}),
+        fullTextGate: {errors: [windowError], warnings: [healthWarning]},
+      },
+      {...buildJob({id: 'job-plain', projectName: 'Plain project'}), fullTextGate: {errors: [], warnings: []}},
+    ]
+    const {cleanup, container} = await renderJobsPage()
+
+    try {
+      const banner = container.querySelector('[data-testid="jobs-full-text-gate-banner"]')
+      const groups = Array.from(banner?.querySelectorAll('[data-tone]') ?? []).map((group) => {
+        return {
+          links: Array.from(group.querySelectorAll('a')).map((link) => {
+            return link.getAttribute('href')
+          }),
+          text: group.querySelector('p')?.textContent,
+          tone: group.getAttribute('data-tone'),
+        }
+      })
+
+      expect(banner?.className).toContain('border-rose-200 bg-rose-50 text-rose-900')
+      expect(banner?.textContent).toContain('Full-text checks')
+      expect(groups).toEqual([
+        {links: ['/admin/jobs/job-blocked'], text: `Blocks judging: ${windowError}`, tone: 'rose'},
+        {links: ['/admin/jobs/job-blocked'], text: `Warning: ${healthWarning}`, tone: 'amber'},
+      ])
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('stays hidden when no job has full-text messages', async () => {
+    mockState.jobs = [buildJob({id: 'job-plain', projectName: 'Plain project'})]
+    const {cleanup, container} = await renderJobsPage()
+
+    try {
+      expect(container.querySelector('[data-testid="jobs-full-text-gate-banner"]')).toBeNull()
+    } finally {
+      cleanup()
+    }
+  })
+})

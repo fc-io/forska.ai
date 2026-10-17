@@ -323,6 +323,40 @@ describe('judgment job detail full-text strategy', () => {
   })
 })
 
+describe('judgment job detail full-text gate', () => {
+  test('shows the blocking full-text errors and warnings the jobs list shows', async () => {
+    const windowError =
+      "Model Judge (sglang) accepts 32,768 prompt tokens, fewer than the chunk policy's 48,000-token prompt size. Choose a smaller prompt size or another model, or correct its context window on the Models page."
+    const healthWarning =
+      'PDF-to-text model MinerU standard: The last health check of MinerU failed at 2026-10-17 20:15 UTC: connect ECONNREFUSED. Conversion will not run until the server is reachable.'
+
+    mockState.job = {...buildJob(null), fullTextGate: {errors: [windowError], warnings: [healthWarning]}}
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      const notice = container.querySelector('[data-testid="job-full-text-gate"]')
+      const blocking = notice?.querySelector('[role="alert"]')
+
+      expect(blocking?.className).toContain('border-rose-200 bg-rose-50 text-rose-900')
+      expect(blocking?.textContent).toBe(`Full-text checks block judging${windowError}`)
+      expect(notice?.textContent).toContain(`Full-text warnings${healthWarning}`)
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('shows no full-text notice when the gate is empty or missing', async () => {
+    mockState.job = {...buildJob(null), fullTextGate: {errors: [], warnings: []}}
+    const empty = await renderJobDetailPage()
+
+    try {
+      expect(empty.container.querySelector('[data-testid="job-full-text-gate"]')).toBeNull()
+    } finally {
+      empty.cleanup()
+    }
+  })
+})
+
 describe('judgment job detail action feedback', () => {
   test('shows a failed repair result as an error instead of a success notice', async () => {
     const message = 'SQLite job DB is missing. Run Preflight after restoring the file.'

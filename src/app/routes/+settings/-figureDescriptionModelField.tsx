@@ -3,6 +3,7 @@ import {For, Show, splitProps} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
+import {FullTextModelStatusNotice} from './-fullTextModelStatusNotice'
 
 export type FigureDescriptionModelOption = {
   capabilitySource: string
@@ -82,6 +83,7 @@ export const FigureDescriptionModelField = (props: {onChange: (value: string) =>
           }}
         </For>
       </select>
+      <FullTextModelStatusNotice modelId={local.value} role="figure_description" />
       <Show when={optionsQuery.isLoading}>
         <p class="mt-2 text-xs text-gray-500">Loading image-capable models...</p>
       </Show>

@@ -159,8 +159,10 @@ const getDefaultFullTextPreview = () => {
   return {
     current: {judgmentCount: 0, strategyId: 'fts-none', strategyLabel: 'no full text'},
     errors: [],
+    recordStrategyOnSave: false,
     strategyId: 'fts-none',
     strategyLabel: 'no full text',
+    warnings: [],
   }
 }
 
@@ -399,7 +401,7 @@ vi.mock('../../../../services/apiClient.ts', () => {
             }
           },
           {
-            'full-text-strategy-preview': {
+            'full-text-validation': {
               post: async (payload: unknown) => {
                 mockState.fullTextPreviewPayloads.push(payload)
                 return {data: {data: mockState.fullTextPreview ?? getDefaultFullTextPreview()}}
@@ -1211,8 +1213,10 @@ describe('project edit route regressions', () => {
         strategyLabel: 'mineru 4.0.12 / none / chunked 48k',
       },
       errors: [],
+      recordStrategyOnSave: false,
       strategyId: 'fts-bbbbbbbbbbbbbbbb',
       strategyLabel: 'mineru 4.0.12 / none / chunked 96k',
+      warnings: [],
     }
 
     const {cleanup, container} = await mountEditRoute(projectId)
@@ -1230,6 +1234,7 @@ describe('project edit route regressions', () => {
       expect(lastPreviewPayload).toEqual({
         fullTextChunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
         fullTextFigureMode: 'none',
+        modelId: 'model-1',
         projectId,
         useFulltext: true,
       })
@@ -1254,7 +1259,7 @@ describe('project edit route regressions', () => {
     }
   })
 
-  test('a judged full-text project shows its stored strategy read-only and asks for no preview', async () => {
+  test('a judged full-text project shows its stored strategy read-only and still validates it', async () => {
     const projectId = 'project-strategy-locked'
     const details = buildProjectDetails(projectId)
 
@@ -1286,7 +1291,99 @@ describe('project edit route regressions', () => {
           return radio.closest('fieldset')?.disabled === true
         }),
       ).toBe(true)
-      expect(mockState.fullTextPreviewPayloads).toHaveLength(0)
+      expect(mockState.fullTextPreviewPayloads.at(-1)).toMatchObject({projectId, useFulltext: true})
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('full-text gate errors disable submit on an editable project', async () => {
+    const projectId = 'project-gate-errors'
+    const details = buildProjectDetails(projectId)
+    const gateError = 'Model GPT Test (openai-compatible) has no verified context window. Add it on the Models page.'
+
+    mockState.projectDetailsById[projectId] = {
+      ...details,
+      project: {
+        ...details.project,
+        fullTextChunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+        fullTextFigureMode: 'none',
+        fullTextStrategyId: 'fts-aaaaaaaaaaaaaaaa',
+        fullTextStrategyLabel: 'mineru 4.0.12 / none / chunked 48k',
+        useFulltext: true,
+      },
+    }
+    mockState.fullTextPreview = {
+      ...getDefaultFullTextPreview(),
+      errors: [gateError],
+      strategyId: null,
+      strategyLabel: null,
+    }
+
+    const {cleanup, container} = await mountEditRoute(projectId)
+
+    try {
+      await waitForUpdates()
+
+      expect(container.querySelector('[data-testid="full-text-strategy-errors"]')?.textContent).toContain(gateError)
+      expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true)
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('a judged project with a drifted strategy shows the warning, keeps submit enabled and records on save', async () => {
+    const projectId = 'project-strategy-drift'
+    const details = buildProjectDetails(projectId)
+    const driftWarning =
+      'Full-text settings changed since the project was saved: it records mineru 4.0.11 / none / chunked 48k (fts-aaaaaaaaaaaaaaaa), current settings resolve to mineru 4.0.12 / none / chunked 48k (fts-bbbbbbbbbbbbbbbb); differing inputs: converterVersion. Saving this page records the new strategy; then start the judgment job clean.'
+
+    mockState.projectDetailsById[projectId] = {
+      ...details,
+      hasJudgedArticles: true,
+      project: {
+        ...details.project,
+        fullTextChunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+        fullTextFigureMode: 'none',
+        fullTextStrategyId: 'fts-aaaaaaaaaaaaaaaa',
+        fullTextStrategyLabel: 'mineru 4.0.11 / none / chunked 48k',
+        useFulltext: true,
+      },
+    }
+    mockState.fullTextPreview = {
+      current: {
+        judgmentCount: 0,
+        strategyId: 'fts-aaaaaaaaaaaaaaaa',
+        strategyLabel: 'mineru 4.0.11 / none / chunked 48k',
+      },
+      errors: [],
+      recordStrategyOnSave: true,
+      strategyId: 'fts-bbbbbbbbbbbbbbbb',
+      strategyLabel: 'mineru 4.0.12 / none / chunked 48k',
+      warnings: [driftWarning],
+    }
+
+    const {cleanup, container} = await mountEditRoute(projectId)
+
+    try {
+      await waitForUpdates()
+
+      expect(container.querySelector('[data-testid="full-text-validation-warnings"]')?.textContent).toContain(
+        driftWarning,
+      )
+      expect(container.textContent).toContain('content and full-text settings are locked')
+      expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false)
+
+      container
+        .querySelector<HTMLFormElement>('form')
+        ?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await waitForUpdates()
+
+      const payload = mockState.editPayloads[0] as Record<string, unknown>
+
+      expect(payload.recordCurrentFullTextStrategy).toBe(true)
+      expect(payload).not.toHaveProperty('fullTextFigureMode')
+      expect(payload).not.toHaveProperty('modelId')
     } finally {
       cleanup()
     }

@@ -1,5 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
-import {Show, splitProps} from 'solid-js'
+import {createEffect, Show, splitProps} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
@@ -8,6 +8,7 @@ import {
   type FullTextChunkMode,
   type FullTextChunkPolicy,
   type FullTextFigureMode,
+  fullTextStrategyErrorMessages,
 } from '../../../utils/fullTextStrategyOptions.ts'
 import {
   type FullTextStrategyChoice,
@@ -15,8 +16,10 @@ import {
 } from './fullTextStrategySettings/fullTextStrategyChoiceGroup.tsx'
 import {
   FullTextStrategyPreview,
-  type FullTextStrategyPreviewData,
+  type ProjectFullTextValidation,
 } from './fullTextStrategySettings/fullTextStrategyPreview.tsx'
+
+export type {ProjectFullTextValidation}
 
 export type FullTextStrategySelection = {
   chunkMode: FullTextChunkMode | null
@@ -28,10 +31,14 @@ export type FullTextStrategySelection = {
 type FullTextStrategySettingsProps = {
   disabled?: boolean
   lockedStrategy?: {id: string | null; label: string | null}
+  modelId: string
   onChange: (selection: FullTextStrategySelection) => void
+  onValidationChange?: (validation: ProjectFullTextValidation | undefined) => void
   projectId?: string
   selection: FullTextStrategySelection
 }
+
+type ProjectFullTextValidationInput = {modelId: string | null; projectId?: string; selection: FullTextStrategySelection}
 
 type ProjectFullTextSettings = {
   fullTextChunkPolicy?: FullTextChunkPolicy | null
@@ -102,48 +109,77 @@ export const getFullTextStrategySelectionPayload = (selection: FullTextStrategyS
 }
 
 export const getFullTextSelectionError = (selection: FullTextStrategySelection) => {
-  const missing = [
-    selection.figureMode ? null : 'a figure mode',
-    getFullTextChunkPolicyFromSelection(selection)
-      ? null
-      : 'a chunk policy (prompt size and what happens when an article does not fit)',
-  ].filter((part): part is string => {
+  const missingMessages: Array<string | null> = [
+    selection.figureMode ? null : fullTextStrategyErrorMessages.figureModeMissing,
+    getFullTextChunkPolicyFromSelection(selection) ? null : fullTextStrategyErrorMessages.chunkPolicyMissing,
+  ]
+  const missing = missingMessages.filter((part): part is string => {
     return part !== null
   })
 
-  return selection.useFulltext && missing.length > 0 ? `Full text needs ${missing.join(' and ')}.` : null
+  return selection.useFulltext && missing.length > 0 ? missing.join(' ') : null
 }
 
-const fetchFullTextStrategyPreview = async (selection: FullTextStrategySelection, projectId: string | undefined) => {
-  const response = await apiClient.api.projects['full-text-strategy-preview'].post({
+export const getFullTextValidationBlocksSubmit = (
+  selection: FullTextStrategySelection,
+  validation: ProjectFullTextValidation | undefined,
+) => {
+  return selection.useFulltext && (validation?.errors.length ?? 0) > 0
+}
+
+const fetchProjectFullTextValidation = async ({modelId, projectId, selection}: ProjectFullTextValidationInput) => {
+  const response = await apiClient.api.projects['full-text-validation'].post({
     ...getFullTextStrategySelectionPayload(selection),
+    modelId: modelId || null,
     ...(projectId ? {projectId} : {}),
   })
 
-  return handleApiResponse<{data: FullTextStrategyPreviewData}>(response, 'Failed to resolve the full-text strategy')
+  return handleApiResponse<{data: ProjectFullTextValidation}>(response, 'Failed to validate the full-text settings')
     .data
 }
 
-export const FullTextStrategySettings = (props: FullTextStrategySettingsProps) => {
-  const [local] = splitProps(props, ['disabled', 'lockedStrategy', 'onChange', 'projectId', 'selection'])
-  const previewQuery = useQuery(() => {
+const useProjectFullTextValidationQuery = (input: () => ProjectFullTextValidationInput) => {
+  return useQuery(() => {
+    const {modelId, projectId, selection} = input()
+
     return {
-      enabled: !local.disabled && (local.selection.useFulltext || Boolean(local.projectId)),
+      enabled: selection.useFulltext || Boolean(projectId),
       queryFn: () => {
-        return fetchFullTextStrategyPreview(local.selection, local.projectId)
+        return fetchProjectFullTextValidation({modelId, projectId, selection})
       },
       queryKey: [
         'projects',
-        'full-text-strategy-preview',
-        local.projectId ?? null,
-        local.selection.useFulltext,
-        local.selection.figureMode,
-        local.selection.maxPromptTokens,
-        local.selection.chunkMode,
+        'full-text-validation',
+        projectId ?? null,
+        modelId || null,
+        selection.useFulltext,
+        selection.figureMode,
+        selection.maxPromptTokens,
+        selection.chunkMode,
       ],
       suspense: false,
     }
   })
+}
+
+export const FullTextStrategySettings = (props: FullTextStrategySettingsProps) => {
+  const [local] = splitProps(props, [
+    'disabled',
+    'lockedStrategy',
+    'modelId',
+    'onChange',
+    'onValidationChange',
+    'projectId',
+    'selection',
+  ])
+  const validationQuery = useProjectFullTextValidationQuery(() => {
+    return {modelId: local.modelId, projectId: local.projectId, selection: local.selection}
+  })
+
+  createEffect(() => {
+    local.onValidationChange?.(validationQuery.data)
+  })
+
   const update = (patch: Partial<FullTextStrategySelection>) => {
     local.onChange({...local.selection, ...patch})
   }
@@ -202,14 +238,13 @@ export const FullTextStrategySettings = (props: FullTextStrategySettingsProps) =
           />
         </div>
       </Show>
-      <Show when={!local.disabled && (local.selection.useFulltext || local.projectId)}>
-        <FullTextStrategyPreview
-          data={previewQuery.data}
-          isError={previewQuery.isError}
-          isLoading={previewQuery.isLoading}
-          showStrategy={local.selection.useFulltext}
-        />
-      </Show>
+      <FullTextStrategyPreview
+        data={validationQuery.data}
+        isError={validationQuery.isError}
+        isLoading={validationQuery.isLoading}
+        showErrors={local.selection.useFulltext}
+        showStrategy={local.selection.useFulltext && !local.disabled}
+      />
       <Show when={local.disabled && local.lockedStrategy?.id}>
         <p class="text-xs text-gray-700">
           Full-text strategy: <span data-testid="full-text-strategy-label">{local.lockedStrategy?.label}</span>{' '}
