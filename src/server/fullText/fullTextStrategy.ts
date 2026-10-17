@@ -29,6 +29,8 @@ export const FULL_TEXT_TOKENIZER_ID = 'o200k_base'
 
 export const FULL_TEXT_PROMPT_LAYOUT_VERSION = 'layout-v1'
 
+export const IMAGE_TRANSPORT_VERSION = 'img-v1'
+
 export const getFullTextStrategyStableJson = (inputs: FullTextStrategyInputs): string => {
   return JSON.stringify(getSortedJsonValue(inputs))
 }

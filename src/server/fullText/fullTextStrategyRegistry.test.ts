@@ -26,11 +26,11 @@ test('every strategy the shipped constants produce is in the registry', () => {
   ).toEqual([])
 })
 
-test('the shipped constants produce twelve distinct strategies on canonical-v1', () => {
+test('the shipped constants produce twenty-four distinct strategies on canonical-v1', () => {
   const shippedInputs = getShippedFullTextStrategyInputs()
 
-  expect(shippedInputs).toHaveLength(12)
-  expect(new Set(shippedInputs.map(getFullTextStrategyId)).size).toBe(12)
+  expect(shippedInputs).toHaveLength(24)
+  expect(new Set(shippedInputs.map(getFullTextStrategyId)).size).toBe(24)
   expect(
     new Set(
       shippedInputs.map((inputs) => {
@@ -38,6 +38,16 @@ test('the shipped constants produce twelve distinct strategies on canonical-v1',
       }),
     ),
   ).toEqual(new Set(['canonical-v1']))
+})
+
+test('shipped strategies cover figure modes none and native_images; descriptions depends on the installation model', () => {
+  const figureModeTransports = new Set(
+    getShippedFullTextStrategyInputs().map((inputs) => {
+      return `${inputs.figureMode}:${String(inputs.imageTransportVersion)}`
+    }),
+  )
+
+  expect(figureModeTransports).toEqual(new Set(['native_images:img-v1', 'none:null']))
 })
 
 test('registry entries are self-consistent, unique and dated', () => {
