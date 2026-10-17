@@ -4,7 +4,12 @@ import {dirname} from 'node:path'
 
 import {Database} from 'bun:sqlite'
 
+import {
+  getJudgmentFullTextExecution,
+  getJudgmentFullTextExecutionForStrategy,
+} from '../../../agent/judge/judgmentFullTextExecution.ts'
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
+import type {JudgmentsJobsPromptsSkipReason} from '../../../db/schemaTypes.ts'
 import {
   FULL_TEXT_STRATEGY_NONE,
   getLegacyFullTextStrategyId,
@@ -215,10 +220,13 @@ type QueuePromptOutboxInsert = {
   answeredOriginal: string | null
   answeredOriginalAsArray: string[]
   articleId: string
+  chunkCount?: number | null
+  chunkPlanHash?: string | null
   chunkingStrategy: string | null
   confidenceOriginal: number
   createdAt: Date
   explanation: string | null
+  fullTextMode?: string | null
   fullTextStrategyId?: string | null
   isAnswered: boolean
   judgmentId: string
@@ -248,10 +256,13 @@ type OutboxRow = {
   answeredOriginal: string | null
   answeredOriginalAsArray: string | null
   articleId: string
+  chunkCount: number | null
+  chunkPlanHash: string | null
   chunkingStrategy: string | null
   confidenceOriginal: number
   createdAt: string
   explanation: string | null
+  fullTextMode: string | null
   fullTextStrategyId: string | null
   jobId: string
   judgmentId: string
@@ -281,10 +292,13 @@ export type JudgmentJobSqliteOutboxEntry = {
   answeredOriginal: string | null
   answeredOriginalAsArray: string[]
   articleId: string
+  chunkCount?: number | null
+  chunkPlanHash?: string | null
   chunkingStrategy: string | null
   confidenceOriginal: number
   createdAt: Date
   explanation: string | null
+  fullTextMode?: string | null
   fullTextStrategyId: string
   isAnswered: boolean
   jobId: string
@@ -914,6 +928,9 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       system_prompt_variant TEXT,
       full_text_strategy_id TEXT,
       chunking_strategy TEXT,
+      full_text_mode TEXT,
+      chunk_count INTEGER,
+      chunk_plan_hash TEXT,
       is_answered INTEGER NOT NULL,
       answered_original TEXT,
       answered_original_as_array TEXT,
@@ -1077,6 +1094,9 @@ const judgmentJobSqliteRequiredSchema = {
     'use_metadata',
     'system_prompt_variant',
     'full_text_strategy_id',
+    'full_text_mode',
+    'chunk_count',
+    'chunk_plan_hash',
     'created_at',
     'updated_at',
     'exported_at',
@@ -1133,6 +1153,9 @@ const judgmentOutboxColumns = [
   {name: 'system_prompt_variant', sql: 'TEXT'},
   {name: 'use_metadata', sql: 'INTEGER NOT NULL DEFAULT 0'},
   {name: 'full_text_strategy_id', sql: 'TEXT'},
+  {name: 'full_text_mode', sql: 'TEXT'},
+  {name: 'chunk_count', sql: 'INTEGER'},
+  {name: 'chunk_plan_hash', sql: 'TEXT'},
 ] as const
 
 const completionAckColumns = [
@@ -2633,6 +2656,7 @@ const getOutboxEntry = (row: OutboxRow) => {
     answeredOriginal: row.answeredOriginal,
     answeredOriginalAsArray: parseStringArrayText(row.answeredOriginalAsArray),
     articleId: row.articleId,
+    ...getJudgmentFullTextExecution(row),
     chunkingStrategy: row.chunkingStrategy,
     confidenceOriginal: Number(row.confidenceOriginal ?? 0),
     createdAt: getDateValue(row.createdAt) ?? new Date(0),
@@ -3214,6 +3238,9 @@ const getClaimableOutboxRows = (database: Database, limit: number, exactRequestA
           ) AS systemPromptVariant,
           full_text_strategy_id AS fullTextStrategyId,
           chunking_strategy AS chunkingStrategy,
+          full_text_mode AS fullTextMode,
+          chunk_count AS chunkCount,
+          chunk_plan_hash AS chunkPlanHash,
           answered_original AS answeredOriginal,
           answered_original_as_array AS answeredOriginalAsArray,
           confidence_original AS confidenceOriginal,
@@ -3268,6 +3295,9 @@ const getClaimedOutboxRows = (database: Database, claimId: string) => {
           ) AS systemPromptVariant,
           full_text_strategy_id AS fullTextStrategyId,
           chunking_strategy AS chunkingStrategy,
+          full_text_mode AS fullTextMode,
+          chunk_count AS chunkCount,
+          chunk_plan_hash AS chunkPlanHash,
           answered_original AS answeredOriginal,
           answered_original_as_array AS answeredOriginalAsArray,
           confidence_original AS confidenceOriginal,
@@ -6632,7 +6662,7 @@ const sqliteService = {
   markPromptAsSkipped: async (
     jobId: string,
     recordId: string,
-    skipReason: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext',
+    skipReason: JudgmentsJobsPromptsSkipReason,
     completionAck?: PromptCompletionAck,
   ) => {
     await withOwnedJobDatabase(jobId, false, (database) => {
@@ -6683,6 +6713,8 @@ const sqliteService = {
           assertPromptClaimIdentityFromDatabase(database, expectedIdentity, options)
         }
 
+        const fullTextExecution = getJudgmentFullTextExecutionForStrategy(fullTextStrategyId, input)
+
         const insertResult = database
           .query(
             `
@@ -6707,6 +6739,9 @@ const sqliteService = {
             system_prompt_variant,
             full_text_strategy_id,
             chunking_strategy,
+            full_text_mode,
+            chunk_count,
+            chunk_plan_hash,
             is_answered,
             answered_original,
             answered_original_as_array,
@@ -6717,7 +6752,7 @@ const sqliteService = {
             request_attempts_json,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
           )
           .run(
@@ -6741,6 +6776,9 @@ const sqliteService = {
             getOutboxSystemPromptVariantFromDatabase(database, jobId, input.systemPromptVariant),
             fullTextStrategyId,
             input.chunkingStrategy,
+            fullTextExecution.fullTextMode,
+            fullTextExecution.chunkCount,
+            fullTextExecution.chunkPlanHash,
             Number(input.isAnswered),
             input.answeredOriginal,
             JSON.stringify(input.answeredOriginalAsArray),

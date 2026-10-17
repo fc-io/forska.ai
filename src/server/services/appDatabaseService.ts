@@ -44,6 +44,9 @@ export type JudgmentInsertRow = {
   systemPromptVariant: SystemPromptVariant
   fullTextStrategyId: string
   chunkingStrategy: string | null
+  fullTextMode?: string | null
+  chunkCount?: number | null
+  chunkPlanHash?: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
   createdAt: Date
@@ -101,7 +104,7 @@ const getAppendJudgmentRowPlaceholders = () => {
     ?, ?, ?, (?::JSON)::VARCHAR[],
     ?, ?, ?::JSON,
     ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?,
+    ?, ?, ?, ?, ?, ?,
     ?::TIMESTAMPTZ, ?::TIMESTAMPTZ
   )`
 }
@@ -127,6 +130,9 @@ const getAppendJudgmentParameters = (row: JudgmentInsertRow) => {
     row.systemPromptVariant,
     row.fullTextStrategyId,
     row.chunkingStrategy,
+    row.fullTextMode ?? null,
+    row.chunkCount ?? null,
+    row.chunkPlanHash ?? null,
     row.snapshotProjectId,
     row.snapshotProjectModelName,
     row.createdAt.toISOString(),
@@ -162,6 +168,9 @@ const getAppendJudgmentsSql = (rows: JudgmentInsertRow[]) => {
       system_prompt_variant,
       full_text_strategy_id,
       chunking_strategy,
+      full_text_mode,
+      chunk_count,
+      chunk_plan_hash,
       snapshot_project_id,
       snapshot_project_model_name,
       created_at,

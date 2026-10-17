@@ -4,6 +4,7 @@ import {dirname} from 'node:path'
 import {Database} from 'bun:sqlite'
 
 import type {SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
+import type {JudgmentsJobsPromptsSkipReason} from '../../../db/schemaTypes.ts'
 import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
 import {getLegacyFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
@@ -85,12 +86,15 @@ export type JudgeWorkerCompletionPayload = {
   answeredOriginal?: unknown
   answeredOriginalAsArray?: unknown
   articleId: string
+  chunkCount?: number | null
+  chunkPlanHash?: string | null
   chunkingStrategy?: string | null
   claimId: string
   confidenceOriginal?: number
   executionSnapshotHash: string
   executionSnapshotId: string
   explanation?: string | null
+  fullTextMode?: string | null
   fullTextStrategyId?: string | null
   isAnswered?: boolean
   jobId: string
@@ -104,7 +108,7 @@ export type JudgeWorkerCompletionPayload = {
   rawResponseJson?: unknown
   requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
   retryAfterMs?: number | null
-  skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
+  skipReason?: JudgmentsJobsPromptsSkipReason
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
   systemPromptVariant?: SystemPromptVariant | null
   useAbstract: boolean
@@ -2071,8 +2075,11 @@ const applyJudgedCompletionLocally = async (
     answeredOriginalAsArray: getCompletionAnsweredOriginalAsArray(payload),
     articleId: payload.articleId,
     claimId: payload.claimId,
+    chunkCount: payload.chunkCount ?? null,
+    chunkPlanHash: payload.chunkPlanHash ?? null,
     chunkingStrategy: payload.chunkingStrategy ?? null,
     confidenceOriginal: payload.confidenceOriginal ?? 50,
+    fullTextMode: payload.fullTextMode ?? null,
     createdAt: now,
     explanation: payload.explanation ?? (typeof judgment.explanation === 'string' ? judgment.explanation : null),
     executionSnapshotHash: payload.executionSnapshotHash,

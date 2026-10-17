@@ -21,7 +21,11 @@ export type JudgmentsJobsPromptsStatus =
   | 'judged'
   | 'judged_and_ready_to_remove_from_queue'
   | 'skipped'
-export type JudgmentsJobsPromptsSkipReason = 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'
+export type JudgmentsJobsPromptsSkipReason =
+  | 'no_fulltext'
+  | 'conversion_failed'
+  | 'fulltext_too_large'
+  | 'figure_description_failed'
 export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_greedy' | 'article_paragraph_greedy'
 export type JudgmentFullTextMode = 'single' | 'chunked'
 export type JudgmentFullTextExecution = {

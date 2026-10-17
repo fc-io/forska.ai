@@ -652,17 +652,26 @@ test('completion replay discards local claims whose use_metadata contradicts the
   expect(row?.lastError).toContain('snapshot claim identity mismatch for useMetadata')
 })
 
-test('judged completion replay sends the claim full-text strategy to the owner', async () => {
+test('judged completion replay sends the claim full-text strategy and execution to the owner', async () => {
   const receivedStrategies: Array<string | null | undefined> = []
+  const receivedExecutions: unknown[] = []
   setupJournalTest(async (request) => {
     const body = (await request.json()) as JudgeWorkerCompletionPayload
     receivedStrategies.push(body.fullTextStrategyId)
+    receivedExecutions.push({
+      chunkCount: body.chunkCount,
+      chunkPlanHash: body.chunkPlanHash,
+      fullTextMode: body.fullTextMode,
+    })
 
     return Response.json({data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}})
   })
   const payload = createCompletionPayload({
     answeredOriginal: 'yes',
+    chunkCount: 4,
+    chunkPlanHash: 'plan-hash-strategy',
     claimId: 'claim-strategy',
+    fullTextMode: 'chunked',
     fullTextStrategyId: 'fts-0123456789abcdef',
     judgmentId: 'judgment-strategy',
     queueRecordId: 'queue-strategy',
@@ -678,6 +687,7 @@ test('judged completion replay sends the claim full-text strategy to the owner',
 
   expect(await replayJudgeWorkerCompletionOutbox()).toEqual({ackedCount: 1, discardedCount: 0, failedCount: 0})
   expect(receivedStrategies).toEqual(['fts-0123456789abcdef'])
+  expect(receivedExecutions).toEqual([{chunkCount: 4, chunkPlanHash: 'plan-hash-strategy', fullTextMode: 'chunked'}])
 })
 
 test('completion replay discards local claims whose full-text strategy contradicts the job without calling the owner', async () => {

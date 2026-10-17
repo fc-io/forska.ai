@@ -1,6 +1,6 @@
 import {randomUUID} from 'crypto'
 
-import type {ArticleRecord, JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
+import type {ArticleRecord, JudgmentChunkingStrategy, JudgmentFullTextExecution} from '../../db/schemaTypes.ts'
 import {
   enqueueJudgeWorkerCompletion,
   shouldUseJudgeWorkerOwnerHandoff,
@@ -21,6 +21,7 @@ import {escapeSqlString} from '../../server/services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../../server/utils/duckdbService.ts'
 import type {ContentSettings} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
+import {getJudgmentFullTextExecutionForStrategy, noJudgmentFullTextExecution} from './judgmentFullTextExecution.ts'
 import type {SinglePromptJudgmentResult} from './parseSinglePromptJudgment.ts'
 import {getSystemPromptVariant, type SystemPromptVariant} from './systemPromptVariant.ts'
 
@@ -54,6 +55,7 @@ const enqueueOwnerBackedCompletion = async ({
   article,
   claimIdentity,
   contentSettings,
+  fullTextExecution,
   fullTextStrategyId,
   judgmentsJobId,
   promptId,
@@ -69,6 +71,7 @@ const enqueueOwnerBackedCompletion = async ({
   article: ArticleRecord
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
   contentSettings: ContentSettings
+  fullTextExecution: JudgmentFullTextExecution
   fullTextStrategyId: string
   judgmentsJobId: string
   promptId: string
@@ -102,12 +105,15 @@ const enqueueOwnerBackedCompletion = async ({
       answeredOriginal,
       answeredOriginalAsArray,
       articleId: article.id,
+      chunkCount: fullTextExecution.chunkCount,
+      chunkPlanHash: fullTextExecution.chunkPlanHash,
       chunkingStrategy,
       claimId: claimIdentity.claimId,
       confidenceOriginal: 50,
       executionSnapshotHash: claimIdentity.executionSnapshotHash,
       executionSnapshotId: claimIdentity.executionSnapshotId,
       explanation: judgment.explanation || null,
+      fullTextMode: fullTextExecution.fullTextMode,
       fullTextStrategyId,
       isAnswered: true,
       jobId: judgmentsJobId,
@@ -156,6 +162,7 @@ export const storeSinglePromptJudgment = async ({
   requestAttempts = [],
   systemPromptVariant: inputSystemPromptVariant,
   fullTextStrategyId,
+  fullTextExecution: inputFullTextExecution = noJudgmentFullTextExecution,
 }: {
   article: ArticleRecord
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
@@ -171,8 +178,10 @@ export const storeSinglePromptJudgment = async ({
   requestAttempts?: JudgmentRequestAttemptJsonEntry[]
   systemPromptVariant?: SystemPromptVariant | null
   fullTextStrategyId: string
+  fullTextExecution?: JudgmentFullTextExecution
 }): Promise<void> => {
   const systemPromptVariant = getSystemPromptVariant(inputSystemPromptVariant)
+  const fullTextExecution = getJudgmentFullTextExecutionForStrategy(fullTextStrategyId, inputFullTextExecution)
 
   try {
     if (shouldUseJudgeWorkerOwnerHandoff()) {
@@ -180,6 +189,7 @@ export const storeSinglePromptJudgment = async ({
         article,
         claimIdentity,
         contentSettings,
+        fullTextExecution,
         fullTextStrategyId,
         judgmentsJobId,
         promptId,
@@ -265,6 +275,7 @@ export const storeSinglePromptJudgment = async ({
           answeredOriginalAsArray: answeredOriginalAsArray ?? [],
           articleId: article.id,
           claimId: claimIdentity?.claimId,
+          ...fullTextExecution,
           chunkingStrategy,
           confidenceOriginal: 50,
           createdAt: new Date(),
