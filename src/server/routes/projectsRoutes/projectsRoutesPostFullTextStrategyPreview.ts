@@ -6,8 +6,8 @@ import {
   getFullTextStrategyDisplayLabel,
 } from '../../fullText/fullTextStrategy.ts'
 import {getFullTextStrategyLabelsById} from '../../fullText/fullTextStrategyRepository.ts'
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getApiReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {
   fullTextChunkPolicyBodySchema,
   fullTextFigureModeBodySchema,
@@ -33,7 +33,7 @@ const getPreviewStrategy = (useFulltext: boolean, resolution: ProjectFullTextRes
 }
 
 const getCurrentProjectStrategy = async (projectId: string) => {
-  const database = getAppDatabaseService()
+  const database = getApiReadOnlyAppDatabaseService()
   const [row] = await database.queryJson<CurrentProjectStrategyRow>(`
     SELECT full_text_strategy_id AS fullTextStrategyId
     FROM app.project

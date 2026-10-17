@@ -92,6 +92,7 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/projectsRoutes/projectsRoutesGetReviewsHealth.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
   'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostFullTextStrategyPreview.ts',
   'src/server/routes/promptsRoutes/promptsRoutesReadOnly.ts',
 ])
 const forbiddenNormalForegroundSqlPatterns = [
@@ -124,6 +125,7 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.ts',
   'src/server/routes/projectTransferRoutes.ts',
+  'src/server/routes/projectsRoutes/projectFullTextSettings.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview.ts',
