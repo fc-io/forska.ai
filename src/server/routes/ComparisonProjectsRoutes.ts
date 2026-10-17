@@ -37,6 +37,10 @@ import {
   getNormalizedComparisonProjectDifferenceFilters,
 } from '../../utils/comparisonProjectDifferenceFilter.ts'
 import {
+  type ComparisonProjectFullTextStrategySource,
+  getComparisonProjectFullTextStrategyMixError,
+} from '../../utils/comparisonProjectFullTextStrategyMix.ts'
+import {
   type ComparisonProjectRowFilter,
   getComparisonProjectRowFiltersLabel,
   getNormalizedComparisonProjectRowFilters,
@@ -46,6 +50,15 @@ import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
 } from '../../utils/providerModelLabel.ts'
+import {
+  FULL_TEXT_STRATEGY_LEGACY,
+  FULL_TEXT_STRATEGY_NONE,
+  type FullTextStrategyInputs,
+  getEffectiveFullTextStrategyId,
+  getFullTextStrategyDisplayLabel,
+  getProjectFullTextStrategyIdSql,
+} from '../fullText/fullTextStrategy.ts'
+import {getFullTextStrategyLabelsById} from '../fullText/fullTextStrategyRepository.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
@@ -209,7 +222,12 @@ type ComparisonProjectContentFlags = {
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
-type ComparisonProjectContentDimension = {systemPromptVariant: SystemPromptVariant; useMetadata: boolean}
+type ComparisonProjectContentDimension = {
+  fullTextStrategyId: string
+  systemPromptVariant: SystemPromptVariant
+  useMetadata: boolean
+}
+type ComparisonProjectFullTextStrategyLabels = ReadonlyMap<string, string>
 type ComparisonProjectContentVariant = ComparisonProjectContentFlags
   & ComparisonProjectContentDimension & {key: string; label: string}
 type ComparisonProjectPromptConfig = {
@@ -246,6 +264,7 @@ type ComparisonProjectSummaryPromptGroup = {
   sourceProjectId: string | null
   systemPromptVariant: SystemPromptVariant | null
   useMetadata: boolean | null
+  fullTextStrategyId: string | null
 }
 type ComparisonProjectScope = {
   id: string
@@ -351,6 +370,9 @@ type ComparisonProjectSource = {
   isSummaryCapable: boolean
   summarySourceProjectId: string | null
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
+  fullTextStrategyInputs: FullTextStrategyInputs | null
+  fullTextStrategyLabel: string
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -407,6 +429,7 @@ type ComparisonProjectLinkedSourceProject = {
   humanJudgmentMode: HumanJudgmentMode
   systemPromptVariant: SystemPromptVariant
   useMetadata: boolean
+  fullTextStrategyId: string
 }
 type ComparisonProjectEditPrompt = {
   id: string
@@ -772,6 +795,7 @@ const getContentVariantClause = (tableAlias: string, contentVariant: ComparisonP
     AND ${tableAlias}.use_fulltext_no_images = ${getBooleanLiteral(contentVariant.useFulltextNoImages)}
     AND ${tableAlias}.use_metadata = ${getBooleanLiteral(contentVariant.useMetadata)}
     AND ${tableAlias}.system_prompt_variant = ${getSqlLiteral(contentVariant.systemPromptVariant)}
+    AND ${tableAlias}.full_text_strategy_id = ${getSqlLiteral(contentVariant.fullTextStrategyId)}
   )`
 }
 
@@ -1038,13 +1062,25 @@ const getComparisonProjectContentFlagVariants = (
   ].filter(isDefined)
 }
 
+type ComparisonProjectContentDimensionRow = {
+  fullTextStrategyId?: string | null
+  systemPromptVariant?: string | null
+  useMetadata?: boolean | null
+}
+
 const defaultComparisonProjectContentDimension: ComparisonProjectContentDimension = {
+  fullTextStrategyId: FULL_TEXT_STRATEGY_NONE,
   systemPromptVariant: defaultSystemPromptVariant,
   useMetadata: false,
 }
 
+const reservedFullTextStrategyOrders: Record<string, number> = {
+  [FULL_TEXT_STRATEGY_LEGACY]: 1,
+  [FULL_TEXT_STRATEGY_NONE]: 0,
+}
+
 const getComparisonProjectContentDimensionKey = (contentDimension: ComparisonProjectContentDimension) => {
-  return `${contentDimension.systemPromptVariant}:${contentDimension.useMetadata}`
+  return `${contentDimension.systemPromptVariant}:${contentDimension.useMetadata}:${contentDimension.fullTextStrategyId}`
 }
 
 const getComparisonProjectContentDimensionOrder = (contentDimension: ComparisonProjectContentDimension) => {
@@ -1054,26 +1090,55 @@ const getComparisonProjectContentDimensionOrder = (contentDimension: ComparisonP
   )
 }
 
-const getComparisonProjectContentDimensions = (
-  contentDimensions: ReadonlyArray<{systemPromptVariant?: string | null; useMetadata?: boolean | null}>,
-): ComparisonProjectContentDimension[] => {
-  const uniqueContentDimensions = Array.from(
+const getFullTextStrategyOrder = (fullTextStrategyId: string) => {
+  return reservedFullTextStrategyOrders[fullTextStrategyId] ?? Object.keys(reservedFullTextStrategyOrders).length
+}
+
+const compareFullTextStrategyIds = (left: string, right: string) => {
+  const orderDiff = getFullTextStrategyOrder(left) - getFullTextStrategyOrder(right)
+
+  return orderDiff !== 0 ? orderDiff : left.localeCompare(right)
+}
+
+const compareComparisonProjectContentDimensions = (
+  left: ComparisonProjectContentDimension,
+  right: ComparisonProjectContentDimension,
+) => {
+  const fullTextStrategyDiff = compareFullTextStrategyIds(left.fullTextStrategyId, right.fullTextStrategyId)
+
+  return fullTextStrategyDiff !== 0
+    ? fullTextStrategyDiff
+    : getComparisonProjectContentDimensionOrder(left) - getComparisonProjectContentDimensionOrder(right)
+}
+
+const getNormalizedComparisonProjectContentDimension = (
+  contentDimension: ComparisonProjectContentDimensionRow,
+): ComparisonProjectContentDimension => {
+  return {
+    fullTextStrategyId: getEffectiveFullTextStrategyId(contentDimension.fullTextStrategyId),
+    systemPromptVariant: getSystemPromptVariant(contentDimension.systemPromptVariant),
+    useMetadata: contentDimension.useMetadata === true,
+  }
+}
+
+const getUniqueComparisonProjectContentDimensions = (
+  contentDimensions: readonly ComparisonProjectContentDimension[],
+) => {
+  return Array.from(
     contentDimensions
       .reduce<Map<string, ComparisonProjectContentDimension>>((dimensionMap, contentDimension) => {
-        const normalizedContentDimension = {
-          systemPromptVariant: getSystemPromptVariant(contentDimension.systemPromptVariant),
-          useMetadata: contentDimension.useMetadata === true,
-        }
-
-        return dimensionMap.set(
-          getComparisonProjectContentDimensionKey(normalizedContentDimension),
-          normalizedContentDimension,
-        )
+        return dimensionMap.set(getComparisonProjectContentDimensionKey(contentDimension), contentDimension)
       }, new Map<string, ComparisonProjectContentDimension>())
       .values(),
-  ).sort((left, right) => {
-    return getComparisonProjectContentDimensionOrder(left) - getComparisonProjectContentDimensionOrder(right)
-  })
+  ).sort(compareComparisonProjectContentDimensions)
+}
+
+const getComparisonProjectContentDimensions = (
+  contentDimensions: ReadonlyArray<ComparisonProjectContentDimensionRow>,
+): ComparisonProjectContentDimension[] => {
+  const uniqueContentDimensions = getUniqueComparisonProjectContentDimensions(
+    contentDimensions.map(getNormalizedComparisonProjectContentDimension),
+  )
 
   return uniqueContentDimensions.length > 0 ? uniqueContentDimensions : [defaultComparisonProjectContentDimension]
 }
@@ -1086,10 +1151,11 @@ const getServedComparisonProjectContentDimensionRows = async (
   const activeGeneration = servingStatus?.activeGeneration ?? null
 
   return activeGeneration !== null && Number.isSafeInteger(activeGeneration) && activeGeneration > 0
-    ? queryRunner.queryJson<{systemPromptVariant: string | null; useMetadata: boolean | null}>(`
+    ? queryRunner.queryJson<ComparisonProjectContentDimensionRow>(`
         SELECT DISTINCT
           system_prompt_variant AS systemPromptVariant,
-          COALESCE(use_metadata, FALSE) AS useMetadata
+          COALESCE(use_metadata, FALSE) AS useMetadata,
+          COALESCE(full_text_strategy_id, ${getSqlLiteral(FULL_TEXT_STRATEGY_NONE)}) AS fullTextStrategyId
         FROM ${comparisonSystemPromptVariantServingTable}
         WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
           AND generation = ${getSqlLiteral(activeGeneration)}
@@ -1098,7 +1164,7 @@ const getServedComparisonProjectContentDimensionRows = async (
 }
 
 const getServedComparisonProjectContentDimensions = (
-  servedContentDimensionRows: ReadonlyArray<{systemPromptVariant: string | null; useMetadata: boolean | null}>,
+  servedContentDimensionRows: ReadonlyArray<ComparisonProjectContentDimensionRow>,
   sourceProjects: ReadonlyArray<ComparisonProjectContentDimension>,
 ) => {
   return getComparisonProjectContentDimensions(
@@ -1106,37 +1172,122 @@ const getServedComparisonProjectContentDimensions = (
   )
 }
 
+const getComparisonProjectFullTextStrategyLabels = async (
+  queryRunner: AppQueryRunner,
+  contentDimensions: readonly ComparisonProjectContentDimension[],
+): Promise<ComparisonProjectFullTextStrategyLabels> => {
+  return getFullTextStrategyLabelsById(
+    queryRunner,
+    contentDimensions
+      .map((contentDimension) => {
+        return contentDimension.fullTextStrategyId
+      })
+      .filter((fullTextStrategyId) => {
+        return !(fullTextStrategyId in reservedFullTextStrategyOrders)
+      }),
+  )
+}
+
+const getComparisonProjectFullTextStrategyLabel = (
+  fullTextStrategyLabels: ComparisonProjectFullTextStrategyLabels,
+  fullTextStrategyId: string,
+) => {
+  return fullTextStrategyLabels.get(fullTextStrategyId) ?? getFullTextStrategyDisplayLabel(fullTextStrategyId, null)
+}
+
 const getComparisonProjectContentVariantLabel = (
   contentFlags: ComparisonProjectContentFlags,
   contentDimension: ComparisonProjectContentDimension,
   showSystemPromptVariant: boolean,
+  fullTextStrategyLabels: ComparisonProjectFullTextStrategyLabels,
 ) => {
   const contentLabel = getComparisonProjectContentLabel({...contentFlags, useMetadata: contentDimension.useMetadata})
-
-  return showSystemPromptVariant
+  const variantContentLabel = showSystemPromptVariant
     ? `${contentLabel} · System prompt variant: ${contentDimension.systemPromptVariant}`
     : contentLabel
+
+  return contentDimension.fullTextStrategyId === FULL_TEXT_STRATEGY_NONE
+    ? variantContentLabel
+    : `${variantContentLabel} · Full text: ${getComparisonProjectFullTextStrategyLabel(fullTextStrategyLabels, contentDimension.fullTextStrategyId)}`
+}
+
+const getIsFullTextContentFlags = (contentFlags: ComparisonProjectContentFlags) => {
+  return contentFlags.useFulltext || contentFlags.useFulltextNoImages
+}
+
+const getHasSameBaseContentDimension = (
+  left: ComparisonProjectContentDimension,
+  right: ComparisonProjectContentDimension,
+) => {
+  return left.systemPromptVariant === right.systemPromptVariant && left.useMetadata === right.useMetadata
+}
+
+const getComparisonProjectBaseContentDimensions = (contentDimensions: readonly ComparisonProjectContentDimension[]) => {
+  return getUniqueComparisonProjectContentDimensions(
+    contentDimensions.map((contentDimension) => {
+      return {...contentDimension, fullTextStrategyId: FULL_TEXT_STRATEGY_NONE}
+    }),
+  )
+}
+
+const getComparisonProjectFullTextContentDimensions = (
+  contentDimensions: readonly ComparisonProjectContentDimension[],
+) => {
+  return getComparisonProjectBaseContentDimensions(contentDimensions).flatMap((baseContentDimension) => {
+    const fullTextContentDimensions = contentDimensions.filter((contentDimension) => {
+      return (
+        contentDimension.fullTextStrategyId !== FULL_TEXT_STRATEGY_NONE
+        && getHasSameBaseContentDimension(contentDimension, baseContentDimension)
+      )
+    })
+
+    return fullTextContentDimensions.length > 0 ? fullTextContentDimensions : [baseContentDimension]
+  })
+}
+
+const getComparisonProjectContentDimensionsForFlags = (
+  contentFlags: ComparisonProjectContentFlags,
+  contentDimensions: readonly ComparisonProjectContentDimension[],
+) => {
+  return getIsFullTextContentFlags(contentFlags)
+    ? getComparisonProjectFullTextContentDimensions(contentDimensions)
+    : getComparisonProjectBaseContentDimensions(contentDimensions)
 }
 
 const getComparisonProjectContentVariants = (
   settings: ComparisonProjectContentFlags,
   contentDimensions: readonly ComparisonProjectContentDimension[] = [defaultComparisonProjectContentDimension],
+  fullTextStrategyLabels: ComparisonProjectFullTextStrategyLabels = new Map<string, string>(),
 ): ComparisonProjectContentVariant[] => {
   const contentFlagVariants = getComparisonProjectContentFlagVariants(settings)
   const showSystemPromptVariant = contentDimensions.some((contentDimension) => {
     return contentDimension.systemPromptVariant !== defaultSystemPromptVariant
   })
 
-  return contentDimensions.flatMap((contentDimension) => {
-    return contentFlagVariants.map<ComparisonProjectContentVariant>((contentFlags) => {
+  return contentFlagVariants
+    .flatMap((contentFlags, flagOrder) => {
+      return getComparisonProjectContentDimensionsForFlags(contentFlags, contentDimensions).map((contentDimension) => {
+        return {contentDimension, contentFlags, flagOrder}
+      })
+    })
+    .sort((left, right) => {
+      const dimensionDiff = compareComparisonProjectContentDimensions(left.contentDimension, right.contentDimension)
+
+      return dimensionDiff !== 0 ? dimensionDiff : left.flagOrder - right.flagOrder
+    })
+    .map<ComparisonProjectContentVariant>(({contentDimension, contentFlags}) => {
       return {
         ...contentFlags,
         ...contentDimension,
         key: getComparisonProjectContentKey({...contentFlags, ...contentDimension}),
-        label: getComparisonProjectContentVariantLabel(contentFlags, contentDimension, showSystemPromptVariant),
+        label: getComparisonProjectContentVariantLabel(
+          contentFlags,
+          contentDimension,
+          showSystemPromptVariant,
+          fullTextStrategyLabels,
+        ),
       }
     })
-  })
 }
 
 const getIsSummaryMode = (scope: Pick<ComparisonProjectScope, 'compareWithHumans' | 'humanJudgmentMode'>) => {
@@ -1233,10 +1384,36 @@ const getComparisonProjectResolutionCount = async (
   return Number(row?.resolutionCount ?? 0)
 }
 
+type ComparisonProjectSourceRow = Omit<
+  ComparisonProjectSource,
+  'fullTextStrategyInputs' | 'fullTextStrategyLabel' | 'systemPromptVariant'
+> & {fullTextStrategyInputs?: unknown; fullTextStrategyStoredLabel?: string | null; systemPromptVariant?: string | null}
+
+const getFullTextStrategyInputsValue = (value: unknown): FullTextStrategyInputs | null => {
+  const parsedValue = getJsonValue(value)
+
+  return parsedValue !== null && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
+    ? (parsedValue as FullTextStrategyInputs)
+    : null
+}
+
+const getComparisonProjectSourceFullTextStrategy = (
+  projectRow: Pick<
+    ComparisonProjectSourceRow,
+    'fullTextStrategyId' | 'fullTextStrategyInputs' | 'fullTextStrategyStoredLabel'
+  >,
+) => {
+  const fullTextStrategyId = getEffectiveFullTextStrategyId(projectRow.fullTextStrategyId)
+
+  return {
+    fullTextStrategyId,
+    fullTextStrategyInputs: getFullTextStrategyInputsValue(projectRow.fullTextStrategyInputs),
+    fullTextStrategyLabel: getFullTextStrategyDisplayLabel(fullTextStrategyId, projectRow.fullTextStrategyStoredLabel),
+  }
+}
+
 const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]> => {
-  const projectRows = await appDatabaseService.queryJson<
-    Omit<ComparisonProjectSource, 'systemPromptVariant'> & {systemPromptVariant?: string | null}
-  >(`
+  const projectRows = await appDatabaseService.queryJson<ComparisonProjectSourceRow>(`
     SELECT
       p.id AS id,
       p.name AS name,
@@ -1248,6 +1425,9 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       m.variant AS modelVersion,
       p.human_judgment_mode AS humanJudgmentMode,
       p.system_prompt_variant AS systemPromptVariant,
+      ${getProjectFullTextStrategyIdSql('p')} AS fullTextStrategyId,
+      fts.label AS fullTextStrategyStoredLabel,
+      CAST(fts.inputs AS VARCHAR) AS fullTextStrategyInputs,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
@@ -1256,6 +1436,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
     FROM ${projectTable} p
     LEFT JOIN ${modelTable} m ON m.id = p.model_id
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    LEFT JOIN app.full_text_strategy fts ON fts.id = p.full_text_strategy_id
     WHERE p.archived = FALSE
     ORDER BY p.name ASC
   `)
@@ -1328,7 +1509,12 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
         return null
       }
 
-      const {modelMetadataJson: _modelMetadataJson, ...sourceProjectRow} = projectRow
+      const {
+        fullTextStrategyInputs: _fullTextStrategyInputs,
+        fullTextStrategyStoredLabel: _fullTextStrategyStoredLabel,
+        modelMetadataJson: _modelMetadataJson,
+        ...sourceProjectRow
+      } = projectRow
 
       const humanJudgmentMode = projectRow.humanJudgmentMode ?? 'prompt'
 
@@ -1346,6 +1532,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
         isSummaryCapable: humanJudgmentMode === 'summary',
         summarySourceProjectId: humanJudgmentMode === 'summary' ? projectRow.id : null,
         systemPromptVariant: getSystemPromptVariant(projectRow.systemPromptVariant),
+        ...getComparisonProjectSourceFullTextStrategy(projectRow),
         useMetadata: projectRow.useMetadata === true,
         prompts: sourcePromptRows.map<ComparisonProjectSourcePrompt>((promptRow, index) => {
           return {
@@ -1376,7 +1563,11 @@ const getComparisonProjectSourceProjects = async (
   }
 
   const sourceProjectRows = await queryRunner.queryJson<
-    Omit<ComparisonProjectLinkedSourceProject, 'humanJudgmentMode' | 'systemPromptVariant' | 'useMetadata'> & {
+    Omit<
+      ComparisonProjectLinkedSourceProject,
+      'fullTextStrategyId' | 'humanJudgmentMode' | 'systemPromptVariant' | 'useMetadata'
+    > & {
+      fullTextStrategyId?: string | null
       humanJudgmentMode: HumanJudgmentMode | null
       systemPromptVariant?: string | null
       useMetadata?: boolean | null
@@ -1390,7 +1581,8 @@ const getComparisonProjectSourceProjects = async (
       COALESCE(m.display_name, m.name, m.remote_model_id, p.model_id) AS modelName,
       p.human_judgment_mode AS humanJudgmentMode,
       p.system_prompt_variant AS systemPromptVariant,
-      COALESCE(p.use_metadata, FALSE) AS useMetadata
+      COALESCE(p.use_metadata, FALSE) AS useMetadata,
+      ${getProjectFullTextStrategyIdSql('p')} AS fullTextStrategyId
     FROM ${projectTable} p
     LEFT JOIN ${modelTable} m ON m.id = p.model_id
     WHERE p.id IN (${getInClause(sourceProjectIds)})
@@ -1410,6 +1602,7 @@ const getComparisonProjectSourceProjects = async (
         humanJudgmentMode: sourceProjectRow.humanJudgmentMode ?? 'prompt',
         systemPromptVariant: getSystemPromptVariant(sourceProjectRow.systemPromptVariant),
         useMetadata: sourceProjectRow.useMetadata === true,
+        fullTextStrategyId: getEffectiveFullTextStrategyId(sourceProjectRow.fullTextStrategyId),
       }
     })
     .sort((left, right) => {
@@ -1676,6 +1869,7 @@ const getComparisonProjectSourceProjectFromSource = (
     humanJudgmentMode: sourceProject.humanJudgmentMode,
     systemPromptVariant: sourceProject.systemPromptVariant,
     useMetadata: sourceProject.useMetadata,
+    fullTextStrategyId: sourceProject.fullTextStrategyId,
   }
 }
 
@@ -1790,9 +1984,11 @@ const getCreateFromProjectImportScope = async (params: {
       return sourceProject.id === params.summarySourceProjectId
     }),
   )
+  const contentDimensions = getComparisonProjectContentDimensions(sourceProjects)
   const contentVariants = getComparisonProjectContentVariants(
     params.createdComparisonProject,
-    getComparisonProjectContentDimensions(sourceProjects),
+    contentDimensions,
+    await getComparisonProjectFullTextStrategyLabels(params.tx, contentDimensions),
   )
   const selectedImportRouteIds = await getImportRouteIdsForRoutes(params.tx, params.selectedImportRoutes)
   const sourceProjectSummaryPrompts = getComparisonProjectSourceSummaryPromptConfigsFromSources(
@@ -3054,6 +3250,76 @@ const getValidatedComparisonSourceProjectIds = async (db: AppQueryRunner, source
   return uniqueSourceProjectIds
 }
 
+const assertComparisonProjectSourcesShareFullTextStrategy = (
+  sources: readonly ComparisonProjectFullTextStrategySource[],
+) => {
+  const fullTextStrategyMixError = getComparisonProjectFullTextStrategyMixError(sources)
+
+  if (fullTextStrategyMixError) {
+    throw new HttpError(400, fullTextStrategyMixError)
+  }
+}
+
+const getComparisonProjectFullTextStrategySources = async (
+  db: AppQueryRunner,
+  sourceProjectIds: string[],
+): Promise<ComparisonProjectFullTextStrategySource[]> => {
+  const rows = await db.queryJson<
+    Pick<
+      ComparisonProjectSourceRow,
+      'fullTextStrategyId' | 'fullTextStrategyInputs' | 'fullTextStrategyStoredLabel'
+    > & {id: string; name: string}
+  >(`
+    SELECT
+      p.id AS id,
+      p.name AS name,
+      ${getProjectFullTextStrategyIdSql('p')} AS fullTextStrategyId,
+      fts.label AS fullTextStrategyStoredLabel,
+      CAST(fts.inputs AS VARCHAR) AS fullTextStrategyInputs
+    FROM ${projectTable} p
+    LEFT JOIN app.full_text_strategy fts ON fts.id = p.full_text_strategy_id
+    WHERE p.id IN (${getInClause(sourceProjectIds)})
+  `)
+  const rowsById = new Map(
+    rows.map((row) => {
+      return [row.id, row] as const
+    }),
+  )
+
+  return sourceProjectIds
+    .map((sourceProjectId) => {
+      return rowsById.get(sourceProjectId)
+    })
+    .filter(isDefined)
+    .map<ComparisonProjectFullTextStrategySource>((row) => {
+      return {name: row.name, ...getComparisonProjectSourceFullTextStrategy(row)}
+    })
+}
+
+const assertComparisonProjectSourceProjectIdsShareFullTextStrategy = async (
+  db: AppQueryRunner,
+  sourceProjectIds: string[],
+) => {
+  const uniqueSourceProjectIds = getUniqueStringValues(sourceProjectIds)
+
+  return uniqueSourceProjectIds.length > 1
+    ? assertComparisonProjectSourcesShareFullTextStrategy(
+        await getComparisonProjectFullTextStrategySources(db, uniqueSourceProjectIds),
+      )
+    : undefined
+}
+
+const getComparisonProjectBodySourceProjectIds = (body: {
+  humanJudgmentMode?: HumanJudgmentMode
+  sourceProjectIds?: string[] | null
+  summarySourceProjectId?: string | null
+}) => {
+  return [
+    ...(body.humanJudgmentMode === 'summary' && body.summarySourceProjectId ? [body.summarySourceProjectId] : []),
+    ...(body.sourceProjectIds ?? []),
+  ]
+}
+
 const getSelectedComparisonProjectSources = (sources: ComparisonProjectSource[], sourceProjectIds: string[]) => {
   const selectedSourceProjects = sourceProjectIds.reduce<ComparisonProjectSource[]>(
     (selectedProjects, sourceProjectId) => {
@@ -3123,6 +3389,8 @@ const getCreateComparisonProjectFromProjectContext = async (
   if (!sourceProject) {
     throw new Error('Source project not found')
   }
+
+  assertComparisonProjectSourcesShareFullTextStrategy(selectedSourceProjects)
 
   const humanJudgmentMode =
     body.humanJudgmentMode ?? (sourceProject.isSummaryCapable && body.compareWithHumans ? 'summary' : 'prompt')
@@ -3375,12 +3643,16 @@ const getComparisonProjectModels = async (
 
 const getSourceProjectContentVariants = (
   contentVariants: ComparisonProjectContentVariant[],
-  sourceProject: Pick<ComparisonProjectLinkedSourceProject, 'systemPromptVariant' | 'useMetadata'>,
+  sourceProject: Pick<
+    ComparisonProjectLinkedSourceProject,
+    'fullTextStrategyId' | 'systemPromptVariant' | 'useMetadata'
+  >,
 ) => {
   return contentVariants.filter((contentVariant) => {
     return (
       contentVariant.systemPromptVariant === sourceProject.systemPromptVariant
       && contentVariant.useMetadata === sourceProject.useMetadata
+      && contentVariant.fullTextStrategyId === sourceProject.fullTextStrategyId
     )
   })
 }
@@ -3646,12 +3918,14 @@ const getComparisonProjectScope = async (
     servingStatus,
     queryRunner,
   )
+  const contentDimensions = getServedComparisonProjectContentDimensions(
+    servedContentDimensionRows,
+    useImportRoutesForScope ? [] : sourceProjects,
+  )
   const contentVariants = getComparisonProjectContentVariants(
     normalizedComparisonProjectRow,
-    getServedComparisonProjectContentDimensions(
-      servedContentDimensionRows,
-      useImportRoutesForScope ? [] : sourceProjects,
-    ),
+    contentDimensions,
+    await getComparisonProjectFullTextStrategyLabels(queryRunner, contentDimensions),
   )
   const modelRows = await getComparisonProjectModels(
     {...normalizedComparisonProjectRow, sourceProjectIds, useImportRoutesForScope, contentVariants},
@@ -3930,6 +4204,7 @@ const getComparisonProjectLlmRows = async (
     explanation: string | null
     quotes: unknown
     systemPromptVariant?: string | null
+    fullTextStrategyId?: string | null
     useTitle: boolean
     useAbstract: boolean
     useFulltext: boolean
@@ -3946,6 +4221,7 @@ const getComparisonProjectLlmRows = async (
       explanation,
       TO_JSON(quotes) AS quotes,
       system_prompt_variant AS systemPromptVariant,
+      full_text_strategy_id AS fullTextStrategyId,
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
@@ -3969,6 +4245,7 @@ const getComparisonProjectLlmRows = async (
         sourceProjectId: null,
         answeredOriginalAsArray: getStringArrayRowValue(row, 'answeredOriginalAsArray'),
         systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
+        fullTextStrategyId: getEffectiveFullTextStrategyId(row.fullTextStrategyId),
         useMetadata: row.useMetadata === true,
       }
     })
@@ -3988,7 +4265,14 @@ const getComparisonProjectSummaryPromptGroups = (
 ): ComparisonProjectSummaryPromptGroup[] => {
   if (!getIsSummaryMode(scope) || scope.useImportRoutesForScope) {
     return [
-      {sourceProjectId: null, modelId: null, prompts: scope.prompts, systemPromptVariant: null, useMetadata: null},
+      {
+        sourceProjectId: null,
+        modelId: null,
+        prompts: scope.prompts,
+        systemPromptVariant: null,
+        useMetadata: null,
+        fullTextStrategyId: null,
+      },
     ]
   }
 
@@ -4012,6 +4296,7 @@ const getComparisonProjectSummaryPromptGroups = (
               prompts,
               systemPromptVariant: sourceProject.systemPromptVariant,
               useMetadata: sourceProject.useMetadata,
+              fullTextStrategyId: sourceProject.fullTextStrategyId,
             },
           ]
         : groups
@@ -4021,7 +4306,16 @@ const getComparisonProjectSummaryPromptGroups = (
 
   return sourceProjectGroups.length > 0
     ? sourceProjectGroups
-    : [{sourceProjectId: null, modelId: null, prompts: scope.prompts, systemPromptVariant: null, useMetadata: null}]
+    : [
+        {
+          sourceProjectId: null,
+          modelId: null,
+          prompts: scope.prompts,
+          systemPromptVariant: null,
+          useMetadata: null,
+          fullTextStrategyId: null,
+        },
+      ]
 }
 
 const getComparisonProjectLlmRowsForSummaryGroup = (
@@ -4041,6 +4335,8 @@ const getComparisonProjectLlmRowsForSummaryGroup = (
       && (summaryPromptGroup.systemPromptVariant === null
         || getSystemPromptVariant(row.systemPromptVariant) === summaryPromptGroup.systemPromptVariant)
       && (summaryPromptGroup.useMetadata === null || (row.useMetadata === true) === summaryPromptGroup.useMetadata)
+      && (summaryPromptGroup.fullTextStrategyId === null
+        || getEffectiveFullTextStrategyId(row.fullTextStrategyId) === summaryPromptGroup.fullTextStrategyId)
     )
   })
 }
@@ -6866,6 +7162,10 @@ export const comparisonProjectsRoutes = new Elysia()
     '/api/comparison-projects',
     async (context) => {
       const {body} = context
+      await assertComparisonProjectSourceProjectIdsShareFullTextStrategy(
+        appDatabaseService,
+        getComparisonProjectBodySourceProjectIds(body),
+      )
       const createdComparisonProject = await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, body)
       })
@@ -6941,6 +7241,23 @@ export const comparisonProjectsRoutes = new Elysia()
         body.sourceProjectIds === undefined
           ? undefined
           : await getValidatedComparisonSourceProjectIds(appDatabaseService, body.sourceProjectIds ?? [])
+
+      if (
+        validatedSourceProjectIds !== undefined
+        && !hasSameStringArrayValue(
+          [...validatedSourceProjectIds].sort(),
+          [...existingComparisonProject.sourceProjectIds].sort(),
+        )
+      ) {
+        await assertComparisonProjectSourceProjectIdsShareFullTextStrategy(
+          appDatabaseService,
+          getComparisonProjectBodySourceProjectIds({
+            humanJudgmentMode,
+            sourceProjectIds: validatedSourceProjectIds,
+            summarySourceProjectId,
+          }),
+        )
+      }
       const baseSetParts = [
         `name = ${getSqlLiteral(body.name)}`,
         `description = ${getSqlLiteral(body.description?.trim() || null)}`,

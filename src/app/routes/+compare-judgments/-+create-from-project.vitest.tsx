@@ -445,6 +445,60 @@ describe('compare judgments create-from-project route', () => {
     }
   })
 
+  test('refuses source projects with different full-text strategies', async () => {
+    const [primarySourceProject] = mockState.sourcesQueryResult.data
+    const originalSourceProjects = mockState.sourcesQueryResult.data
+
+    mockState.sourcesQueryResult.data = [
+      {
+        ...primarySourceProject,
+        fullTextStrategyId: 'fts-aaaaaaaaaaaaaaaa',
+        fullTextStrategyInputs: {figureMode: 'none'},
+        fullTextStrategyLabel: 'mineru 4.0 / none / single 96k',
+      },
+      {
+        ...primarySourceProject,
+        fullTextStrategyId: 'fts-bbbbbbbbbbbbbbbb',
+        fullTextStrategyInputs: {figureMode: 'descriptions'},
+        fullTextStrategyLabel: 'mineru 4.0 / descriptions / single 96k',
+        id: 'source-project-2',
+        name: 'Peer Project',
+        summarySourceProjectId: 'source-project-2',
+      },
+    ] as unknown as typeof originalSourceProjects
+
+    const {container, dispose} = await renderCreateFromProjectPage()
+
+    try {
+      await fillSummaryConflictResolutionForm(container)
+      expect(container.textContent).toContain('Full text: mineru 4.0 / none / single 96k')
+
+      const peerCheckbox = Array.from(container.querySelectorAll('input[type="checkbox"]')).find((input) => {
+        return input.closest('label')?.textContent?.trim().startsWith('Peer Project')
+      })
+
+      expect(peerCheckbox).toBeInstanceOf(HTMLInputElement)
+      setChecked(peerCheckbox as HTMLInputElement, true)
+      await Promise.resolve()
+
+      const submitButton = container.querySelector('button[type="submit"]')
+
+      expect(container.textContent).toContain(
+        'Selected projects use different full-text strategies: Primary Project: mineru 4.0 / none / single 96k; Peer Project: mineru 4.0 / descriptions / single 96k. Differing inputs: figureMode',
+      )
+      expect(submitButton).toBeInstanceOf(HTMLButtonElement)
+      expect((submitButton as HTMLButtonElement).disabled).toBe(true)
+
+      await submitForm(container)
+
+      expect(mockState.createComparisonProjectFromProject).not.toHaveBeenCalled()
+    } finally {
+      mockState.sourcesQueryResult.data = originalSourceProjects
+      dispose()
+      container.remove()
+    }
+  })
+
   test('keeps blocking server validation errors on the form without post-create warnings', async () => {
     mockState.createComparisonProjectFromProject.mockRejectedValueOnce(new Error('Duplicate source DOI import key'))
 

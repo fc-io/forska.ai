@@ -1,4 +1,9 @@
 import {defaultSystemPromptVariant, systemPromptVariants} from '../../agent/judge/systemPromptVariant.ts'
+import {
+  FULL_TEXT_STRATEGY_LEGACY,
+  FULL_TEXT_STRATEGY_NONE,
+  getProjectFullTextStrategyIdSql,
+} from '../fullText/fullTextStrategy.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
 
 type ComparisonProjectServingGenerationConfigRunner = {
@@ -25,9 +30,13 @@ const summaryPromptId = 'summary'
 const comparisonSystemPromptVariantServingTable = 'mart.comparison_system_prompt_variant_serving'
 const contentFlagVariantCount = 3
 const contentMetadataOrderOffset = systemPromptVariants.length + 1
+const contentFullTextStrategyOrderOffset = 2 * contentMetadataOrderOffset
 const contentKeySystemPromptVariantSeparator = '-'
 const contentKeyMetadataSuffix = 'm'
+const contentKeyFullTextStrategySeparator = '~'
 const defaultSystemPromptVariantSql = getSqlLiteral(defaultSystemPromptVariant)
+const fullTextStrategyNoneSql = getSqlLiteral(FULL_TEXT_STRATEGY_NONE)
+const fullTextStrategyLegacySql = getSqlLiteral(FULL_TEXT_STRATEGY_LEGACY)
 
 const getComparisonProjectSystemPromptVariantSql = (expression: string) => {
   return `CASE
@@ -51,17 +60,35 @@ const getSystemPromptVariantOrderSql = (expression: string) => {
     END`
 }
 
-const getContentDimensionOrderSql = (systemPromptVariantExpression: string, useMetadataExpression: string) => {
+const getContentDimensionOrderSql = (
+  systemPromptVariantExpression: string,
+  useMetadataExpression: string,
+  fullTextStrategyRankExpression: string,
+) => {
   return `(
       ${getSystemPromptVariantOrderSql(systemPromptVariantExpression)}
         + CASE WHEN ${useMetadataExpression} THEN ${contentMetadataOrderOffset} ELSE 0 END
+        + ${fullTextStrategyRankExpression} * ${contentFullTextStrategyOrderOffset}
     )`
+}
+
+const getFullTextStrategyRankSql = (fullTextStrategyExpression: string) => {
+  return `DENSE_RANK() OVER (
+      ORDER BY
+        CASE ${fullTextStrategyExpression}
+          WHEN ${fullTextStrategyNoneSql} THEN 0
+          WHEN ${fullTextStrategyLegacySql} THEN 1
+          ELSE 2
+        END,
+        ${fullTextStrategyExpression}
+    ) - 1`
 }
 
 const getContentKeySql = (
   flagKeyExpression: string,
   systemPromptVariantExpression: string,
   useMetadataExpression: string,
+  fullTextStrategyExpression: string,
 ) => {
   return `${flagKeyExpression} || CASE
       WHEN ${useMetadataExpression} THEN ${getSqlLiteral(contentKeyMetadataSuffix)}
@@ -69,6 +96,9 @@ const getContentKeySql = (
     END || CASE
       WHEN ${systemPromptVariantExpression} = ${defaultSystemPromptVariantSql} THEN ''
       ELSE ${getSqlLiteral(contentKeySystemPromptVariantSeparator)} || ${systemPromptVariantExpression}
+    END || CASE
+      WHEN ${fullTextStrategyExpression} = ${fullTextStrategyNoneSql} THEN ''
+      ELSE ${getSqlLiteral(contentKeyFullTextStrategySeparator)} || ${fullTextStrategyExpression}
     END`
 }
 
@@ -196,7 +226,8 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
         use_abstract BOOLEAN NOT NULL,
         use_fulltext BOOLEAN NOT NULL,
         use_fulltext_no_images BOOLEAN NOT NULL,
-        use_metadata BOOLEAN NOT NULL
+        use_metadata BOOLEAN NOT NULL,
+        full_text_strategy_id VARCHAR NOT NULL
       )
     `,
     `
@@ -216,6 +247,7 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
         model_id VARCHAR NOT NULL,
         system_prompt_variant VARCHAR NOT NULL,
         use_metadata BOOLEAN NOT NULL,
+        full_text_strategy_id VARCHAR NOT NULL,
         source_project_order INTEGER NOT NULL
       )
     `,
@@ -228,6 +260,7 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
         model_id VARCHAR,
         system_prompt_variant VARCHAR,
         use_metadata BOOLEAN,
+        full_text_strategy_id VARCHAR,
         source_project_order INTEGER NOT NULL,
         prompt_id VARCHAR NOT NULL,
         prompt_order INTEGER NOT NULL,
@@ -242,6 +275,7 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
         model_id VARCHAR NOT NULL,
         system_prompt_variant VARCHAR NOT NULL,
         use_metadata BOOLEAN NOT NULL,
+        full_text_strategy_id VARCHAR NOT NULL,
         source_project_order INTEGER NOT NULL
       )
     `,
@@ -250,7 +284,8 @@ const getCreateComparisonProjectServingGenerationConfigTableStatements = () => {
         comparison_project_id VARCHAR NOT NULL,
         generation BIGINT NOT NULL,
         system_prompt_variant VARCHAR NOT NULL,
-        use_metadata BOOLEAN NOT NULL
+        use_metadata BOOLEAN NOT NULL,
+        full_text_strategy_id VARCHAR NOT NULL
       )
     `,
     `
@@ -387,7 +422,8 @@ const getContentVariantInsertSql = ({
       use_abstract,
       use_fulltext,
       use_fulltext_no_images,
-      use_metadata
+      use_metadata,
+      full_text_strategy_id
     )
     WITH comparison_project AS (
       SELECT *
@@ -398,28 +434,80 @@ const getContentVariantInsertSql = ({
     content_dimension_config AS (
       SELECT DISTINCT
         system_prompt_variant,
-        COALESCE(use_metadata, FALSE) AS use_metadata
+        COALESCE(use_metadata, FALSE) AS use_metadata,
+        COALESCE(full_text_strategy_id, ${fullTextStrategyNoneSql}) AS full_text_strategy_id
       FROM ${systemPromptVariantTable}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
         AND generation = ${generationLiteral}
+    ),
+    content_base_dimension AS (
+      SELECT DISTINCT system_prompt_variant, use_metadata
+      FROM content_dimension_config
+    ),
+    full_text_content_dimension AS (
+      SELECT system_prompt_variant, use_metadata, full_text_strategy_id
+      FROM content_dimension_config
+      WHERE full_text_strategy_id <> ${fullTextStrategyNoneSql}
+
+      UNION ALL
+
+      SELECT
+        content_base_dimension.system_prompt_variant,
+        content_base_dimension.use_metadata,
+        ${fullTextStrategyNoneSql} AS full_text_strategy_id
+      FROM content_base_dimension
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM content_dimension_config
+        WHERE content_dimension_config.system_prompt_variant = content_base_dimension.system_prompt_variant
+          AND content_dimension_config.use_metadata = content_base_dimension.use_metadata
+          AND content_dimension_config.full_text_strategy_id <> ${fullTextStrategyNoneSql}
+      )
+    ),
+    paired_content_variant AS (
+      SELECT
+        content_flag_variant.*,
+        content_base_dimension.system_prompt_variant,
+        content_base_dimension.use_metadata,
+        ${fullTextStrategyNoneSql} AS full_text_strategy_id
+      FROM content_flag_variant
+      CROSS JOIN content_base_dimension
+      WHERE NOT (content_flag_variant.use_fulltext OR content_flag_variant.use_fulltext_no_images)
+
+      UNION ALL
+
+      SELECT
+        content_flag_variant.*,
+        full_text_content_dimension.system_prompt_variant,
+        full_text_content_dimension.use_metadata,
+        full_text_content_dimension.full_text_strategy_id
+      FROM content_flag_variant
+      CROSS JOIN full_text_content_dimension
+      WHERE content_flag_variant.use_fulltext OR content_flag_variant.use_fulltext_no_images
+    ),
+    ranked_content_variant AS (
+      SELECT
+        paired_content_variant.*,
+        ${getFullTextStrategyRankSql('paired_content_variant.full_text_strategy_id')} AS full_text_strategy_rank
+      FROM paired_content_variant
     )
     SELECT
       ${comparisonProjectLiteral} AS comparison_project_id,
       ${generationLiteral} AS generation,
       CAST(
-        content_flag_variant.flag_order
-          + ${contentFlagVariantCount} * ${getContentDimensionOrderSql('content_dimension_config.system_prompt_variant', 'content_dimension_config.use_metadata')}
+        ranked_content_variant.flag_order
+          + ${contentFlagVariantCount} * ${getContentDimensionOrderSql('ranked_content_variant.system_prompt_variant', 'ranked_content_variant.use_metadata', 'ranked_content_variant.full_text_strategy_rank')}
         AS INTEGER
       ) AS content_order,
-      ${getContentKeySql('content_flag_variant.flag_key', 'content_dimension_config.system_prompt_variant', 'content_dimension_config.use_metadata')} AS content_key,
-      content_dimension_config.system_prompt_variant,
-      content_flag_variant.use_title,
-      content_flag_variant.use_abstract,
-      content_flag_variant.use_fulltext,
-      content_flag_variant.use_fulltext_no_images,
-      content_dimension_config.use_metadata
-    FROM content_flag_variant
-    CROSS JOIN content_dimension_config
+      ${getContentKeySql('ranked_content_variant.flag_key', 'ranked_content_variant.system_prompt_variant', 'ranked_content_variant.use_metadata', 'ranked_content_variant.full_text_strategy_id')} AS content_key,
+      ranked_content_variant.system_prompt_variant,
+      ranked_content_variant.use_title,
+      ranked_content_variant.use_abstract,
+      ranked_content_variant.use_fulltext,
+      ranked_content_variant.use_fulltext_no_images,
+      ranked_content_variant.use_metadata,
+      ranked_content_variant.full_text_strategy_id
+    FROM ranked_content_variant
   `
 }
 
@@ -436,7 +524,8 @@ const getSystemPromptVariantServingInsertSql = ({
       comparison_project_id,
       generation,
       system_prompt_variant,
-      use_metadata
+      use_metadata,
+      full_text_strategy_id
     )
     WITH comparison_project AS (
       SELECT *
@@ -469,7 +558,8 @@ const getSystemPromptVariantServingInsertSql = ({
     judgment_content_dimension AS (
       SELECT DISTINCT
         ${getComparisonProjectSystemPromptVariantSql('j.system_prompt_variant')} AS system_prompt_variant,
-        COALESCE(j.use_metadata, FALSE) AS use_metadata
+        COALESCE(j.use_metadata, FALSE) AS use_metadata,
+        j.full_text_strategy_id
       FROM app.judgment j
       INNER JOIN scoped_article scoped_article ON scoped_article.article_id = j.article_id
       INNER JOIN discovery_prompt discovery_prompt ON discovery_prompt.prompt_id = j.prompt_id
@@ -488,30 +578,35 @@ const getSystemPromptVariantServingInsertSql = ({
     source_project_content_dimension AS (
       SELECT DISTINCT
         ${getComparisonProjectSystemPromptVariantSql('p.system_prompt_variant')} AS system_prompt_variant,
-        COALESCE(p.use_metadata, FALSE) AS use_metadata
+        COALESCE(p.use_metadata, FALSE) AS use_metadata,
+        ${getProjectFullTextStrategyIdSql('p')} AS full_text_strategy_id
       FROM app.comparison_project_source_project cpsp
       INNER JOIN comparison_project cp ON cp.id = cpsp.comparison_project_id
       INNER JOIN app.project p ON p.id = cpsp.source_project_id
     ),
     discovered_content_dimension AS (
-      SELECT system_prompt_variant, use_metadata FROM source_project_content_dimension
+      SELECT system_prompt_variant, use_metadata, full_text_strategy_id FROM source_project_content_dimension
       UNION
-      SELECT system_prompt_variant, use_metadata FROM judgment_content_dimension
+      SELECT system_prompt_variant, use_metadata, full_text_strategy_id FROM judgment_content_dimension
     ),
     content_dimension_config AS (
-      SELECT system_prompt_variant, use_metadata
+      SELECT system_prompt_variant, use_metadata, full_text_strategy_id
       FROM discovered_content_dimension
 
       UNION ALL
 
-      SELECT ${defaultSystemPromptVariantSql} AS system_prompt_variant, FALSE AS use_metadata
+      SELECT
+        ${defaultSystemPromptVariantSql} AS system_prompt_variant,
+        FALSE AS use_metadata,
+        ${fullTextStrategyNoneSql} AS full_text_strategy_id
       WHERE NOT EXISTS (SELECT 1 FROM discovered_content_dimension)
     )
     SELECT
       ${comparisonProjectLiteral} AS comparison_project_id,
       ${generationLiteral} AS generation,
       system_prompt_variant,
-      use_metadata
+      use_metadata,
+      full_text_strategy_id
     FROM content_dimension_config
   `
 }
@@ -546,6 +641,7 @@ const getSourceProjectConfigInsertSql = ({
       model_id,
       system_prompt_variant,
       use_metadata,
+      full_text_strategy_id,
       source_project_order
     )
     WITH comparison_project AS (
@@ -561,6 +657,7 @@ const getSourceProjectConfigInsertSql = ({
       p.model_id,
       ${getComparisonProjectSystemPromptVariantSql('p.system_prompt_variant')} AS system_prompt_variant,
       COALESCE(p.use_metadata, FALSE) AS use_metadata,
+      ${getProjectFullTextStrategyIdSql('p')} AS full_text_strategy_id,
       CAST(
         ROW_NUMBER() OVER (
           ORDER BY cpsp.created_at ASC NULLS LAST, cpsp.id ASC
@@ -588,6 +685,7 @@ const getSummaryPromptGroupInsertSql = ({
       model_id,
       system_prompt_variant,
       use_metadata,
+      full_text_strategy_id,
       source_project_order,
       prompt_id,
       prompt_order,
@@ -605,6 +703,7 @@ const getSummaryPromptGroupInsertSql = ({
         model_id,
         system_prompt_variant,
         use_metadata,
+        full_text_strategy_id,
         source_project_order
       FROM ${comparisonProjectServingGenerationConfigTables.sourceProjectConfig}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
@@ -616,6 +715,7 @@ const getSummaryPromptGroupInsertSql = ({
         source_project_config.model_id,
         source_project_config.system_prompt_variant,
         source_project_config.use_metadata,
+        source_project_config.full_text_strategy_id,
         source_project_config.source_project_order,
         pp.prompt_id,
         CAST(
@@ -642,6 +742,7 @@ const getSummaryPromptGroupInsertSql = ({
         NULL AS model_id,
         NULL AS system_prompt_variant,
         NULL AS use_metadata,
+        NULL AS full_text_strategy_id,
         0 AS source_project_order,
         cpp.prompt_id,
         CAST(
@@ -663,6 +764,7 @@ const getSummaryPromptGroupInsertSql = ({
         model_id,
         system_prompt_variant,
         use_metadata,
+        full_text_strategy_id,
         source_project_order,
         prompt_id,
         prompt_order,
@@ -677,6 +779,7 @@ const getSummaryPromptGroupInsertSql = ({
         model_id,
         system_prompt_variant,
         use_metadata,
+        full_text_strategy_id,
         source_project_order,
         prompt_id,
         prompt_order,
@@ -691,6 +794,7 @@ const getSummaryPromptGroupInsertSql = ({
       model_id,
       system_prompt_variant,
       use_metadata,
+      full_text_strategy_id,
       source_project_order,
       prompt_id,
       prompt_order,
@@ -740,7 +844,8 @@ const getModelConfigInsertSql = ({
         use_abstract,
         use_fulltext,
         use_fulltext_no_images,
-        use_metadata
+        use_metadata,
+        full_text_strategy_id
       FROM ${comparisonProjectServingGenerationConfigTables.contentVariant}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
         AND generation = ${generationLiteral}
@@ -775,6 +880,7 @@ const getModelConfigInsertSql = ({
        AND content_variant.use_fulltext_no_images = j.use_fulltext_no_images
        AND content_variant.use_metadata = j.use_metadata
        AND content_variant.system_prompt_variant = j.system_prompt_variant
+       AND content_variant.full_text_strategy_id = j.full_text_strategy_id
       INNER JOIN app.model m ON m.id = j.model_id
       WHERE j.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM selected_model_config)
@@ -855,6 +961,7 @@ const getSourceProjectColumnConfigInsertSql = ({
       model_id,
       system_prompt_variant,
       use_metadata,
+      full_text_strategy_id,
       source_project_order
     )
     WITH source_project_summary_prompt_count AS (
@@ -871,6 +978,7 @@ const getSourceProjectColumnConfigInsertSql = ({
       source_project_config.model_id,
       source_project_config.system_prompt_variant,
       source_project_config.use_metadata,
+      source_project_config.full_text_strategy_id,
       source_project_config.source_project_order
     FROM ${comparisonProjectServingGenerationConfigTables.sourceProjectConfig} source_project_config
     INNER JOIN ${comparisonProjectServingGenerationConfigTables.modelConfig} summary_model_config
@@ -912,7 +1020,7 @@ const getRequiredColumnInsertSql = ({
         AND generation = ${generationLiteral}
     ),
     content_variant AS (
-      SELECT content_key, system_prompt_variant, use_metadata
+      SELECT content_key, system_prompt_variant, use_metadata, full_text_strategy_id
       FROM ${comparisonProjectServingGenerationConfigTables.contentVariant}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
         AND generation = ${generationLiteral}
@@ -936,7 +1044,8 @@ const getRequiredColumnInsertSql = ({
         source_project_id,
         model_id,
         system_prompt_variant,
-        use_metadata
+        use_metadata,
+        full_text_strategy_id
       FROM ${comparisonProjectServingGenerationConfigTables.sourceProjectColumnConfig}
       WHERE comparison_project_id = ${comparisonProjectLiteral}
         AND generation = ${generationLiteral}
@@ -975,6 +1084,7 @@ const getRequiredColumnInsertSql = ({
       INNER JOIN content_variant
         ON content_variant.system_prompt_variant = source_project_column_config.system_prompt_variant
        AND content_variant.use_metadata = source_project_column_config.use_metadata
+       AND content_variant.full_text_strategy_id = source_project_column_config.full_text_strategy_id
       WHERE cp.compare_with_humans = TRUE
         AND COALESCE(cp.human_judgment_mode, 'prompt') = 'summary'
     ),

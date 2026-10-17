@@ -19,6 +19,7 @@ import {
   fetchComparisonProjectConflictResolutionImportSources,
   fetchComparisonProjectSources,
 } from '../../../services/comparisonProjectsService'
+import {getComparisonProjectFullTextStrategyMixError} from '../../../utils/comparisonProjectFullTextStrategyMix.ts'
 
 type PostCreateConflictResolutionImportWarningResult = {
   createdComparisonProject: CreateComparisonProjectFromProjectResult['data']
@@ -430,6 +431,16 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
   const selectedProjectCount = createMemo(() => {
     return selectedSourceProjectId() ? 1 + selectedAdditionalSourceProjectIds().length : 0
   })
+  const selectedComparisonSourceProjects = createMemo(() => {
+    return [selectedSourceProject(), ...(summaryModeEnabled() ? selectedAdditionalSourceProjects() : [])].filter(
+      (sourceProject): sourceProject is ComparisonProjectSource => {
+        return sourceProject !== undefined
+      },
+    )
+  })
+  const fullTextStrategyValidationError = createMemo(() => {
+    return getComparisonProjectFullTextStrategyMixError(selectedComparisonSourceProjects())
+  })
   const isConflictResolutionAvailable = createMemo(() => {
     return summaryModeEnabled()
   })
@@ -470,7 +481,7 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
       queryFn: () => {
         return fetchComparisonProjectConflictResolutionImportPreview(input)
       },
-      enabled: selectedConflictResolutionImportSourceIds().length > 0,
+      enabled: selectedConflictResolutionImportSourceIds().length > 0 && !fullTextStrategyValidationError(),
       staleTime: 1000 * 30,
       suspense: false,
     }
@@ -529,6 +540,7 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
       comparisonProjectName().trim()
       && selectedSourceProjectId()
       && (!summaryModeEnabled() || (!summaryModeUnavailableReason() && !additionalProjectValidationError()))
+      && !fullTextStrategyValidationError()
       && !isLoading(),
     )
   })
@@ -579,6 +591,13 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
 
     if (summaryValidationError) {
       setError(summaryValidationError)
+      return
+    }
+
+    const strategyValidationError = fullTextStrategyValidationError()
+
+    if (strategyValidationError) {
+      setError(strategyValidationError)
       return
     }
 
@@ -751,6 +770,9 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
                             Content: {formatContentSettings(sourceProject)}
                           </p>
                           <p class="text-xs text-muted-foreground mt-1">
+                            Full text: {sourceProject.fullTextStrategyLabel}
+                          </p>
+                          <p class="text-xs text-muted-foreground mt-1">
                             Prompts: {sourceProject.prompts.length} · Import routes: {sourceProject.importRoutes.length}
                           </p>
                           <p
@@ -918,6 +940,9 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
                             Content: {formatContentSettings(sourceProject)}
                           </p>
                           <p class="text-xs text-muted-foreground mt-1">
+                            Full text: {sourceProject.fullTextStrategyLabel}
+                          </p>
+                          <p class="text-xs text-muted-foreground mt-1">
                             Summary prompts: {getSummaryPrompts(sourceProject).length} · Import routes:{' '}
                             {sourceProject.importRoutes.length}
                           </p>
@@ -935,6 +960,10 @@ export const CreateCompareJudgmentsFromProjectPage = () => {
 
           <Show when={summaryModeEnabled() && additionalProjectValidationError()}>
             <p class="text-sm text-red-600">{additionalProjectValidationError()}</p>
+          </Show>
+
+          <Show when={fullTextStrategyValidationError()}>
+            <p class="text-sm text-red-600">{fullTextStrategyValidationError()}</p>
           </Show>
 
           <div

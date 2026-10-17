@@ -266,3 +266,46 @@ test('the context upsert is content addressed and never overwrites', () => {
   expect(sql).toContain("['screening_v1']")
   expect(sql).not.toContain('DO UPDATE')
 })
+
+test('full-text strategies join the column identity while their labels stay display-only', () => {
+  const getFullTextContext = (row: Partial<ComparisonJudgmentContextColumnRow>) => {
+    return getComparisonJudgmentContext({
+      columns: [getLlmRow({promptId: 'prompt-a', sourceProjectId: null, ...row})],
+      criteria: [],
+      humanJudgmentMode: 'prompt',
+      sourceProjectIds: [],
+      summarySourceProjectId: null,
+    })
+  }
+  const plainContext = getFullTextContext({})
+  const noneContext = getFullTextContext({fullTextStrategyId: 'fts-none', fullTextStrategyStoredLabel: null})
+  const strategyContext = getFullTextContext({
+    contentKey: '0010~fts-aaaaaaaaaaaaaaaa',
+    fullTextStrategyId: 'fts-aaaaaaaaaaaaaaaa',
+    fullTextStrategyStoredLabel: 'mineru 4.0 / none / single 96k',
+  })
+  const relabelledContext = getFullTextContext({
+    contentKey: '0010~fts-aaaaaaaaaaaaaaaa',
+    fullTextStrategyId: 'fts-aaaaaaaaaaaaaaaa',
+    fullTextStrategyStoredLabel: 'renamed',
+  })
+  const legacyContext = getFullTextContext({contentKey: '0010~fts-legacy-v0', fullTextStrategyId: 'fts-legacy-v0'})
+
+  expect(getComparisonJudgmentContextCanonicalJson(noneContext)).toBe(
+    getComparisonJudgmentContextCanonicalJson(plainContext),
+  )
+  expect(getComparisonJudgmentContextId(noneContext)).toBe(getComparisonJudgmentContextId(plainContext))
+  expect(strategyContext.columns[0]).toMatchObject({
+    fullTextStrategyId: 'fts-aaaaaaaaaaaaaaaa',
+    fullTextStrategyLabel: 'mineru 4.0 / none / single 96k',
+  })
+  expect(legacyContext.columns[0]).toMatchObject({
+    fullTextStrategyId: 'fts-legacy-v0',
+    fullTextStrategyLabel: 'legacy full text (before strategy tracking)',
+  })
+  expect(getComparisonJudgmentContextId(relabelledContext)).toBe(getComparisonJudgmentContextId(strategyContext))
+  expect(getComparisonJudgmentContextId(strategyContext)).not.toBe(getComparisonJudgmentContextId(plainContext))
+  expect(getValidatedComparisonJudgmentContext(getComparisonJudgmentContextCanonicalJson(strategyContext))).toEqual(
+    strategyContext,
+  )
+})

@@ -15,6 +15,7 @@ import type {
   ComparisonProjectDifferenceFilter,
 } from '../utils/comparisonProjectDifferenceFilter.ts'
 import type {ComparisonProjectRowFilter} from '../utils/comparisonProjectRowFilter.ts'
+import type {FullTextStrategyInputs} from '../utils/fullTextStrategyOptions.ts'
 import {apiClient} from './apiClient.ts'
 import {handleApiResponse} from './utils/handleApiResponse.ts'
 
@@ -66,6 +67,9 @@ export type ComparisonProjectSource = {
   humanJudgmentMode: HumanJudgmentMode
   isSummaryCapable: boolean
   summarySourceProjectId: string | null
+  fullTextStrategyId: string
+  fullTextStrategyInputs: FullTextStrategyInputs | null
+  fullTextStrategyLabel: string
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -275,6 +279,8 @@ export type ComparisonJudgmentContextCriterion = {
 export type ComparisonJudgmentContextLlmColumn = {
   contentKey: string
   criteria?: ComparisonJudgmentContextCriterion[]
+  fullTextStrategyId?: string
+  fullTextStrategyLabel?: string
   kind: 'llm'
   modelId: string
   modelName: string | null
