@@ -10,6 +10,11 @@ import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
 } from '../../utils/providerModelLabel.ts'
+import {
+  type FullTextChunkPolicy,
+  type FullTextFigureMode,
+  getProjectFullTextStrategyIdSql,
+} from '../fullText/fullTextStrategy.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
@@ -39,6 +44,20 @@ import {
 import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
+import {
+  fullTextChunkPolicyBodySchema,
+  fullTextFigureModeBodySchema,
+  fullTextNoImagesReplacedErrorMessage,
+  getProjectFullTextColumnValuesSql,
+  getProjectFullTextSelectSql,
+  getProjectFullTextUpdateParts,
+  getProjectFullTextValues,
+  hasProjectFullTextSettingsChanged,
+  type ProjectFullTextResolution,
+  type ProjectFullTextRow,
+  resolveProjectFullTextSettingsOrThrow,
+  saveProjectFullTextStrategy,
+} from './projectsRoutes/projectFullTextSettings.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
 import {projectsRoutesGetArticlesReviewsBoth} from './projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts'
 import {projectsRoutesGetArticlesReviewsCount} from './projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts'
@@ -50,6 +69,7 @@ import {projectsRoutesGetPromptPreview} from './projectsRoutes/projectsRoutesGet
 import {projectsRoutesGetReviewsWarnings} from './projectsRoutes/projectsRoutesGetReviewsWarnings.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 import {projectsRoutesPostDeleteArchived} from './projectsRoutes/projectsRoutesPostDeleteArchived.ts'
+import {projectsRoutesPostFullTextStrategyPreview} from './projectsRoutes/projectsRoutesPostFullTextStrategyPreview.ts'
 
 const parseOptionalDate = (value?: string | null) => {
   if (!value) {
@@ -70,8 +90,6 @@ const parseOptionalDate = (value?: string | null) => {
 }
 
 const selectedModelUnavailableErrorMessage = 'Selected model does not exist or is disabled'
-const fulltextModeConflictErrorMessage =
-  'Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time'
 
 const assertSelectableProjectModelId = async (
   runner: Parameters<typeof assertSelectableProviderModelId>[0],
@@ -236,6 +254,7 @@ type ProjectPromptLlmCleanupCandidateRow = {
   promptId: string
   sharedProjectReferenced: boolean
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
   updatedAt: string | null
   useAbstract: boolean
   useFulltext: boolean
@@ -264,7 +283,7 @@ type ProjectEditCurrentProject = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   useTitle: boolean
-}
+} & ProjectFullTextRow
 
 type ExistingProjectPromptComparisonRow = ExistingProjectPromptAssociation & {
   order: number | null
@@ -290,11 +309,11 @@ type ProjectRow = {
   archived: boolean
   createdAt: unknown
   updatedAt: unknown
-}
+} & ProjectFullTextRow
 
 const getProjectValue = (row: ProjectRow) => {
   return {
-    ...row,
+    ...getProjectFullTextValues(row),
     systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
     dateFrom: getDateValue(row.dateFrom),
     dateTo: getDateValue(row.dateTo),
@@ -317,6 +336,7 @@ const getProjectRowSql = (projectId: string) => {
       COALESCE(use_metadata, FALSE) AS useMetadata,
       human_judgment_mode AS humanJudgmentMode,
       system_prompt_variant AS systemPromptVariant,
+      ${getProjectFullTextSelectSql('app.project')},
       date_from AS dateFrom,
       date_to AS dateTo,
       archived,
@@ -440,6 +460,8 @@ const getChangedProtectedProjectEditFields = ({
     useFulltextNoImages?: boolean
     useMetadata?: boolean
     useTitle?: boolean
+    fullTextFigureMode?: FullTextFigureMode | null
+    fullTextChunkPolicy?: FullTextChunkPolicy | null
   }
   currentImportRoutes: string[]
   currentProject: ProjectEditCurrentProject
@@ -451,11 +473,22 @@ const getChangedProtectedProjectEditFields = ({
     hasSystemPromptVariantEditChanged(body.systemPromptVariant, currentProject) ? 'systemPromptVariant' : null,
     body.useTitle !== undefined && body.useTitle !== currentProject.useTitle ? 'useTitle' : null,
     body.useAbstract !== undefined && body.useAbstract !== currentProject.useAbstract ? 'useAbstract' : null,
-    body.useFulltext !== undefined && body.useFulltext !== currentProject.useFulltext ? 'useFulltext' : null,
+    body.useFulltext !== undefined && body.useFulltext !== getProjectUsesFullText(currentProject)
+      ? 'useFulltext'
+      : null,
     body.useFulltextNoImages !== undefined && body.useFulltextNoImages !== currentProject.useFulltextNoImages
       ? 'useFulltextNoImages'
       : null,
     body.useMetadata !== undefined && body.useMetadata !== currentProject.useMetadata ? 'useMetadata' : null,
+    body.fullTextFigureMode !== undefined
+    && body.fullTextFigureMode !== getProjectFullTextValues(currentProject).fullTextFigureMode
+      ? 'fullTextFigureMode'
+      : null,
+    body.fullTextChunkPolicy !== undefined
+    && JSON.stringify(body.fullTextChunkPolicy)
+      !== JSON.stringify(getProjectFullTextValues(currentProject).fullTextChunkPolicy)
+      ? 'fullTextChunkPolicy'
+      : null,
     body.humanJudgmentMode !== undefined && body.humanJudgmentMode !== (currentProject.humanJudgmentMode ?? 'prompt')
       ? 'humanJudgmentMode'
       : null,
@@ -467,6 +500,30 @@ const getChangedProtectedProjectEditFields = ({
   ].filter((field): field is string => {
     return field !== null
   })
+}
+
+const getProjectUsesFullText = (project: Pick<ProjectEditCurrentProject, 'useFulltext' | 'useFulltextNoImages'>) => {
+  return project.useFulltext || project.useFulltextNoImages
+}
+
+const getFullTextReviewConfigFields = (params: {
+  currentProject: ProjectEditCurrentProject
+  fullTextResolution: ProjectFullTextResolution | null
+  useFulltext: boolean
+}): ProjectReviewConfigReviewServingField[] => {
+  const currentFullText = getProjectFullTextValues(params.currentProject)
+
+  return params.fullTextResolution
+    ? [
+        params.useFulltext !== params.currentProject.useFulltext ? ('useFulltext' as const) : null,
+        params.currentProject.useFulltextNoImages ? ('useFulltextNoImages' as const) : null,
+        params.fullTextResolution.fullTextStrategyId !== currentFullText.fullTextStrategyId
+          ? ('fullTextStrategyId' as const)
+          : null,
+      ].filter((field): field is ProjectReviewConfigReviewServingField => {
+        return field !== null
+      })
+    : []
 }
 
 const getEffectiveSubmittedPromptEdits = (
@@ -800,7 +857,8 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
         judgment.use_fulltext_no_images,
         judgment.use_metadata,
         judgment.use_title,
-        judgment.system_prompt_variant
+        judgment.system_prompt_variant,
+        judgment.full_text_strategy_id
       FROM app.judgment judgment
       INNER JOIN old_prompt ON old_prompt.prompt_id = judgment.prompt_id
       INNER JOIN app.project project ON project.id = '${escapeSqlString(params.projectId)}'
@@ -813,6 +871,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
         AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
         AND judgment.use_metadata = COALESCE(project.use_metadata, FALSE)
         AND judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')
+        AND judgment.full_text_strategy_id = ${getProjectFullTextStrategyIdSql('project')}
         AND project.archived = FALSE
         AND project.delete_pending_at IS NULL
         AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
@@ -853,6 +912,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
       candidate.use_metadata AS useMetadata,
       candidate.use_title AS useTitle,
       candidate.system_prompt_variant AS systemPromptVariant,
+      candidate.full_text_strategy_id AS fullTextStrategyId,
       EXISTS (
         SELECT 1
         FROM app.comparison_project_prompt comparison_prompt
@@ -889,6 +949,7 @@ const getProjectPromptLlmCleanupCandidateRowsTx = async (
           )
           AND COALESCE(other_project.use_metadata, FALSE) = candidate.use_metadata
           AND COALESCE(other_project.system_prompt_variant, 'legacy') = candidate.system_prompt_variant
+          AND ${getProjectFullTextStrategyIdSql('other_project')} = candidate.full_text_strategy_id
           AND (other_project.date_from IS NULL OR other_article.article_created_at >= other_project.date_from)
           AND (other_project.date_to IS NULL OR other_article.article_created_at <= other_project.date_to)
           AND NOT EXISTS (
@@ -960,6 +1021,7 @@ const softDeleteProjectPromptLlmJudgmentsTx = async (
             sourceOperation: 'delete' as const,
             sourceUpdatedAt: row.updatedAt,
             systemPromptVariant: row.systemPromptVariant,
+            fullTextStrategyId: row.fullTextStrategyId,
             useAbstract: row.useAbstract,
             useFulltext: row.useFulltext,
             useFulltextNoImages: row.useFulltextNoImages,
@@ -984,6 +1046,7 @@ const softDeleteProjectPromptLlmJudgmentsTx = async (
               AND existing.use_fulltext_no_images = judgment.use_fulltext_no_images
               AND existing.use_metadata = judgment.use_metadata
               AND existing.system_prompt_variant = judgment.system_prompt_variant
+              AND existing.full_text_strategy_id = judgment.full_text_strategy_id
           )
       WHERE judgment.id IN (${getQuotedStringList(softDeleteIds).join(', ')})
     `)
@@ -1139,6 +1202,7 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsFilters)
   .use(projectsRoutesGetArticlesReviewsHumanFilters)
   .use(projectsRoutesGetPromptPreview)
+  .use(projectsRoutesPostFullTextStrategyPreview)
   .use(projectsRoutesPostArticleReviewDetails)
   .use(projectsRoutesPostDeleteArchived)
   .use(projectsRoutesGetReviewsWarnings)
@@ -1164,28 +1228,30 @@ export const projectsRoutes = new Elysia()
   )
   .get('/api/projects', async () => {
     const projectsWithModelName = await getAppDatabaseService()
-      .queryJson<{
-        id: string
-        name: string
-        description: string | null
-        modelId: string
-        useTitle: boolean
-        useAbstract: boolean
-        useFulltext: boolean
-        useFulltextNoImages: boolean
-        useMetadata: boolean
-        humanJudgmentMode: 'prompt' | 'summary' | null
-        systemPromptVariant: string | null
-        dateFrom: unknown
-        dateTo: unknown
-        archived: boolean
-        createdAt: unknown
-        updatedAt: unknown
-        modelMetadataJson: unknown
-        modelName: string | null
-        modelProvider: string | null
-        modelVersion: string | null
-      }>(
+      .queryJson<
+        {
+          id: string
+          name: string
+          description: string | null
+          modelId: string
+          useTitle: boolean
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+          useMetadata: boolean
+          humanJudgmentMode: 'prompt' | 'summary' | null
+          systemPromptVariant: string | null
+          dateFrom: unknown
+          dateTo: unknown
+          archived: boolean
+          createdAt: unknown
+          updatedAt: unknown
+          modelMetadataJson: unknown
+          modelName: string | null
+          modelProvider: string | null
+          modelVersion: string | null
+        } & ProjectFullTextRow
+      >(
         `
       SELECT
         p.id AS id,
@@ -1199,6 +1265,7 @@ export const projectsRoutes = new Elysia()
         COALESCE(p.use_metadata, FALSE) AS useMetadata,
         p.human_judgment_mode AS humanJudgmentMode,
         p.system_prompt_variant AS systemPromptVariant,
+        ${getProjectFullTextSelectSql('p')},
         p.date_from AS dateFrom,
         p.date_to AS dateTo,
         p.archived AS archived,
@@ -1227,7 +1294,7 @@ export const projectsRoutes = new Elysia()
           const {modelMetadataJson: _modelMetadataJson, ...projectRow} = row
 
           return {
-            ...projectRow,
+            ...getProjectFullTextValues(projectRow),
             systemPromptVariant: getSystemPromptVariant(projectRow.systemPromptVariant),
             dateFrom: getDateValue(projectRow.dateFrom),
             dateTo: getDateValue(projectRow.dateTo),
@@ -1247,28 +1314,30 @@ export const projectsRoutes = new Elysia()
   })
   .get('/api/projects/archived', async () => {
     const projectsWithModelName = await getAppDatabaseService()
-      .queryJson<{
-        id: string
-        name: string
-        description: string | null
-        modelId: string
-        useTitle: boolean
-        useAbstract: boolean
-        useFulltext: boolean
-        useFulltextNoImages: boolean
-        useMetadata: boolean
-        humanJudgmentMode: 'prompt' | 'summary' | null
-        systemPromptVariant: string | null
-        dateFrom: unknown
-        dateTo: unknown
-        archived: boolean
-        createdAt: unknown
-        updatedAt: unknown
-        modelMetadataJson: unknown
-        modelName: string | null
-        modelProvider: string | null
-        modelVersion: string | null
-      }>(
+      .queryJson<
+        {
+          id: string
+          name: string
+          description: string | null
+          modelId: string
+          useTitle: boolean
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+          useMetadata: boolean
+          humanJudgmentMode: 'prompt' | 'summary' | null
+          systemPromptVariant: string | null
+          dateFrom: unknown
+          dateTo: unknown
+          archived: boolean
+          createdAt: unknown
+          updatedAt: unknown
+          modelMetadataJson: unknown
+          modelName: string | null
+          modelProvider: string | null
+          modelVersion: string | null
+        } & ProjectFullTextRow
+      >(
         `
       SELECT
         p.id AS id,
@@ -1282,6 +1351,7 @@ export const projectsRoutes = new Elysia()
         COALESCE(p.use_metadata, FALSE) AS useMetadata,
         p.human_judgment_mode AS humanJudgmentMode,
         p.system_prompt_variant AS systemPromptVariant,
+        ${getProjectFullTextSelectSql('p')},
         p.date_from AS dateFrom,
         p.date_to AS dateTo,
         p.archived AS archived,
@@ -1310,7 +1380,7 @@ export const projectsRoutes = new Elysia()
           const {modelMetadataJson: _modelMetadataJson, ...projectRow} = row
 
           return {
-            ...projectRow,
+            ...getProjectFullTextValues(projectRow),
             systemPromptVariant: getSystemPromptVariant(projectRow.systemPromptVariant),
             dateFrom: getDateValue(projectRow.dateFrom),
             dateTo: getDateValue(projectRow.dateTo),
@@ -1344,24 +1414,26 @@ export const projectsRoutes = new Elysia()
       const includeImportablePrompts = query.includeImportablePrompts === 'true'
 
       const [project] = await getAppDatabaseService()
-        .queryJson<{
-          id: string
-          name: string
-          description: string | null
-          modelId: string
-          useTitle: boolean
-          useAbstract: boolean
-          useFulltext: boolean
-          useFulltextNoImages: boolean
-          useMetadata: boolean
-          humanJudgmentMode: 'prompt' | 'summary' | null
-          systemPromptVariant: string | null
-          dateFrom: unknown
-          dateTo: unknown
-          archived: boolean
-          createdAt: unknown
-          updatedAt: unknown
-        }>(
+        .queryJson<
+          {
+            id: string
+            name: string
+            description: string | null
+            modelId: string
+            useTitle: boolean
+            useAbstract: boolean
+            useFulltext: boolean
+            useFulltextNoImages: boolean
+            useMetadata: boolean
+            humanJudgmentMode: 'prompt' | 'summary' | null
+            systemPromptVariant: string | null
+            dateFrom: unknown
+            dateTo: unknown
+            archived: boolean
+            createdAt: unknown
+            updatedAt: unknown
+          } & ProjectFullTextRow
+        >(
           `
       SELECT
         id,
@@ -1375,6 +1447,7 @@ export const projectsRoutes = new Elysia()
         COALESCE(use_metadata, FALSE) AS useMetadata,
         human_judgment_mode AS humanJudgmentMode,
         system_prompt_variant AS systemPromptVariant,
+        ${getProjectFullTextSelectSql('app.project')},
         date_from AS dateFrom,
         date_to AS dateTo,
         archived,
@@ -1395,7 +1468,7 @@ export const projectsRoutes = new Elysia()
         .then((rows) => {
           return rows.map((row) => {
             return {
-              ...row,
+              ...getProjectFullTextValues(row),
               systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
               dateFrom: getDateValue(row.dateFrom),
               dateTo: getDateValue(row.dateTo),
@@ -1570,13 +1643,20 @@ export const projectsRoutes = new Elysia()
 
       await assertSelectableProjectModelId(getAppDatabaseService(), body.modelId)
 
-      // Validate mutual exclusivity of useFulltext and useFulltextNoImages
-      if (body.useFulltext && body.useFulltextNoImages) {
-        throw new HttpError(400, fulltextModeConflictErrorMessage)
+      if (body.useFulltextNoImages) {
+        throw new HttpError(400, fullTextNoImagesReplacedErrorMessage)
       }
+
+      const fullTextResolution = await resolveProjectFullTextSettingsOrThrow({
+        fullTextChunkPolicy: body.fullTextChunkPolicy ?? null,
+        fullTextFigureMode: body.fullTextFigureMode ?? null,
+        useFulltext: body.useFulltext ?? false,
+      })
+      const fullTextColumnValues = getProjectFullTextColumnValuesSql(fullTextResolution)
 
       const newProject = await getAppDatabaseService().transaction(async (tx) => {
         const newProjectId = crypto.randomUUID()
+        await saveProjectFullTextStrategy(tx, fullTextResolution)
         const [createdProject] = await tx.queryJson<{
           id: string
           name: string
@@ -1605,6 +1685,9 @@ export const projectsRoutes = new Elysia()
             use_fulltext_no_images,
             use_metadata,
             system_prompt_variant,
+            full_text_figure_mode,
+            full_text_chunk_policy,
+            full_text_strategy_id,
             date_from,
             date_to
           )
@@ -1616,9 +1699,12 @@ export const projectsRoutes = new Elysia()
             ${(body.useTitle ?? true) ? 'TRUE' : 'FALSE'},
             ${(body.useAbstract ?? true) ? 'TRUE' : 'FALSE'},
             ${(body.useFulltext ?? false) ? 'TRUE' : 'FALSE'},
-            ${(body.useFulltextNoImages ?? false) ? 'TRUE' : 'FALSE'},
+            FALSE,
             ${(body.useMetadata ?? false) ? 'TRUE' : 'FALSE'},
             ${getSqlLiteral(body.systemPromptVariant ?? null)},
+            ${fullTextColumnValues.fullTextFigureMode},
+            ${fullTextColumnValues.fullTextChunkPolicy},
+            ${fullTextColumnValues.fullTextStrategyId},
             ${dateFrom ? getTimestampLiteral(dateFrom) : 'NULL'},
             ${dateTo ? getTimestampLiteral(dateTo) : 'NULL'}
           )
@@ -1754,6 +1840,7 @@ export const projectsRoutes = new Elysia()
             'useFulltextNoImages',
             'useMetadata',
             'systemPromptVariant',
+            'fullTextStrategyId',
             ...(dateFrom ? (['dateFrom'] as const) : []),
             ...(dateTo ? (['dateTo'] as const) : []),
             ...(body.prompts?.length || body.existingPromptIds?.length ? (['promptMembership'] as const) : []),
@@ -1765,7 +1852,13 @@ export const projectsRoutes = new Elysia()
           sourceUpdatedAt: getReviewServingSourceTimestamp(createdProject.updatedAt),
         })
 
-        return getProjectValue(createdProject)
+        const savedProject = await getProjectRow(tx, createdProject.id)
+
+        if (!savedProject) {
+          throw new Error('Failed to read created project')
+        }
+
+        return getProjectValue(savedProject)
       })
 
       return {data: newProject}
@@ -1782,6 +1875,8 @@ export const projectsRoutes = new Elysia()
         useFulltext: t.Optional(t.Boolean()),
         useFulltextNoImages: t.Optional(t.Boolean()),
         useMetadata: t.Optional(t.Boolean()),
+        fullTextFigureMode: t.Optional(t.Union([fullTextFigureModeBodySchema, t.Null()])),
+        fullTextChunkPolicy: t.Optional(t.Union([fullTextChunkPolicyBodySchema, t.Null()])),
         systemPromptVariant: t.Optional(systemPromptVariantBodySchema),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
@@ -1863,6 +1958,7 @@ export const projectsRoutes = new Elysia()
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
           COALESCE(use_metadata, FALSE) AS useMetadata,
+          ${getProjectFullTextSelectSql('app.project')},
           date_from AS dateFrom,
           date_to AS dateTo
         FROM app.project
@@ -1902,6 +1998,36 @@ export const projectsRoutes = new Elysia()
         )
       }
 
+      if (body.useFulltextNoImages) {
+        throw new HttpError(400, fullTextNoImagesReplacedErrorMessage)
+      }
+
+      const currentFullTextSettings = getProjectFullTextValues(currentProject)
+      const nextUseFulltext = body.useFulltext ?? getProjectUsesFullText(currentProject)
+      const hasFullTextSelection =
+        body.useFulltext !== undefined
+        || body.fullTextFigureMode !== undefined
+        || body.fullTextChunkPolicy !== undefined
+      const fullTextResolution =
+        hasFullTextSelection && !hasExistingJob
+          ? await resolveProjectFullTextSettingsOrThrow({
+              fullTextChunkPolicy:
+                body.fullTextChunkPolicy === undefined
+                  ? currentFullTextSettings.fullTextChunkPolicy
+                  : body.fullTextChunkPolicy,
+              fullTextFigureMode:
+                body.fullTextFigureMode === undefined
+                  ? currentFullTextSettings.fullTextFigureMode
+                  : body.fullTextFigureMode,
+              useFulltext: nextUseFulltext,
+            })
+          : null
+      const hasFullTextUpdate =
+        fullTextResolution !== null
+        && (hasProjectFullTextSettingsChanged(currentFullTextSettings, fullTextResolution)
+          || nextUseFulltext !== currentProject.useFulltext
+          || currentProject.useFulltextNoImages)
+
       const hasPromptChanges = getHasProjectPromptEditChanges({
         existingPrompts: existingPromptComparisonRows,
         submittedPrompts: body.prompts as ProjectEditPromptPayload[] | undefined,
@@ -1914,20 +2040,30 @@ export const projectsRoutes = new Elysia()
       const hasModelIdUpdate = body.modelId !== undefined && body.modelId !== currentProject.modelId
       const hasImportRouteChanges =
         body.importRoutes !== undefined && !hasSameStringSet(body.importRoutes, currentImportRoutes)
-      const changedReviewConfigFields = getChangedReviewConfigFields({
-        body,
-        currentProject,
-        hasImportRouteChanges,
-        hasModelIdUpdate,
-        hasPromptChanges,
-        parsedDateFrom,
-        parsedDateTo,
-      })
+      const changedReviewConfigFields = Array.from(
+        new Set([
+          ...getChangedReviewConfigFields({
+            body,
+            currentProject,
+            hasImportRouteChanges,
+            hasModelIdUpdate,
+            hasPromptChanges,
+            parsedDateFrom,
+            parsedDateTo,
+          }),
+          ...getFullTextReviewConfigFields({currentProject, fullTextResolution, useFulltext: nextUseFulltext}),
+        ]),
+      )
+      const hasFullTextStrategyChange = changedReviewConfigFields.includes('fullTextStrategyId')
       const hasNameUpdate = body.name !== undefined && body.name !== currentProject.name
       const hasDescriptionUpdate = body.description !== undefined && body.description !== currentProject.description
       const hasSystemPromptVariantUpdate = hasSystemPromptVariantEditChanged(body.systemPromptVariant, currentProject)
       const hasEditChanges =
-        hasNameUpdate || hasDescriptionUpdate || hasSystemPromptVariantUpdate || changedReviewConfigFields.length > 0
+        hasNameUpdate
+        || hasDescriptionUpdate
+        || hasSystemPromptVariantUpdate
+        || hasFullTextUpdate
+        || changedReviewConfigFields.length > 0
 
       if (!hasEditChanges) {
         const [project, prompts] = await Promise.all([
@@ -1950,10 +2086,8 @@ export const projectsRoutes = new Elysia()
             await assertSelectableProjectModelId(tx, body.modelId as string)
           }
 
-          const finalUseFulltext = body.useFulltext ?? currentProject.useFulltext
-          const finalUseFulltextNoImages = body.useFulltextNoImages ?? currentProject.useFulltextNoImages
-          if (finalUseFulltext && finalUseFulltextNoImages) {
-            throw new HttpError(400, fulltextModeConflictErrorMessage)
+          if (hasFullTextUpdate && fullTextResolution) {
+            await saveProjectFullTextStrategy(tx, fullTextResolution)
           }
 
           const updateParts = [
@@ -1980,11 +2114,12 @@ export const projectsRoutes = new Elysia()
               ? `use_abstract = ${body.useAbstract ? 'TRUE' : 'FALSE'}`
               : null,
             !hasExistingJob && changedReviewConfigFields.includes('useFulltext')
-              ? `use_fulltext = ${body.useFulltext ? 'TRUE' : 'FALSE'}`
+              ? `use_fulltext = ${nextUseFulltext ? 'TRUE' : 'FALSE'}`
               : null,
             !hasExistingJob && changedReviewConfigFields.includes('useFulltextNoImages')
-              ? `use_fulltext_no_images = ${body.useFulltextNoImages ? 'TRUE' : 'FALSE'}`
+              ? 'use_fulltext_no_images = FALSE'
               : null,
+            ...(hasFullTextUpdate && fullTextResolution ? getProjectFullTextUpdateParts(fullTextResolution) : []),
             !hasExistingJob && changedReviewConfigFields.includes('useMetadata')
               ? `use_metadata = ${body.useMetadata ? 'TRUE' : 'FALSE'}`
               : null,
@@ -2254,7 +2389,12 @@ export const projectsRoutes = new Elysia()
             await markComparisonServingStaleForProjectPromptEditTx(tx, params.id)
           }
 
-          if (!hasExistingJob && (hasSystemPromptVariantUpdate || changedReviewConfigFields.includes('useMetadata'))) {
+          if (
+            !hasExistingJob
+            && (hasSystemPromptVariantUpdate
+              || changedReviewConfigFields.includes('useMetadata')
+              || hasFullTextStrategyChange)
+          ) {
             await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForSourceProjects(
               [params.id],
               {runner: tx},
@@ -2334,6 +2474,8 @@ export const projectsRoutes = new Elysia()
         useFulltext: t.Optional(t.Boolean()),
         useFulltextNoImages: t.Optional(t.Boolean()),
         useMetadata: t.Optional(t.Boolean()),
+        fullTextFigureMode: t.Optional(t.Union([fullTextFigureModeBodySchema, t.Null()])),
+        fullTextChunkPolicy: t.Optional(t.Union([fullTextChunkPolicyBodySchema, t.Null()])),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Array(
@@ -2423,21 +2565,23 @@ export const projectsRoutes = new Elysia()
     await assertProjectIsActive(params.id)
 
     const [sourceProject] = await getAppDatabaseService()
-      .queryJson<{
-        id: string
-        name: string
-        description: string | null
-        modelId: string
-        humanJudgmentMode: 'prompt' | 'summary' | null
-        systemPromptVariant: string | null
-        useTitle: boolean
-        useAbstract: boolean
-        useFulltext: boolean
-        useFulltextNoImages: boolean
-        useMetadata: boolean
-        dateFrom: unknown
-        dateTo: unknown
-      }>(
+      .queryJson<
+        {
+          id: string
+          name: string
+          description: string | null
+          modelId: string
+          humanJudgmentMode: 'prompt' | 'summary' | null
+          systemPromptVariant: string | null
+          useTitle: boolean
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+          useMetadata: boolean
+          dateFrom: unknown
+          dateTo: unknown
+        } & ProjectFullTextRow
+      >(
         `
       SELECT
         id,
@@ -2451,6 +2595,7 @@ export const projectsRoutes = new Elysia()
         use_fulltext AS useFulltext,
         use_fulltext_no_images AS useFulltextNoImages,
         COALESCE(use_metadata, FALSE) AS useMetadata,
+        ${getProjectFullTextSelectSql('app.project')},
         date_from AS dateFrom,
         date_to AS dateTo
       FROM app.project
@@ -2467,7 +2612,11 @@ export const projectsRoutes = new Elysia()
       )
       .then((rows) => {
         return rows.map((row) => {
-          return {...row, dateFrom: getDateValue(row.dateFrom), dateTo: getDateValue(row.dateTo)}
+          return {
+            ...getProjectFullTextValues(row),
+            dateFrom: getDateValue(row.dateFrom),
+            dateTo: getDateValue(row.dateTo),
+          }
         })
       })
 
@@ -2480,26 +2629,29 @@ export const projectsRoutes = new Elysia()
       modelId: sourceProject.modelId,
     })
 
+    const clonedFullTextColumnValues = getProjectFullTextColumnValuesSql(sourceProject)
     const result = await getAppDatabaseService().transaction(async (tx) => {
       const clonedProjectId = crypto.randomUUID()
-      const [clonedProject] = await tx.queryJson<{
-        id: string
-        name: string
-        description: string | null
-        modelId: string
-        humanJudgmentMode: 'prompt' | 'summary' | null
-        systemPromptVariant: string | null
-        useTitle: boolean
-        useAbstract: boolean
-        useFulltext: boolean
-        useFulltextNoImages: boolean
-        useMetadata: boolean
-        dateFrom: unknown
-        dateTo: unknown
-        archived: boolean
-        createdAt: unknown
-        updatedAt: unknown
-      }>(`
+      const [clonedProject] = await tx.queryJson<
+        {
+          id: string
+          name: string
+          description: string | null
+          modelId: string
+          humanJudgmentMode: 'prompt' | 'summary' | null
+          systemPromptVariant: string | null
+          useTitle: boolean
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+          useMetadata: boolean
+          dateFrom: unknown
+          dateTo: unknown
+          archived: boolean
+          createdAt: unknown
+          updatedAt: unknown
+        } & ProjectFullTextRow
+      >(`
         INSERT INTO app.project (
           id,
           name,
@@ -2512,6 +2664,9 @@ export const projectsRoutes = new Elysia()
           use_fulltext,
           use_fulltext_no_images,
           use_metadata,
+          full_text_figure_mode,
+          full_text_chunk_policy,
+          full_text_strategy_id,
           date_from,
           date_to,
           archived
@@ -2528,6 +2683,9 @@ export const projectsRoutes = new Elysia()
           ${sourceProject.useFulltext ? 'TRUE' : 'FALSE'},
           ${sourceProject.useFulltextNoImages ? 'TRUE' : 'FALSE'},
           ${sourceProject.useMetadata ? 'TRUE' : 'FALSE'},
+          ${clonedFullTextColumnValues.fullTextFigureMode},
+          ${clonedFullTextColumnValues.fullTextChunkPolicy},
+          ${clonedFullTextColumnValues.fullTextStrategyId},
           ${sourceProject.dateFrom ? getTimestampLiteral(sourceProject.dateFrom) : 'NULL'},
           ${sourceProject.dateTo ? getTimestampLiteral(sourceProject.dateTo) : 'NULL'},
           FALSE
@@ -2544,6 +2702,10 @@ export const projectsRoutes = new Elysia()
           use_fulltext AS useFulltext,
           use_fulltext_no_images AS useFulltextNoImages,
           COALESCE(use_metadata, FALSE) AS useMetadata,
+          full_text_figure_mode AS fullTextFigureMode,
+          TO_JSON(full_text_chunk_policy) AS fullTextChunkPolicy,
+          full_text_strategy_id AS fullTextStrategyId,
+          ${getSqlLiteral(sourceProject.fullTextStrategyLabel)} AS fullTextStrategyStoredLabel,
           date_from AS dateFrom,
           date_to AS dateTo,
           archived,

@@ -43,6 +43,7 @@ type JudgmentPromptCollisionRow = {
   projectId: string | null
   promptId: string
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
   updatedAt: string | null
   useAbstract: boolean
   useFulltext: boolean
@@ -182,7 +183,8 @@ const getJudgmentPromptCollisions = async ({
            merge_row.use_fulltext_no_images AS useFulltextNoImages,
            merge_row.use_metadata AS useMetadata,
            merge_row.use_title AS useTitle,
-           merge_row.system_prompt_variant AS systemPromptVariant
+           merge_row.system_prompt_variant AS systemPromptVariant,
+           merge_row.full_text_strategy_id AS fullTextStrategyId
     FROM app.judgment merge_row
     INNER JOIN app.judgment keep_row
       ON keep_row.article_id = merge_row.article_id
@@ -194,6 +196,7 @@ const getJudgmentPromptCollisions = async ({
      AND keep_row.use_fulltext_no_images = merge_row.use_fulltext_no_images
      AND keep_row.use_metadata = merge_row.use_metadata
      AND keep_row.system_prompt_variant = merge_row.system_prompt_variant
+     AND keep_row.full_text_strategy_id = merge_row.full_text_strategy_id
      AND keep_row.delete_generation = merge_row.delete_generation
     WHERE merge_row.prompt_id = '${escapeSqlString(mergeId)}'
   `)
@@ -280,6 +283,7 @@ const resolveJudgmentPromptCollisions = async ({
           sourceOperation: 'delete',
           sourceUpdatedAt: collision.updatedAt,
           systemPromptVariant: collision.systemPromptVariant,
+          fullTextStrategyId: collision.fullTextStrategyId,
           useAbstract: collision.useAbstract,
           useFulltext: collision.useFulltext,
           useFulltextNoImages: collision.useFulltextNoImages,
@@ -882,6 +886,7 @@ const promptsAdminRoutes = new Elysia()
           projectId: string | null
           promptId: string | null
           systemPromptVariant: SystemPromptVariant
+          fullTextStrategyId: string
           useAbstract: boolean
           useFulltext: boolean
           useFulltextNoImages: boolean
@@ -899,7 +904,8 @@ const promptsAdminRoutes = new Elysia()
             COALESCE(use_fulltext_no_images, FALSE) AS useFulltextNoImages,
             COALESCE(use_metadata, FALSE) AS useMetadata,
             COALESCE(use_title, FALSE) AS useTitle,
-            system_prompt_variant AS systemPromptVariant
+            system_prompt_variant AS systemPromptVariant,
+            full_text_strategy_id AS fullTextStrategyId
           FROM app.judgment
           WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
         `)
@@ -929,6 +935,7 @@ const promptsAdminRoutes = new Elysia()
                 sourceOperation: 'delete' as const,
                 sourceUpdatedAt: now,
                 systemPromptVariant: judgment.systemPromptVariant,
+                fullTextStrategyId: judgment.fullTextStrategyId,
                 useAbstract: judgment.useAbstract,
                 useFulltext: judgment.useFulltext,
                 useFulltextNoImages: judgment.useFulltextNoImages,

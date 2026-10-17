@@ -10,6 +10,7 @@ import type {
   PromptRecord,
 } from '../../../db/schemaTypes.ts'
 import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadata.ts'
+import {getEffectiveFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {
   detailReadyReviewServingComponents,
@@ -68,6 +69,7 @@ type ProjectReviewConfig = {
   useFulltextNoImages: boolean
   useMetadata?: boolean
   systemPromptVariant?: SystemPromptVariant
+  fullTextStrategyId?: string
 }
 
 const detailReadinessReviewServingRepairPriority = 1_000
@@ -105,6 +107,7 @@ type ProjectReviewDetailJudgmentRow = {
   judgmentUseFulltextNoImages: boolean | null
   judgmentUseMetadata: boolean | null
   judgmentSystemPromptVariant: string | null
+  judgmentFullTextStrategyId: string | null
   judgmentChunkingStrategy: string | null
   judgmentIsAnswered: boolean | null
   judgmentAnsweredOriginal: string | null
@@ -437,6 +440,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
         judgmentUseFulltextNoImages: params.projectReviewConfig.useFulltextNoImages,
         judgmentUseMetadata: params.projectReviewConfig.useMetadata ?? false,
         judgmentSystemPromptVariant: getSystemPromptVariant(params.projectReviewConfig.systemPromptVariant),
+        judgmentFullTextStrategyId: getEffectiveFullTextStrategyId(params.projectReviewConfig.fullTextStrategyId),
         judgmentChunkingStrategy: row.chunking_strategy ?? null,
         judgmentIsAnswered: row.is_answered ?? false,
         judgmentAnsweredOriginal: row.answered_original ?? null,
@@ -601,6 +605,7 @@ const getArticleJudgmentRows = async (params: {
       j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
       j.use_metadata AS judgmentUseMetadata,
       j.system_prompt_variant AS judgmentSystemPromptVariant,
+      j.full_text_strategy_id AS judgmentFullTextStrategyId,
       j.chunking_strategy AS judgmentChunkingStrategy,
       j.is_answered AS judgmentIsAnswered,
       j.answered_original AS judgmentAnsweredOriginal,
@@ -659,6 +664,7 @@ const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow
     useFulltextNoImages: row.judgmentUseFulltextNoImages ?? false,
     useMetadata: row.judgmentUseMetadata ?? false,
     systemPromptVariant: getSystemPromptVariant(row.judgmentSystemPromptVariant),
+    fullTextStrategyId: getEffectiveFullTextStrategyId(row.judgmentFullTextStrategyId),
     chunkingStrategy: row.judgmentChunkingStrategy as JudgmentChunkingStrategy,
     isAnswered: row.judgmentIsAnswered ?? false,
     answeredOriginal: row.judgmentAnsweredOriginal,

@@ -64,9 +64,9 @@ const chunkModeLabels: Record<FullTextChunkMode, string> = {chunked: 'chunked', 
 
 const getDoclingServeVersion = (converterVersion: string): string => {
   const serveVersion = converterVersion
-    .split(',')
+    .split(/[\s,]+/)
     .map((part) => {
-      return part.trim().split('=')
+      return part.split('=')
     })
     .find(([name]) => {
       return name === 'docling-serve'

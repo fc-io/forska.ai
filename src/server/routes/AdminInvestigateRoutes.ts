@@ -273,6 +273,7 @@ type ProjectScope = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
   dateFrom: Date | null
   dateTo: Date | null
   importRouteIds: string[]
@@ -335,6 +336,7 @@ const getProjectJudgmentClause = (projectScope: ProjectScope | null, judgmentAli
     `${judgmentAlias}.use_fulltext_no_images = ${appQueryHelpers.getSqlLiteral(projectScope.useFulltextNoImages)}`,
     `${judgmentAlias}.use_metadata = ${appQueryHelpers.getSqlLiteral(projectScope.useMetadata)}`,
     `${judgmentAlias}.system_prompt_variant = ${appQueryHelpers.getSqlLiteral(projectScope.systemPromptVariant)}`,
+    `${judgmentAlias}.full_text_strategy_id = ${appQueryHelpers.getSqlLiteral(projectScope.fullTextStrategyId)}`,
     routeOrCuratedClause ? `EXISTS (SELECT 1 FROM app.article a WHERE ${routeOrCuratedClause})` : null,
   ])
 }
@@ -427,6 +429,7 @@ const fetchProjectScope = async (projectId: string): Promise<ProjectScope | null
         useFulltextNoImages: projectConfig.useFulltextNoImages,
         useMetadata: projectConfig.useMetadata,
         systemPromptVariant: projectConfig.systemPromptVariant,
+        fullTextStrategyId: projectConfig.fullTextStrategyId,
         dateFrom: projectConfig.dateFrom,
         dateTo: projectConfig.dateTo,
         importRouteIds: projectConfig.importRouteIds,

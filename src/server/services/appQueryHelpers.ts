@@ -68,6 +68,7 @@ type JudgmentConfig = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
 }
 
 export const getAndClause = (parts: Array<string | null | undefined | false>) => {
@@ -97,6 +98,7 @@ export const getJudgmentConfigClause = (params: {judgmentAlias: string; configs:
         `${params.judgmentAlias}.use_fulltext_no_images = ${getSqlLiteral(config.useFulltextNoImages)}`,
         `${params.judgmentAlias}.use_metadata = ${getSqlLiteral(config.useMetadata)}`,
         `${params.judgmentAlias}.system_prompt_variant = ${getSqlLiteral(config.systemPromptVariant)}`,
+        `${params.judgmentAlias}.full_text_strategy_id = ${getSqlLiteral(config.fullTextStrategyId)}`,
       ])
     }),
   )

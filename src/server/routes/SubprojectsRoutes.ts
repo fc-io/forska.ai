@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {getEffectiveFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
 import {
@@ -47,6 +48,7 @@ type ProjectBound = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
 }
 
 type PromptFilter = {promptId: string; types: string[]}
@@ -133,6 +135,7 @@ const queryArticlesWithPromptFilters = async (
         useFulltextNoImages: project.useFulltextNoImages,
         useMetadata: project.useMetadata,
         systemPromptVariant: project.systemPromptVariant,
+        fullTextStrategyId: project.fullTextStrategyId,
       }
     }),
   })
@@ -383,6 +386,7 @@ export const subprojectsRoutes = new Elysia()
                 useFulltextNoImages: boolean | null
                 useMetadata: boolean | null
                 systemPromptVariant: string | null
+                fullTextStrategyId: string | null
               }>(`
                 SELECT
                   id,
@@ -394,7 +398,8 @@ export const subprojectsRoutes = new Elysia()
                   use_fulltext AS useFulltext,
                   use_fulltext_no_images AS useFulltextNoImages,
                   COALESCE(use_metadata, FALSE) AS useMetadata,
-                  system_prompt_variant AS systemPromptVariant
+                  system_prompt_variant AS systemPromptVariant,
+                  full_text_strategy_id AS fullTextStrategyId
                 FROM app.project
                 WHERE id IN (${appQueryHelpers.getQuotedStringList(body.sourceProjectIds).join(', ')})
               `),
@@ -411,6 +416,7 @@ export const subprojectsRoutes = new Elysia()
           useFulltextNoImages: row.useFulltextNoImages ?? false,
           useMetadata: row.useMetadata ?? false,
           systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
+          fullTextStrategyId: getEffectiveFullTextStrategyId(row.fullTextStrategyId),
         }
       })
       const importRouteIdsByProjectId = projectImportRoutes.reduce<Map<string, string[]>>((map, row) => {

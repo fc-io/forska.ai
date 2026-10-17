@@ -1,5 +1,7 @@
+import {doclingConvertOptions, fetchDoclingConverterVersion} from '../../fullText/converters/doclingConverter.ts'
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
-import {type ProviderDefinition} from '../providerTypes.ts'
+import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
+import {type ProviderDefinition, type ProviderListedModel} from '../providerTypes.ts'
 import {
   beginSecretlessProviderAuth,
   finishSecretlessProviderAuth,
@@ -48,6 +50,40 @@ const assertDoclingAvailable = async (baseURL: string | null): Promise<void> => 
   throw new Error('Docling server did not respond at the configured base URL')
 }
 
+export const getDoclingListedModel = (serverVersion: string): ProviderListedModel => {
+  const listedModel = {
+    displayName: `Docling ${doclingConvertOptions.pipeline}`,
+    metadataJson: null,
+    modelName: `docling-${doclingConvertOptions.pipeline}`,
+    remoteModelId: `docling-${doclingConvertOptions.pipeline}`,
+    variant: null,
+    version: serverVersion,
+  }
+
+  return {
+    ...listedModel,
+    metadataJson: {
+      ...getNormalizedProviderModelMetadata({
+        listedModel,
+        providerKind: 'docling',
+        rawMetadata: null,
+        source: 'provider',
+      }),
+      converter: {kind: 'docling', pipeline: doclingConvertOptions.pipeline, serverVersion},
+    },
+  }
+}
+
+const getDoclingServerVersion = async (baseURL: string | null): Promise<string> => {
+  const normalizedBaseURL = getTrimmedValue(baseURL)
+
+  if (!normalizedBaseURL) {
+    throw new Error('Docling base URL is required')
+  }
+
+  return fetchDoclingConverterVersion(normalizedBaseURL)
+}
+
 export const createDoclingAdapter = (catalog: ProviderCatalogEntry): ProviderDefinition => {
   return {
     beginAuth: async ({connection}) => {
@@ -70,8 +106,8 @@ export const createDoclingAdapter = (catalog: ProviderCatalogEntry): ProviderDef
       throw new Error('Docling provider does not support judgment invocation')
     },
     kind: catalog.kind,
-    listModels: async () => {
-      return []
+    listModels: async ({runtimeCredentials}) => {
+      return [getDoclingListedModel(await getDoclingServerVersion(runtimeCredentials.baseURL))]
     },
     resolveRuntimeCredentials: async ({connection}) => {
       return resolveSecretlessRuntimeCredentials({baseURL: connection.baseURL, secretRef: connection.secretRef})
