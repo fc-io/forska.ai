@@ -106,6 +106,6 @@ export const storeFullTextChunkPlans = async (plans: StoredFullTextChunkPlan[]):
       text_hash = EXCLUDED.text_hash,
       chunk_count = EXCLUDED.chunk_count,
       chunks = EXCLUDED.chunks,
-      created_at = current_timestamp
+      created_at = now()
   `)
 }

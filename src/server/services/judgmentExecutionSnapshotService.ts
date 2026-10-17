@@ -3,6 +3,7 @@ import {createHash, randomUUID} from 'node:crypto'
 import type {FullTextJudgingBlock} from '../../agent/judge/fullTextJudgingInput.ts'
 import {getFullTextChunkPlanKey} from '../fullText/fullTextChunkPlanStore.ts'
 import {type FullTextJudgingArticleRow, getFullTextJudgingBlocks} from '../fullText/fullTextJudgingBlocks.ts'
+import {startPendingFullTextJudgingFigureDescriptions} from '../fullText/fullTextJudgingFigureDescriptions.ts'
 import {
   FULL_TEXT_STRATEGY_LEGACY,
   FULL_TEXT_STRATEGY_NONE,
@@ -792,10 +793,10 @@ const getSnapshotIdentityByRequest = async ({claimId, jobId, queueRecordId}: Jud
 
 const shouldIncludeFulltext = (requests: JudgmentExecutionSnapshotClaimInput[]): boolean => {
   return requests.every((request) => {
-    return typeof request.useFulltext === 'boolean'
+    return typeof request.useFulltext === 'boolean' && typeof request.useFulltextNoImages === 'boolean'
   })
     ? requests.some((request) => {
-        return request.useFulltext === true
+        return request.useFulltext === true || request.useFulltextNoImages === true
       })
     : true
 }
@@ -914,6 +915,11 @@ const createJudgmentExecutionSnapshotsForClaimGroup = async (
 ): Promise<JudgmentExecutionSnapshotClaimWithRecord[]> => {
   const rows = await getSnapshotRows(requests, {includeFulltext: shouldIncludeFulltext(requests)})
   const blocks = await getSnapshotFullTextJudgingBlocks(rows, {database: getAppDatabaseService(), writable: true})
+  startPendingFullTextJudgingFigureDescriptions(
+    rows.map((row) => {
+      return {articleId: getFullTextJudgingArticleRow(row).articleId, block: getRowFullTextJudgingBlock(row, blocks)}
+    }),
+  )
   const rowsByClaimId = new Map(
     rows.map((row) => {
       return [row.claimId, row] as const

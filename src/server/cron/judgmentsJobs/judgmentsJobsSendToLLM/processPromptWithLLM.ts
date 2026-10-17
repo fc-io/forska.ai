@@ -1,9 +1,17 @@
 import {Effect} from 'effect'
 
 import {judgeSinglePrompt, MAX_COMPLETION_TOKENS, RecoverableJudgeError} from '../../../../agent/judge.ts'
+import {
+  type FullTextJudgingBlock,
+  FullTextJudgingConfigError,
+  type FullTextJudgingInput,
+  FullTextTooLargeError,
+  getFullTextJudgingBlockFromPayload,
+} from '../../../../agent/judge/fullTextJudgingInput.ts'
+import {JudgePromptTooLargeError} from '../../../../agent/judge/judgePromptTooLargeError.ts'
 import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromptJudgment.ts'
 import {getSystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
-import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
+import type {ArticleRecord, JudgmentsJobsPromptsSkipReason, PublicationStatus} from '../../../../db/schemaTypes.ts'
 import type {StoredProviderInvocationContext} from '../../../providers/providerInvocationService.ts'
 import {getModelContext, getModelContextWindowMissingError} from '../../../providers/providerModelCapabilities.ts'
 import {escapeSqlString} from '../../../services/appQueryHelpers.ts'
@@ -16,7 +24,6 @@ import {
   recordJudgmentJobProviderSuccess,
 } from '../../../services/judgmentJobProviderHealthService.ts'
 import {normalizeProviderKind} from '../../../services/providerCatalog.ts'
-import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {createRateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError, formatConnectionOutageMessage} from '../connectionHealth.ts'
 import {
@@ -35,6 +42,13 @@ import {
 } from '../judgmentJobSqliteService.ts'
 import {isProviderAdmissionLeaseLostError, reserveJudgmentPromptRequestWork} from '../judgmentsRequestRuntime.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
+import {
+  type FullTextJudgingPreparedResult,
+  fullTextJudgingRequeueDelayMs,
+  isFullTextJudgingStrategy,
+  prepareFullTextJudging,
+  prepareLocalFullTextJudging,
+} from './prepareFullTextJudging.ts'
 import {prepareLiveArticleForJudging} from './prepareLiveArticleForJudging.ts'
 
 const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): Promise<boolean> => {
@@ -82,9 +96,20 @@ type PromptDefinition = {
 type PreparedPromptResult =
   | {kind: 'closed'; closeoutReason: PromptCloseoutReason}
   | {kind: 'completed'; noRequestSuccessReason: PromptNoRequestSuccessReason}
-  | {kind: 'ready'}
-  | {kind: 'run'; articleForJudging: ArticleRecord; prompt: PromptDefinition}
-  | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
+  | {kind: 'ready'; retryAfterMs: number | null}
+  | {
+      kind: 'run'
+      articleForJudging: ArticleRecord
+      fullTextJudging: FullTextJudgingInput | null
+      prompt: PromptDefinition
+    }
+  | {kind: 'skipped'; skipReason: JudgmentsJobsPromptsSkipReason}
+
+type OwnerBackedPromptInput = {
+  article: ArticleRecord
+  fullTextJudgingBlock: FullTextJudgingBlock | null
+  prompt: PromptDefinition
+}
 
 type PromptPreparationWaiter = {limit: number; resolve: (release: () => void) => void}
 
@@ -99,14 +124,14 @@ type PromptTerminalState =
   | {kind: 'closed'; closeoutReason: PromptCloseoutReason}
   | {kind: 'completed'; noRequestSuccessReason?: PromptNoRequestSuccessReason}
   | {kind: 'ready'; retryAfterMs: number | null}
-  | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
+  | {kind: 'skipped'; skipReason: JudgmentsJobsPromptsSkipReason}
 
 const processPromptLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const processPromptFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const providerHealthWriteLogger = createRateLimitedLogger({sink: 'both', windowMs: 60_000})
 const processPromptComponent = 'processPromptWithLLM'
 const cachedArticleLookups = new Map<string, Promise<ArticleRecord | null>>()
-const cachedOwnerBackedPromptLookups = new Map<string, Promise<{article: ArticleRecord; prompt: PromptDefinition}>>()
+const cachedOwnerBackedPromptLookups = new Map<string, Promise<OwnerBackedPromptInput>>()
 const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 
 const modelContextWindowMissingRetryAfterMs = 60_000
@@ -258,11 +283,9 @@ const getPublicationStatus = (value: unknown): PublicationStatus | null => {
     : null
 }
 
-const getOwnerBackedPromptInput = async (
-  promptToProcess: PromptToProcess,
-): Promise<{article: ArticleRecord; prompt: PromptDefinition}> => {
+const getOwnerBackedPromptInput = async (promptToProcess: PromptToProcess): Promise<OwnerBackedPromptInput> => {
   const cacheKey = `${promptToProcess.executionSnapshotId}:${promptToProcess.executionSnapshotHash}`
-  const buildPromptInput = (payloadValue: unknown): {article: ArticleRecord; prompt: PromptDefinition} => {
+  const buildPromptInput = (payloadValue: unknown): OwnerBackedPromptInput => {
     const payload = isObjectRecord(payloadValue) ? payloadValue : null
     const articlePayload = payload && isObjectRecord(payload.article) ? payload.article : null
     const promptPayload = payload && isObjectRecord(payload.prompt) ? payload.prompt : null
@@ -313,6 +336,7 @@ const getOwnerBackedPromptInput = async (
         sourceMetadata: articlePayload.sourceMetadata ?? null,
         publicationStatus: getPublicationStatus(articlePayload.publicationStatus),
       },
+      fullTextJudgingBlock: getFullTextJudgingBlockFromPayload(payload?.fullTextJudging),
       prompt: {
         id: promptId,
         originalText: promptOriginalText,
@@ -451,8 +475,7 @@ export const resetPromptPreparationConcurrencyForTests = (): void => {
 
 const processSinglePrompt = async (
   promptToProcess: PromptToProcess,
-  article: ArticleRecord,
-  prompt: PromptDefinition,
+  prepared: Extract<PreparedPromptResult, {kind: 'run'}>,
   modelContext: number,
 ): Promise<void> => {
   const sessionId = null
@@ -464,8 +487,8 @@ const processSinglePrompt = async (
 
   try {
     await judgeSinglePrompt({
-      article,
-      prompt,
+      article: prepared.articleForJudging,
+      prompt: prepared.prompt,
       queueRecordId: promptToProcess.recordId,
       sessionId,
       judgmentsJobId: promptToProcess.jobId,
@@ -505,6 +528,7 @@ const processSinglePrompt = async (
       },
       systemPromptVariant: promptToProcess.systemPromptVariant,
       fullTextStrategyId: promptToProcess.fullTextStrategyId,
+      fullTextJudging: prepared.fullTextJudging,
     })
   } finally {
     releaseRequestWork()
@@ -550,13 +574,106 @@ const markAsRetry = async (jobId: string, recordId: string, retryAfterMs: number
 const markAsSkipped = async (
   jobId: string,
   recordId: string,
-  skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large',
+  skipReason: JudgmentsJobsPromptsSkipReason,
 ): Promise<void> => {
   if (shouldUseJudgeWorkerOwnerHandoff()) {
     return undefined
   }
 
   await getJudgmentJobSqliteService().markPromptAsSkipped(jobId, recordId, skipReason)
+}
+
+const logFullTextSkip = (
+  promptToProcess: PromptToProcess,
+  skipReason: JudgmentsJobsPromptsSkipReason,
+  message?: string,
+): void => {
+  processPromptLogger.log(`fulltext:skip:${skipReason}`, '[fulltext] Skipping article', {
+    articleId: promptToProcess.articleId,
+    component: processPromptComponent,
+    event: 'fulltextSkip',
+    jobId: promptToProcess.jobId,
+    message: message ?? null,
+    promptId: promptToProcess.promptId,
+    recordId: promptToProcess.recordId,
+    skipReason,
+  })
+}
+
+const getFullTextPreparedPrompt = ({
+  article,
+  prompt,
+  promptToProcess,
+  result,
+}: {
+  article: ArticleRecord
+  prompt: PromptDefinition
+  promptToProcess: PromptToProcess
+  result: FullTextJudgingPreparedResult
+}): PreparedPromptResult => {
+  if (result.kind === 'requeue') {
+    processPromptFailureLogger.warn(
+      `fulltext.requeue.${result.reason}.${promptToProcess.jobId}`,
+      `[fulltext] Requeuing prompt: ${result.message}`,
+      {
+        articleId: promptToProcess.articleId,
+        component: processPromptComponent,
+        event: 'fulltextJudgingRequeue',
+        jobId: promptToProcess.jobId,
+        promptId: promptToProcess.promptId,
+        reason: result.reason,
+        recordId: promptToProcess.recordId,
+      },
+    )
+  }
+
+  if (result.kind === 'closed') {
+    processPromptFailureLogger.error('llm.prompt.fullTextNotReady', `[fulltext] ${result.message}`, {
+      articleId: promptToProcess.articleId,
+      component: processPromptComponent,
+      event: 'fullTextNotReady',
+      jobId: promptToProcess.jobId,
+      promptId: promptToProcess.promptId,
+      recordId: promptToProcess.recordId,
+    })
+  }
+
+  if (result.kind === 'skipped') {
+    logFullTextSkip(promptToProcess, result.skipReason, result.message)
+  }
+
+  return result.kind === 'ready'
+    ? {articleForJudging: article, fullTextJudging: result.fullTextJudging, kind: 'run', prompt}
+    : result.kind === 'requeue'
+      ? {kind: 'ready', retryAfterMs: fullTextJudgingRequeueDelayMs}
+      : result.kind === 'skipped'
+        ? {kind: 'skipped', skipReason: result.skipReason}
+        : {closeoutReason: 'requestFailure', kind: 'closed'}
+}
+
+const prepareLocalFullTextPrompt = async ({
+  article,
+  modelContext,
+  prompt,
+  promptToProcess,
+}: {
+  article: ArticleRecord
+  modelContext: number
+  prompt: PromptDefinition
+  promptToProcess: PromptToProcess
+}): Promise<PreparedPromptResult> => {
+  return getFullTextPreparedPrompt({
+    article,
+    prompt,
+    promptToProcess,
+    result: await prepareLocalFullTextJudging({
+      articleId: article.id,
+      fallbackFullText: article.fullText,
+      fullTextStrategyId: promptToProcess.fullTextStrategyId,
+      modelContext,
+      modelName: promptToProcess.modelName,
+    }),
+  })
 }
 
 const prepareLocalPrompt = async (
@@ -577,7 +694,7 @@ const prepareLocalPrompt = async (
     return {kind: 'completed', noRequestSuccessReason: 'alreadyJudged'}
   }
 
-  const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
+  const needsFulltext = isFullTextJudgingStrategy(promptToProcess.fullTextStrategyId)
   const article = await getCachedArticle({
     articleId: promptToProcess.articleId,
     includeFullText: needsFulltext,
@@ -596,23 +713,10 @@ const prepareLocalPrompt = async (
     return {closeoutReason: 'articleMissing', kind: 'closed'}
   }
 
-  const preparedArticle = await prepareLiveArticleForJudging({
-    article,
-    modelContext,
-    useFulltext: promptToProcess.useFulltext,
-    useFulltextNoImages: promptToProcess.useFulltextNoImages,
-  })
+  const preparedArticle = await prepareLiveArticleForJudging({article, needsFulltext})
 
   if (preparedArticle.kind === 'skipped') {
-    processPromptLogger.log(`fulltext:skip:${preparedArticle.skipReason}`, '[fulltext] Skipping article', {
-      articleId: article.id,
-      component: processPromptComponent,
-      event: 'fulltextSkip',
-      jobId: promptToProcess.jobId,
-      promptId: promptToProcess.promptId,
-      recordId: promptToProcess.recordId,
-      skipReason: preparedArticle.skipReason,
-    })
+    logFullTextSkip(promptToProcess, preparedArticle.skipReason)
     return {kind: 'skipped', skipReason: preparedArticle.skipReason}
   }
 
@@ -625,23 +729,9 @@ const prepareLocalPrompt = async (
       promptId: promptToProcess.promptId,
       recordId: promptToProcess.recordId,
     })
-    return {kind: 'ready'}
+    return {kind: 'ready', retryAfterMs: null}
   }
 
-  if (preparedArticle.fullTextBudget && !preparedArticle.fullTextBudget.withinBudget) {
-    processPromptLogger.log('fulltext:large:chunked-mode', '[fulltext] Large fulltext will rely on chunked judging', {
-      articleId: article.id,
-      component: processPromptComponent,
-      event: 'largeFulltextChunkedMode',
-      jobId: promptToProcess.jobId,
-      maxTokens: preparedArticle.fullTextBudget.maxTokens,
-      promptId: promptToProcess.promptId,
-      recordId: promptToProcess.recordId,
-      tokenCount: preparedArticle.fullTextBudget.tokenCount,
-    })
-  }
-
-  const articleForJudging = preparedArticle.article
   const prompt = await getCachedPromptDefinition({
     projectId: promptToProcess.projectId,
     promptId: promptToProcess.promptId,
@@ -660,78 +750,67 @@ const prepareLocalPrompt = async (
     return {closeoutReason: 'promptMissing', kind: 'closed'}
   }
 
-  return {articleForJudging, kind: 'run', prompt}
+  return needsFulltext
+    ? prepareLocalFullTextPrompt({article: preparedArticle.article, modelContext, prompt, promptToProcess})
+    : {articleForJudging: preparedArticle.article, fullTextJudging: null, kind: 'run', prompt}
 }
 
 const prepareOwnerBackedPrompt = async (
   promptToProcess: PromptToProcess,
   modelContext: number,
 ): Promise<PreparedPromptResult> => {
-  const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
+  const needsFulltext = isFullTextJudgingStrategy(promptToProcess.fullTextStrategyId)
   const ownerBackedInput = await getOwnerBackedPromptInput(promptToProcess)
-  let articleWithFulltext = ownerBackedInput.article
+  const article = ownerBackedInput.article
+  const fullText = article.fullText
 
-  if (needsFulltext) {
-    if (!articleWithFulltext.fullText) {
-      if (articleWithFulltext.fullTextConversionStatus === 'failed' || !articleWithFulltext.fullTextPDF) {
-        const skipReason =
-          articleWithFulltext.fullTextConversionStatus === 'failed' ? 'conversion_failed' : 'no_fulltext'
-
-        processPromptLogger.log(`fulltext:skip:${skipReason}`, '[fulltext] Skipping article', {
-          articleId: articleWithFulltext.id,
-          component: processPromptComponent,
-          event: 'fulltextSkip',
-          jobId: promptToProcess.jobId,
-          promptId: promptToProcess.promptId,
-          recordId: promptToProcess.recordId,
-          skipReason,
-        })
-
-        return {kind: 'skipped', skipReason}
-      }
-
-      processPromptLogger.log(
-        'fulltext.transientFailure.requeue',
-        '[fulltext] Snapshot missing fulltext, requeuing prompt',
-        {
-          articleId: articleWithFulltext.id,
-          component: processPromptComponent,
-          event: 'fulltextTransientRequeue',
-          jobId: promptToProcess.jobId,
-          promptId: promptToProcess.promptId,
-          recordId: promptToProcess.recordId,
-        },
-      )
-
-      return {kind: 'ready'}
+  if (!needsFulltext) {
+    return {
+      articleForJudging: {...article, fullText: null},
+      fullTextJudging: null,
+      kind: 'run',
+      prompt: ownerBackedInput.prompt,
     }
+  }
 
-    const processResult = processFulltextForLLM(articleWithFulltext.fullText, {
-      stripImages: promptToProcess.useFulltextNoImages,
-      promptTokenLimit: modelContext,
+  if (fullText) {
+    return getFullTextPreparedPrompt({
+      article,
+      prompt: ownerBackedInput.prompt,
+      promptToProcess,
+      result: await prepareFullTextJudging({
+        abstract: article.articleSummary,
+        articleId: article.id,
+        block: ownerBackedInput.fullTextJudgingBlock,
+        fullText,
+        fullTextStrategyId: promptToProcess.fullTextStrategyId,
+        modelContext,
+        modelName: promptToProcess.modelName,
+      }),
     })
-
-    if (!processResult.withinBudget) {
-      processPromptLogger.log('fulltext:large:chunked-mode', '[fulltext] Large fulltext will rely on chunked judging', {
-        articleId: articleWithFulltext.id,
-        component: processPromptComponent,
-        event: 'largeFulltextChunkedMode',
-        jobId: promptToProcess.jobId,
-        maxTokens: processResult.maxTokens,
-        promptId: promptToProcess.promptId,
-        recordId: promptToProcess.recordId,
-        tokenCount: processResult.tokenCount,
-      })
-    }
-
-    articleWithFulltext = {...articleWithFulltext, fullText: processResult.processedText}
   }
 
-  return {
-    articleForJudging: needsFulltext ? articleWithFulltext : {...articleWithFulltext, fullText: null},
-    kind: 'run',
-    prompt: ownerBackedInput.prompt,
+  if (article.fullTextConversionStatus === 'failed' || !article.fullTextPDF) {
+    const skipReason = article.fullTextConversionStatus === 'failed' ? 'conversion_failed' : 'no_fulltext'
+
+    logFullTextSkip(promptToProcess, skipReason)
+    return {kind: 'skipped', skipReason}
   }
+
+  processPromptLogger.log(
+    'fulltext.transientFailure.requeue',
+    '[fulltext] Snapshot missing fulltext, requeuing prompt',
+    {
+      articleId: article.id,
+      component: processPromptComponent,
+      event: 'fulltextTransientRequeue',
+      jobId: promptToProcess.jobId,
+      promptId: promptToProcess.promptId,
+      recordId: promptToProcess.recordId,
+    },
+  )
+
+  return {kind: 'ready', retryAfterMs: null}
 }
 
 const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: number): Promise<PreparedPromptResult> => {
@@ -931,7 +1010,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
           }
 
           if (prepared.kind !== 'run') {
-            terminalState = prepared.kind === 'ready' ? {kind: 'ready', retryAfterMs: null} : prepared
+            terminalState = prepared
             return undefined
           }
 
@@ -962,7 +1041,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
               promptId: promptToProcess.promptId,
               recordId: promptToProcess.recordId,
             })
-            await processSinglePrompt(promptToProcess, prepared.articleForJudging, prepared.prompt, modelContext)
+            await processSinglePrompt(promptToProcess, prepared, modelContext)
             terminalState = {kind: 'completed'}
             const duration = Date.now() - startTime
             processPromptLogger.log(`llm:success:${promptToProcess.modelBaseUrl}`, '[llm] Success - processed prompt', {
@@ -1016,6 +1095,43 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
             if (error instanceof JudgmentPersistenceError) {
               terminalState = {kind: 'ready', retryAfterMs: null}
               throw error
+            }
+
+            if (error instanceof FullTextTooLargeError) {
+              logFullTextSkip(promptToProcess, 'fulltext_too_large', error.message)
+              terminalState = {kind: 'skipped', skipReason: 'fulltext_too_large'}
+              return undefined
+            }
+
+            if (error instanceof FullTextJudgingConfigError) {
+              processPromptFailureLogger.warn(
+                `fulltext.requeue.full_text_config.${promptToProcess.jobId}`,
+                `[fulltext] Requeuing prompt: ${error.message}`,
+                {
+                  articleId: promptToProcess.articleId,
+                  component: processPromptComponent,
+                  event: 'fulltextJudgingRequeue',
+                  jobId: promptToProcess.jobId,
+                  promptId: promptToProcess.promptId,
+                  reason: 'full_text_config',
+                  recordId: promptToProcess.recordId,
+                },
+              )
+              terminalState = {kind: 'ready', retryAfterMs: fullTextJudgingRequeueDelayMs}
+              return undefined
+            }
+
+            if (error instanceof JudgePromptTooLargeError) {
+              processPromptFailureLogger.error('llm.prompt.tooLarge', `[llm] ${error.message}`, {
+                articleId: promptToProcess.articleId,
+                component: processPromptComponent,
+                event: 'promptTooLarge',
+                jobId: promptToProcess.jobId,
+                promptId: promptToProcess.promptId,
+                recordId: promptToProcess.recordId,
+              })
+              terminalState = {closeoutReason: 'requestFailure', kind: 'closed'}
+              return undefined
             }
 
             if (isProviderAdmissionLeaseLostError(error)) {

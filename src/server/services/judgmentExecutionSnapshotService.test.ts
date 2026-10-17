@@ -178,11 +178,11 @@ test('snapshot hydration of full-text claims reads the stored canonical text for
   expect(snapshotSql).not.toContain('TO_JSON(a.original_data)')
 })
 
-test('use_fulltext_no_images is identity only: such claims read no full text', async () => {
+test('use_fulltext_no_images claims read the stored full text unchanged; rendering follows the strategy', async () => {
   const snapshotSql = await captureTransientSnapshotSql({useFulltext: false, useFulltextNoImages: true})
 
-  expect(snapshotSql).toContain('NULL AS fullText,')
-  expect(snapshotSql).toContain('NULL AS fullTextJudgingAssets')
+  expect(snapshotSql).toContain('a.full_text AS fullText,')
+  expect(snapshotSql).toContain('TO_JSON(a.full_text_assets) AS fullTextJudgingAssets')
   expect(snapshotSql).not.toContain('regexp_replace(a.full_text')
 })
 

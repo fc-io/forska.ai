@@ -1,9 +1,23 @@
 import {normalizeInlineText} from '../../server/fullText/canonicalFullText/canonicalFullTextUnits.ts'
+import {
+  type FigureDescriptionAssetState,
+  type FigureDescriptionTarget,
+  getFigureDescriptionAssetState,
+  isFigureDescriptionAsset,
+} from '../../server/fullText/figureDescriptionAssets.ts'
 import type {FullTextFigureMode} from '../../utils/fullTextStrategyOptions.ts'
 
-export type FullTextJudgingFigureAsset = {description: string; index: number}
+export type FullTextJudgingFigureAsset = {
+  description: string
+  descriptionState: FigureDescriptionAssetState | null
+  index: number
+}
 
-export type RenderedFullTextForJudging = {missingDescriptionFigureIndexes: number[]; text: string}
+export type RenderedFullTextForJudging = {
+  failedDescriptionFigureIndexes: number[]
+  missingDescriptionFigureIndexes: number[]
+  text: string
+}
 
 export class FullTextFigureMarkerError extends Error {
   constructor(message: string) {
@@ -14,6 +28,8 @@ export class FullTextFigureMarkerError extends Error {
 
 const figureMarkerLinePattern = /^\[figure:(\d+)\]$/
 
+const figureDescriptionStates: readonly FigureDescriptionAssetState[] = ['described', 'failed', 'needed']
+
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -22,31 +38,72 @@ const getParsedAssetsValue = (value: unknown): unknown => {
   return typeof value === 'string' ? JSON.parse(value) : (value ?? [])
 }
 
-const toFigureAsset = (value: unknown): FullTextJudgingFigureAsset => {
-  if (!isRecord(value) || !Number.isInteger(value.index)) {
-    throw new FullTextFigureMarkerError('full_text_assets entry has no integer figure index')
-  }
-
-  return {
-    description: normalizeInlineText(typeof value.description === 'string' ? value.description : ''),
-    index: value.index as number,
-  }
-}
-
-export const getFullTextJudgingFigureAssets = (value: unknown): FullTextJudgingFigureAsset[] => {
+const getAssetList = (value: unknown): unknown[] => {
   const parsed = getParsedAssetsValue(value)
 
   if (!Array.isArray(parsed)) {
     throw new FullTextFigureMarkerError('full_text_assets is not a figure list')
   }
 
-  return parsed.map(toFigureAsset)
+  return parsed
 }
 
-export const getMissingFigureDescriptionCount = (assets: unknown): number => {
-  return getFullTextJudgingFigureAssets(assets).filter((asset) => {
-    return asset.description === ''
-  }).length
+const getDescriptionState = (
+  value: Record<string, unknown>,
+  target: FigureDescriptionTarget | null,
+): FigureDescriptionAssetState | null => {
+  return target === null
+    ? null
+    : isFigureDescriptionAsset(value)
+      ? getFigureDescriptionAssetState(value, target)
+      : 'failed'
+}
+
+const toFigureAsset = (value: unknown, target: FigureDescriptionTarget | null): FullTextJudgingFigureAsset => {
+  if (!isRecord(value) || !Number.isInteger(value.index)) {
+    throw new FullTextFigureMarkerError('full_text_assets entry has no integer figure index')
+  }
+
+  const descriptionState = getDescriptionState(value, target)
+
+  return {
+    description:
+      descriptionState === 'described' && typeof value.description === 'string'
+        ? normalizeInlineText(value.description)
+        : '',
+    descriptionState,
+    index: value.index as number,
+  }
+}
+
+export const getFullTextJudgingFigureAssets = (
+  value: unknown,
+  target: FigureDescriptionTarget | null,
+): FullTextJudgingFigureAsset[] => {
+  return getAssetList(value).map((entry) => {
+    return toFigureAsset(entry, target)
+  })
+}
+
+const isFigureDescriptionState = (value: unknown): value is FigureDescriptionAssetState => {
+  return typeof value === 'string' && (figureDescriptionStates as readonly string[]).includes(value)
+}
+
+const isStoredJudgingFigureAsset = (value: unknown): value is FullTextJudgingFigureAsset => {
+  return (
+    isRecord(value)
+    && Number.isInteger(value.index)
+    && typeof value.description === 'string'
+    && (value.descriptionState === null || isFigureDescriptionState(value.descriptionState))
+  )
+}
+
+export const getStoredFullTextJudgingFigureAssets = (value: unknown): FullTextJudgingFigureAsset[] | null => {
+  return Array.isArray(value) && value.every(isStoredJudgingFigureAsset)
+    ? value.map((asset) => {
+        return {description: asset.description, descriptionState: asset.descriptionState, index: asset.index}
+      })
+    : null
 }
 
 const getFigureMarkerIndex = (line: string): number | null => {
@@ -94,22 +151,45 @@ const assertMarkersReferenceAssets = ({
 }
 
 const renderMarkerLine = ({
-  descriptionByIndex,
+  assetByIndex,
   figureMode,
   line,
 }: {
-  descriptionByIndex: Map<number, string>
+  assetByIndex: Map<number, FullTextJudgingFigureAsset>
   figureMode: FullTextFigureMode
   line: string
 }): string[] => {
   const markerIndex = getFigureMarkerIndex(line)
-  const description = markerIndex === null ? '' : (descriptionByIndex.get(markerIndex) ?? '')
+  const description = markerIndex === null ? '' : (assetByIndex.get(markerIndex)?.description ?? '')
 
   return markerIndex === null || figureMode === 'native_images'
     ? [line]
     : figureMode === 'none'
       ? []
       : [description === '' ? line : `Description: ${description}`]
+}
+
+const getMarkerIndexesInState = ({
+  assetByIndex,
+  figureMode,
+  markerIndexes,
+  state,
+}: {
+  assetByIndex: Map<number, FullTextJudgingFigureAsset>
+  figureMode: FullTextFigureMode
+  markerIndexes: number[]
+  state: FigureDescriptionAssetState
+}): number[] => {
+  return figureMode === 'descriptions'
+    ? markerIndexes.filter((index) => {
+        const asset = assetByIndex.get(index)
+
+        return state === 'needed'
+          ? asset?.descriptionState === 'needed'
+              || (asset?.descriptionState === 'described' && asset.description === '')
+          : asset?.descriptionState === state
+      })
+    : []
 }
 
 export const renderFullTextForJudging = ({
@@ -126,23 +206,23 @@ export const renderFullTextForJudging = ({
 
   assertMarkersReferenceAssets({assets, markerIndexes})
 
-  const descriptionByIndex = new Map(
-    assets.map((asset): [number, string] => {
-      return [asset.index, asset.description]
+  const assetByIndex = new Map(
+    assets.map((asset): [number, FullTextJudgingFigureAsset] => {
+      return [asset.index, asset]
     }),
   )
-  const missingDescriptionFigureIndexes =
-    figureMode === 'descriptions'
-      ? markerIndexes.filter((index) => {
-          return (descriptionByIndex.get(index) ?? '') === ''
-        })
-      : []
 
   return {
-    missingDescriptionFigureIndexes,
+    failedDescriptionFigureIndexes: getMarkerIndexesInState({assetByIndex, figureMode, markerIndexes, state: 'failed'}),
+    missingDescriptionFigureIndexes: getMarkerIndexesInState({
+      assetByIndex,
+      figureMode,
+      markerIndexes,
+      state: 'needed',
+    }),
     text: lines
       .flatMap((line) => {
-        return renderMarkerLine({descriptionByIndex, figureMode, line})
+        return renderMarkerLine({assetByIndex, figureMode, line})
       })
       .join('\n'),
   }
