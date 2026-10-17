@@ -1,8 +1,43 @@
-import {type ProviderInvocationResult, type ProviderListedModel} from '../providerTypes.ts'
+import {getProviderImageBase64, getProviderPromptParts} from '../providerImageInput.ts'
+import {type ProviderInvocationResult, type ProviderInvokePrompt, type ProviderListedModel} from '../providerTypes.ts'
 import {getRequiredApiKey, getRequiredBaseURL, getTrimmedValue} from './providerTransportUtils.ts'
 
 const getGoogleModelName = (modelName: string): string => {
   return modelName.startsWith('models/') ? modelName : `models/${modelName}`
+}
+
+type GeminiContentPart = {inlineData: {data: string; mimeType: string}} | {text: string}
+
+const getGeminiUserParts = (prompt: ProviderInvokePrompt): GeminiContentPart[] => {
+  const parts = getProviderPromptParts(prompt)
+
+  return [
+    {text: parts.text},
+    ...parts.images.map((image): GeminiContentPart => {
+      return {inlineData: {data: getProviderImageBase64(image), mimeType: image.mimeType}}
+    }),
+  ]
+}
+
+export const getGeminiGenerateContentRequestBody = ({
+  maxCompletionTokens,
+  prompt,
+  systemPrompt,
+  temperature,
+}: {
+  maxCompletionTokens?: number | null
+  prompt: ProviderInvokePrompt
+  systemPrompt: string
+  temperature: number
+}) => {
+  return {
+    contents: [{parts: getGeminiUserParts(prompt), role: 'user'}],
+    generationConfig: {
+      temperature,
+      ...(typeof maxCompletionTokens === 'number' ? {maxOutputTokens: maxCompletionTokens} : {}),
+    },
+    systemInstruction: {parts: [{text: systemPrompt}]},
+  }
 }
 
 export const listGeminiModels = async ({
@@ -60,7 +95,7 @@ export const invokeGeminiGenerateContentModel = async ({
   baseURL: string | null
   maxCompletionTokens?: number | null
   modelName: string
-  prompt: string
+  prompt: ProviderInvokePrompt
   signal?: AbortSignal
   systemPrompt: string
   temperature: number
@@ -70,14 +105,9 @@ export const invokeGeminiGenerateContentModel = async ({
   const response = await fetch(
     `${resolvedBaseURL}/${getGoogleModelName(modelName)}:generateContent?key=${encodeURIComponent(requiredApiKey)}`,
     {
-      body: JSON.stringify({
-        contents: [{parts: [{text: prompt}], role: 'user'}],
-        generationConfig: {
-          temperature,
-          ...(typeof maxCompletionTokens === 'number' ? {maxOutputTokens: maxCompletionTokens} : {}),
-        },
-        systemInstruction: {parts: [{text: systemPrompt}]},
-      }),
+      body: JSON.stringify(
+        getGeminiGenerateContentRequestBody({maxCompletionTokens, prompt, systemPrompt, temperature}),
+      ),
       headers: {'content-type': 'application/json'},
       method: 'POST',
       signal,

@@ -376,3 +376,73 @@ test('throws a classified error when Anthropic returns no text', async () => {
   expect(error instanceof Error ? error.message : null).toContain('failure_code=anthropic_thinking_only_empty_response')
   expect(fetchMock).toHaveBeenCalledTimes(1)
 })
+
+test('sends image prompts as a text block followed by base64 image blocks', async () => {
+  globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+  fetchMock.mockImplementation(async () => {
+    return new Response(
+      JSON.stringify({
+        content: [{text: '{"description":"A bar chart."}', type: 'text'}],
+        stop_reason: 'end_turn',
+        usage: {input_tokens: 9, output_tokens: 4},
+      }),
+      {headers: {'content-type': 'application/json'}, status: 200},
+    )
+  })
+
+  const result = await invokeAnthropicMessagesModel({
+    apiKey: 'test-key',
+    baseURL: 'https://api.anthropic.com/v1',
+    maxCompletionTokens: 32,
+    modelName: 'claude-sonnet-4-5',
+    outputSchema: {type: 'object'},
+    prompt: {
+      images: [
+        {bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg'},
+        {bytes: new Uint8Array([4, 5]), mimeType: 'image/png'},
+      ],
+      text: 'Describe the figure.',
+    },
+    systemPrompt: 'Return JSON',
+    temperature: 0,
+    version: null,
+  })
+
+  expect(result.text).toBe('{"description":"A bar chart."}')
+  expect(getRequestBody(0)).toMatchObject({
+    messages: [
+      {
+        content: [
+          {text: 'Describe the figure.', type: 'text'},
+          {source: {data: 'AQID', media_type: 'image/jpeg', type: 'base64'}, type: 'image'},
+          {source: {data: 'BAU=', media_type: 'image/png', type: 'base64'}, type: 'image'},
+        ],
+        role: 'user',
+      },
+    ],
+  })
+})
+
+test('keeps text-only prompts as a plain string user message', async () => {
+  globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+  fetchMock.mockImplementation(async () => {
+    return new Response(JSON.stringify({content: [{text: '{}', type: 'text'}], stop_reason: 'end_turn', usage: {}}), {
+      headers: {'content-type': 'application/json'},
+      status: 200,
+    })
+  })
+
+  await invokeAnthropicMessagesModel({
+    apiKey: 'test-key',
+    baseURL: 'https://api.anthropic.com/v1',
+    maxCompletionTokens: 32,
+    modelName: 'claude-sonnet-4-5',
+    outputSchema: {type: 'object'},
+    prompt: 'Hello',
+    systemPrompt: 'Return JSON',
+    temperature: 0,
+    version: null,
+  })
+
+  expect(getRequestBody(0)).toMatchObject({messages: [{content: 'Hello', role: 'user'}]})
+})

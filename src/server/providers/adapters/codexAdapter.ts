@@ -1,4 +1,5 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
+import {getProviderTextOnlyPrompt} from '../providerImageInput.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {type ProviderDefinition} from '../providerTypes.ts'
 import {
@@ -144,7 +145,7 @@ export const createCodexAdapter = (catalog: ProviderCatalogEntry): ProviderDefin
       return invokeCodexAppModel({
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         outputSchema: request.outputSchema,
-        prompt: request.prompt,
+        prompt: getProviderTextOnlyPrompt({prompt: request.prompt, transportFamily: 'codex-app'}),
         signal: request.signal,
         systemPrompt: request.systemPrompt,
         version: model.variant ?? model.version,

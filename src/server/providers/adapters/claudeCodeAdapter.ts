@@ -1,4 +1,5 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
+import {getProviderTextOnlyPrompt} from '../providerImageInput.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {
   type ProviderAuthLifecycleResult,
@@ -76,7 +77,7 @@ export const createClaudeCodeAdapter = (catalog: ProviderCatalogEntry): Provider
         effort: model.variant ?? model.version,
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         outputSchema: request.outputSchema,
-        prompt: request.prompt,
+        prompt: getProviderTextOnlyPrompt({prompt: request.prompt, transportFamily: 'claude-code-cli'}),
         signal: request.signal,
         systemPrompt: request.systemPrompt,
       })
