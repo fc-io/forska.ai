@@ -192,3 +192,68 @@ test('posts the multipart chat payload over the wire', async () => {
     role: 'user',
   })
 })
+
+test('sends the completion cap as max_tokens when the server ignores max_completion_tokens', () => {
+  const request = getOpenAIChatCompletionRequest({
+    completionTokenLimitField: 'max_tokens',
+    maxCompletionTokens: 512,
+    modelName: 'qwen3-vl:2b-instruct',
+    outputSchema: {type: 'object'},
+    prompt: 'Prompt',
+    systemPrompt: 'System',
+    temperature: 0,
+  })
+
+  expect(request.max_tokens).toBe(512)
+  expect('max_completion_tokens' in request).toBe(false)
+})
+
+test('the Ollama adapter posts image prompts with max_tokens', async () => {
+  const {requireProviderRegistryEntry} = await import('../providerRegistry.ts')
+  const originalFetch = globalThis.fetch
+  const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    return new Response(
+      JSON.stringify({
+        choices: [{finish_reason: 'stop', index: 0, message: {content: '{"description":"x"}', role: 'assistant'}}],
+        created: 0,
+        id: 'chatcmpl-test',
+        model: 'qwen3-vl:2b-instruct',
+        object: 'chat.completion',
+        usage: {completion_tokens: 3, prompt_tokens: 40, total_tokens: 43},
+      }),
+      {headers: {'content-type': 'application/json'}, status: 200},
+    )
+  })
+  globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+
+  await requireProviderRegistryEntry('ollama')
+    .invoke({
+      connection: {providerKind: 'ollama'} as never,
+      model: {metadataJson: null, modelName: 'qwen3-vl:2b-instruct', name: 'qwen3-vl', remoteModelId: null} as never,
+      request: {
+        maxCompletionTokens: 1024,
+        outputSchema: {type: 'object'},
+        prompt: {images: [{bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg'}], text: 'Describe.'},
+        systemPrompt: 'System',
+        temperature: 0.7,
+      },
+      runtimeCredentials: {apiKey: null, baseURL: `http://ollama-${Date.now()}.test/v1`, headers: {}, secretRef: null},
+    })
+    .finally(() => {
+      globalThis.fetch = originalFetch
+    })
+  const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as Record<string, unknown>
+
+  expect(body.max_tokens).toBe(1024)
+  expect(body.max_completion_tokens).toBeUndefined()
+  expect(body.messages).toEqual([
+    {content: 'System', role: 'system'},
+    {
+      content: [
+        {text: 'Describe.', type: 'text'},
+        {image_url: {url: 'data:image/jpeg;base64,AQID'}, type: 'image_url'},
+      ],
+      role: 'user',
+    },
+  ])
+})

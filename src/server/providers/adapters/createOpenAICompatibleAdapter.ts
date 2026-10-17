@@ -10,7 +10,12 @@ import {
   type ProviderInvokeInput,
   type ProviderListedModel,
 } from '../providerTypes.ts'
-import {invokeOpenAIChatModel, listNativeOllamaModels, listOpenAIChatModels} from '../transports/openaiChatTransport.ts'
+import {
+  invokeOpenAIChatModel,
+  listNativeOllamaModels,
+  listOpenAIChatModels,
+  type OpenAIChatCompletionTokenLimitField,
+} from '../transports/openaiChatTransport.ts'
 import {addLocalServerModelLimits} from './localServerModelLimits.ts'
 import {
   beginApiKeyProviderAuth,
@@ -26,6 +31,7 @@ import {
 
 type OpenAICompatibleAdapterOptions = {
   authFlow?: 'api-key' | 'optional-api-key' | 'secretless'
+  completionTokenLimitField?: OpenAIChatCompletionTokenLimitField
   transportFamily: ProviderDefinition['transportFamily']
   useNativeOllamaDiscovery?: boolean
 }
@@ -211,6 +217,7 @@ export const createOpenAICompatibleAdapter = (
       return invokeOpenAIChatModel({
         apiKey: runtimeCredentials.apiKey,
         baseURL: runtimeCredentials.baseURL,
+        completionTokenLimitField: options.completionTokenLimitField,
         maxCompletionTokens: request.maxCompletionTokens,
         modelOptions: getProviderModelOptions(model.metadataJson),
         modelName: getProviderModelName(model),
