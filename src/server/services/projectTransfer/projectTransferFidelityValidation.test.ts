@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {type FullTextStrategy, getFullTextStrategy} from '../../fullText/fullTextStrategy.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
 import {
   getProjectTransferFidelityValidation,
@@ -86,6 +87,7 @@ test('judgment review-visible keys preserve distinct content settings', async ()
                 confidenceOriginal: 90,
                 deleteGeneration: 0,
                 explanation: 'Existing title-only judgment',
+                fullTextStrategyId: 'fts-none',
                 isAnswered: true,
                 quotes: [{quote: 'Fixture quote'}],
                 targetArticleId: 'target-article-1',
@@ -95,6 +97,7 @@ test('judgment review-visible keys preserve distinct content settings', async ()
                 useAbstract: false,
                 useFulltext: false,
                 useFulltextNoImages: false,
+                useMetadata: false,
                 useTitle: true,
               },
             ]
@@ -110,7 +113,7 @@ test('judgment review-visible keys preserve distinct content settings', async ()
   expect(judgmentPlan?.action).toBe('insert')
   expect(judgmentPlan?.conflictCodes).not.toContain('judgment_review_visible_natural_key_conflict')
   expect(judgmentPlan?.reviewVisibleKey).toBe(
-    'target-article-1:target-prompt-1:target-model-1:true:true:false:false|legacy',
+    'target-article-1|target-prompt-1|target-model-1|true|true|false|false|false|legacy|fts-none',
   )
   expect(result.conflictCounts.judgmentConflictCount).toBe(0)
 })
@@ -145,6 +148,7 @@ test('reused judgments treat TO_JSON database fields as equivalent arrays', asyn
                 confidenceOriginal: importedJudgment.confidenceOriginal,
                 deleteGeneration: Number(importedJudgment.deleteGeneration ?? 0),
                 explanation: importedJudgment.explanation,
+                fullTextStrategyId: 'fts-none',
                 isAnswered: importedJudgment.isAnswered,
                 quotes: JSON.stringify(importedJudgment.quotes ?? []),
                 targetArticleId: 'target-article-1',
@@ -154,6 +158,7 @@ test('reused judgments treat TO_JSON database fields as equivalent arrays', asyn
                 useAbstract: true,
                 useFulltext: false,
                 useFulltextNoImages: false,
+                useMetadata: false,
                 useTitle: true,
               },
             ]
@@ -203,6 +208,7 @@ test('compact analysis judgment digests preserve input and saved-field fidelity 
                 confidenceOriginal: importedJudgment.confidenceOriginal,
                 deleteGeneration: Number(importedJudgment.deleteGeneration ?? 0),
                 explanation: importedJudgment.explanation,
+                fullTextStrategyId: 'fts-none',
                 isAnswered: importedJudgment.isAnswered,
                 quotes: JSON.stringify(importedJudgment.quotes ?? []),
                 targetArticleId: 'target-article-1',
@@ -212,6 +218,7 @@ test('compact analysis judgment digests preserve input and saved-field fidelity 
                 useAbstract: true,
                 useFulltext: false,
                 useFulltextNoImages: false,
+                useMetadata: false,
                 useTitle: true,
               },
             ]
@@ -259,6 +266,7 @@ test('imported model placeholders detect judgments that already exist under the 
                 confidenceOriginal: importedJudgment.confidenceOriginal,
                 deleteGeneration: Number(importedJudgment.deleteGeneration ?? 0),
                 explanation: importedJudgment.explanation,
+                fullTextStrategyId: 'fts-none',
                 isAnswered: importedJudgment.isAnswered,
                 quotes: JSON.stringify(importedJudgment.quotes ?? []),
                 targetArticleId: 'target-article-1',
@@ -268,6 +276,7 @@ test('imported model placeholders detect judgments that already exist under the 
                 useAbstract: true,
                 useFulltext: false,
                 useFulltextNoImages: false,
+                useMetadata: false,
                 useTitle: true,
               },
             ]
@@ -283,7 +292,9 @@ test('imported model placeholders detect judgments that already exist under the 
   expect(judgmentPlan?.action).toBe('reuse')
   expect(judgmentPlan?.targetJudgmentId).toBe('target-judgment-1')
   expect(judgmentPlan?.targetModelId).toBe('model-1')
-  expect(judgmentPlan?.physicalKey).toBe('target-article-1:target-prompt-1:model-1:true:true:false:false:0|legacy')
+  expect(judgmentPlan?.physicalKey).toBe(
+    'target-article-1|target-prompt-1|model-1|true|true|false|false|false|legacy|fts-none|0',
+  )
   expect(judgmentPlan?.conflictCodes).toEqual([])
   expect(result.conflictCounts.judgmentConflictCount).toBe(0)
 })
@@ -318,6 +329,7 @@ test('imported model placeholders detect review-visible conflicts under the mate
                 confidenceOriginal: importedJudgment.confidenceOriginal,
                 deleteGeneration: 1,
                 explanation: importedJudgment.explanation,
+                fullTextStrategyId: 'fts-none',
                 isAnswered: importedJudgment.isAnswered,
                 quotes: JSON.stringify(importedJudgment.quotes ?? []),
                 targetArticleId: 'target-article-1',
@@ -327,6 +339,7 @@ test('imported model placeholders detect review-visible conflicts under the mate
                 useAbstract: true,
                 useFulltext: false,
                 useFulltextNoImages: false,
+                useMetadata: false,
                 useTitle: true,
               },
             ]
@@ -368,6 +381,7 @@ test('reused judgment field conflicts explain differing saved judgment content c
                 confidenceOriginal: 20,
                 deleteGeneration: 0,
                 explanation: 'Conflicting saved explanation.',
+                fullTextStrategyId: 'fts-none',
                 isAnswered: true,
                 quotes: '[]',
                 targetArticleId: 'target-article-1',
@@ -377,6 +391,7 @@ test('reused judgment field conflicts explain differing saved judgment content c
                 useAbstract: true,
                 useFulltext: false,
                 useFulltextNoImages: false,
+                useMetadata: false,
                 useTitle: true,
               },
             ]
@@ -433,6 +448,7 @@ const getSystemPromptVariantFidelityPlan = async (targetSystemPromptVariant: str
                 confidenceOriginal: 20,
                 deleteGeneration: 0,
                 explanation: 'Target judgment saved under another variant.',
+                fullTextStrategyId: 'fts-none',
                 isAnswered: true,
                 quotes: '[]',
                 ...(targetSystemPromptVariant === undefined ? {} : {systemPromptVariant: targetSystemPromptVariant}),
@@ -443,6 +459,7 @@ const getSystemPromptVariantFidelityPlan = async (targetSystemPromptVariant: str
                 useAbstract: true,
                 useFulltext: false,
                 useFulltextNoImages: false,
+                useMetadata: false,
                 useTitle: true,
               },
             ]
@@ -466,10 +483,10 @@ test('judgment physical and review-visible keys include the system prompt varian
   expect(legacyTarget.judgmentPlan?.conflictCodes).toEqual([])
   expect(legacyTarget.judgmentPlan?.targetJudgmentId).toBe('new:judgment:judgment-1')
   expect(legacyTarget.judgmentPlan?.physicalKey).toBe(
-    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|screening_v1',
+    'target-article-1|target-prompt-1|target-model-1|true|true|false|false|false|screening_v1|fts-none|0',
   )
   expect(legacyTarget.judgmentPlan?.reviewVisibleKey).toBe(
-    'target-article-1:target-prompt-1:target-model-1:true:true:false:false|screening_v1',
+    'target-article-1|target-prompt-1|target-model-1|true|true|false|false|false|screening_v1|fts-none',
   )
   expect(legacyTarget.result.conflictCounts.judgmentConflictCount).toBe(0)
   expect(defaultTarget.judgmentPlan?.action).toBe('insert')
@@ -510,6 +527,7 @@ test('judgments without a system prompt variant match legacy target judgments', 
                 confidenceOriginal: importedJudgment.confidenceOriginal,
                 deleteGeneration: 0,
                 explanation: importedJudgment.explanation,
+                fullTextStrategyId: 'fts-none',
                 isAnswered: importedJudgment.isAnswered,
                 quotes: JSON.stringify(importedJudgment.quotes ?? []),
                 systemPromptVariant: 'legacy',
@@ -520,6 +538,7 @@ test('judgments without a system prompt variant match legacy target judgments', 
                 useAbstract: true,
                 useFulltext: false,
                 useFulltextNoImages: false,
+                useMetadata: false,
                 useTitle: true,
               },
             ]
@@ -536,7 +555,7 @@ test('judgments without a system prompt variant match legacy target judgments', 
   expect(judgmentPlan?.action).toBe('reuse')
   expect(judgmentPlan?.targetJudgmentId).toBe('target-judgment-1')
   expect(judgmentPlan?.physicalKey).toBe(
-    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|legacy',
+    'target-article-1|target-prompt-1|target-model-1|true|true|false|false|false|legacy|fts-none|0',
   )
   expect(
     statements.some((statement) => {
@@ -591,6 +610,7 @@ const getUseMetadataFidelityPlan = async ({
                 confidenceOriginal: fixtureJudgment.confidenceOriginal,
                 deleteGeneration: 0,
                 explanation: fixtureJudgment.explanation,
+                fullTextStrategyId: 'fts-none',
                 isAnswered: fixtureJudgment.isAnswered,
                 quotes: JSON.stringify(fixtureJudgment.quotes ?? []),
                 systemPromptVariant: 'legacy',
@@ -616,7 +636,7 @@ const getUseMetadataFidelityPlan = async ({
   return {fixtureContentSettings, judgmentPlan: result.targetPlan.judgmentPlan[0], statements}
 }
 
-test('judgment keys include useMetadata only when it is true and old judgments read it as false', async () => {
+test('judgment keys carry useMetadata and old judgments read it as false', async () => {
   const metadataOverPlainTarget = await getUseMetadataFidelityPlan({
     importedUseMetadata: true,
     targetUseMetadata: false,
@@ -642,18 +662,18 @@ test('judgment keys include useMetadata only when it is true and old judgments r
   expect(metadataOverPlainTarget.judgmentPlan?.targetJudgmentId).toBeNull()
   expect(metadataOverPlainTarget.judgmentPlan?.conflictCodes).toEqual(['judgment_input_signature_mismatch'])
   expect(metadataOverPlainTarget.judgmentPlan?.physicalKey).toBe(
-    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|legacy|useMetadata',
+    'target-article-1|target-prompt-1|target-model-1|true|true|false|false|true|legacy|fts-none|0',
   )
   expect(metadataOverPlainTarget.judgmentPlan?.reviewVisibleKey).toBe(
-    'target-article-1:target-prompt-1:target-model-1:true:true:false:false|legacy|useMetadata',
+    'target-article-1|target-prompt-1|target-model-1|true|true|false|false|true|legacy|fts-none',
   )
   expect(metadataOverMetadataTarget.judgmentPlan?.physicalKey).toBe(
-    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|legacy|useMetadata',
+    'target-article-1|target-prompt-1|target-model-1|true|true|false|false|true|legacy|fts-none|0',
   )
   expect(oldOverMetadataTarget.judgmentPlan?.action).toBe('insert')
   expect(oldOverMetadataTarget.judgmentPlan?.conflictCodes).toEqual([])
   expect(oldOverMetadataTarget.judgmentPlan?.physicalKey).toBe(
-    'target-article-1:target-prompt-1:target-model-1:true:true:false:false:0|legacy',
+    'target-article-1|target-prompt-1|target-model-1|true|true|false|false|false|legacy|fts-none|0',
   )
   expect(oldOverPlainTarget.judgmentPlan?.action).toBe('reuse')
   expect(oldOverPlainTarget.judgmentPlan?.targetJudgmentId).toBe('target-judgment-1')
@@ -684,4 +704,179 @@ test('judgment input signatures detect a useMetadata mismatch with the stored si
   expect(metadataOverMetadataTarget.judgmentPlan?.action).toBe('blocked')
   expect(metadataOverMetadataTarget.judgmentPlan?.targetJudgmentId).toBe('target-judgment-1')
   expect(metadataOverMetadataTarget.judgmentPlan?.conflictCodes).toEqual(['judgment_physical_key_not_equivalent'])
+})
+
+const fidelityFullTextStrategy = getFullTextStrategy({
+  canonicalTextVersion: 'canonical-v1',
+  chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+  converterKind: 'mineru',
+  converterOptionsHash: 'mineru-options-hash',
+  converterVersion: '4.0.0',
+  figureDescriptionModelId: null,
+  figureDescriptionPromptVersion: null,
+  figureMode: 'none',
+  imageTransportVersion: null,
+  promptLayoutVersion: 'layout-v1',
+  tokenizerId: 'o200k_base',
+})
+
+const getFullTextStrategyFidelityPlan = async ({
+  definedStrategies,
+  importedStrategyId,
+  signatureStrategyId,
+  targetStrategyId,
+}: {
+  definedStrategies: unknown[]
+  importedStrategyId: string | undefined
+  signatureStrategyId: string | null
+  targetStrategyId: string
+}) => {
+  const fixturePayloads = getProjectTransferPayloadFixtureMap()
+  const [fixtureJudgment] = fixturePayloads.judgments
+
+  if (!fixtureJudgment) {
+    throw new Error('Expected judgment fixture')
+  }
+
+  const {fullTextStrategyId: _fixtureStrategyId, ...oldFixtureJudgment} = fixtureJudgment
+  const contentSettings = {...(fixtureJudgment.contentSettings as Record<string, unknown>), useFulltext: true}
+  const signature = fixtureJudgment.judgmentInputSignature as Record<string, Record<string, unknown>>
+  const importedJudgment = {
+    ...oldFixtureJudgment,
+    contentSettings,
+    judgmentInputSignature: {
+      ...signature,
+      contentSettings: {...signature.contentSettings, useFulltext: true},
+      fullTextProcessing: {
+        ...signature.fullTextProcessing,
+        ...(signatureStrategyId === null ? {} : {fullTextStrategyId: signatureStrategyId}),
+      },
+    },
+    ...(importedStrategyId === undefined ? {} : {fullTextStrategyId: importedStrategyId}),
+  } as ProjectTransferPayloadRecord
+  const result = await getProjectTransferFidelityValidation({
+    dependencyResolution: {
+      modelTargetBySourceId: {'model-1': 'target-model-1'},
+      providerTargetBySourceId: {'provider-connection-1': 'target-provider-1'},
+    },
+    payloads: {
+      ...fixturePayloads,
+      humanJudgmentSummaries: [],
+      humanJudgments: [],
+      judgmentAssessments: [],
+      judgments: [importedJudgment],
+      project: {...fixturePayloads.project, fullTextStrategies: definedStrategies as FullTextStrategy[]},
+      reviews: [],
+    },
+    runner: {
+      queryJson: async <T>(statement: string): Promise<T[]> => {
+        const rows = statement.includes('FROM app.judgment')
+          ? [
+              {
+                answeredOriginal: fixtureJudgment.answeredOriginal,
+                answeredOriginalAsArray: JSON.stringify(fixtureJudgment.answeredOriginalAsArray ?? []),
+                confidenceOriginal: fixtureJudgment.confidenceOriginal,
+                deleteGeneration: 0,
+                explanation: fixtureJudgment.explanation,
+                fullTextStrategyId: targetStrategyId,
+                isAnswered: fixtureJudgment.isAnswered,
+                quotes: JSON.stringify(fixtureJudgment.quotes ?? []),
+                systemPromptVariant: 'legacy',
+                targetArticleId: 'target-article-1',
+                targetJudgmentId: 'target-legacy-full-text-judgment',
+                targetModelId: 'target-model-1',
+                targetPromptId: 'target-prompt-1',
+                useAbstract: true,
+                useFulltext: true,
+                useFulltextNoImages: false,
+                useMetadata: false,
+                useTitle: true,
+              },
+            ]
+          : []
+
+        return rows as T[]
+      },
+    },
+    targetPlan: getBaseTargetPlan(),
+  })
+
+  return {blockers: result.blockers, judgmentPlan: result.targetPlan.judgmentPlan[0]}
+}
+
+test('judgment keys carry the full-text strategy so a new strategy never reuses a legacy full-text judgment', async () => {
+  const strategyId = fidelityFullTextStrategy.id
+  const strategyOverLegacyTarget = await getFullTextStrategyFidelityPlan({
+    definedStrategies: [fidelityFullTextStrategy],
+    importedStrategyId: strategyId,
+    signatureStrategyId: strategyId,
+    targetStrategyId: 'fts-legacy-v0',
+  })
+  const strategyOverStrategyTarget = await getFullTextStrategyFidelityPlan({
+    definedStrategies: [fidelityFullTextStrategy],
+    importedStrategyId: strategyId,
+    signatureStrategyId: strategyId,
+    targetStrategyId: strategyId,
+  })
+  const oldPackageOverLegacyTarget = await getFullTextStrategyFidelityPlan({
+    definedStrategies: [],
+    importedStrategyId: undefined,
+    signatureStrategyId: null,
+    targetStrategyId: 'fts-legacy-v0',
+  })
+
+  expect(strategyOverLegacyTarget.judgmentPlan).toMatchObject({
+    action: 'insert',
+    conflictCodes: [],
+    inputSignatureMatches: true,
+    physicalKey: `target-article-1|target-prompt-1|target-model-1|true|true|true|false|false|legacy|${strategyId}|0`,
+    reviewVisibleKey: `target-article-1|target-prompt-1|target-model-1|true|true|true|false|false|legacy|${strategyId}`,
+    targetJudgmentId: 'new:judgment:judgment-1',
+  })
+  expect(strategyOverStrategyTarget.judgmentPlan).toMatchObject({
+    action: 'reuse',
+    conflictCodes: [],
+    targetJudgmentId: 'target-legacy-full-text-judgment',
+  })
+  expect(oldPackageOverLegacyTarget.judgmentPlan).toMatchObject({
+    action: 'reuse',
+    conflictCodes: [],
+    inputSignatureMatches: true,
+    physicalKey: 'target-article-1|target-prompt-1|target-model-1|true|true|true|false|false|legacy|fts-legacy-v0|0',
+    targetJudgmentId: 'target-legacy-full-text-judgment',
+  })
+})
+
+test('judgments with an undefined or unsigned full-text strategy are blocked', async () => {
+  const strategyId = fidelityFullTextStrategy.id
+  const undefinedStrategy = await getFullTextStrategyFidelityPlan({
+    definedStrategies: [],
+    importedStrategyId: strategyId,
+    signatureStrategyId: strategyId,
+    targetStrategyId: 'fts-legacy-v0',
+  })
+  const unsignedStrategy = await getFullTextStrategyFidelityPlan({
+    definedStrategies: [fidelityFullTextStrategy],
+    importedStrategyId: strategyId,
+    signatureStrategyId: null,
+    targetStrategyId: 'fts-legacy-v0',
+  })
+
+  expect(undefinedStrategy.judgmentPlan?.action).toBe('blocked')
+  expect(undefinedStrategy.judgmentPlan?.conflictCodes).toEqual(['judgment_full_text_strategy_undefined'])
+  expect(
+    undefinedStrategy.blockers.filter((blocker) => {
+      return blocker.code === 'judgment_full_text_strategy_undefined'
+    }),
+  ).toEqual([
+    {
+      code: 'judgment_full_text_strategy_undefined',
+      message: 'judgment-1 uses a full-text strategy that the package does not define',
+      resolutionKind: 'requires_new_package_or_target_changes',
+      scope: 'judgments.judgment-1',
+    },
+  ])
+  expect(unsignedStrategy.judgmentPlan?.action).toBe('blocked')
+  expect(unsignedStrategy.judgmentPlan?.inputSignatureMatches).toBe(false)
+  expect(unsignedStrategy.judgmentPlan?.conflictCodes).toEqual(['judgment_input_signature_mismatch'])
 })

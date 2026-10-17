@@ -292,6 +292,21 @@ test('project-transfer export reads archived app-table scope and serializes lock
       signatureUseMetadata: unknown
       sourceJudgmentId: string
     }>
+    strategyDefinitions: Array<{id: string; inputs: unknown; label: unknown}>
+    strategyId: string
+    strategyJudgments: Array<{
+      fullTextStrategyId: unknown
+      processingStrategyId: unknown
+      requestStrategyId: unknown
+      sourceJudgmentId: string
+    }>
+    strategyProjectSettings: Record<string, unknown>
+    summaryFullTextStrategies: unknown[]
+    summaryJudgmentStrategies: Array<{
+      fullTextStrategyId: unknown
+      processingHasStrategy: boolean
+      requestStrategyId: unknown
+    }>
     preservedUrlWarnings: Array<{action: string; code: string; jsonPointer: string; severity: string}>
     warnings: unknown[]
     warningCodes: string[]
@@ -487,7 +502,46 @@ test('project-transfer export reads archived app-table scope and serializes lock
           FALSE,
           TIMESTAMPTZ '2026-01-01T00:00:00Z',
           TIMESTAMPTZ '2026-01-02T00:00:00Z'
+        ),
+        (
+          'project-strategy-export',
+          'Strategy Export',
+          NULL,
+          'model-null-remote',
+          'prompt',
+          TRUE,
+          TRUE,
+          TRUE,
+          FALSE,
+          NULL,
+          NULL,
+          FALSE,
+          TIMESTAMPTZ '2026-01-01T00:00:00Z',
+          TIMESTAMPTZ '2026-01-02T00:00:00Z'
         )
+    \`)
+    const {getFullTextStrategy} = await import('./src/server/fullText/fullTextStrategy.ts')
+    const {upsertFullTextStrategy} = await import('./src/server/fullText/fullTextStrategyRepository.ts')
+    const fullTextStrategy = getFullTextStrategy({
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 48000, mode: 'chunked'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'mineru-options-hash',
+      converterVersion: '4.0.0',
+      figureDescriptionModelId: null,
+      figureDescriptionPromptVersion: null,
+      figureMode: 'none',
+      imageTransportVersion: null,
+      promptLayoutVersion: 'layout-v1',
+      tokenizerId: 'o200k_base',
+    })
+    await upsertFullTextStrategy(database, fullTextStrategy)
+    await database.run(\`
+      UPDATE app.project
+      SET full_text_figure_mode = 'none',
+        full_text_chunk_policy = CAST('{"maxPromptTokens":48000,"mode":"chunked"}' AS JSON),
+        full_text_strategy_id = '\${fullTextStrategy.id}'
+      WHERE id = 'project-strategy-export'
     \`)
     await database.run(\`
       UPDATE app.project
@@ -536,6 +590,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
         ('pp-disabled', 'project-archived-export', 'prompt-disabled', 2, FALSE, FALSE, 'exclude', 'exclusion', 'Exclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-summary', 'project-summary-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-metadata', 'project-metadata-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
+        ('pp-strategy', 'project-strategy-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-missing-provider', 'project-missing-provider', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
     \`)
     await database.run(\`
@@ -830,6 +885,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
         ('pa-stale-duplicate-doi', 'project-archived-export', 'article-stale-duplicate-doi', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pa-summary', 'project-summary-export', 'article-route-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pa-metadata', 'project-metadata-export', 'article-route-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
+        ('pa-strategy', 'project-strategy-export', 'article-route-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pa-missing-provider', 'project-missing-provider', 'article-route-in', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
     \`)
     await database.run(\`
@@ -888,6 +944,33 @@ test('project-transfer export reads archived app-table scope and serializes lock
         updated_at
       )
       VALUES ('judgment-metadata-twin', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-metadata-export', TRUE, TRUE, FALSE, FALSE, TRUE, 'legacy', TRUE, 'yes', ['yes'], 81, 'metadata explanation', CAST('[{"quote":"metadata quote"}]' AS JSON), 0, TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z')
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        system_prompt_variant,
+        full_text_strategy_id,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original,
+        explanation,
+        quotes,
+        delete_generation,
+        created_at,
+        updated_at
+      )
+      VALUES
+        ('judgment-strategy', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-strategy-export', TRUE, TRUE, TRUE, FALSE, 'legacy', '\${fullTextStrategy.id}', TRUE, 'yes', ['yes'], 77, 'strategy explanation', CAST('[]' AS JSON), 0, TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z'),
+        ('judgment-strategy-legacy-twin', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-strategy-export', TRUE, TRUE, TRUE, FALSE, 'legacy', 'fts-legacy-v0', TRUE, 'no', ['no'], 66, 'legacy full-text explanation', CAST('[]' AS JSON), 0, TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z')
     \`)
     await database.run(\`
       INSERT INTO app.judgment_assessment (
@@ -961,6 +1044,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     })
     const summary = await getProjectTransferExportPayloads('project-summary-export')
     const metadata = await getProjectTransferExportPayloads('project-metadata-export')
+    const strategy = await getProjectTransferExportPayloads('project-strategy-export')
     const metadataSourceSettings = await getProjectTransferExportSourceProjectSettings('project-metadata-export')
     const summarySourceSettings = await getProjectTransferExportSourceProjectSettings('project-summary-export')
     const serialized = serializeProjectTransferExportPayloads(archived.payloads)
@@ -1227,6 +1311,25 @@ test('project-transfer export reads archived app-table scope and serializes lock
           sourceJudgmentId: judgment.sourceJudgmentId,
         }
       }),
+      strategyDefinitions: strategy.payloads.project.fullTextStrategies,
+      strategyId: fullTextStrategy.id,
+      strategyJudgments: strategy.payloads.judgments.map((judgment) => {
+        return {
+          fullTextStrategyId: judgment.fullTextStrategyId,
+          processingStrategyId: judgment.judgmentInputSignature.fullTextProcessing.fullTextStrategyId,
+          requestStrategyId: judgment.judgmentInputSignature.request.fullTextStrategyId,
+          sourceJudgmentId: judgment.sourceJudgmentId,
+        }
+      }),
+      strategyProjectSettings: strategy.payloads.project.settings,
+      summaryFullTextStrategies: summary.payloads.project.fullTextStrategies,
+      summaryJudgmentStrategies: summary.payloads.judgments.map((judgment) => {
+        return {
+          fullTextStrategyId: judgment.fullTextStrategyId,
+          processingHasStrategy: Object.hasOwn(judgment.judgmentInputSignature.fullTextProcessing, 'fullTextStrategyId'),
+          requestStrategyId: judgment.judgmentInputSignature.request.fullTextStrategyId,
+        }
+      }),
       preservedUrlWarnings: archived.warnings.filter((warning) => warning.code === 'nonLocalUrlPreserved').map((warning) => {
         return {
           action: warning.action,
@@ -1291,6 +1394,32 @@ test('project-transfer export reads archived app-table scope and serializes lock
       signatureUseMetadata: true,
       sourceJudgmentId: 'judgment-metadata-twin',
     },
+  ])
+  expect(result.strategyProjectSettings).toMatchObject({
+    fullTextChunkPolicy: {maxPromptTokens: 48000, mode: 'chunked'},
+    fullTextFigureMode: 'none',
+    fullTextStrategyId: result.strategyId,
+    useFulltext: true,
+  })
+  expect(result.strategyDefinitions).toEqual([
+    {id: result.strategyId, inputs: expect.objectContaining({converterKind: 'mineru'}), label: expect.any(String)},
+  ])
+  expect(result.strategyJudgments).toEqual([
+    {
+      fullTextStrategyId: result.strategyId,
+      processingStrategyId: result.strategyId,
+      requestStrategyId: result.strategyId,
+      sourceJudgmentId: 'judgment-strategy',
+    },
+  ])
+  expect(result.summaryProjectSettings).toMatchObject({
+    fullTextChunkPolicy: null,
+    fullTextFigureMode: null,
+    fullTextStrategyId: null,
+  })
+  expect(result.summaryFullTextStrategies).toEqual([])
+  expect(result.summaryJudgmentStrategies).toEqual([
+    {fullTextStrategyId: 'fts-none', processingHasStrategy: false, requestStrategyId: 'fts-none'},
   ])
   expect(result.judgmentAssessmentIds).toEqual(['assessment-duplicate', 'assessment-export'])
   expect(result.humanJudgmentIds).toEqual(['human-disabled'])
@@ -1718,6 +1847,59 @@ test('project-transfer judgment input signatures are stable across database id r
   expect(JSON.stringify(signature)).not.toContain('source-prompt-a')
   expect(signature.fullTextProcessing.processedTextDigest).not.toBeNull()
   expect(signature.provider.transportFamily).toBe('codex-app')
+})
+
+test('project-transfer judgment input signatures digest a full-text strategy and keep legacy signatures unchanged', () => {
+  type JudgmentSignatureInput = Parameters<typeof getProjectTransferExportJudgmentInputSignature>[0]
+  const input = {
+    article: {
+      articleSummary: 'Strategy abstract',
+      articleTitle: 'Strategy title',
+      fullText: 'Strategy full text',
+      identifierInputs: [],
+      provenance: {sourceArticleId: 'source-article-strategy'},
+      signature: {identifierKeys: [], title: 'Strategy title'},
+      sourceArticleId: 'source-article-strategy',
+    },
+    chunkingStrategy: null,
+    contentSettings: {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useTitle: true},
+    model: {
+      metadataJson: {discovery: {contextWindow: {totalTokens: 200000}}},
+      modelId: 'source-model-strategy',
+      name: 'Strategy Model',
+      providerConnectionId: 'source-provider-strategy',
+      remoteModelId: 'strategy-model',
+      variant: null,
+    },
+    prompt: {contentHash: 'strategy-prompt-hash', originalText: 'Include?', promptHeading: null, type: 'string'},
+    providerConnection: {
+      authMode: 'apiKey',
+      baseURL: null,
+      configJson: null,
+      providerConnectionId: 'source-provider-strategy',
+      providerKind: 'openai',
+    },
+  } as unknown as JudgmentSignatureInput
+  const legacySignature = getProjectTransferExportJudgmentInputSignature(input)
+  const explicitLegacySignature = getProjectTransferExportJudgmentInputSignature({
+    ...input,
+    fullTextStrategyId: 'fts-legacy-v0',
+  })
+  const strategySignature = getProjectTransferExportJudgmentInputSignature({
+    ...input,
+    fullTextStrategyId: 'fts-0123456789abcdef',
+  })
+  const {fullTextStrategyId: processingStrategyId, ...strategyProcessingRest} = strategySignature.fullTextProcessing
+
+  expect(explicitLegacySignature).toEqual(legacySignature)
+  expect(legacySignature.request.fullTextStrategyId).toBe('fts-legacy-v0')
+  expect(Object.hasOwn(legacySignature.fullTextProcessing, 'fullTextStrategyId')).toBe(false)
+  expect(processingStrategyId).toBe('fts-0123456789abcdef')
+  expect(strategySignature.request.fullTextStrategyId).toBe('fts-0123456789abcdef')
+  expect(strategyProcessingRest).toEqual(legacySignature.fullTextProcessing)
+  expect(getProjectTransferJudgmentAnalysisInputSignatureDigest(strategySignature)).not.toBe(
+    getProjectTransferJudgmentAnalysisInputSignatureDigest(legacySignature),
+  )
 })
 
 test('project-transfer human review input signatures omit database ids and detect content mismatches', () => {

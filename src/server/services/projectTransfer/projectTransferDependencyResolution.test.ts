@@ -446,6 +446,7 @@ test('project transfer dependency resolution revalidates judgments against reuse
                       confidenceOriginal: importedJudgment.confidenceOriginal,
                       deleteGeneration: Number(importedJudgment.deleteGeneration ?? 0),
                       explanation: importedJudgment.explanation,
+                      fullTextStrategyId: 'fts-none',
                       isAnswered: importedJudgment.isAnswered,
                       quotes: JSON.stringify(importedJudgment.quotes ?? []),
                       targetArticleId: 'target-article-1',
@@ -455,6 +456,7 @@ test('project transfer dependency resolution revalidates judgments against reuse
                       useAbstract: true,
                       useFulltext: false,
                       useFulltextNoImages: false,
+                      useMetadata: false,
                       useTitle: true,
                     },
                   ]
@@ -607,6 +609,7 @@ test('project transfer dependency resolution reuses hidden imported snapshot row
                   confidenceOriginal: importedJudgment.confidenceOriginal,
                   deleteGeneration: Number(importedJudgment.deleteGeneration ?? 0),
                   explanation: importedJudgment.explanation,
+                  fullTextStrategyId: 'fts-none',
                   isAnswered: importedJudgment.isAnswered,
                   quotes: JSON.stringify(importedJudgment.quotes ?? []),
                   targetArticleId: 'target-article-1',
@@ -616,6 +619,7 @@ test('project transfer dependency resolution reuses hidden imported snapshot row
                   useAbstract: true,
                   useFulltext: false,
                   useFulltextNoImages: false,
+                  useMetadata: false,
                   useTitle: true,
                 },
               ] as T[]
@@ -1225,6 +1229,7 @@ test('project transfer dependency resolution inserts imported judgments when pro
                       answeredOriginalAsArray: ['include'],
                       confidenceOriginal: 90,
                       explanation: 'Fixture explanation',
+                      fullTextStrategyId: 'fts-none',
                       isAnswered: true,
                       quotes: [{quote: 'Fixture quote'}],
                       targetArticleId: 'target-article-1',
@@ -1234,6 +1239,7 @@ test('project transfer dependency resolution inserts imported judgments when pro
                       useAbstract: true,
                       useFulltext: false,
                       useFulltextNoImages: false,
+                      useMetadata: false,
                       useTitle: true,
                     },
                   ]
@@ -2141,6 +2147,7 @@ const getHiddenSnapshotRunner = ({
             confidenceOriginal: importedJudgment.confidenceOriginal,
             deleteGeneration: Number(importedJudgment.deleteGeneration ?? 0),
             explanation: importedJudgment.explanation,
+            fullTextStrategyId: 'fts-none',
             isAnswered: importedJudgment.isAnswered,
             quotes: JSON.stringify(importedJudgment.quotes ?? []),
             targetArticleId: 'target-article-1',
@@ -2150,6 +2157,7 @@ const getHiddenSnapshotRunner = ({
             useAbstract: true,
             useFulltext: false,
             useFulltextNoImages: false,
+            useMetadata: false,
             useTitle: true,
           },
         ] as T[]

@@ -4,6 +4,19 @@ import {
   systemPromptVariants,
 } from '../../../agent/judge/systemPromptVariant.ts'
 import type {ArticleIdentifierInput, ArticleIdentifierInputKind} from '../../../utils/articleIdentifierNormalization.ts'
+import {fullTextFigureModes} from '../../../utils/fullTextStrategyOptions.ts'
+import {
+  FULL_TEXT_STRATEGY_LEGACY,
+  FULL_TEXT_STRATEGY_NONE,
+  type FullTextChunkPolicy,
+  type FullTextFigureMode,
+  type FullTextStrategy,
+  type FullTextStrategyInputs,
+  getFullTextChunkPolicy,
+  getFullTextStrategyId,
+  getLegacyFullTextStrategyId,
+  isFullTextFigureMode,
+} from '../../fullText/fullTextStrategy.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import {
   getProjectTransferNormalizedArticleIdentifiers,
@@ -102,10 +115,17 @@ export type ProjectTransferContentSettings = {
 
 export type ProjectTransferNormalizedContentSettings = Required<ProjectTransferContentSettings>
 
-export type ProjectTransferProjectSettings = ProjectTransferContentSettings & {
-  humanJudgmentMode: 'prompt' | 'summary'
-  systemPromptVariant?: SystemPromptVariant
+export type ProjectTransferProjectFullTextSettings = {
+  fullTextChunkPolicy: FullTextChunkPolicy | null
+  fullTextFigureMode: FullTextFigureMode | null
+  fullTextStrategyId: string | null
 }
+
+export type ProjectTransferProjectSettings = ProjectTransferContentSettings
+  & Partial<ProjectTransferProjectFullTextSettings> & {
+    humanJudgmentMode: 'prompt' | 'summary'
+    systemPromptVariant?: SystemPromptVariant
+  }
 
 export type ProjectTransferPayloadRecord = JsonRecord & {
   omissions?: ProjectTransferPayloadOmission[]
@@ -116,6 +136,7 @@ export type ProjectTransferPayloadRecord = JsonRecord & {
 }
 
 export type ProjectTransferProjectPayload = ProjectTransferPayloadRecord & {
+  fullTextStrategies?: FullTextStrategy[]
   modelSignature: ProjectTransferPayloadSignature
   name: string
   settings: ProjectTransferProjectSettings
@@ -459,15 +480,23 @@ export const assertProjectTransferContentSettings = (
 export const assertProjectTransferProjectSettings = (
   value: unknown,
   label = 'settings',
-): ProjectTransferProjectSettings & ProjectTransferNormalizedContentSettings => {
+): ProjectTransferProjectSettings
+  & ProjectTransferNormalizedContentSettings
+  & ProjectTransferProjectFullTextSettings => {
   const settings = assertRecord(value, label)
   const contentSettings = assertProjectTransferContentSettings(settings, label)
   const humanJudgmentMode = settings.humanJudgmentMode
   const isValidHumanJudgmentMode = humanJudgmentMode === 'prompt' || humanJudgmentMode === 'summary'
   const systemPromptVariant = assertProjectTransferSystemPromptVariant(settings.systemPromptVariant, label)
+  const fullTextSettings = assertProjectTransferProjectFullTextSettings(settings, contentSettings, label)
 
   return isValidHumanJudgmentMode
-    ? {...contentSettings, humanJudgmentMode, ...(systemPromptVariant ? {systemPromptVariant} : {})}
+    ? {
+        ...contentSettings,
+        ...fullTextSettings,
+        humanJudgmentMode,
+        ...(systemPromptVariant ? {systemPromptVariant} : {}),
+      }
     : failProjectTransferPayload(`${label}.humanJudgmentMode must be prompt or summary`)
 }
 
@@ -477,6 +506,151 @@ const assertProjectTransferSystemPromptVariant = (value: unknown, label: string)
     : isSystemPromptVariant(value)
       ? value
       : failProjectTransferPayload(`${label}.systemPromptVariant must be one of ${systemPromptVariants.join(', ')}`)
+}
+
+const projectTransferProjectFullTextSettingFields = [
+  'fullTextChunkPolicy',
+  'fullTextFigureMode',
+  'fullTextStrategyId',
+] as const
+
+const projectTransferReservedFullTextStrategyIds = new Set<string>([FULL_TEXT_STRATEGY_NONE, FULL_TEXT_STRATEGY_LEGACY])
+
+type ProjectTransferFullTextContentFlags = {useFulltext: boolean; useFulltextNoImages: boolean}
+
+export const isProjectTransferReservedFullTextStrategyId = (id: string) => {
+  return projectTransferReservedFullTextStrategyIds.has(id)
+}
+
+const getLegacyProjectTransferProjectFullTextSettings = (
+  contentFlags: ProjectTransferFullTextContentFlags,
+): ProjectTransferProjectFullTextSettings => {
+  return getLegacyFullTextStrategyId(contentFlags) === FULL_TEXT_STRATEGY_LEGACY
+    ? {fullTextChunkPolicy: null, fullTextFigureMode: 'none', fullTextStrategyId: FULL_TEXT_STRATEGY_LEGACY}
+    : {fullTextChunkPolicy: null, fullTextFigureMode: null, fullTextStrategyId: null}
+}
+
+const getStoredProjectTransferProjectFullTextSettings = (
+  settings: JsonRecord,
+): ProjectTransferProjectFullTextSettings => {
+  return {
+    fullTextChunkPolicy: getFullTextChunkPolicy(settings.fullTextChunkPolicy),
+    fullTextFigureMode: isFullTextFigureMode(settings.fullTextFigureMode) ? settings.fullTextFigureMode : null,
+    fullTextStrategyId:
+      typeof settings.fullTextStrategyId === 'string' && settings.fullTextStrategyId.trim() !== ''
+        ? settings.fullTextStrategyId
+        : null,
+  }
+}
+
+export const getProjectTransferProjectFullTextSettings = (
+  settings: JsonRecord,
+  contentFlags: ProjectTransferFullTextContentFlags,
+): ProjectTransferProjectFullTextSettings => {
+  return hasOwn(settings, 'fullTextStrategyId')
+    ? getStoredProjectTransferProjectFullTextSettings(settings)
+    : getLegacyProjectTransferProjectFullTextSettings(contentFlags)
+}
+
+export const getProjectTransferJudgmentFullTextStrategyId = (record: JsonRecord): string => {
+  const settings = isRecord(record.contentSettings) ? record.contentSettings : {}
+  const strategyId = record.fullTextStrategyId
+
+  return typeof strategyId === 'string' && strategyId.trim() !== ''
+    ? strategyId
+    : getLegacyFullTextStrategyId({
+        useFulltext: settings.useFulltext === true,
+        useFulltextNoImages: settings.useFulltextNoImages === true,
+      })
+}
+
+const assertProjectTransferFullTextFigureMode = (value: unknown, label: string) => {
+  return value === null || isFullTextFigureMode(value)
+    ? value
+    : failProjectTransferPayload(`${label}.fullTextFigureMode must be null or one of ${fullTextFigureModes.join(', ')}`)
+}
+
+const assertProjectTransferFullTextChunkPolicy = (value: unknown, label: string) => {
+  return value === null || (isRecord(value) && getFullTextChunkPolicy(value) !== null)
+    ? value
+    : failProjectTransferPayload(`${label}.fullTextChunkPolicy must be null or a full-text chunk policy`)
+}
+
+const assertProjectTransferProjectFullTextSettings = (
+  settings: JsonRecord,
+  contentFlags: ProjectTransferFullTextContentFlags,
+  label: string,
+): ProjectTransferProjectFullTextSettings => {
+  const presentFieldCount = projectTransferProjectFullTextSettingFields.filter((field) => {
+    return hasOwn(settings, field)
+  }).length
+
+  if (presentFieldCount > 0 && presentFieldCount < projectTransferProjectFullTextSettingFields.length) {
+    return failProjectTransferPayload(
+      `${label} must carry fullTextStrategyId, fullTextFigureMode and fullTextChunkPolicy together`,
+    )
+  }
+
+  if (presentFieldCount > 0) {
+    assertNullableNonEmptyString(settings.fullTextStrategyId, `${label}.fullTextStrategyId`)
+    assertProjectTransferFullTextFigureMode(settings.fullTextFigureMode, label)
+    assertProjectTransferFullTextChunkPolicy(settings.fullTextChunkPolicy, label)
+  }
+
+  return getProjectTransferProjectFullTextSettings(settings, contentFlags)
+}
+
+const assertProjectTransferFullTextStrategy = (value: unknown, label: string): FullTextStrategy => {
+  const record = assertRecord(value, label)
+  const id = assertNonEmptyString(record.id, `${label}.id`)
+  const strategyLabel = assertNonEmptyString(record.label, `${label}.label`)
+  const inputs = assertRecord(record.inputs, `${label}.inputs`) as FullTextStrategyInputs
+
+  return isProjectTransferReservedFullTextStrategyId(id)
+    ? failProjectTransferPayload(`${label}.id ${id} is reserved and must not be defined`)
+    : getFullTextStrategyId(inputs) === id
+      ? {id, inputs, label: strategyLabel}
+      : failProjectTransferPayload(`${label}.id ${id} does not match its inputs`)
+}
+
+export const assertProjectTransferFullTextStrategies = (value: unknown, label = 'fullTextStrategies') => {
+  const strategies =
+    value === undefined
+      ? []
+      : assertArray(value, label).map((entry, index) => {
+          return assertProjectTransferFullTextStrategy(entry, `${label}[${index}]`)
+        })
+  const duplicate = strategies.find((strategy, index) => {
+    return (
+      strategies.findIndex((candidate) => {
+        return candidate.id === strategy.id
+      }) !== index
+    )
+  })
+
+  return duplicate ? failProjectTransferPayload(`${label} defines ${duplicate.id} more than once`) : strategies
+}
+
+export const getProjectTransferUndefinedFullTextStrategyIds = ({
+  referencedIds,
+  strategies,
+}: {
+  referencedIds: readonly (string | null)[]
+  strategies: readonly FullTextStrategy[]
+}) => {
+  const definedIds = new Set(
+    strategies.map((strategy) => {
+      return strategy.id
+    }),
+  )
+
+  return [
+    ...new Set(
+      referencedIds.filter((id): id is string => {
+        return id !== null && !isProjectTransferReservedFullTextStrategyId(id) && !definedIds.has(id)
+      }),
+    ),
+  ].sort()
 }
 
 export const normalizeProjectTransferModelVariant = (variant: unknown): string | null => {
@@ -530,10 +704,25 @@ const assertIdentifierSignatureMatches = (record: JsonRecord, label: string) => 
     : failProjectTransferPayload(`${label}.signature.identifierKeys must match normalized strong identifiers`)
 }
 
+const assertProjectFullTextStrategyDefined = (record: JsonRecord, label: string) => {
+  const settings = assertProjectTransferProjectSettings(record.settings, `${label}.settings`)
+  const strategies = assertProjectTransferFullTextStrategies(record.fullTextStrategies, `${label}.fullTextStrategies`)
+  const [undefinedId] = getProjectTransferUndefinedFullTextStrategyIds({
+    referencedIds: [settings.fullTextStrategyId],
+    strategies,
+  })
+
+  return undefinedId === undefined
+    ? undefined
+    : failProjectTransferPayload(
+        `${label}.settings.fullTextStrategyId ${undefinedId} has no definition in ${label}.fullTextStrategies`,
+      )
+}
+
 const assertProjectPayload = (record: JsonRecord, label: string) => {
   assertNonEmptyString(record.sourceProjectId, `${label}.sourceProjectId`)
   assertNonEmptyString(record.name, `${label}.name`)
-  assertProjectTransferProjectSettings(record.settings, `${label}.settings`)
+  assertProjectFullTextStrategyDefined(record, label)
   const dateFrom =
     record.dateFrom === undefined || record.dateFrom === null
       ? null
@@ -682,6 +871,10 @@ const assertJudgmentPayload = (record: JsonRecord, label: string) => {
   assertNonNegativeInteger(record.confidenceOriginal, `${label}.confidenceOriginal`)
   assertProjectTransferContentSettings(record.contentSettings, `${label}.contentSettings`)
   assertProjectTransferSystemPromptVariant(record.systemPromptVariant, label)
+
+  if (record.fullTextStrategyId !== undefined) {
+    assertNonEmptyString(record.fullTextStrategyId, `${label}.fullTextStrategyId`)
+  }
 
   return assertArray(record.quotes, `${label}.quotes`)
 }
@@ -1582,6 +1775,12 @@ const projectSettings = {
   useFulltextNoImages: false,
   useTitle: true,
 }
+const projectPayloadSettings = {
+  fullTextChunkPolicy: null,
+  fullTextFigureMode: null,
+  fullTextStrategyId: null,
+  ...projectSettings,
+}
 const promptSignature = {contentHash: 'c4f659c8baf0066f65ecb7006731b24d', originalText: 'Include the study?'}
 const importRouteSignature = {route: 'covidence'}
 const articleSignature = {
@@ -1664,6 +1863,7 @@ const judgmentInputSignature = {
   request: {
     evidenceOutputSchemaDigest: 'fixture-evidence-schema-digest',
     evidenceSystemPromptDigest: null,
+    fullTextStrategyId: 'fts-none',
     invocationTemperature: 0.2,
     maxRetries: 2,
     outputSchemaDigest: 'fixture-output-schema-digest',
@@ -1804,6 +2004,7 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
       confidenceOriginal: 90,
       contentSettings: projectSettings,
       explanation: 'Fixture explanation',
+      fullTextStrategyId: 'fts-none',
       isAnswered: true,
       judgmentInputSignature,
       judgmentInputSignatureProvenance: inputSignatureProvenance,
@@ -1835,11 +2036,12 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
   ],
   project: {
     description: 'Fixture project package',
+    fullTextStrategies: [],
     modelSignature,
     name: 'Fixture Project',
     provenance: {sourceProjectId},
-    settings: projectSettings,
-    signature: {modelSignature, name: 'Fixture Project', settings: projectSettings},
+    settings: projectPayloadSettings,
+    signature: {modelSignature, name: 'Fixture Project', settings: projectPayloadSettings},
     sourceProjectId,
   },
   projectArticles: [
