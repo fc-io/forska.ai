@@ -131,6 +131,13 @@ beforeAll(async () => {
     figureMode: 'descriptions',
   })
   await seedStrategy('fts-0000000000000bad', {figureMode: 'none'})
+  await seedStrategy('fts-00000000000img24', {
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
+    figureDescriptionModelId: null,
+    figureDescriptionPromptVersion: null,
+    figureMode: 'native_images',
+    imageTransportVersion: 'img-v1',
+  })
 })
 
 afterAll(async () => {
@@ -173,4 +180,12 @@ test('descriptions strategies need the installation figure-description model the
 
   await setFigureDescriptionModel('vlm-a')
   expect(await getError('fts-000000000000024a')).toBeNull()
+})
+
+test('native-images strategies need a model that accepts images', async () => {
+  expect(await getError('fts-00000000000img24')).toMatchObject({
+    message: stringContaining('Model judge-32k cannot receive images'),
+    status: 409,
+  })
+  expect(await getError('fts-00000000000img24', 'vlm-a')).toBeNull()
 })

@@ -132,8 +132,8 @@ test('figure states are only computed for the descriptions mode and survive the 
   const withTarget = getFullTextJudgingFigureAssets(rawAssets, target)
 
   expect(withoutTarget).toEqual([
-    {description: '', descriptionState: null, index: 1},
-    {description: '', descriptionState: null, index: 2},
+    {description: '', descriptionState: null, imagePath: 'assets/full-text-assets/a/fig-1.png', index: 1},
+    {description: '', descriptionState: null, imagePath: 'assets/full-text-assets/a/fig-2.png', index: 2},
   ])
   expect(getStoredFullTextJudgingFigureAssets(JSON.parse(JSON.stringify(withTarget)))).toEqual(withTarget)
   expect(getStoredFullTextJudgingFigureAssets([{index: 1}])).toBeNull()

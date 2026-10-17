@@ -22,12 +22,13 @@ import {
   withJudgmentRequest,
 } from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {type FullTextTokenCounter, loadFullTextTokenCounter} from '../server/fullText/fullTextTokenizer.ts'
+import {getNativeFigureMarkerIndexes} from '../server/fullText/nativeFigureImages.ts'
 import {claudeCodeRecoverableFailureCodes} from '../server/providers/claudeCodeFailureCodes.ts'
 import {
   invokeStoredProviderModel,
   type StoredProviderInvocationContext,
 } from '../server/providers/providerInvocationService.ts'
-import {ProviderInvocationError} from '../server/providers/providerTypes.ts'
+import {ProviderInvocationError, type ProviderInvokeImage} from '../server/providers/providerTypes.ts'
 import {inferenceRuntimeConfig} from '../server/utils/getInferenceRuntimeConfig.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {FULL_TEXT_STRATEGY_NONE, type FullTextChunkPolicy} from '../utils/fullTextStrategyOptions.ts'
@@ -681,6 +682,7 @@ const generateSinglePromptResponse = async ({
   promptIds,
   queueRecordId,
   prompt,
+  images = [],
   systemPrompt,
   baseURL,
   provider,
@@ -706,6 +708,7 @@ const generateSinglePromptResponse = async ({
   promptIds: string[]
   queueRecordId: string
   prompt: string
+  images?: ProviderInvokeImage[]
   systemPrompt: string
   baseURL: string
   provider: string | null
@@ -761,7 +764,7 @@ const generateSinglePromptResponse = async ({
           maxCompletionTokens: MAX_COMPLETION_TOKENS,
           modelId,
           outputSchema,
-          prompt,
+          prompt: images.length > 0 ? {images, text: prompt} : prompt,
           signal: requestAttempt.signal,
           systemPrompt,
           temperature: 0.2,
@@ -1170,6 +1173,7 @@ type JudgeCallResult<T> =
 type JudgeCallInput<T> = {
   basePrompt: string
   context: JudgeCallContext
+  images: ProviderInvokeImage[]
   label: string
   onValid: (value: T, response: GeneratedPromptResponse) => Promise<void>
   outputSchema: unknown
@@ -1454,6 +1458,7 @@ const runJudgeCallAttempt = async <T>(
       promptIds: input.context.promptIds,
       queueRecordId: input.context.queueRecordId,
       prompt: state.userPrompt,
+      images: input.images,
       systemPrompt: input.systemPrompt,
       baseURL: input.context.modelConfig.baseURL,
       provider: input.context.modelConfig.provider,
@@ -1615,12 +1620,28 @@ export const getFullTextCallMode = ({
       : 'too_large'
 }
 
+const getCallFigureImages = (fullText: FullTextJudgingInput, text: string): ProviderInvokeImage[] => {
+  const imageByFigureIndex = new Map(
+    fullText.figureImages.map((image) => {
+      return [image.figureIndex, image] as const
+    }),
+  )
+
+  return getNativeFigureMarkerIndexes(text).flatMap((figureIndex) => {
+    const image = imageByFigureIndex.get(figureIndex)
+
+    return image ? [{bytes: image.bytes, mimeType: image.mimeType}] : []
+  })
+}
+
 const runSingleJudgment = async ({
   fullTextExecution,
+  images,
   request,
   run,
 }: {
   fullTextExecution: JudgmentFullTextExecution
+  images: ProviderInvokeImage[]
   request: ReturnType<typeof getSinglePromptJudgmentRequest>
   run: JudgeRunInput
 }): Promise<JudgeOutcome> => {
@@ -1638,6 +1659,7 @@ const runSingleJudgment = async ({
   const result = await runJudgeCall<SinglePromptJudgmentResult>({
     basePrompt: request.userPrompt,
     context: run.context,
+    images,
     label: 'request',
     onValid: (judgment, response) => {
       return storeJudgeResult({fullTextExecution, judgment, response, run})
@@ -1693,12 +1715,14 @@ const assertPromptFitsFullTextLimit = ({
 
 const runChunkJudgments = async ({
   chunkPrompts,
+  fullText,
   plan,
   recordText,
   run,
   systemPrompt,
 }: {
   chunkPrompts: string[]
+  fullText: FullTextJudgingInput
   plan: FullTextChunkPlan
   recordText: string
   run: JudgeRunInput
@@ -1729,6 +1753,10 @@ const runChunkJudgments = async ({
       return runJudgeCall<FullTextChunkJudgmentForMerge>({
         basePrompt: chunkPrompt,
         context: run.context,
+        images: getCallFigureImages(
+          fullText,
+          chunk ? getFullTextChunkText({chunk, renderedText: fullText.renderedText}) : '',
+        ),
         label: `full-text part ${chunkIndex + 1}/${chunkPrompts.length}`,
         onValid: async () => {
           return undefined
@@ -1836,6 +1864,7 @@ const runMergeJudgment = async ({
   const result = await runJudgeCall<SinglePromptJudgmentResult>({
     basePrompt: mergePrompt,
     context: run.context,
+    images: [],
     label: 'full-text merge',
     onValid: (judgment, response) => {
       return storeJudgeResult({
@@ -1917,6 +1946,7 @@ const runChunkedJudgment = async ({
   const chunkPhase = await getChunkPhaseOutcome(
     await runChunkJudgments({
       chunkPrompts,
+      fullText,
       plan,
       recordText: request.recordText,
       run,
@@ -1957,6 +1987,7 @@ const runFullTextJudgment = async ({
   return mode === 'single'
     ? runSingleJudgment({
         fullTextExecution: {chunkCount: null, chunkPlanHash: null, fullTextMode: 'single'},
+        images: getCallFigureImages(fullText, fullText.renderedText),
         request,
         run,
       })
@@ -1982,7 +2013,7 @@ const runTitleAbstractJudgment = async ({
     )
   }
 
-  return runSingleJudgment({fullTextExecution: noJudgmentFullTextExecution, request, run})
+  return runSingleJudgment({fullTextExecution: noJudgmentFullTextExecution, images: [], request, run})
 }
 
 export const judgeSinglePrompt = async ({

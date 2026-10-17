@@ -10,6 +10,7 @@ import type {FullTextFigureMode} from '../../utils/fullTextStrategyOptions.ts'
 export type FullTextJudgingFigureAsset = {
   description: string
   descriptionState: FigureDescriptionAssetState | null
+  imagePath: string | null
   index: number
 }
 
@@ -72,6 +73,7 @@ const toFigureAsset = (value: unknown, target: FigureDescriptionTarget | null): 
         ? normalizeInlineText(value.description)
         : '',
     descriptionState,
+    imagePath: typeof value.imagePath === 'string' ? value.imagePath : null,
     index: value.index as number,
   }
 }
@@ -95,13 +97,19 @@ const isStoredJudgingFigureAsset = (value: unknown): value is FullTextJudgingFig
     && Number.isInteger(value.index)
     && typeof value.description === 'string'
     && (value.descriptionState === null || isFigureDescriptionState(value.descriptionState))
+    && (value.imagePath === null || typeof value.imagePath === 'string')
   )
 }
 
 export const getStoredFullTextJudgingFigureAssets = (value: unknown): FullTextJudgingFigureAsset[] | null => {
   return Array.isArray(value) && value.every(isStoredJudgingFigureAsset)
     ? value.map((asset) => {
-        return {description: asset.description, descriptionState: asset.descriptionState, index: asset.index}
+        return {
+          description: asset.description,
+          descriptionState: asset.descriptionState,
+          imagePath: asset.imagePath,
+          index: asset.index,
+        }
       })
     : null
 }

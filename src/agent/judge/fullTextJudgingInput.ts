@@ -41,8 +41,11 @@ export type FullTextJudgingBlock = {
   strategy: FullTextJudgingStrategy | null
 }
 
+export type FullTextJudgingFigureImage = {bytes: Uint8Array; figureIndex: number; mimeType: 'image/jpeg' | 'image/png'}
+
 export type FullTextJudgingInput = {
   chunkPlan: FullTextChunkPlan | null
+  figureImages: FullTextJudgingFigureImage[]
   renderedText: string
   strategy: FullTextJudgingStrategy
   textHash: string
@@ -324,6 +327,7 @@ export const prepareFullTextJudgingInput = ({
               strategy,
               textHash,
             }),
+            figureImages: [],
             renderedText: rendered.text,
             strategy,
             textHash,
