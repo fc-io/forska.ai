@@ -1,5 +1,8 @@
 import {createHash, randomUUID} from 'node:crypto'
 
+import type {FullTextJudgingBlock} from '../../agent/judge/fullTextJudgingInput.ts'
+import {getFullTextChunkPlanKey} from '../fullText/fullTextChunkPlanStore.ts'
+import {type FullTextJudgingArticleRow, getFullTextJudgingBlocks} from '../fullText/fullTextJudgingBlocks.ts'
 import {
   FULL_TEXT_STRATEGY_LEGACY,
   FULL_TEXT_STRATEGY_NONE,
@@ -27,6 +30,7 @@ type JudgmentExecutionSnapshotRow = {
   externalArticleId: string | null
   fullText: string | null
   fullTextAssets: unknown
+  fullTextCanonicalVersion: string | null
   fullTextCharCount: number | null
   fullTextConversionAttempts: number | null
   fullTextConversionError: string | null
@@ -34,7 +38,9 @@ type JudgmentExecutionSnapshotRow = {
   fullTextConversionModelId: string | null
   fullTextConversionStatus: string | null
   fullTextFetchedAt: unknown
+  fullTextFigureModeBuilt: string | null
   fullTextHtml: string | null
+  fullTextJudgingAssets: unknown
   fullTextOriginalFormat: string | null
   fullTextPdf: string | null
   fullTextSource: string | null
@@ -234,25 +240,9 @@ const getSnapshotTextColumnSelect = ({
   return includeFulltext ? selectSql : 'NULL'
 }
 
-const snapshotMarkdownImageRegexSql = String.raw`'!\[([^\]]*)\]\(data:image/[^;]+;base64,[^)]+\)'`
-
-const getSnapshotFullTextColumnSelect = ({
-  includeFulltext,
-  stripImages,
-}: {
-  includeFulltext: boolean
-  stripImages: boolean
-}): string => {
-  return !includeFulltext
-    ? 'NULL'
-    : stripImages
-      ? `regexp_replace(a.full_text, ${snapshotMarkdownImageRegexSql}, '', 'g')`
-      : 'a.full_text'
-}
-
 const getSnapshotRows = async (
   requests: JudgmentExecutionSnapshotClaimInput[],
-  {includeFulltext, stripImages}: {includeFulltext: boolean; stripImages: boolean},
+  {includeFulltext}: {includeFulltext: boolean},
   database: SnapshotQueryService = getAppDatabaseService(),
 ): Promise<JudgmentExecutionSnapshotRow[]> => {
   if (requests.length === 0) {
@@ -477,7 +467,10 @@ const getSnapshotRows = async (
       a.doi AS doi,
       a.pubmed_id AS pubmedId,
       a.url AS url,
-      ${getSnapshotFullTextColumnSelect({includeFulltext, stripImages})} AS fullText,
+      ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text'})} AS fullText,
+      ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_canonical_version'})} AS fullTextCanonicalVersion,
+      ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_figure_mode_built'})} AS fullTextFigureModeBuilt,
+      ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'TO_JSON(a.full_text_assets)'})} AS fullTextJudgingAssets,
       NULL AS fullTextHtml,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_pdf'})} AS fullTextPdf,
       ${getSnapshotTextColumnSelect({includeFulltext, selectSql: 'a.full_text_source'})} AS fullTextSource,
@@ -539,7 +532,7 @@ const getSnapshotRows = async (
   `)
 }
 
-const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
+const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow, fullTextJudging: FullTextJudgingBlock | null) => {
   const articleId = row.articleId ?? row.requestedArticleId
   const promptId = row.promptId ?? row.requestedPromptId
   const canonicalOriginalData = getJsonValue(row.originalData)
@@ -609,6 +602,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       useMetadata: row.useMetadata,
       useTitle: row.useTitle,
     },
+    fullTextJudging,
     identity: {
       articleId,
       claimId: row.claimId,
@@ -656,7 +650,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       maxInflightRequests: row.providerMaxInflightRequests,
       secretRef: row.providerSecretRef,
     },
-    snapshotVersion: 4,
+    snapshotVersion: 5,
   }
 }
 
@@ -798,22 +792,45 @@ const getSnapshotIdentityByRequest = async ({claimId, jobId, queueRecordId}: Jud
 
 const shouldIncludeFulltext = (requests: JudgmentExecutionSnapshotClaimInput[]): boolean => {
   return requests.every((request) => {
-    return typeof request.useFulltext === 'boolean' && typeof request.useFulltextNoImages === 'boolean'
+    return typeof request.useFulltext === 'boolean'
   })
     ? requests.some((request) => {
-        return request.useFulltext === true || request.useFulltextNoImages === true
+        return request.useFulltext === true
       })
     : true
 }
 
-const shouldStripFulltextImages = (requests: JudgmentExecutionSnapshotClaimInput[]): boolean => {
-  return requests.every((request) => {
-    return request.useFulltextNoImages === true && request.useFulltext !== true
-  })
+const getFullTextJudgingArticleRow = (row: JudgmentExecutionSnapshotRow): FullTextJudgingArticleRow => {
+  return {
+    articleId: row.articleId ?? row.requestedArticleId,
+    articleSummary: row.articleSummary,
+    fullText: row.fullText,
+    fullTextAssets: getJsonValue(row.fullTextJudgingAssets),
+    fullTextCanonicalVersion: row.fullTextCanonicalVersion,
+    fullTextFigureModeBuilt: row.fullTextFigureModeBuilt,
+    fullTextStrategyId: row.fullTextStrategyId,
+  }
 }
 
-const getSnapshotIdentityForTransientRow = (row: JudgmentExecutionSnapshotRow): JudgmentExecutionSnapshotClaim => {
-  const payload = getSnapshotPayload(row)
+const getSnapshotFullTextJudgingBlocks = async (
+  rows: JudgmentExecutionSnapshotRow[],
+  {database, writable}: {database: SnapshotQueryService; writable: boolean},
+): Promise<Map<string, FullTextJudgingBlock>> => {
+  return getFullTextJudgingBlocks({database, rows: rows.map(getFullTextJudgingArticleRow), writable})
+}
+
+const getRowFullTextJudgingBlock = (
+  row: JudgmentExecutionSnapshotRow,
+  blocks: Map<string, FullTextJudgingBlock>,
+): FullTextJudgingBlock | null => {
+  return blocks.get(getFullTextChunkPlanKey(getFullTextJudgingArticleRow(row))) ?? null
+}
+
+const getSnapshotIdentityForTransientRow = (
+  row: JudgmentExecutionSnapshotRow,
+  blocks: Map<string, FullTextJudgingBlock>,
+): JudgmentExecutionSnapshotClaim => {
+  const payload = getSnapshotPayload(row, getRowFullTextJudgingBlock(row, blocks))
 
   return {
     executionSnapshotHash: getJudgmentExecutionSnapshotHash(payload),
@@ -838,19 +855,16 @@ export const createTransientJudgmentExecutionSnapshotsForClaims = async (
     return []
   }
 
-  const sourceRows = await getSnapshotRows(
-    requests,
-    {includeFulltext: shouldIncludeFulltext(requests), stripImages: shouldStripFulltextImages(requests)},
-    database,
-  )
+  const sourceRows = await getSnapshotRows(requests, {includeFulltext: shouldIncludeFulltext(requests)}, database)
+  const blocks = await getSnapshotFullTextJudgingBlocks(sourceRows, {database, writable: false})
 
   return sourceRows.map((row) => {
-    return getSnapshotIdentityForTransientRow(row)
+    return getSnapshotIdentityForTransientRow(row, blocks)
   })
 }
 
 const getSnapshotClaimFlagKey = (request: JudgmentExecutionSnapshotClaimInput) => {
-  return `${shouldIncludeFulltext([request])}:${shouldStripFulltextImages([request])}`
+  return `${shouldIncludeFulltext([request])}`
 }
 
 const getSnapshotClaimGroups = (
@@ -871,6 +885,7 @@ const getSnapshotClaimGroups = (
 const getSnapshotInputForClaim = (
   request: JudgmentExecutionSnapshotClaimInput,
   rowsByClaimId: Map<string, JudgmentExecutionSnapshotRow>,
+  blocks: Map<string, FullTextJudgingBlock>,
 ) => {
   const row = rowsByClaimId.get(request.claimId)
 
@@ -878,7 +893,7 @@ const getSnapshotInputForClaim = (
     throw new Error(`Failed to build judgment execution snapshot for claim ${request.claimId}`)
   }
 
-  const payload = getSnapshotPayload(row)
+  const payload = getSnapshotPayload(row, getRowFullTextJudgingBlock(row, blocks))
 
   return {
     claimedBy: request.claimedBy,
@@ -897,17 +912,15 @@ type JudgmentExecutionSnapshotClaimWithRecord = {
 const createJudgmentExecutionSnapshotsForClaimGroup = async (
   requests: JudgmentExecutionSnapshotClaimInput[],
 ): Promise<JudgmentExecutionSnapshotClaimWithRecord[]> => {
-  const rows = await getSnapshotRows(requests, {
-    includeFulltext: shouldIncludeFulltext(requests),
-    stripImages: shouldStripFulltextImages(requests),
-  })
+  const rows = await getSnapshotRows(requests, {includeFulltext: shouldIncludeFulltext(requests)})
+  const blocks = await getSnapshotFullTextJudgingBlocks(rows, {database: getAppDatabaseService(), writable: true})
   const rowsByClaimId = new Map(
     rows.map((row) => {
       return [row.claimId, row] as const
     }),
   )
   const snapshotInputs = requests.map((request) => {
-    return getSnapshotInputForClaim(request, rowsByClaimId)
+    return getSnapshotInputForClaim(request, rowsByClaimId, blocks)
   })
   const insertedRows = await getAppDatabaseService().queryJson<StoredSnapshotIdentityRow>(`
     INSERT INTO app.judgment_execution_snapshot (

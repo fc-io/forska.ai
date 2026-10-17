@@ -135,7 +135,7 @@ test('snapshot scoped import selection ranks lightweight rows before reading raw
   expect(snapshotSql).toContain('source_record.id = selected_key.source_row_id')
 })
 
-test('snapshot hydration avoids bulky raw payloads for no-image fulltext claims', async () => {
+const captureTransientSnapshotSql = async (flags: {useFulltext: boolean; useFulltextNoImages: boolean}) => {
   let snapshotSql = ''
 
   await createTransientJudgmentExecutionSnapshotsForClaims(
@@ -147,8 +147,7 @@ test('snapshot hydration avoids bulky raw payloads for no-image fulltext claims'
         jobId: 'job-1',
         promptId: 'prompt-1',
         queueRecordId: 'queue-1',
-        useFulltext: false,
-        useFulltextNoImages: true,
+        ...flags,
       },
     ],
     {
@@ -159,7 +158,17 @@ test('snapshot hydration avoids bulky raw payloads for no-image fulltext claims'
     },
   )
 
-  expect(snapshotSql).toContain('regexp_replace(a.full_text')
+  return snapshotSql
+}
+
+test('snapshot hydration of full-text claims reads the stored canonical text form and no bulky raw payloads', async () => {
+  const snapshotSql = await captureTransientSnapshotSql({useFulltext: true, useFulltextNoImages: false})
+
+  expect(snapshotSql).toContain('a.full_text AS fullText')
+  expect(snapshotSql).toContain('a.full_text_canonical_version AS fullTextCanonicalVersion')
+  expect(snapshotSql).toContain('a.full_text_figure_mode_built AS fullTextFigureModeBuilt')
+  expect(snapshotSql).toContain('TO_JSON(a.full_text_assets) AS fullTextJudgingAssets')
+  expect(snapshotSql).not.toContain('regexp_replace(a.full_text')
   expect(snapshotSql).toContain('NULL AS fullTextHtml')
   expect(snapshotSql).toContain('NULL AS fullTextAssets')
   expect(snapshotSql).toContain('NULL AS fullTextConversionMetadata')
@@ -167,7 +176,14 @@ test('snapshot hydration avoids bulky raw payloads for no-image fulltext claims'
   expect(snapshotSql).toContain('NULL AS scopedRawPayload')
   expect(snapshotSql).not.toContain('TO_JSON(scoped_import.raw_payload)')
   expect(snapshotSql).not.toContain('TO_JSON(a.original_data)')
-  expect(snapshotSql).not.toContain('TO_JSON(a.full_text_assets)')
+})
+
+test('use_fulltext_no_images is identity only: such claims read no full text', async () => {
+  const snapshotSql = await captureTransientSnapshotSql({useFulltext: false, useFulltextNoImages: true})
+
+  expect(snapshotSql).toContain('NULL AS fullText,')
+  expect(snapshotSql).toContain('NULL AS fullTextJudgingAssets')
+  expect(snapshotSql).not.toContain('regexp_replace(a.full_text')
 })
 
 test('snapshot hydration reads only the resolved articles instead of hash-joining the whole article table', async () => {
@@ -405,7 +421,7 @@ test('snapshots carry use_metadata and the PubMed id, and the identity check com
     identityValidWithMetadata: true,
     identityValidWithoutMetadata: false,
     snapshotUseMetadata: true,
-    snapshotVersion: 4,
+    snapshotVersion: 5,
     storedUseMetadata: true,
   })
 })
