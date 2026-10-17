@@ -1,5 +1,6 @@
 import {createSignal, For, Show} from 'solid-js'
 
+import {legacyFullTextNoImagesLabel} from '../../../../../utils/legacyFullTextNoImagesLabel.ts'
 import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
@@ -276,20 +277,22 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
               >
                 Abstract
               </span>
-              <span
-                class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                  props.judgment.useFulltext ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'
-                }`}
+              <Show
+                when={props.judgment.useFulltextNoImages}
+                fallback={
+                  <span
+                    class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                      props.judgment.useFulltext ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500'
+                    }`}
+                  >
+                    Full text
+                  </span>
+                }
               >
-                Full text
-              </span>
-              <span
-                class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                  props.judgment.useFulltextNoImages ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-500'
-                }`}
-              >
-                Full text - no images
-              </span>
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800">
+                  {legacyFullTextNoImagesLabel}
+                </span>
+              </Show>
               <Show when={props.judgment.useMetadata !== undefined}>
                 <span
                   class={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${

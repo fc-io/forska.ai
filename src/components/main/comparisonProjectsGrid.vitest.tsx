@@ -244,3 +244,28 @@ describe('ComparisonProjectsGrid archive actions', () => {
     }
   })
 })
+
+describe('ComparisonProjectsGrid content label', () => {
+  test('names legacy no-images content with the frozen legacy label and plain full text without a qualifier', async () => {
+    const {container, dispose} = await renderComparisonProjectsGrid([
+      getComparisonProject({
+        id: 'legacy-comparison',
+        name: 'Legacy comparison',
+        useAbstract: false,
+        useFulltextNoImages: true,
+        useTitle: false,
+      }),
+      getComparisonProject({id: 'full-text-comparison', name: 'Full text comparison', useFulltext: true}),
+    ])
+
+    try {
+      expect(container.textContent).toContain('full text (legacy, no images)')
+      expect(container.textContent).toContain('Article Title and Abstract · Use Full Text')
+      expect(container.textContent).not.toContain('(with images)')
+      expect(container.textContent).not.toContain('(without images)')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+})

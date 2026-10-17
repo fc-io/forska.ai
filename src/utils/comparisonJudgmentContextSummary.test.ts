@@ -215,6 +215,20 @@ test('compares content in both directions from the server-decoded flags', () => 
   )
 })
 
+test('names legacy no-images content with the frozen legacy label', () => {
+  const current = getSummary('context-current')
+  const older = getSummary('context-older', {
+    context: {
+      ...current.context,
+      columns: [getLlmColumn({contentKey: '0001', useAbstract: false, useFulltextNoImages: true, useTitle: false})],
+    },
+  })
+
+  expect(getComparisonJudgmentContextSummaryLines(older, current).at(-1)).toBe(
+    'Content: full text (legacy, no images) (no longer used); added since: title + abstract',
+  )
+})
+
 test('compares summary-mode criteria with their dispositions, including an empty criteria list', () => {
   const current = getSummaryModeSummary('context-current', [
     {criteriaDisposition: 'include', promptHeading: 'Population', promptId: 'prompt-1'},

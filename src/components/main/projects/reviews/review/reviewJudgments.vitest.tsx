@@ -101,3 +101,50 @@ test('ReviewJudgments shows the full-text execution on the chunking line', () =>
 
   dispose()
 })
+
+test('ReviewJudgments labels legacy no-images judgments and keeps one full text badge for the rest', () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+
+  const dispose = render(() => {
+    return (
+      <ReviewJudgments
+        judgments={[
+          {
+            id: 'judgment-legacy-no-images',
+            promptId: 'prompt-1',
+            prompt: {id: 'prompt-1', originalText: 'Legacy prompt'},
+            answeredOriginal: 'yes',
+            useAbstract: false,
+            useFulltext: false,
+            useFulltextNoImages: true,
+            useTitle: false,
+          },
+          {
+            id: 'judgment-full-text',
+            promptId: 'prompt-2',
+            prompt: {id: 'prompt-2', originalText: 'Full text prompt'},
+            answeredOriginal: 'no',
+            useAbstract: false,
+            useFulltext: true,
+            useFulltextNoImages: false,
+            useTitle: false,
+          },
+        ]}
+        setArticleViewToShow={() => {}}
+      />
+    )
+  }, container)
+
+  const contentLines = Array.from(container.querySelectorAll('div'))
+    .map((element) => {
+      return element.textContent ?? ''
+    })
+    .filter((text) => {
+      return text.startsWith('Content:')
+    })
+
+  expect(contentLines).toEqual(['Content:TitleAbstractfull text (legacy, no images)', 'Content:TitleAbstractFull text'])
+
+  dispose()
+})
