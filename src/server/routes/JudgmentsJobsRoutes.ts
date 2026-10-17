@@ -5,6 +5,7 @@ import {
   type SystemPromptVariant,
   systemPromptVariants,
 } from '../../agent/judge/systemPromptVariant.ts'
+import type {JudgmentsJobsPromptsSkipReason} from '../../db/schemaTypes.ts'
 import {
   getJudgmentJobResumeBlockedMessage,
   getJudgmentJobResumeBlockingStopReason,
@@ -117,6 +118,10 @@ import {
   markJudgmentJobSqliteDeletePendingTx,
   retryPendingJudgmentJobSqliteDeletes,
 } from '../services/judgmentJobDeleteService.ts'
+import {
+  assertFullTextJudgingPreconditions,
+  getJudgmentJobFullTextClaimError,
+} from '../services/judgmentJobFullTextPreconditions.ts'
 import {
   assertModelContextWindowResolvable,
   getJudgmentJobModelContextWindowClaimError,
@@ -394,9 +399,12 @@ type JudgmentCompletionIdentity = {
 type JudgmentCompletionBody = Omit<JudgmentCompletionIdentity, 'fullTextStrategyId' | 'useMetadata'> & {
   answeredOriginal?: unknown
   answeredOriginalAsArray?: unknown
+  chunkCount?: number | null
+  chunkPlanHash?: string | null
   chunkingStrategy?: string | null
   confidenceOriginal?: number
   explanation?: string | null
+  fullTextMode?: string | null
   fullTextStrategyId?: string | null
   isAnswered?: boolean
   judgment?: unknown
@@ -405,7 +413,7 @@ type JudgmentCompletionBody = Omit<JudgmentCompletionIdentity, 'fullTextStrategy
   rawResponseJson?: unknown
   requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
   retryAfterMs?: number | null
-  skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
+  skipReason?: JudgmentsJobsPromptsSkipReason
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
   systemPromptVariant?: SystemPromptVariant | null
   tokenUse?: JudgmentCompletionTokenUseSummary | null
@@ -455,9 +463,12 @@ const judgmentCompletionBodySchema = t.Object({
   useTitle: t.Boolean(),
   answeredOriginal: t.Optional(t.Any()),
   answeredOriginalAsArray: t.Optional(t.Any()),
+  chunkCount: t.Optional(t.Union([t.Integer(), t.Null()])),
+  chunkPlanHash: t.Optional(t.Union([t.String(), t.Null()])),
   chunkingStrategy: t.Optional(t.Union([t.String(), t.Null()])),
   confidenceOriginal: t.Optional(t.Number()),
   explanation: t.Optional(t.Union([t.String(), t.Null()])),
+  fullTextMode: t.Optional(t.Union([t.Literal('single'), t.Literal('chunked'), t.Null()])),
   fullTextStrategyId: t.Optional(t.Union([t.String(), t.Null()])),
   isAnswered: t.Optional(t.Boolean()),
   judgment: t.Optional(t.Any()),
@@ -467,7 +478,12 @@ const judgmentCompletionBodySchema = t.Object({
   requestAttempts: t.Optional(t.Union([t.Array(t.Any()), t.Null()])),
   retryAfterMs: t.Optional(t.Union([t.Number(), t.Null()])),
   skipReason: t.Optional(
-    t.Union([t.Literal('conversion_failed'), t.Literal('fulltext_too_large'), t.Literal('no_fulltext')]),
+    t.Union([
+      t.Literal('conversion_failed'),
+      t.Literal('figure_description_failed'),
+      t.Literal('fulltext_too_large'),
+      t.Literal('no_fulltext'),
+    ]),
   ),
   status: t.Optional(
     t.Union([
@@ -976,6 +992,14 @@ const logModelContextWindowClaimGate = (jobId: string, message: string): void =>
   )
 }
 
+const logFullTextClaimGate = (jobId: string, message: string): void => {
+  providerHealthLogger.warn(
+    `judgmentsJobs.fullText.claimGated.${jobId}`,
+    `[judgmentsJobs] claims held back: ${message}`,
+    {component: 'JudgmentsJobsRoutes', event: 'fullTextClaimGated', jobId},
+  )
+}
+
 const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {
   const claimedBy = body?.claimedBy ?? judgmentJobServerId
   if (isJudgeWorkerPausedAfterArmedTestClaim({claimedBy})) {
@@ -993,6 +1017,13 @@ const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequest
 
   if (modelContextWindowError) {
     logModelContextWindowClaimGate(jobId, modelContextWindowError.message)
+    return {data: {claims: []}, error: null}
+  }
+
+  const fullTextClaimError = await getJudgmentJobFullTextClaimError(jobId)
+
+  if (fullTextClaimError) {
+    logFullTextClaimGate(jobId, fullTextClaimError)
     return {data: {claims: []}, error: null}
   }
 
@@ -1313,9 +1344,12 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
         answeredOriginalAsArray: getCompletionAnsweredOriginalAsArray(body.answeredOriginalAsArray, answer),
         articleId: body.articleId,
         claimId: body.claimId,
+        chunkCount: body.chunkCount ?? null,
+        chunkPlanHash: body.chunkPlanHash ?? null,
         chunkingStrategy: body.chunkingStrategy ?? null,
         confidenceOriginal: body.confidenceOriginal ?? 50,
         createdAt: getDateValue(judgment.createdAt) ?? now,
+        fullTextMode: body.fullTextMode ?? null,
         explanation: body.explanation ?? (typeof judgment.explanation === 'string' ? judgment.explanation : null),
         executionSnapshotHash: body.executionSnapshotHash,
         executionSnapshotId: body.executionSnapshotId,
@@ -2205,6 +2239,22 @@ const getJudgmentJobModelContextWindowApi = (row: Parameters<typeof getModelCont
 
 const assertProjectModelContextWindow = async (projectId: string): Promise<void> => {
   return assertModelContextWindowResolvable(await getProjectModelId(projectId))
+}
+
+const assertProjectFullTextJudgingPreconditions = async (projectId: string): Promise<void> => {
+  const [project] = await getAppDatabaseService().queryJson<{fullTextStrategyId: string}>(`
+    SELECT ${getProjectFullTextStrategyIdSql('p')} AS fullTextStrategyId
+    FROM app.project p
+    WHERE p.id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+
+  return project
+    ? assertFullTextJudgingPreconditions({
+        fullTextStrategyId: project.fullTextStrategyId,
+        modelId: await getProjectModelId(projectId),
+      })
+    : undefined
 }
 
 const getJudgingRuntimeReason = async (): Promise<string | null> => {
@@ -3129,6 +3179,7 @@ export const judgmentsJobsRoutes = new Elysia()
       await assertJudgingRuntimeCanRun()
       await assertProjectRuntimeModelMatch(body.projectId)
       await assertProjectModelContextWindow(body.projectId)
+      await assertProjectFullTextJudgingPreconditions(body.projectId)
 
       const [job] = await getAppDatabaseService().queryJson<{
         id: string
@@ -3978,6 +4029,7 @@ export const judgmentsJobsRoutes = new Elysia()
         const {job, projectFullTextStrategyId, projectModelId} = await getJobContext({jobId: params.id})
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
         await assertModelContextWindowResolvable(projectModelId)
+        await assertFullTextJudgingPreconditions({fullTextStrategyId: job.fullTextStrategyId, modelId: projectModelId})
 
         if (!sqliteService.hasJob(params.id)) {
           await sqliteService.initializeJob(params.id)
@@ -4067,6 +4119,7 @@ export const judgmentsJobsRoutes = new Elysia()
       await assertJudgmentJobStopConditionsAllowResume({jobId: params.id, update: {}})
       await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
       await assertModelContextWindowResolvable(projectModelId)
+      await assertFullTextJudgingPreconditions({fullTextStrategyId: projectFullTextStrategyId, modelId: projectModelId})
       await resetJudgmentJobLocalSqliteState({jobId: params.id, storageState: job.storageState})
       await sqliteService.initializeJob(params.id)
       await assertJudgmentJobCanRunSqlitePreflight({jobId: params.id, quarantineReason: null, storageState: 'active'})

@@ -6,6 +6,7 @@ import {getModelContextWindowMissingError} from '../../../providers/providerMode
 import {resolveProviderConnectionRuntimeMatch} from '../../../providers/providerRuntimeMatchResolver.ts'
 import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appReadOnlyDatabaseService.ts'
+import {getJudgmentJobFullTextClaimError} from '../../../services/judgmentJobFullTextPreconditions.ts'
 import {createRateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {
   claimOwnerJudgmentJobPrompts,
@@ -139,6 +140,20 @@ const isModelContextWindowMissingForClaim = ({
   }
 
   return modelContextWindowError !== null
+}
+
+const isFullTextJudgingBlockedForClaim = async (jobId: string): Promise<boolean> => {
+  const message = await getJudgmentJobFullTextClaimError(jobId)
+
+  if (message) {
+    modelContextWindowClaimLogger.warn(
+      `judgmentsJobs.fullText.claimGated.${jobId}`,
+      `[getAndUpdateReadyPrompts] claims held back: ${message}`,
+      {component: 'getAndUpdateReadyPrompts', event: 'fullTextClaimGated', jobId},
+    )
+  }
+
+  return message !== null
 }
 
 const getOwnerRuntimeMissingLogKey = (jobId: string, jobInfo: OwnerBackedJudgmentJobInfo): string => {
@@ -282,7 +297,7 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
     return []
   }
 
-  if (isModelContextWindowMissingForClaim({...jobInfo, jobId})) {
+  if (isModelContextWindowMissingForClaim({...jobInfo, jobId}) || (await isFullTextJudgingBlockedForClaim(jobId))) {
     return []
   }
 
@@ -431,7 +446,11 @@ const getOwnerBackedReadyRows = async (
       const sqliteService = getJudgmentJobSqliteService()
       const localJobInfo = await sqliteService.getJobInfo(jobId)
 
-      if (!localJobInfo || isModelContextWindowMissingForClaim({...localJobInfo, jobId})) {
+      if (
+        !localJobInfo
+        || isModelContextWindowMissingForClaim({...localJobInfo, jobId})
+        || (await isFullTextJudgingBlockedForClaim(jobId))
+      ) {
         return []
       }
 
