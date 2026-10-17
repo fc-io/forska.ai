@@ -1853,6 +1853,7 @@ const appendProjectTransferProjectReviewConfigDelta = async ({
     changedReviewConfigFields: [
       'dateFrom',
       'dateTo',
+      'fullTextStrategyId',
       'humanJudgmentMode',
       'importRoutes',
       'modelExecutionIdentity',
