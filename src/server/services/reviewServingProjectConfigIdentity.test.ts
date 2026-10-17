@@ -30,7 +30,8 @@ const withReviewConfigDatabase = async <T>(
         use_fulltext BOOLEAN,
         use_fulltext_no_images BOOLEAN,
         system_prompt_variant VARCHAR,
-        use_metadata BOOLEAN DEFAULT FALSE
+        use_metadata BOOLEAN DEFAULT FALSE,
+        full_text_strategy_id VARCHAR
       );
       CREATE TABLE app.model (
         id VARCHAR,
@@ -49,10 +50,14 @@ const withReviewConfigDatabase = async <T>(
         archived BOOLEAN
       );
       INSERT INTO app.project VALUES
-        ('project-null', 'prompt', 'model-1', TRUE, TRUE, FALSE, FALSE, NULL, NULL),
-        ('project-legacy', 'prompt', 'model-1', TRUE, TRUE, FALSE, FALSE, 'legacy', FALSE),
-        ('project-screening', 'prompt', 'model-1', TRUE, TRUE, FALSE, FALSE, 'screening_v1', FALSE),
-        ('project-metadata', 'prompt', 'model-1', TRUE, TRUE, FALSE, FALSE, 'legacy', TRUE);
+        ('project-null', 'prompt', 'model-1', TRUE, TRUE, FALSE, FALSE, NULL, NULL, NULL),
+        ('project-legacy', 'prompt', 'model-1', TRUE, TRUE, FALSE, FALSE, 'legacy', FALSE, NULL),
+        ('project-screening', 'prompt', 'model-1', TRUE, TRUE, FALSE, FALSE, 'screening_v1', FALSE, NULL),
+        ('project-metadata', 'prompt', 'model-1', TRUE, TRUE, FALSE, FALSE, 'legacy', TRUE, NULL),
+        ('project-strategy-none', 'prompt', 'model-1', TRUE, TRUE, FALSE, FALSE, 'legacy', FALSE, 'fts-none'),
+        ('project-full-text-legacy', 'prompt', 'model-1', TRUE, TRUE, TRUE, FALSE, 'legacy', FALSE, 'fts-legacy-v0'),
+        ('project-full-text-a', 'prompt', 'model-1', TRUE, TRUE, TRUE, FALSE, 'legacy', FALSE, 'fts-0123456789abcdef'),
+        ('project-full-text-b', 'prompt', 'model-1', TRUE, TRUE, TRUE, FALSE, 'legacy', FALSE, 'fts-fedcba9876543210');
       INSERT INTO app.model VALUES ('model-1', 'provider-1', 'remote-1', 'thinking', '{"options": {"thinking": "high"}}');
       INSERT INTO app.provider_connection VALUES ('provider-1', 'openai-compatible', 'http://localhost:1');
       INSERT INTO app.prompt VALUES ('prompt-1', 'hash-1', 'Prompt one', FALSE);
@@ -60,7 +65,11 @@ const withReviewConfigDatabase = async <T>(
         ('project-null', 'prompt-1', 0, TRUE, FALSE),
         ('project-legacy', 'prompt-1', 0, TRUE, FALSE),
         ('project-screening', 'prompt-1', 0, TRUE, FALSE),
-        ('project-metadata', 'prompt-1', 0, TRUE, FALSE);
+        ('project-metadata', 'prompt-1', 0, TRUE, FALSE),
+        ('project-strategy-none', 'prompt-1', 0, TRUE, FALSE),
+        ('project-full-text-legacy', 'prompt-1', 0, TRUE, FALSE),
+        ('project-full-text-a', 'prompt-1', 0, TRUE, FALSE),
+        ('project-full-text-b', 'prompt-1', 0, TRUE, FALSE);
     `)
 
     return await operation(database)
@@ -113,4 +122,35 @@ test('both review config hash readers agree on article metadata and keep it out 
   expect(metadataOn?.current).toMatch(/^review:/)
   expect(metadataOn?.serving).toBe(metadataOn?.current)
   expect(metadataOn?.current).not.toBe(metadataOff?.current)
+})
+
+test('both review config hash readers agree on the full-text strategy and change the hash when the strategy changes', async () => {
+  const hashes = await withReviewConfigDatabase(async (database) => {
+    const projectIds = [
+      'project-legacy',
+      'project-strategy-none',
+      'project-full-text-legacy',
+      'project-full-text-a',
+      'project-full-text-b',
+    ]
+
+    return Promise.all(
+      projectIds.map(async (projectId) => {
+        return {
+          current: await getCurrentReviewConfigHash(projectId, {database}),
+          serving: await getCurrentReviewServingReviewConfigHash(projectId, database),
+        }
+      }),
+    )
+  })
+  const [nullStrategy, noneStrategy, legacyStrategy, strategyA, strategyB] = hashes
+
+  expect(noneStrategy?.current).toBe(nullStrategy?.current)
+  expect(noneStrategy?.serving).toBe(nullStrategy?.current)
+  expect(legacyStrategy?.serving).toBe(legacyStrategy?.current)
+  expect(strategyA?.current).toMatch(/^review:/)
+  expect(strategyA?.serving).toBe(strategyA?.current)
+  expect(strategyB?.serving).toBe(strategyB?.current)
+  expect(strategyA?.current).not.toBe(legacyStrategy?.current)
+  expect(strategyB?.current).not.toBe(strategyA?.current)
 })

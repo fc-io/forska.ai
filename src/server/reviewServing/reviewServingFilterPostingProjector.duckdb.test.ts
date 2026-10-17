@@ -224,6 +224,7 @@ const projectPayloadRows = async (input: SnapshotInput) => {
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
+      fullTextStrategyId: 'fts-none',
       systemPromptVariant: 'legacy',
       useMetadata: false,
       useTitle: true,

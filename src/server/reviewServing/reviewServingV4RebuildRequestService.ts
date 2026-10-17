@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto'
 
 import {Effect} from 'effect'
 
+import {getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
@@ -2027,7 +2028,8 @@ const getReviewServingV4RebuildStats = async (
         project.use_fulltext,
         project.use_fulltext_no_images,
         COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant,
-        COALESCE(project.use_metadata, FALSE) AS use_metadata
+        COALESCE(project.use_metadata, FALSE) AS use_metadata,
+        ${getProjectFullTextStrategyIdSql('project')} AS full_text_strategy_id
       FROM app.project project
       WHERE project.id = ${getSqlLiteral(input.projectId)}
     ),
@@ -2075,6 +2077,7 @@ const getReviewServingV4RebuildStats = async (
       AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
       AND judgment.system_prompt_variant = project.system_prompt_variant
       AND judgment.use_metadata = project.use_metadata
+      AND judgment.full_text_strategy_id = project.full_text_strategy_id
     WHERE judgment.deleted_at IS NULL
     `)
   })

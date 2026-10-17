@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto'
 
 import {defaultSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {getLegacyFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import type {ReviewServingProjectionComponent, ReviewServingReadContractKey} from './reviewServingContracts.ts'
 
 type ReviewServingIdentityPrimitive = boolean | null | number | string
@@ -30,6 +31,7 @@ export type ReviewSearchIdentityInput = {
 export type ReviewJudgmentInputContentIdentityInput = {
   contentDependencyKeys: readonly string[]
   definitionVersion: string
+  fullTextStrategyId?: string
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -48,6 +50,7 @@ export type PromptConfigHashInput = {
 }
 
 export type ReviewConfigHashInput = {
+  fullTextStrategyId?: string
   humanJudgmentMode: 'prompt' | 'summary'
   modelExecutionIdentity: ReviewServingIdentityValue
   modelId: string | null
@@ -207,12 +210,21 @@ export const buildReviewSearchIdentity = (input: ReviewSearchIdentityInput) => {
   })
 }
 
+const getIdentityFullTextStrategyId = (input: {
+  fullTextStrategyId?: string
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+}) => {
+  return input.fullTextStrategyId === getLegacyFullTextStrategyId(input) ? undefined : input.fullTextStrategyId
+}
+
 export const buildReviewJudgmentInputContentIdentity = (input: ReviewJudgmentInputContentIdentityInput) => {
   return buildReviewProjectionIdentity({
     component: 'judgmentInputContent',
     definitionVersion: input.definitionVersion,
     upstreamDigests: {
       contentDependencyKeys: getSortedUniqueValues(input.contentDependencyKeys),
+      fullTextStrategyId: getIdentityFullTextStrategyId(input),
       useAbstract: input.useAbstract,
       useFulltext: input.useFulltext,
       useFulltextNoImages: input.useFulltextNoImages,
@@ -258,6 +270,7 @@ export const buildReviewConfigHash = (input: ReviewConfigHashInput) => {
     })
 
   return `review:${getReviewServingHash('review-config', {
+    fullTextStrategyId: getIdentityFullTextStrategyId(input),
     humanJudgmentMode: input.humanJudgmentMode,
     modelExecutionIdentity: input.modelExecutionIdentity,
     modelId: input.modelId,

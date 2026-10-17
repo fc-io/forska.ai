@@ -384,6 +384,10 @@ test('judgment job refill falls back to current project tables when no serving s
   expect(refillStatement ?? '').toContain('AND judgment.system_prompt_variant = current_project.system_prompt_variant')
   expect(refillStatement ?? '').toContain('COALESCE(project.use_metadata, FALSE) AS use_metadata')
   expect(refillStatement ?? '').toContain('AND judgment.use_metadata = current_project.use_metadata')
+  expect(refillStatement ?? '').toContain(
+    "COALESCE(project.full_text_strategy_id, 'fts-none') AS full_text_strategy_id",
+  )
+  expect(refillStatement ?? '').toContain('AND judgment.full_text_strategy_id = current_project.full_text_strategy_id')
   expect(refillStatement ?? '').not.toContain('queue_union AS')
   expect(refillStatement ?? '').not.toContain('FROM mart.project_scope_article')
   expect(fallbackWorkloadContext).toMatchObject({maxResultRows: 11, timeoutMs: 15000, timeoutScope: 'execution'})

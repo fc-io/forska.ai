@@ -741,6 +741,67 @@ test('bulk review change deltas stage and copy the article metadata typed column
   expect(targetInsert?.match(/use_metadata/g)).toHaveLength(2)
 })
 
+test('review change deltas write the full-text strategy typed column and map a missing one from the row flags', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendReviewServingChangeDelta(tx, {
+    ...baseIdempotencyInput,
+    changeKind: 'judgment.llm.updated',
+    fullTextStrategyId: 'fts-0123456789abcdef',
+    payloadVersion: 1,
+    useFulltext: true,
+  })
+  await appendReviewServingChangeDelta(tx, {
+    ...baseIdempotencyInput,
+    changeKind: 'judgment.llm.updated',
+    payloadVersion: 1,
+    sourceMutationKey: 'judgment:judgment-1:v3',
+    useFulltextNoImages: true,
+  })
+  await appendReviewServingChangeDelta(tx, {
+    ...baseIdempotencyInput,
+    changeKind: 'judgment.llm.deleted',
+    payloadVersion: 1,
+    sourceMutationKey: 'judgment:judgment-1:v4',
+  })
+  const [strategyInsert = '', legacyInsert = '', noneInsert = ''] = statements.filter((statement) => {
+    return statement.includes('INSERT INTO app.review_change_delta')
+  })
+
+  expect(strategyInsert).toContain('use_metadata,\n      full_text_strategy_id,')
+  expect(strategyInsert).toMatch(/'legacy',\s+FALSE,\s+'fts-0123456789abcdef',/)
+  expect(legacyInsert).toMatch(/'legacy',\s+FALSE,\s+'fts-legacy-v0',/)
+  expect(noneInsert).toMatch(/'legacy',\s+FALSE,\s+'fts-none',/)
+})
+
+test('bulk review change deltas stage and copy the full-text strategy typed column', async () => {
+  const {statements, tx} = createFakeBulkLedgerTransaction()
+
+  await appendReviewServingChangeDeltas(tx, [
+    {
+      ...baseIdempotencyInput,
+      changeKind: 'judgment.llm.created',
+      fullTextStrategyId: 'fts-0123456789abcdef',
+      payloadVersion: 1,
+      useFulltext: true,
+    },
+  ])
+  const tempTable = statements.find((statement) => {
+    return statement.includes('CREATE TEMP TABLE temp_review_serving_delta_bulk_')
+  })
+  const tempRows = statements.find((statement) => {
+    return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+  })
+  const targetInsert = statements.find((statement) => {
+    return statement.includes('INSERT INTO app.review_change_delta')
+  })
+
+  expect(tempTable).toContain('full_text_strategy_id VARCHAR')
+  expect(tempRows).toContain('system_prompt_variant, use_metadata, full_text_strategy_id')
+  expect(tempRows).toContain("'legacy', FALSE, 'fts-0123456789abcdef'")
+  expect(targetInsert?.match(/full_text_strategy_id/g)).toHaveLength(2)
+})
+
 test('new review-serving outbox appends allocate monotonic source high-water marks per partition', async () => {
   const {tx} = createFakeLedgerTransaction()
   const first = await appendReviewServingSourceChangeOutbox(tx, {

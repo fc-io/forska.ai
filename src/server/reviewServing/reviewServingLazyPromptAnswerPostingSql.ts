@@ -1,3 +1,5 @@
+import {getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
+
 export const reviewServingPromptAnswerFilterKind = 'promptAnswer'
 
 export const reviewServingLazyPromptAnswerPostingDiagnostics = {
@@ -66,6 +68,7 @@ export const getReviewServingLazyPromptAnswerPostingSourceSql = (input: {
           project.use_fulltext_no_images,
           COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant,
           COALESCE(project.use_metadata, FALSE) AS use_metadata,
+          ${getProjectFullTextStrategyIdSql('project')} AS full_text_strategy_id,
           COALESCE(project.human_judgment_mode, 'prompt') AS human_judgment_mode
         FROM app.project project
         WHERE project.id = ${input.projectIdSql}
@@ -122,6 +125,7 @@ export const getReviewServingLazyPromptAnswerPostingSourceSql = (input: {
             AND project.use_fulltext_no_images = judgment.use_fulltext_no_images
             AND project.system_prompt_variant = judgment.system_prompt_variant
             AND project.use_metadata = judgment.use_metadata
+            AND project.full_text_strategy_id = judgment.full_text_strategy_id
           INNER JOIN active_prompt prompt
             ON prompt.prompt_id = judgment.prompt_id
           WHERE judgment.deleted_at IS NULL

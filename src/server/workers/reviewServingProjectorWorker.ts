@@ -4,6 +4,7 @@ import {hostname} from 'node:os'
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {sleep} from '../../utils/sleep.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {getEffectiveFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import {publishProjectedJudgmentJobVisibility} from '../reviewServing/judgmentJobReviewServingVisibilityService.ts'
 import {intakeReviewChangeDeltasToDirtyWork} from '../reviewServing/reviewChangeDeltaDirtyIntakeService.ts'
 import {intakeReviewImportDeltasToDirtyWork} from '../reviewServing/reviewImportDeltaDirtyIntakeService.ts'
@@ -524,6 +525,7 @@ type ReviewServingSnapshotContext = ReviewServingSnapshotContextRow & {
 }
 
 type ProjectReviewSettingsRow = {
+  fullTextStrategyId: string
   humanJudgmentMode: 'prompt' | 'summary'
   modelExecutionOptions: unknown
   modelId: string
@@ -2134,6 +2136,7 @@ const runPayloadRebuildChunk = async (
                   chunkStartArticleId: input.chunk.chunkStartKey,
                   claims: [],
                   definitionVersion: manifest.definitionVersion,
+                  fullTextStrategyId: project.fullTextStrategyId,
                   listModeKeys: reviewServingListModes,
                   modelId: project.modelId,
                   projectId,
@@ -2927,6 +2930,7 @@ const runJudgmentInputContentRebuildChunk = async (
                     chunkStartArticleId: input.chunk.chunkStartKey,
                     claims: [],
                     definitionVersion: manifest.definitionVersion,
+                    fullTextStrategyId: project.fullTextStrategyId,
                     listModeKeys: reviewServingListModes,
                     modelId: project.modelId,
                     projectId,
@@ -3911,6 +3915,7 @@ const runPayloadRebuildChunkBatch = async (
               chunkStartArticleId: chunk.chunkStartKey,
               claims: [],
               definitionVersion: manifest.definitionVersion,
+              fullTextStrategyId: project.fullTextStrategyId,
               listModeKeys: reviewServingListModes,
               modelId: project.modelId,
               projectId,
@@ -4311,6 +4316,7 @@ const runJudgmentInputContentRebuildChunkBatch = async (
               chunkStartArticleId: chunk.chunkStartKey,
               claims: [],
               definitionVersion: manifest.definitionVersion,
+              fullTextStrategyId: project.fullTextStrategyId,
               listModeKeys: reviewServingListModes,
               modelId: project.modelId,
               projectId,
@@ -4915,7 +4921,10 @@ const getSelectedImportBaseProjectionResult = async (
 
 const getProjectReviewSettings = async (projectId: string, database: ReviewServingProjectorWorkerDatabase) => {
   const rows = await database.queryJson<
-    Omit<ProjectReviewSettingsRow, 'systemPromptVariant'> & {systemPromptVariant: string | null}
+    Omit<ProjectReviewSettingsRow, 'fullTextStrategyId' | 'systemPromptVariant'> & {
+      fullTextStrategyId: string | null
+      systemPromptVariant: string | null
+    }
   >(`
     SELECT
       COALESCE(project.human_judgment_mode, 'prompt') AS humanJudgmentMode,
@@ -4931,7 +4940,8 @@ const getProjectReviewSettings = async (projectId: string, database: ReviewServi
       project.use_fulltext AS useFulltext,
       project.use_fulltext_no_images AS useFulltextNoImages,
       project.system_prompt_variant AS systemPromptVariant,
-      COALESCE(project.use_metadata, FALSE) AS useMetadata
+      COALESCE(project.use_metadata, FALSE) AS useMetadata,
+      project.full_text_strategy_id AS fullTextStrategyId
     FROM app.project project
     LEFT JOIN app.model model
       ON model.id = project.model_id
@@ -4946,7 +4956,11 @@ const getProjectReviewSettings = async (projectId: string, database: ReviewServi
     throw new Error(`cannot run projector without review settings for project ${projectId}`)
   }
 
-  return {...row, systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant)}
+  return {
+    ...row,
+    fullTextStrategyId: getEffectiveFullTextStrategyId(row.fullTextStrategyId),
+    systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
+  }
 }
 
 const getProjectPromptConfigRows = async (projectId: string, database: ReviewServingProjectorWorkerDatabase) => {
@@ -4983,6 +4997,7 @@ const getReviewConfigHash = (
   input: ProjectReviewSettingsRow & {promptConfigRows: readonly ProjectPromptConfigRow[]},
 ) => {
   return buildReviewConfigHash({
+    fullTextStrategyId: input.fullTextStrategyId,
     humanJudgmentMode: input.humanJudgmentMode,
     modelExecutionIdentity: {
       modelExecutionOptions: getJsonValue(input.modelExecutionOptions) as ReviewServingIdentityValue,
@@ -5485,6 +5500,7 @@ const getUngatedReviewServingProjectorRunners = (database: ReviewServingProjecto
             baseGeneration: manifest.baseGeneration,
             claims,
             definitionVersion: manifest.definitionVersion,
+            fullTextStrategyId: project.fullTextStrategyId,
             listModeKeys: reviewServingListModes,
             modelId: project.modelId,
             projectId,

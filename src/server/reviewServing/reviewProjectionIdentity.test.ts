@@ -461,6 +461,46 @@ test('buildReviewJudgmentInputContentIdentity keeps the identity without article
   expect(buildReviewJudgmentInputContentIdentity({...input, useMetadata: true})).not.toBe(withoutMetadata)
 })
 
+test('buildReviewConfigHash keeps the hash byte-identical for the none and legacy strategies and separates others', () => {
+  const input = {
+    humanJudgmentMode: 'prompt',
+    modelExecutionIdentity: {providerConnectionId: 'provider-a', remoteModelId: 'model-a', variant: 'thinking'},
+    modelId: 'model-a',
+    promptConfigs: [{promptConfigHash: 'prompt:a', promptId: 'prompt-a', promptOrder: 1}],
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  } as const
+  const pinnedLegacyHash = 'review:a62efbdc412d01bbaaee603e490e1538ef56100435231d4e625c57135955874a'
+  const fullTextInput = {...input, useFulltext: true}
+  const legacyFullTextHash = buildReviewConfigHash(fullTextInput)
+  const strategyHash = buildReviewConfigHash({...fullTextInput, fullTextStrategyId: 'fts-0123456789abcdef'})
+
+  expect(buildReviewConfigHash({...input, fullTextStrategyId: 'fts-none'})).toBe(pinnedLegacyHash)
+  expect(buildReviewConfigHash({...fullTextInput, fullTextStrategyId: 'fts-legacy-v0'})).toBe(legacyFullTextHash)
+  expect(strategyHash).not.toBe(legacyFullTextHash)
+  expect(buildReviewConfigHash({...fullTextInput, fullTextStrategyId: 'fts-fedcba9876543210'})).not.toBe(strategyHash)
+  expect(buildReviewConfigHash({...fullTextInput, fullTextStrategyId: 'fts-none'})).not.toBe(legacyFullTextHash)
+})
+
+test('buildReviewJudgmentInputContentIdentity keeps the identity for the none and legacy strategies and separates others', () => {
+  const input = {
+    contentDependencyKeys: ['title', 'abstract', 'fullText'],
+    definitionVersion: 'judgment-input:v1',
+    useAbstract: true,
+    useFulltext: true,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
+  const legacyIdentity = buildReviewJudgmentInputContentIdentity(input)
+
+  expect(buildReviewJudgmentInputContentIdentity({...input, fullTextStrategyId: 'fts-legacy-v0'})).toBe(legacyIdentity)
+  expect(buildReviewJudgmentInputContentIdentity({...input, fullTextStrategyId: 'fts-0123456789abcdef'})).not.toBe(
+    legacyIdentity,
+  )
+})
+
 test('buildSummaryDefinitionIdentity sorts contribution keys before hashing', () => {
   const left = buildSummaryDefinitionIdentity({
     contributionKeys: ['answer:yes', 'answer:no'],

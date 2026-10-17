@@ -1,3 +1,4 @@
+import {getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
@@ -419,6 +420,7 @@ export const getReviewServingQueueRebuildSourceCtes = (input: ProjectReviewServi
         project.use_fulltext_no_images,
         COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant,
         COALESCE(project.use_metadata, FALSE) AS use_metadata,
+        ${getProjectFullTextStrategyIdSql('project')} AS full_text_strategy_id,
         COALESCE(project.human_judgment_mode, 'prompt') AS human_judgment_mode
       FROM app.project project
       WHERE project.id = ${getSqlLiteral(input.projectId)}
@@ -448,6 +450,7 @@ export const getReviewServingQueueRebuildSourceCtes = (input: ProjectReviewServi
         AND project.use_fulltext_no_images = judgment.use_fulltext_no_images
         AND project.system_prompt_variant = judgment.system_prompt_variant
         AND project.use_metadata = judgment.use_metadata
+        AND project.full_text_strategy_id = judgment.full_text_strategy_id
       WHERE judgment.deleted_at IS NULL
     ), llm_queue AS (
       SELECT

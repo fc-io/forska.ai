@@ -2931,9 +2931,13 @@ test('low-memory worker charges request-associated selected import batch complet
   ).toBe(16)
 })
 
-const runExplicitPayloadRebuildChunk = async (useMetadata: boolean) => {
+const runExplicitPayloadRebuildChunk = async (
+  useMetadata: boolean,
+  fullText: {fullTextStrategyId: string | null; useFulltext: boolean} = {fullTextStrategyId: null, useFulltext: false},
+) => {
   const statements: string[] = []
   const projectSettings = {
+    fullTextStrategyId: fullText.fullTextStrategyId,
     humanJudgmentMode: 'prompt' as const,
     modelExecutionOptions: null,
     modelId: 'model-1',
@@ -2944,12 +2948,13 @@ const runExplicitPayloadRebuildChunk = async (useMetadata: boolean) => {
     modelVariant: null,
     systemPromptVariant: 'legacy' as const,
     useAbstract: true,
-    useFulltext: false,
+    useFulltext: fullText.useFulltext,
     useFulltextNoImages: false,
     useMetadata,
     useTitle: true,
   }
   const reviewConfigHash = buildReviewConfigHash({
+    fullTextStrategyId: projectSettings.fullTextStrategyId ?? 'fts-none',
     humanJudgmentMode: projectSettings.humanJudgmentMode,
     modelExecutionIdentity: {
       modelExecutionOptions: null,
@@ -3085,6 +3090,26 @@ test('explicit payload rebuild chunk hashes and filters article metadata from th
   expect(joined).toContain('snapshot-target')
   expect(joined).toContain('AND judgment.use_metadata = TRUE')
   expect(joined).not.toContain('AND judgment.use_metadata = FALSE')
+})
+
+test('explicit payload rebuild chunk hashes and filters the full-text strategy from the project settings', async () => {
+  const {joined, result, statements} = await runExplicitPayloadRebuildChunk(false, {
+    fullTextStrategyId: 'fts-0123456789abcdef',
+    useFulltext: true,
+  })
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain('snapshot-target')
+  expect(joined).toContain("AND judgment.full_text_strategy_id = 'fts-0123456789abcdef'")
+  expect(joined).not.toContain("AND judgment.full_text_strategy_id = 'fts-none'")
+  expect(statements.join('\n')).toContain('project.full_text_strategy_id AS fullTextStrategyId')
+})
+
+test('explicit payload rebuild chunk treats a NULL project strategy as fts-none', async () => {
+  const {joined, result} = await runExplicitPayloadRebuildChunk(false)
+
+  expect(result).toEqual({status: 'completed'})
+  expect(joined).toContain("AND judgment.full_text_strategy_id = 'fts-none'")
 })
 
 test('worker writes compatible display rebuild chunks through one batch writer', async () => {

@@ -77,6 +77,7 @@ const projectSettingsRow = (
   input?: Partial<ReviewServingProjectReviewSettingsRow>,
 ): ReviewServingProjectReviewSettingsRow => {
   return {
+    fullTextStrategyId: 'fts-none',
     humanJudgmentMode: 'prompt',
     modelExecutionOptions: '{"thinking":{"effort":"medium"}}',
     modelId: 'model-1',

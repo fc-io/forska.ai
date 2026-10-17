@@ -21,6 +21,7 @@ export type ProjectReviewConfigReviewServingField =
   | 'archived'
   | 'dateFrom'
   | 'dateTo'
+  | 'fullTextStrategyId'
   | 'humanJudgmentMode'
   | 'importRoutes'
   | 'modelExecutionIdentity'
