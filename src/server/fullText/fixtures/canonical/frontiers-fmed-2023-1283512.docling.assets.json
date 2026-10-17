@@ -1,0 +1,110 @@
+[
+ {
+  "bbox": [
+   0.0818,
+   0.0413,
+   0.3645,
+   0.0593
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-1.png",
+  "index": 1,
+  "page": 1
+ },
+ {
+  "bbox": [
+   0.082,
+   0.1431,
+   0.2107,
+   0.1627
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-2.png",
+  "index": 2,
+  "page": 1
+ },
+ {
+  "bbox": [
+   0.0818,
+   0.5144,
+   0.4882,
+   0.9174
+  ],
+  "caption": "FIGURE 1 PRISMA flow diagram of study selection.",
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-3.png",
+  "index": 3,
+  "page": 3
+ },
+ {
+  "bbox": [
+   0.0819,
+   0.0899,
+   0.4867,
+   0.5139
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-4.png",
+  "index": 4,
+  "page": 4
+ },
+ {
+  "bbox": [
+   0.0821,
+   0.6779,
+   0.9169,
+   0.9169
+  ],
+  "caption": "FIGURE 3 Graph of the risk of bias.",
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-5.png",
+  "index": 5,
+  "page": 4
+ },
+ {
+  "bbox": [
+   0.0818,
+   0.0901,
+   0.9173,
+   0.2599
+  ],
+  "caption": "FIGURE 4 Pain within 6 h on the VAS.",
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-6.png",
+  "index": 6,
+  "page": 5
+ },
+ {
+  "bbox": [
+   0.0813,
+   0.2708,
+   0.9171,
+   0.4402
+  ],
+  "caption": "FIGURE 5 Pain at 12 h on the VAS.",
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-7.png",
+  "index": 7,
+  "page": 5
+ },
+ {
+  "bbox": [
+   0.0818,
+   0.4511,
+   0.9171,
+   0.6208
+  ],
+  "caption": "FIGURE 6 Pain at 24 h on the VAS.",
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-8.png",
+  "index": 8,
+  "page": 5
+ },
+ {
+  "bbox": [
+   0.0816,
+   0.6317,
+   0.9167,
+   0.7743
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-9.png",
+  "index": 9,
+  "page": 5
+ }
+]

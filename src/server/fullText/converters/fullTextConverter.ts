@@ -6,7 +6,11 @@ import {ConversionError} from './conversionError.ts'
 import {getConverterOptionsHash} from './converterOptionsHash.ts'
 import {doclingConverter} from './doclingConverter.ts'
 import {writeFullTextAssetFiles} from './fullTextAssetFiles.ts'
-import {type FullTextConversionResult, type FullTextConverter} from './fullTextConverterTypes.ts'
+import {
+  FULL_TEXT_LAYOUT_VERSION,
+  type FullTextConversionResult,
+  type FullTextConverter,
+} from './fullTextConverterTypes.ts'
 import {mineruConverter} from './mineruConverter.ts'
 
 export type FullTextConversionRuntimeConfig = {
@@ -61,10 +65,17 @@ export const convertArticlePdf = async ({
     throw new ConversionError(`${converter.kind} returned no Markdown content for ${absolutePath}`)
   }
 
-  const assets = await writeFullTextAssetFiles({articleId, cwd, figures: parsed.figures, layout: parsed.layout})
+  const assets = await writeFullTextAssetFiles({
+    articleId,
+    cwd,
+    figures: parsed.figures,
+    layout: parsed.layout,
+    markdown: parsed.markdown,
+  })
 
   return {
     converterKind: converter.kind,
+    converterMarkdownPath: assets.converterMarkdownPath,
     converterVersion: parsed.converterVersion,
     figures: assets.figures,
     html: parsed.html,
@@ -85,8 +96,10 @@ export const getFullTextConversionMetadata = ({
   return {
     baseURL: runtimeConfig.baseURL,
     converterKind: result.converterKind,
+    converterMarkdownPath: result.converterMarkdownPath,
     converterVersion: result.converterVersion,
     layoutPath: result.layoutPath,
+    layoutVersion: FULL_TEXT_LAYOUT_VERSION,
     modelId: runtimeConfig.modelId,
     modelName: runtimeConfig.modelName,
     optionsHash: result.optionsHash,

@@ -1,0 +1,134 @@
+[
+ {
+  "bbox": [
+   0.5065,
+   0.2547,
+   0.8879,
+   0.4177
+  ],
+  "caption": "Figure 1. Our MAE architecture. During pre-training, a large random subset of image patches (e.g., 75%) is masked out. The encoder is applied to the small subset of visible patches. Mask tokens are introduced after the encoder, and the full set of encoded patches and mask tokens is processed by a small decoder that reconstructs the original image in pixels. After pre-training, the decoder is discarded and the encoder is applied to uncorrupted images (full sets of patches) for recognition tasks.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-1.png",
+  "index": 1,
+  "page": 1
+ },
+ {
+  "bbox": [
+   0.0882,
+   0.0835,
+   0.8836,
+   0.2951
+  ],
+  "caption": "Figure 2. Example results on ImageNet validation images. For each triplet, we show the masked image (left), our MAE reconstruction† (middle), and the ground-truth (right). The masking ratio is 80%, leaving only 39 out of 196 patches. More examples are in the appendix. † As no loss is computed on visible patches, the model output on visible patches is qualitatively worse. One can simply overlay the output with the visible patches to improve visual quality. We intentionally opt not to do this, so we can more comprehensively demonstrate the method's behavior.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-2.png",
+  "index": 2,
+  "page": 2
+ },
+ {
+  "bbox": [
+   0.0872,
+   0.3639,
+   0.8839,
+   0.4693
+  ],
+  "caption": "Figure 3. Example results on COCO validation images, using an MAE trained on ImageNet (the same model weights as in Figure 2). Observe the reconstructions on the two right-most examples, which, although different from the ground truth, are semantically plausible.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-3.png",
+  "index": 3,
+  "page": 2
+ },
+ {
+  "bbox": [
+   0.0807,
+   0.0901,
+   0.4673,
+   0.3188
+  ],
+  "caption": "Figure 4. Reconstructions of ImageNet validation images using an MAE pre-trained with a masking ratio of 75% but applied on inputs with higher masking ratios. The predictions differ plausibly from the original images, showing that the method can generalize.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-4.png",
+  "index": 4,
+  "page": 3
+ },
+ {
+  "bbox": [
+   0.5268,
+   0.0811,
+   0.8701,
+   0.2385
+  ],
+  "caption": "Figure 5. Masking ratio. A high masking ratio (75%) works well for both fine-tuning (top) and linear probing (bottom). The y-axes are ImageNet-1K validation accuracy (%) in all plots in this paper.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-5.png",
+  "index": 5,
+  "page": 4
+ },
+ {
+  "bbox": [
+   0.0806,
+   0.0901,
+   0.4642,
+   0.2047
+  ],
+  "caption": "Figure 6. Mask sampling strategies determine the pretext task difficulty, influencing reconstruction quality and representations (Table 1f). Here each output is from an MAE trained with the specified masking strategy. Left: random sampling (our default). Middle: block-wise sampling [2] that removes large random blocks. Right: grid-wise sampling that keeps one of every four patches. Images are from the validation set.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-6.png",
+  "index": 6,
+  "page": 6
+ },
+ {
+  "bbox": [
+   0.5097,
+   0.0928,
+   0.8887,
+   0.2647
+  ],
+  "caption": "Figure 7. Training schedules. A longer training schedule gives a noticeable improvement. Here each point is a full training schedule. The model is ViT-L with the default setting in Table 1.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-7.png",
+  "index": 7,
+  "page": 6
+ },
+ {
+  "bbox": [
+   0.0929,
+   0.2861,
+   0.4608,
+   0.4437
+  ],
+  "caption": "Figure 8. MAE pre-training vs. supervised pre-training, evaluated by fine-tuning in ImageNet-1K (224 size). We compare with the original ViT results [16] trained in IN1K or JFT300M.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-8.png",
+  "index": 8,
+  "page": 7
+ },
+ {
+  "bbox": [
+   0.5251,
+   0.0842,
+   0.8693,
+   0.2159
+  ],
+  "caption": "Figure 9. Partial fine-tuning results of ViT-L w.r.t. the number of fine-tuned Transformer blocks under the default settings from Table 1. Tuning 0 blocks is linear probing; 24 is full fine-tuning. Our MAE representations are less linearly separable, but are consistently better than MoCo v3 if one or more blocks are tuned.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-9.png",
+  "index": 9,
+  "page": 7
+ },
+ {
+  "bbox": [
+   0.0893,
+   0.059,
+   0.8829,
+   0.8843
+  ],
+  "caption": "Figure 10. Uncurated random samples on ImageNet validation images. For each triplet, we show the masked image (left), our MAE reconstruction (middle), and the ground-truth (right). The masking ratio is 75%.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-10.png",
+  "index": 10,
+  "page": 13
+ },
+ {
+  "bbox": [
+   0.0893,
+   0.0592,
+   0.8826,
+   0.8844
+  ],
+  "caption": "Figure 11. Uncurated random samples on COCO validation images, using an MAE trained on ImageNet. For each triplet, we show the masked image (left), our MAE reconstruction (middle), and the ground-truth (right). The masking ratio is 75%.",
+  "imagePath": "assets/full-text-assets/arxiv-2111.06377/fig-11.png",
+  "index": 11,
+  "page": 14
+ }
+]

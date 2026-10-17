@@ -97,9 +97,18 @@ test('PDF conversion writes figure crops and layout under the runtime full-text 
       page: 3,
     },
   ])
-  expect((await readdir(join(root, 'assets/full-text-assets/article-1'))).sort()).toEqual(['fig-1.jpg', 'layout.json'])
+  expect(result.converterMarkdownPath).toBe('assets/full-text-assets/article-1/converter.md')
+  expect((await readdir(join(root, 'assets/full-text-assets/article-1'))).sort()).toEqual([
+    'converter.md',
+    'fig-1.jpg',
+    'layout.json',
+  ])
   expect(new Uint8Array(await readFile(join(root, 'assets/full-text-assets/article-1/fig-1.jpg')))).toEqual(imageBytes)
-  expect(JSON.parse(await readFile(join(root, result.layoutPath), 'utf8'))).toEqual(result.layout)
+  expect(JSON.parse(await readFile(join(root, result.layoutPath), 'utf8'))).toEqual({
+    blocks: result.layout,
+    version: 'layout-v2',
+  })
+  expect(await readFile(join(root, result.converterMarkdownPath), 'utf8')).toBe('# Converted\n')
 })
 
 test('PDF conversion fails permanently when the PDF file is missing', async () => {
@@ -122,6 +131,7 @@ test('conversion metadata records converter identity next to the configured mode
   const metadata = getFullTextConversionMetadata({
     result: {
       converterKind: 'mineru',
+      converterMarkdownPath: 'assets/full-text-assets/a/converter.md',
       converterVersion: '4.0.12',
       figures: [],
       html: null,
@@ -136,8 +146,10 @@ test('conversion metadata records converter identity next to the configured mode
   expect(metadata).toEqual({
     baseURL: 'http://127.0.0.1:8000',
     converterKind: 'mineru',
+    converterMarkdownPath: 'assets/full-text-assets/a/converter.md',
     converterVersion: '4.0.12',
     layoutPath: 'assets/full-text-assets/a/layout.json',
+    layoutVersion: 'layout-v2',
     modelId: 'model-mineru',
     modelName: 'mineru-standard',
     optionsHash: 'hash-1',
