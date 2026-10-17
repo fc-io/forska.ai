@@ -114,6 +114,7 @@
     "elysia": "^1.4.27",
     "fast-xml-parser": "^5.5.5",
     "fflate": "^0.8.2",
+    "gpt-tokenizer": "4.0.3",
     "headroom-ai": "^0.22.4",
     "openai": "^6.27.0",
     "pngjs": "^7.0.0",
