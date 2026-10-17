@@ -1,3 +1,7 @@
+import {mkdtempSync, rmSync, writeFileSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
 import {afterEach, expect, mock, test} from 'bun:test'
 
 import type {FullTextJudgingBlock, FullTextJudgingStrategy} from '../../../../agent/judge/fullTextJudgingInput.ts'
@@ -267,4 +271,18 @@ test('native images: preparation loads one flattened image per marker and closes
   expect(await prepareFullTextJudging(getPreparationInput(getNativeBlock(`${fixturePath}.missing.png`)))).toMatchObject(
     {kind: 'closed'},
   )
+
+  const notPngDirectory = mkdtempSync(join(tmpdir(), 'native-figure-not-png-'))
+  const notPngPath = join(notPngDirectory, 'fig-1.png')
+
+  writeFileSync(notPngPath, 'not a png')
+
+  try {
+    expect(await prepareFullTextJudging(getPreparationInput(getNativeBlock(notPngPath)))).toMatchObject({
+      kind: 'closed',
+      message: expect.stringContaining('is not a PNG file') as unknown as string,
+    })
+  } finally {
+    rmSync(notPngDirectory, {force: true, recursive: true})
+  }
 })
