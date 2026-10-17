@@ -8,6 +8,7 @@ import {
   type FullTextJudgingPreparation,
   prepareFullTextJudgingInput,
 } from '../../../../agent/judge/fullTextJudgingInput.ts'
+import {isFigureImageEncodingError} from '../../../fullText/figureImageEncoding.ts'
 import {getFullTextChunkPlanKey} from '../../../fullText/fullTextChunkPlanStore.ts'
 import {getFullTextJudgingBlocks} from '../../../fullText/fullTextJudgingBlocks.ts'
 import {
@@ -132,7 +133,11 @@ const getErrorResult = (error: unknown): FullTextJudgingPreparedResult => {
     return {kind: 'requeue', message: error.message, reason: 'full_text_config'}
   }
 
-  if (error instanceof FullTextArticleNotReadyError || isNativeFigureImageError(error)) {
+  if (
+    error instanceof FullTextArticleNotReadyError
+    || isNativeFigureImageError(error)
+    || isFigureImageEncodingError(error)
+  ) {
     return {kind: 'closed', message: error.message}
   }
 
