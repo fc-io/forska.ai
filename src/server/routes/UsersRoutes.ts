@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {readLocalAppSettings, updateLocalAppSettings} from '../utils/localAppSettings.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {usersRoutesGetFullTextModelStatus} from './usersRoutes/usersRoutesGetFullTextModelStatus.ts'
 
 const getNullableString = (value: string | null): string | null => {
   const normalized = String(value ?? '').trim()
@@ -19,6 +20,7 @@ const getLocalUserSettings = async () => {
 
 export const usersRoutes = new Elysia()
   .use(withErrorHandler())
+  .use(usersRoutesGetFullTextModelStatus)
   .get('/api/users', async () => {
     return {data: [await getLocalUserSettings()]}
   })

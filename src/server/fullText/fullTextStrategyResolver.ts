@@ -1,3 +1,4 @@
+import {fullTextStrategyErrorMessages} from '../../utils/fullTextStrategyOptions.ts'
 import {
   FULL_TEXT_PROMPT_LAYOUT_VERSION,
   FULL_TEXT_TOKENIZER_ID,
@@ -26,17 +27,7 @@ export type FullTextStrategySelection = {chunkPolicy: FullTextChunkPolicy | null
 
 export type FullTextStrategyResolution = {errors: string[]; strategy: FullTextStrategy | null}
 
-export const fullTextStrategyErrorMessages = {
-  canonicalTextVersionMissing:
-    'Full text needs the canonical judgment text builder, which this build does not include yet.',
-  chunkPolicyMissing: 'Full text needs a chunk policy: choose 24k, 48k or 96k and single only or chunked.',
-  conversionModelMissing: 'Full text needs a PDF-to-text model. Set it in Settings → PDF conversion.',
-  figureDescriptionModelMissing:
-    'Figure mode Descriptions needs a figure-description model. Set it in Settings, or choose figure mode None.',
-  figureModeMissing: 'Full text needs a figure mode: choose None, Descriptions or Native images.',
-  imageTransportMissing:
-    'Figure mode Native images needs image transports, which this build does not include yet. Choose figure mode None.',
-} as const
+export {fullTextStrategyErrorMessages}
 
 const getConverterVersionMissingMessage = (modelLabel: string) => {
   return `PDF-to-text model ${modelLabel} has not reported a server version. Refresh its provider's models on the Models page and select the discovered model in Settings → PDF conversion.`

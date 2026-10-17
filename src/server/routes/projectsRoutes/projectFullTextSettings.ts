@@ -10,10 +10,9 @@ import {
   getFullTextStrategyDisplayLabel,
   isFullTextFigureMode,
 } from '../../fullText/fullTextStrategy.ts'
-import {getFullTextStrategyEnvironment} from '../../fullText/fullTextStrategyEnvironment.ts'
 import {upsertFullTextStrategy} from '../../fullText/fullTextStrategyRepository.ts'
-import {resolveFullTextStrategy} from '../../fullText/fullTextStrategyResolver.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getProjectFullTextGateForSelection} from '../../services/judgmentJobFullTextGate.ts'
 import {getProjectVisibleJudgmentPromptSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {HttpError} from '../../utils/httpError.ts'
 
@@ -40,7 +39,11 @@ export type ProjectFullTextSelection = {
   useFulltext: boolean
 }
 
-export type ProjectFullTextResolution = ProjectFullTextSettings & {errors: string[]; strategy: FullTextStrategy | null}
+export type ProjectFullTextResolution = ProjectFullTextSettings & {
+  errors: string[]
+  strategy: FullTextStrategy | null
+  warnings: string[]
+}
 
 export const fullTextFigureModeBodySchema = t.Union([
   t.Literal('none'),
@@ -52,6 +55,19 @@ export const fullTextChunkPolicyBodySchema = t.Object({
   maxPromptTokens: t.Union([t.Literal(24_000), t.Literal(48_000), t.Literal(96_000)]),
   mode: t.Union([t.Literal('single_only'), t.Literal('chunked')]),
 })
+
+export const fullTextStrategyRecordableJobStatuses: ReadonlySet<string> = new Set([
+  'completed',
+  'failed',
+  'not_started',
+  'paused',
+])
+
+export const fullTextStrategyRecordJobRunningErrorMessage =
+  'Pause the judgment job before recording a new full-text strategy.'
+
+export const fullTextStrategyRecordWithoutFullTextErrorMessage =
+  'Only a project with explicit full-text settings can record a new full-text strategy.'
 
 export const fullTextNoImagesReplacedErrorMessage =
   'useFulltextNoImages is replaced by fullTextFigureMode "none". Send useFulltext with a figure mode and a chunk policy.'
@@ -85,34 +101,46 @@ export const getProjectFullTextValues = <T extends ProjectFullTextRow>(row: T) =
 }
 
 const getDisabledProjectFullTextResolution = (): ProjectFullTextResolution => {
-  return {errors: [], fullTextChunkPolicy: null, fullTextFigureMode: null, fullTextStrategyId: null, strategy: null}
+  return {
+    errors: [],
+    fullTextChunkPolicy: null,
+    fullTextFigureMode: null,
+    fullTextStrategyId: null,
+    strategy: null,
+    warnings: [],
+  }
 }
 
 const getEnabledProjectFullTextResolution = async (
   selection: ProjectFullTextSelection,
+  modelId: string | null,
 ): Promise<ProjectFullTextResolution> => {
-  const resolution = resolveFullTextStrategy(
-    {chunkPolicy: selection.fullTextChunkPolicy, figureMode: selection.fullTextFigureMode},
-    await getFullTextStrategyEnvironment(),
-  )
+  const gate = await getProjectFullTextGateForSelection({modelId, selection})
 
   return {
-    errors: resolution.errors,
+    errors: gate.errors,
     fullTextChunkPolicy: selection.fullTextChunkPolicy,
     fullTextFigureMode: selection.fullTextFigureMode,
-    fullTextStrategyId: resolution.strategy?.id ?? null,
-    strategy: resolution.strategy,
+    fullTextStrategyId: gate.strategy?.id ?? null,
+    strategy: gate.strategy,
+    warnings: gate.warnings,
   }
 }
 
 export const getProjectFullTextResolution = async (
   selection: ProjectFullTextSelection,
+  modelId: string | null,
 ): Promise<ProjectFullTextResolution> => {
-  return selection.useFulltext ? getEnabledProjectFullTextResolution(selection) : getDisabledProjectFullTextResolution()
+  return selection.useFulltext
+    ? getEnabledProjectFullTextResolution(selection, modelId)
+    : getDisabledProjectFullTextResolution()
 }
 
-export const resolveProjectFullTextSettingsOrThrow = async (selection: ProjectFullTextSelection) => {
-  const resolution = await getProjectFullTextResolution(selection)
+export const resolveProjectFullTextSettingsOrThrow = async (
+  selection: ProjectFullTextSelection,
+  modelId: string | null,
+) => {
+  const resolution = await getProjectFullTextResolution(selection, modelId)
 
   if (resolution.errors.length > 0) {
     throw new HttpError(400, resolution.errors.join(' '))

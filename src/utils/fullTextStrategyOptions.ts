@@ -10,6 +10,18 @@ export const fullTextChunkMaxPromptTokens = [24_000, 48_000, 96_000] as const
 
 export const fullTextChunkModes = ['single_only', 'chunked'] as const
 
+export const fullTextStrategyErrorMessages = {
+  canonicalTextVersionMissing:
+    'Full text needs the canonical judgment text builder, which this build does not include yet.',
+  chunkPolicyMissing: 'Full text needs a chunk policy: choose 24k, 48k or 96k and single only or chunked.',
+  conversionModelMissing: 'Full text needs a PDF-to-text model. Set it in Settings → PDF conversion.',
+  figureDescriptionModelMissing:
+    'Figure mode Descriptions needs a figure-description model. Set it in Settings, or choose figure mode None.',
+  figureModeMissing: 'Full text needs a figure mode: choose None, Descriptions or Native images.',
+  imageTransportMissing:
+    'Figure mode Native images needs image transports, which this build does not include yet. Choose figure mode None.',
+} as const
+
 export type FullTextStrategyConverterKind = (typeof fullTextConverterKinds)[number]
 
 export type FullTextFigureMode = (typeof fullTextFigureModes)[number]

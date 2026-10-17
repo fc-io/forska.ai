@@ -5601,7 +5601,7 @@ test('job create, resume and start-clean write the project full-text strategy be
   `)
   await runDatabase(`
     UPDATE app.project
-    SET use_fulltext = TRUE, full_text_strategy_id = '${firstStrategyId}'
+    SET full_text_strategy_id = '${firstStrategyId}'
     WHERE id = '${projectId}'
   `)
 
@@ -5633,7 +5633,7 @@ test('job create, resume and start-clean write the project full-text strategy be
 
   expect(resumeResponse?.status).toBe(409)
   expect(resumeBody).toContain(
-    `The project's full-text strategy changed since this job started (${firstStrategyId} → ${secondStrategyId}). Start the job clean to judge with the new strategy.`,
+    `The project's full-text strategy changed since this job started (MinerU 4 · figures: none · single chunk (${firstStrategyId}) → ${secondStrategyId}). Start the job clean to judge with the new strategy.`,
   )
   expect(await getJudgmentJobFullTextStrategyId(jobId)).toBe(firstStrategyId)
 
@@ -5670,7 +5670,7 @@ test('resuming a job created before strategy tracking fills the job and job_info
   await insertProjectFixture({connectionId, modelId, projectId})
   await runDatabase(`
     UPDATE app.project
-    SET use_fulltext = TRUE, full_text_strategy_id = 'fts-legacy-v0'
+    SET full_text_strategy_id = 'fts-legacy-v0'
     WHERE id = '${projectId}'
   `)
   await runDatabase(`

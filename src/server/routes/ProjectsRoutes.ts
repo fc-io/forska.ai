@@ -48,6 +48,9 @@ import {
   fullTextChunkPolicyBodySchema,
   fullTextFigureModeBodySchema,
   fullTextNoImagesReplacedErrorMessage,
+  fullTextStrategyRecordableJobStatuses,
+  fullTextStrategyRecordJobRunningErrorMessage,
+  fullTextStrategyRecordWithoutFullTextErrorMessage,
   getProjectFullTextColumnValuesSql,
   getProjectFullTextSelectSql,
   getProjectFullTextUpdateParts,
@@ -55,6 +58,7 @@ import {
   hasProjectFullTextSettingsChanged,
   type ProjectFullTextResolution,
   type ProjectFullTextRow,
+  type ProjectFullTextSettings,
   resolveProjectFullTextSettingsOrThrow,
   saveProjectFullTextStrategy,
 } from './projectsRoutes/projectFullTextSettings.ts'
@@ -69,7 +73,7 @@ import {projectsRoutesGetPromptPreview} from './projectsRoutes/projectsRoutesGet
 import {projectsRoutesGetReviewsWarnings} from './projectsRoutes/projectsRoutesGetReviewsWarnings.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 import {projectsRoutesPostDeleteArchived} from './projectsRoutes/projectsRoutesPostDeleteArchived.ts'
-import {projectsRoutesPostFullTextStrategyPreview} from './projectsRoutes/projectsRoutesPostFullTextStrategyPreview.ts'
+import {projectsRoutesPostFullTextValidation} from './projectsRoutes/projectsRoutesPostFullTextValidation.ts'
 
 const parseOptionalDate = (value?: string | null) => {
   if (!value) {
@@ -500,6 +504,35 @@ const getChangedProtectedProjectEditFields = ({
   ].filter((field): field is string => {
     return field !== null
   })
+}
+
+const getRecordedProjectFullTextResolution = async ({
+  currentFullTextSettings,
+  job,
+  modelId,
+  useFulltext,
+}: {
+  currentFullTextSettings: ProjectFullTextSettings
+  job: ProjectEditJudgmentJob
+  modelId: string
+  useFulltext: boolean
+}): Promise<ProjectFullTextResolution> => {
+  if (!fullTextStrategyRecordableJobStatuses.has(job.status)) {
+    throw new HttpError(409, fullTextStrategyRecordJobRunningErrorMessage)
+  }
+
+  if (!useFulltext || !currentFullTextSettings.fullTextFigureMode || !currentFullTextSettings.fullTextChunkPolicy) {
+    throw new HttpError(400, fullTextStrategyRecordWithoutFullTextErrorMessage)
+  }
+
+  return resolveProjectFullTextSettingsOrThrow(
+    {
+      fullTextChunkPolicy: currentFullTextSettings.fullTextChunkPolicy,
+      fullTextFigureMode: currentFullTextSettings.fullTextFigureMode,
+      useFulltext,
+    },
+    modelId,
+  )
 }
 
 const getProjectUsesFullText = (project: Pick<ProjectEditCurrentProject, 'useFulltext' | 'useFulltextNoImages'>) => {
@@ -1203,7 +1236,7 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsFilters)
   .use(projectsRoutesGetArticlesReviewsHumanFilters)
   .use(projectsRoutesGetPromptPreview)
-  .use(projectsRoutesPostFullTextStrategyPreview)
+  .use(projectsRoutesPostFullTextValidation)
   .use(projectsRoutesPostArticleReviewDetails)
   .use(projectsRoutesPostDeleteArchived)
   .use(projectsRoutesGetReviewsWarnings)
@@ -1648,11 +1681,14 @@ export const projectsRoutes = new Elysia()
         throw new HttpError(400, fullTextNoImagesReplacedErrorMessage)
       }
 
-      const fullTextResolution = await resolveProjectFullTextSettingsOrThrow({
-        fullTextChunkPolicy: body.fullTextChunkPolicy ?? null,
-        fullTextFigureMode: body.fullTextFigureMode ?? null,
-        useFulltext: body.useFulltext ?? false,
-      })
+      const fullTextResolution = await resolveProjectFullTextSettingsOrThrow(
+        {
+          fullTextChunkPolicy: body.fullTextChunkPolicy ?? null,
+          fullTextFigureMode: body.fullTextFigureMode ?? null,
+          useFulltext: body.useFulltext ?? false,
+        },
+        body.modelId,
+      )
       const fullTextColumnValues = getProjectFullTextColumnValuesSql(fullTextResolution)
 
       const newProject = await getAppDatabaseService().transaction(async (tx) => {
@@ -2009,20 +2045,32 @@ export const projectsRoutes = new Elysia()
         body.useFulltext !== undefined
         || body.fullTextFigureMode !== undefined
         || body.fullTextChunkPolicy !== undefined
+      const hasModelIdUpdate = body.modelId !== undefined && body.modelId !== currentProject.modelId
+      const nextModelId = body.modelId ?? currentProject.modelId
       const fullTextResolution =
-        hasFullTextSelection && !hasExistingJob
-          ? await resolveProjectFullTextSettingsOrThrow({
-              fullTextChunkPolicy:
-                body.fullTextChunkPolicy === undefined
-                  ? currentFullTextSettings.fullTextChunkPolicy
-                  : body.fullTextChunkPolicy,
-              fullTextFigureMode:
-                body.fullTextFigureMode === undefined
-                  ? currentFullTextSettings.fullTextFigureMode
-                  : body.fullTextFigureMode,
-              useFulltext: nextUseFulltext,
-            })
-          : null
+        (hasFullTextSelection || hasModelIdUpdate) && !hasExistingJob
+          ? await resolveProjectFullTextSettingsOrThrow(
+              {
+                fullTextChunkPolicy:
+                  body.fullTextChunkPolicy === undefined
+                    ? currentFullTextSettings.fullTextChunkPolicy
+                    : body.fullTextChunkPolicy,
+                fullTextFigureMode:
+                  body.fullTextFigureMode === undefined
+                    ? currentFullTextSettings.fullTextFigureMode
+                    : body.fullTextFigureMode,
+                useFulltext: nextUseFulltext,
+              },
+              nextModelId,
+            )
+          : body.recordCurrentFullTextStrategy === true && job
+            ? await getRecordedProjectFullTextResolution({
+                currentFullTextSettings,
+                job,
+                modelId: nextModelId,
+                useFulltext: nextUseFulltext,
+              })
+            : null
       const hasFullTextUpdate =
         fullTextResolution !== null
         && (hasProjectFullTextSettingsChanged(currentFullTextSettings, fullTextResolution)
@@ -2038,7 +2086,6 @@ export const projectsRoutes = new Elysia()
         throw new HttpError(409, 'Pause or drain the judgment job before editing prompts.')
       }
 
-      const hasModelIdUpdate = body.modelId !== undefined && body.modelId !== currentProject.modelId
       const hasImportRouteChanges =
         body.importRoutes !== undefined && !hasSameStringSet(body.importRoutes, currentImportRoutes)
       const changedReviewConfigFields = Array.from(
@@ -2391,10 +2438,8 @@ export const projectsRoutes = new Elysia()
           }
 
           if (
-            !hasExistingJob
-            && (hasSystemPromptVariantUpdate
-              || changedReviewConfigFields.includes('useMetadata')
-              || hasFullTextStrategyChange)
+            hasFullTextStrategyChange
+            || (!hasExistingJob && (hasSystemPromptVariantUpdate || changedReviewConfigFields.includes('useMetadata')))
           ) {
             await getComparisonProjectServingInvalidationService().markComparisonProjectsServingStaleForSourceProjects(
               [params.id],
@@ -2477,6 +2522,7 @@ export const projectsRoutes = new Elysia()
         useMetadata: t.Optional(t.Boolean()),
         fullTextFigureMode: t.Optional(t.Union([fullTextFigureModeBodySchema, t.Null()])),
         fullTextChunkPolicy: t.Optional(t.Union([fullTextChunkPolicyBodySchema, t.Null()])),
+        recordCurrentFullTextStrategy: t.Optional(t.Boolean()),
         importRoutes: t.Optional(t.Array(t.String())),
         prompts: t.Optional(
           t.Array(

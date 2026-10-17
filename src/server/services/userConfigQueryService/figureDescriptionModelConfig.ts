@@ -34,18 +34,22 @@ export type FigureDescriptionModelConfig = {
   providerKind: string
 }
 
+type FigureDescriptionModelQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+
 const getFigureDescriptionModelRows = async ({
   modelId,
+  runner = getAppDatabaseService(),
   userConfigWhereClause,
 }: {
   modelId?: string
+  runner?: FigureDescriptionModelQueryRunner
   userConfigWhereClause?: string
 }) => {
   const userConfigJoin = userConfigWhereClause
     ? `INNER JOIN app.user_config uc ON uc.figure_description_model_id = m.id AND ${userConfigWhereClause}`
     : ''
 
-  return getAppDatabaseService().queryJson<FigureDescriptionModelRow>(`
+  return runner.queryJson<FigureDescriptionModelRow>(`
     SELECT
       m.id AS modelId,
       m.name AS name,
@@ -123,11 +127,13 @@ export const getValidatedFigureDescriptionModelId = async (value: string | null)
 }
 
 export const getFigureDescriptionModelConfig = async ({
+  runner,
   userConfigWhereClause,
 }: {
+  runner?: FigureDescriptionModelQueryRunner
   userConfigWhereClause: string
 }): Promise<FigureDescriptionModelConfig | null> => {
-  const [row] = (await getFigureDescriptionModelRows({userConfigWhereClause})).filter(
+  const [row] = (await getFigureDescriptionModelRows({runner, userConfigWhereClause})).filter(
     isFigureDescriptionModelRowSelectable,
   )
 

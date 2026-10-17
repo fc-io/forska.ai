@@ -475,6 +475,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     ['GET', '/api/projects/:id'],
     ['GET', '/api/projects/:id/prompts/:promptId/preview'],
     ['POST', '/api/projects'],
+    ['POST', '/api/projects/full-text-validation'],
     ['PATCH', '/api/projects/:id'],
     ['PATCH', '/api/projects/:id/edit'],
     ['DELETE', '/api/projects/:id'],
@@ -590,6 +591,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     [
       ['GET', '/api/users'],
       ['GET', '/api/users/figure-description-models'],
+      ['GET', '/api/users/full-text-model-status'],
       ['PATCH', '/api/users'],
     ],
   ),
