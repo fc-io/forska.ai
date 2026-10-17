@@ -19,6 +19,10 @@ type MockProjectDetails = {
     description: string | null
     name: string
     useAbstract: boolean
+    fullTextChunkPolicy?: {maxPromptTokens: number; mode: string} | null
+    fullTextFigureMode?: string | null
+    fullTextStrategyId?: string | null
+    fullTextStrategyLabel?: string | null
     useFulltext: boolean
     useFulltextNoImages: boolean
     useMetadata: boolean
@@ -51,6 +55,8 @@ const mockState = vi.hoisted(() => {
     },
     editPatchResponse: null as {data?: unknown; error?: unknown; status?: number} | null,
     editPayloads: [] as unknown[],
+    fullTextPreview: null as unknown,
+    fullTextPreviewPayloads: [] as unknown[],
     fetchGates: {
       importRoutes: null as Promise<void> | null,
       models: null as Promise<void> | null,
@@ -145,6 +151,17 @@ const resetApiCallCounts = () => {
   }
   mockState.editPatchResponse = null
   mockState.editPayloads = []
+  mockState.fullTextPreview = null
+  mockState.fullTextPreviewPayloads = []
+}
+
+const getDefaultFullTextPreview = () => {
+  return {
+    current: {judgmentCount: 0, strategyId: 'fts-none', strategyLabel: 'no full text'},
+    errors: [],
+    strategyId: 'fts-none',
+    strategyLabel: 'no full text',
+  }
 }
 
 const setFormValue = (element: HTMLInputElement | HTMLTextAreaElement | null, value: string) => {
@@ -337,53 +354,93 @@ vi.mock('../../../../services/apiClient.ts', () => {
             return {data: {data: mockState.models}}
           },
         },
-        projects: ({id}: {id: string}) => {
-          return {
-            access: {
-              get: async () => {
-                mockState.apiCallCounts.projectAccess += 1
-                return {data: {data: getProjectAccess(id)}}
+        projects: Object.assign(
+          ({id}: {id: string}) => {
+            return {
+              access: {
+                get: async () => {
+                  mockState.apiCallCounts.projectAccess += 1
+                  return {data: {data: getProjectAccess(id)}}
+                },
               },
-            },
-            clone: {
-              post: async () => {
-                return {data: {data: {id: `${id}-clone`}}}
+              clone: {
+                post: async () => {
+                  return {data: {data: {id: `${id}-clone`}}}
+                },
               },
-            },
-            delete: async () => {
-              return {data: {success: true}}
-            },
-            get: async () => {
-              mockState.apiCallCounts.projectDetails += 1
-              if (mockState.fetchGates.projectDetails) {
-                await mockState.fetchGates.projectDetails
-              }
-              return {data: {data: getProjectDetails(id)}}
-            },
-            edit: {
-              patch: async (payload: unknown) => {
-                mockState.editPayloads.push(payload)
-                if (mockState.editPatchResponse) {
-                  return mockState.editPatchResponse
-                }
-                const details = getProjectDetails(id)
-                return {data: {data: {project: details.project, prompts: details.prompts}}}
-              },
-            },
-            patch: async () => {
-              return {data: {data: getProjectDetails(id)}}
-            },
-            unarchive: {
-              post: async () => {
+              delete: async () => {
                 return {data: {success: true}}
               },
+              get: async () => {
+                mockState.apiCallCounts.projectDetails += 1
+                if (mockState.fetchGates.projectDetails) {
+                  await mockState.fetchGates.projectDetails
+                }
+                return {data: {data: getProjectDetails(id)}}
+              },
+              edit: {
+                patch: async (payload: unknown) => {
+                  mockState.editPayloads.push(payload)
+                  if (mockState.editPatchResponse) {
+                    return mockState.editPatchResponse
+                  }
+                  const details = getProjectDetails(id)
+                  return {data: {data: {project: details.project, prompts: details.prompts}}}
+                },
+              },
+              patch: async () => {
+                return {data: {data: getProjectDetails(id)}}
+              },
+              unarchive: {
+                post: async () => {
+                  return {data: {success: true}}
+                },
+              },
+            }
+          },
+          {
+            'full-text-strategy-preview': {
+              post: async (payload: unknown) => {
+                mockState.fullTextPreviewPayloads.push(payload)
+                return {data: {data: mockState.fullTextPreview ?? getDefaultFullTextPreview()}}
+              },
             },
-          }
-        },
+          },
+        ),
       },
     },
   }
 })
+
+const mountEditRoute = async (projectId: string) => {
+  const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
+  const queryClient = routeContext.appQueryClient
+  const providerQueryClient = new QueryClient()
+
+  queryClient.clear()
+  seedEditRouteQueries(queryClient, projectId)
+
+  const mounted = await mountRouterAtPath({
+    path: `/projects/${projectId}/edit`,
+    queryClient: providerQueryClient,
+    routeTree: routeContext.routeTree,
+    solidQueryModule: routeContext.solidQueryModule,
+    solidRouterModule: routeContext.solidRouterModule,
+    solidWebModule: routeContext.solidWebModule,
+  })
+  const cleanup = () => {
+    queryClient.clear()
+    providerQueryClient.clear()
+    mounted.dispose()
+    mounted.container.remove()
+  }
+
+  return {cleanup, container: mounted.container}
+}
+
+const getCheckedRadioValue = (container: HTMLElement, name: string) => {
+  return container.querySelector<HTMLInputElement>(`input[type="radio"][name="${name}"]:checked`)?.value ?? null
+}
 
 describe('project edit route regressions', () => {
   beforeEach(() => {
@@ -651,7 +708,9 @@ describe('project edit route regressions', () => {
       expect(payload.useTitle).toBe(true)
       expect(payload.useAbstract).toBe(true)
       expect(payload.useFulltext).toBe(false)
-      expect(payload.useFulltextNoImages).toBe(false)
+      expect(payload.fullTextFigureMode).toBeNull()
+      expect(payload.fullTextChunkPolicy).toBeNull()
+      expect(payload).not.toHaveProperty('useFulltextNoImages')
     } finally {
       queryClient.clear()
       providerQueryClient.clear()
@@ -1087,6 +1146,149 @@ describe('project edit route regressions', () => {
       queryClient.clear()
       dispose()
       container.remove()
+    }
+  })
+  test('a legacy no-images project shows full text on with figure mode none and needs a chunk policy', async () => {
+    const projectId = 'project-legacy-no-images'
+    const details = buildProjectDetails(projectId)
+
+    mockState.projectDetailsById[projectId] = {
+      ...details,
+      project: {
+        ...details.project,
+        fullTextChunkPolicy: null,
+        fullTextFigureMode: 'none',
+        fullTextStrategyId: 'fts-legacy-v0',
+        fullTextStrategyLabel: 'legacy full text (before strategy tracking)',
+        useFulltextNoImages: true,
+      },
+    }
+
+    const {cleanup, container} = await mountEditRoute(projectId)
+
+    try {
+      const fullTextCheckbox = container.querySelector<HTMLInputElement>(
+        '[data-testid="full-text-strategy-settings"] input[type="checkbox"]',
+      )
+
+      expect(container.textContent).not.toContain('Use Full Text (without images)')
+      expect(fullTextCheckbox?.checked).toBe(true)
+      expect(getCheckedRadioValue(container, 'full-text-figure-mode')).toBe('none')
+      expect(getCheckedRadioValue(container, 'full-text-max-prompt-tokens')).toBeNull()
+      expect(getCheckedRadioValue(container, 'full-text-chunk-mode')).toBeNull()
+
+      container
+        .querySelector<HTMLFormElement>('form')
+        ?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await waitForUpdates()
+
+      expect(mockState.editPayloads).toHaveLength(0)
+      expect(container.textContent).toContain('Full text needs a chunk policy')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('changing the full-text settings warns with the count of judgments under the current strategy', async () => {
+    const projectId = 'project-strategy-warning'
+    const details = buildProjectDetails(projectId)
+
+    mockState.projectDetailsById[projectId] = {
+      ...details,
+      project: {
+        ...details.project,
+        fullTextChunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+        fullTextFigureMode: 'none',
+        fullTextStrategyId: 'fts-aaaaaaaaaaaaaaaa',
+        fullTextStrategyLabel: 'mineru 4.0.12 / none / chunked 48k',
+        useFulltext: true,
+      },
+    }
+    mockState.fullTextPreview = {
+      current: {
+        judgmentCount: 12,
+        strategyId: 'fts-aaaaaaaaaaaaaaaa',
+        strategyLabel: 'mineru 4.0.12 / none / chunked 48k',
+      },
+      errors: [],
+      strategyId: 'fts-bbbbbbbbbbbbbbbb',
+      strategyLabel: 'mineru 4.0.12 / none / chunked 96k',
+    }
+
+    const {cleanup, container} = await mountEditRoute(projectId)
+
+    try {
+      container
+        .querySelector<HTMLInputElement>('input[type="radio"][name="full-text-max-prompt-tokens"][value="96000"]')
+        ?.click()
+      await waitForUpdates()
+      await waitForUpdates()
+
+      const warning = container.querySelector('[data-testid="full-text-strategy-warning"]')?.textContent ?? ''
+      const lastPreviewPayload = mockState.fullTextPreviewPayloads.at(-1) as Record<string, unknown>
+
+      expect(lastPreviewPayload).toEqual({
+        fullTextChunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
+        fullTextFigureMode: 'none',
+        projectId,
+        useFulltext: true,
+      })
+      expect(container.querySelector('[data-testid="full-text-strategy-label"]')?.textContent).toBe(
+        'mineru 4.0.12 / none / chunked 96k',
+      )
+      expect(warning).toContain('12 existing judgments')
+      expect(warning).toContain('mineru 4.0.12 / none / chunked 48k')
+
+      container
+        .querySelector<HTMLFormElement>('form')
+        ?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await waitForUpdates()
+
+      const payload = mockState.editPayloads[0] as Record<string, unknown>
+
+      expect(payload.useFulltext).toBe(true)
+      expect(payload.fullTextFigureMode).toBe('none')
+      expect(payload.fullTextChunkPolicy).toEqual({maxPromptTokens: 96_000, mode: 'chunked'})
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('a judged full-text project shows its stored strategy read-only and asks for no preview', async () => {
+    const projectId = 'project-strategy-locked'
+    const details = buildProjectDetails(projectId)
+
+    mockState.projectDetailsById[projectId] = {
+      ...details,
+      hasJudgedArticles: true,
+      project: {
+        ...details.project,
+        fullTextChunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
+        fullTextFigureMode: 'none',
+        fullTextStrategyId: 'fts-cccccccccccccccc',
+        fullTextStrategyLabel: 'docling 1.37.0 / none / single 24k',
+        useFulltext: true,
+      },
+    }
+
+    const {cleanup, container} = await mountEditRoute(projectId)
+
+    try {
+      const radios = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
+
+      expect(container.querySelector('[data-testid="full-text-strategy-label"]')?.textContent).toBe(
+        'docling 1.37.0 / none / single 24k',
+      )
+      expect(container.querySelector('[data-testid="full-text-strategy-id"]')?.textContent).toBe('fts-cccccccccccccccc')
+      expect(radios.length).toBe(8)
+      expect(
+        radios.every((radio) => {
+          return radio.closest('fieldset')?.disabled === true
+        }),
+      ).toBe(true)
+      expect(mockState.fullTextPreviewPayloads).toHaveLength(0)
+    } finally {
+      cleanup()
     }
   })
 })

@@ -4,6 +4,14 @@ import type {JSX} from 'solid-js'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {
+  emptyFullTextStrategySelection,
+  type FullTextStrategySelection,
+  FullTextStrategySettings,
+  getFullTextSelectionError,
+  getFullTextStrategySelectionFromProject,
+  getFullTextStrategySelectionPayload,
+} from '../../../../components/main/projects/fullTextStrategySettings.tsx'
 import {ImportRouteGroups} from '../../../../components/main/projects/importRouteGroups.tsx'
 import {invalidateReviewsWarningsQueries} from '../../../../components/main/reviews/reviewsWarningsQuery.ts'
 import {RuntimeModelNotice} from '../../../../components/main/runtimeModelNotice.tsx'
@@ -12,6 +20,7 @@ import {apiClient} from '../../../../services/apiClient'
 import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
+import {type FullTextChunkPolicy, type FullTextFigureMode} from '../../../../utils/fullTextStrategyOptions.ts'
 import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
 import {appQueryClient} from '../../../queryClient'
 import {createListMemo} from '../../../utils/createListMemo.ts'
@@ -58,6 +67,10 @@ type ProjectSummary = {
   useFulltext: boolean
   useFulltextNoImages: boolean
   useMetadata: boolean
+  fullTextChunkPolicy?: FullTextChunkPolicy | null
+  fullTextFigureMode?: FullTextFigureMode | null
+  fullTextStrategyId?: string | null
+  fullTextStrategyLabel?: string | null
 }
 
 type ModelOption = {
@@ -129,7 +142,8 @@ type ProjectUpdatePayload = {
   useTitle?: boolean
   useAbstract?: boolean
   useFulltext?: boolean
-  useFulltextNoImages?: boolean
+  fullTextChunkPolicy?: FullTextChunkPolicy | null
+  fullTextFigureMode?: FullTextFigureMode | null
   useMetadata?: boolean
 }
 
@@ -381,8 +395,8 @@ const EditProject = (): JSX.Element => {
   const [selectedImportRoutes, setSelectedImportRoutes] = createSignal<string[]>([])
   const [useTitle, setUseTitle] = createSignal(true)
   const [useAbstract, setUseAbstract] = createSignal(true)
-  const [useFulltext, setUseFulltext] = createSignal(false)
-  const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
+  const [fullTextSelection, setFullTextSelection] =
+    createSignal<FullTextStrategySelection>(emptyFullTextStrategySelection)
   const [useMetadata, setUseMetadata] = createSignal(false)
   const [promptCleanupSummary, setPromptCleanupSummary] = createSignal<ProjectPromptCleanupSummary | null>(null)
 
@@ -577,8 +591,7 @@ const EditProject = (): JSX.Element => {
 
       setUseTitle(details.project.useTitle)
       setUseAbstract(details.project.useAbstract)
-      setUseFulltext(details.project.useFulltext)
-      setUseFulltextNoImages(details.project.useFulltextNoImages)
+      setFullTextSelection(getFullTextStrategySelectionFromProject(details.project))
       setUseMetadata(details.project.useMetadata)
       if (!initialModelLoaded && details.model?.id) {
         const provider = String(details.model?.provider ?? '')
@@ -689,7 +702,8 @@ const EditProject = (): JSX.Element => {
         ...(payload.useTitle !== undefined ? {useTitle: payload.useTitle} : {}),
         ...(payload.useAbstract !== undefined ? {useAbstract: payload.useAbstract} : {}),
         ...(payload.useFulltext !== undefined ? {useFulltext: payload.useFulltext} : {}),
-        ...(payload.useFulltextNoImages !== undefined ? {useFulltextNoImages: payload.useFulltextNoImages} : {}),
+        ...(payload.fullTextFigureMode !== undefined ? {fullTextFigureMode: payload.fullTextFigureMode} : {}),
+        ...(payload.fullTextChunkPolicy !== undefined ? {fullTextChunkPolicy: payload.fullTextChunkPolicy} : {}),
         ...(payload.useMetadata !== undefined ? {useMetadata: payload.useMetadata} : {}),
       })
 
@@ -759,6 +773,12 @@ const EditProject = (): JSX.Element => {
       return
     }
 
+    const fullTextSelectionError = canEditJudgmentConfig() ? getFullTextSelectionError(fullTextSelection()) : null
+    if (fullTextSelectionError) {
+      setErrorMessage(fullTextSelectionError)
+      return
+    }
+
     setIsLoading(true)
 
     const onFulfilled = (result: ProjectUpdateResult) => {
@@ -782,8 +802,7 @@ const EditProject = (): JSX.Element => {
       dateTo: endDateResult.normalized ?? null,
       importRoutes: selectedImportRoutes(),
       useAbstract: useAbstract(),
-      useFulltext: useFulltext(),
-      useFulltextNoImages: useFulltextNoImages(),
+      ...getFullTextStrategySelectionPayload(fullTextSelection()),
       useMetadata: useMetadata(),
       useTitle: useTitle(),
     }
@@ -1047,54 +1066,16 @@ const EditProject = (): JSX.Element => {
                         <p class="text-sm font-medium text-gray-900">Use Article Abstract</p>
                       </div>
                     </label>
-                    <label
-                      class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                        canEditJudgmentConfig() ? 'border-input' : 'opacity-60'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        class="mt-1"
-                        checked={useFulltext()}
-                        onChange={(event) => {
-                          const checked = event.currentTarget.checked
-                          setUseFulltext(checked)
-                          // Mutual exclusivity: uncheck the other if this is checked
-                          if (checked) setUseFulltextNoImages(false)
-                        }}
-                        disabled={!canEditJudgmentConfig()}
-                      />
-                      <div class="flex-1">
-                        <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
-                        <p class="text-xs text-gray-500 mt-0.5">
-                          Include the complete article text including embedded images
-                        </p>
-                      </div>
-                    </label>
-                    <label
-                      class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
-                        canEditJudgmentConfig() ? 'border-input' : 'opacity-60'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        class="mt-1"
-                        checked={useFulltextNoImages()}
-                        onChange={(event) => {
-                          const checked = event.currentTarget.checked
-                          setUseFulltextNoImages(checked)
-                          // Mutual exclusivity: uncheck the other if this is checked
-                          if (checked) setUseFulltext(false)
-                        }}
-                        disabled={!canEditJudgmentConfig()}
-                      />
-                      <div class="flex-1">
-                        <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
-                        <p class="text-xs text-gray-500 mt-0.5">
-                          Include article text but strip embedded base64 images to reduce token usage
-                        </p>
-                      </div>
-                    </label>
+                    <FullTextStrategySettings
+                      disabled={!canEditJudgmentConfig()}
+                      lockedStrategy={{
+                        id: projectDetails()?.project.fullTextStrategyId ?? null,
+                        label: projectDetails()?.project.fullTextStrategyLabel ?? null,
+                      }}
+                      projectId={projectId}
+                      selection={fullTextSelection()}
+                      onChange={setFullTextSelection}
+                    />
                     <label
                       class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${
                         canEditJudgmentConfig() ? 'border-input' : 'opacity-60'
