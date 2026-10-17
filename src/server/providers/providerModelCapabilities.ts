@@ -163,6 +163,18 @@ export const carryProviderModelCapabilityOverrides = ({
   return previousOverrides === undefined ? nextMetadataJson : {...nextRecord, capabilityOverrides: previousOverrides}
 }
 
+export const refreshProviderModelDiscovery = ({
+  nextMetadataJson,
+  previousMetadataJson,
+}: {
+  nextMetadataJson: unknown
+  previousMetadataJson: unknown
+}): unknown => {
+  const discovery = getJsonRecord(nextMetadataJson)?.discovery
+
+  return discovery === undefined ? previousMetadataJson : {...getJsonRecord(previousMetadataJson), discovery}
+}
+
 const getUserProvenance = (updatedAt: string | null): ProviderModelCapabilityProvenance => {
   return {source: 'user', sourceUrl: null, verifiedAt: updatedAt ? updatedAt.slice(0, 10) : null}
 }
