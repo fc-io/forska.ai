@@ -1,3 +1,5 @@
+import {getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
+
 type ProjectVisibleJudgmentNaturalKeySqlParams = {judgmentAlias: string; projectAlias: string}
 
 type ProjectVisibleJudgmentPromptSqlParams = ProjectVisibleJudgmentNaturalKeySqlParams & {projectPromptAlias: string}
@@ -16,6 +18,7 @@ export const getProjectVisibleJudgmentNaturalKeySql = ({
     AND ${judgmentAlias}.use_fulltext_no_images = ${projectAlias}.use_fulltext_no_images
     AND ${judgmentAlias}.use_metadata = COALESCE(${projectAlias}.use_metadata, FALSE)
     AND ${judgmentAlias}.system_prompt_variant = COALESCE(${projectAlias}.system_prompt_variant, 'legacy')
+    AND ${judgmentAlias}.full_text_strategy_id = ${getProjectFullTextStrategyIdSql(projectAlias)}
   )`
 }
 

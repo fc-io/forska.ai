@@ -269,6 +269,9 @@ export type ProjectRecord = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant: string | null
+  fullTextFigureMode: string | null
+  fullTextChunkPolicy: unknown
+  fullTextStrategyId: string | null
   dateFrom: Date | null
   dateTo: Date | null
   archived: boolean
@@ -472,6 +475,7 @@ export type JudgmentRecord = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
   chunkingStrategy: JudgmentChunkingStrategy | null
   isAnswered: boolean
   answeredOriginal: string | null
