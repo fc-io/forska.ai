@@ -309,6 +309,7 @@ test('full-text strategies discovered in scope become separate comparison column
   expect(fullTextNoneContentKey).toBe('0010')
   expect(fullTextAContentKey).toBe(`0010~${strategyA}`)
   expect(getComparisonProjectContentKey({...fullTextSettings, fullTextStrategyId: 'fts-none'})).toBe('0010')
+  expect(getComparisonProjectContentKey({...fullTextSettings, fullTextStrategyId: 'fts-legacy-v0'})).toBe('0010')
   expect(
     getComparisonProjectContentKey({
       ...fullTextSettings,

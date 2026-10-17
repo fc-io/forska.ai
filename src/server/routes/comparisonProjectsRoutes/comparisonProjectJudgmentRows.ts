@@ -20,7 +20,7 @@ import {
   type ComparisonProjectRowFilter,
   getComparisonProjectPassesRowFilter,
 } from '../../../utils/comparisonProjectRowFilter.ts'
-import {FULL_TEXT_STRATEGY_NONE, getEffectiveFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
+import {isReservedFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgmentDisplayAnswer, hasAnyJudgmentAnswer} from '../../utils/judgmentAnswers.ts'
 import {
@@ -246,11 +246,9 @@ const comparisonProjectContentKeyMetadataSuffix = 'm'
 export const comparisonProjectContentKeyFullTextStrategySeparator = '~'
 
 const getComparisonProjectContentKeyFullTextStrategySuffix = (fullTextStrategyId: string | null | undefined) => {
-  const effectiveFullTextStrategyId = getEffectiveFullTextStrategyId(fullTextStrategyId)
-
-  return effectiveFullTextStrategyId === FULL_TEXT_STRATEGY_NONE
+  return isReservedFullTextStrategyId(fullTextStrategyId)
     ? ''
-    : `${comparisonProjectContentKeyFullTextStrategySeparator}${effectiveFullTextStrategyId}`
+    : `${comparisonProjectContentKeyFullTextStrategySeparator}${fullTextStrategyId}`
 }
 
 export const getComparisonProjectContentKey = (settings: {

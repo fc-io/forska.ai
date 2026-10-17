@@ -4,6 +4,7 @@ import type {
   ComparisonJudgmentContextSummary,
   ComparisonProjectJudgmentsRow,
 } from '../services/comparisonProjectsService.ts'
+import {FULL_TEXT_STRATEGY_LEGACY, getFullTextStrategyDisplayLabel} from './fullTextStrategyOptions.ts'
 
 export type ComparisonJudgmentContextSummariesById = Record<string, ComparisonJudgmentContextSummary>
 
@@ -151,11 +152,14 @@ const getVariantEntries = (summary: ComparisonJudgmentContextSummary) => {
 
 const getFullTextStrategyEntries = (summary: ComparisonJudgmentContextSummary) => {
   return getLlmColumns(summary).flatMap((column) => {
-    return column.fullTextStrategyId
+    const fullTextStrategyId =
+      column.fullTextStrategyId ?? (column.fullTextStrategyLabel === undefined ? null : FULL_TEXT_STRATEGY_LEGACY)
+
+    return fullTextStrategyId
       ? [
           {
-            id: column.fullTextStrategyId,
-            label: getEntryLabel(column.fullTextStrategyLabel ?? null, column.fullTextStrategyId),
+            id: fullTextStrategyId,
+            label: getFullTextStrategyDisplayLabel(fullTextStrategyId, column.fullTextStrategyLabel),
           },
         ]
       : []

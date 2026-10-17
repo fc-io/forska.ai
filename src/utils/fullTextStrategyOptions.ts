@@ -138,6 +138,10 @@ const reservedFullTextStrategyLabels: Record<string, string> = {
   [FULL_TEXT_STRATEGY_NONE]: 'no full text',
 }
 
+export const isReservedFullTextStrategyId = (value: string | null | undefined): boolean => {
+  return value === null || value === undefined || value in reservedFullTextStrategyLabels
+}
+
 export const getFullTextStrategyDisplayLabel = (id: string, storedLabel: string | null | undefined): string => {
   return reservedFullTextStrategyLabels[id] ?? storedLabel ?? id
 }

@@ -97,7 +97,7 @@ const getContentKeySql = (
       WHEN ${systemPromptVariantExpression} = ${defaultSystemPromptVariantSql} THEN ''
       ELSE ${getSqlLiteral(contentKeySystemPromptVariantSeparator)} || ${systemPromptVariantExpression}
     END || CASE
-      WHEN ${fullTextStrategyExpression} = ${fullTextStrategyNoneSql} THEN ''
+      WHEN ${fullTextStrategyExpression} IN (${fullTextStrategyNoneSql}, ${fullTextStrategyLegacySql}) THEN ''
       ELSE ${getSqlLiteral(contentKeyFullTextStrategySeparator)} || ${fullTextStrategyExpression}
     END`
 }
@@ -499,7 +499,12 @@ const getContentVariantInsertSql = ({
           + ${contentFlagVariantCount} * ${getContentDimensionOrderSql('ranked_content_variant.system_prompt_variant', 'ranked_content_variant.use_metadata', 'ranked_content_variant.full_text_strategy_rank')}
         AS INTEGER
       ) AS content_order,
-      ${getContentKeySql('ranked_content_variant.flag_key', 'ranked_content_variant.system_prompt_variant', 'ranked_content_variant.use_metadata', 'ranked_content_variant.full_text_strategy_id')} AS content_key,
+      ${getContentKeySql(
+        'ranked_content_variant.flag_key',
+        'ranked_content_variant.system_prompt_variant',
+        'ranked_content_variant.use_metadata',
+        'ranked_content_variant.full_text_strategy_id',
+      )} AS content_key,
       ranked_content_variant.system_prompt_variant,
       ranked_content_variant.use_title,
       ranked_content_variant.use_abstract,
