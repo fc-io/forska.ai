@@ -119,6 +119,16 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
     }, 0)
   })
 
+  const isSelectAllMatchingActive = createMemo(() => {
+    return Boolean(props.selectAllMatching?.()) && allSelected()
+  })
+
+  createEffect(() => {
+    if (props.selectAllMatching?.() && !allSelected()) {
+      props.setSelectAllMatching?.(false)
+    }
+  })
+
   const projectsWithoutJobsQuery = useQuery(() => {
     return {
       enabled: addToProjectMenuOpened(),
@@ -325,7 +335,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                                           onClick={(e) => {
                                             e.preventDefault()
                                             void (async () => {
-                                              const allAcross = props.selectAllMatching && props.selectAllMatching()
+                                              const allAcross = isSelectAllMatchingActive()
                                               if (allAcross) {
                                                 addArticlesToProjectMutation.mutate({
                                                   mode: 'filter',
@@ -370,7 +380,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                     disabled={startPdfFetchJobMutation.isPending}
                     class="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
                     onClick={() => {
-                      const allAcross = props.selectAllMatching && props.selectAllMatching()
+                      const allAcross = isSelectAllMatchingActive()
                       if (allAcross) {
                         return startPdfFetchJobMutation.mutate({mode: 'filter'})
                       }
@@ -467,7 +477,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
       </div>
       <Show when={allSelected()}>
         {(() => {
-          const allAcross = props.selectAllMatching && props.selectAllMatching()
+          const allAcross = isSelectAllMatchingActive()
           const total = props.totalMatchingCount ?? null
           return (
             <>
