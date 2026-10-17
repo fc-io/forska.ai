@@ -1,16 +1,8 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
-import {
-  convertArticlePdf,
-  getFullTextConversionMetadata,
-  isPermanentConversionFailure,
-} from '../fullText/converters/fullTextConverter.ts'
-import {getJsonSqlLiteral} from '../providers/providerDbUtils.ts'
-import {
-  appendArticleReviewServingDeltas,
-  getArticleReviewServingMutationValueHash,
-} from '../reviewServing/articleReviewServingDeltaService.ts'
+import {storeConvertedFullText} from '../fullText/canonicalFullTextStore.ts'
+import {convertArticlePdf, isPermanentConversionFailure} from '../fullText/converters/fullTextConverter.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../services/appQueryHelpers.ts'
+import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 
@@ -144,40 +136,23 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       runtimeConfig,
       timeoutMs: CONVERSION_TIMEOUT_MS,
     })
-    const {html, markdown: md} = result
-
-    await getAppDatabaseService().transaction(async (tx) => {
-      const sourceUpdatedAt = new Date()
-      await tx.run(`
-        UPDATE app.article
-        SET full_text = ${getSqlLiteral(md)},
-            full_text_html = ${getSqlLiteral(html)},
-            full_text_assets = ${getJsonSqlLiteral(result.figures)},
-            full_text_conversion_status = 'success',
-            full_text_conversion_error = NULL,
-            full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
-            full_text_conversion_metadata = ${getJsonSqlLiteral(getFullTextConversionMetadata({result, runtimeConfig}))},
-            full_text_char_count = ${md.length},
-            full_text_conversion_attempts = ${(fresh.fullTextConversionAttempts ?? 0) + 1},
-            updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
-        WHERE id = '${escapeSqlString(articleId)}'
-      `)
-      await appendArticleReviewServingDeltas(tx, {
-        articleId,
-        changedFields: ['fullText', 'fullTextHtml'],
-        sourceMutationKey: `ensureFullText|article|${articleId}|success|${sourceUpdatedAt.toISOString()}|${getArticleReviewServingMutationValueHash({html, md})}`,
-        sourceOperation: 'update',
-        sourceUpdatedAt,
-      })
-    }, ensureFullTextWorkloadContext)
+    const canonical = await storeConvertedFullText({
+      articleId,
+      attempts: (fresh.fullTextConversionAttempts ?? 0) + 1,
+      mutationSource: 'ensureFullText',
+      result,
+      runtimeConfig,
+      workloadContext: ensureFullTextWorkloadContext,
+    })
 
     ensureFullTextLogger.log('ensureFullText:conversionSucceeded', '[ensureFullText] On-demand conversion succeeded', {
       articleId,
-      charCount: md.length,
+      canonicalHash: canonical.hash,
+      charCount: canonical.text.length,
       component: ensureFullTextComponent,
       durationMs: Date.now() - conversionStartedAt,
     })
-    return {text: md, shouldSkip: false}
+    return {text: canonical.text, shouldSkip: false}
   } catch (error) {
     // Classify error
     const errorMessage = error instanceof Error ? error.message : String(error)

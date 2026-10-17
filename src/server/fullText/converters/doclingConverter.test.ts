@@ -58,11 +58,23 @@ test('Docling zip parsing follows body reading order, normalises bboxes and reso
   ).toEqual(['section_header', 'list_item', 'picture', 'caption', 'table', 'page_header', 'picture'])
   expect(parsed.layout[0]).toEqual({
     bbox: [0.1, 0.05, 0.3333, 0.0688],
+    level: 1,
     page: 3,
     text: '1 Introduction',
     type: 'section_header',
   })
-  expect(parsed.layout[4]?.text).toBe('Study | Country\nXia 2023 | China')
+  expect(parsed.layout[1]?.listMarker).toBe('-')
+  expect(parsed.layout[2]).toMatchObject({
+    figureIndex: 1,
+    parts: [{text: 'FIGURE 1 PRISMA flow diagram of study selection.', type: 'image_caption'}],
+    type: 'picture',
+  })
+  expect(parsed.layout[3]).toMatchObject({container: 'picture', type: 'caption'})
+  expect(parsed.layout[4]?.text).toBe('| Study | Country |\n| --- | --- |\n| Xia 2023 | China |')
+  expect(parsed.layout[4]?.parts).toEqual([
+    {text: '| Study | Country |\n| --- | --- |\n| Xia 2023 | China |', type: 'table_body'},
+  ])
+  expect(parsed.layout[6]?.figureIndex).toBeUndefined()
   expect(parsed.figures).toEqual([
     {
       bbox: [0.1, 0.125, 0.5, 0.375],
@@ -71,6 +83,22 @@ test('Docling zip parsing follows body reading order, normalises bboxes and reso
       index: 1,
       page: 3,
     },
+  ])
+})
+
+test('Docling figure captions fall back to child caption items when the picture has no caption refs', () => {
+  const document = JSON.parse(documentText) as {pictures: Record<string, unknown>[]}
+  const pictures = document.pictures.map((picture) => {
+    return {...picture, captions: []}
+  })
+  const parsed = parseDoclingZipEntries({
+    converterVersion: 'v',
+    entries: {...getDoclingEntries(), 'paper.json': strToU8(JSON.stringify({...document, pictures}))},
+  })
+
+  expect(parsed.figures[0]?.caption).toBe('FIGURE 1 PRISMA flow diagram of study selection.')
+  expect(parsed.layout[2]?.parts).toEqual([
+    {text: 'FIGURE 1 PRISMA flow diagram of study selection.', type: 'image_caption'},
   ])
 })
 

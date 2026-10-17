@@ -1,0 +1,86 @@
+[
+ {
+  "bbox": [
+   0.082,
+   0.513,
+   0.488,
+   0.915
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-1.jpg",
+  "index": 1,
+  "page": 3
+ },
+ {
+  "bbox": [
+   0.107,
+   0.339,
+   0.457,
+   0.471
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-2.jpg",
+  "index": 2,
+  "page": 4
+ },
+ {
+  "bbox": [
+   0.178,
+   0.693,
+   0.811,
+   0.874
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-3.jpg",
+  "index": 3,
+  "page": 4
+ },
+ {
+  "bbox": [
+   0.588,
+   0.465,
+   0.852,
+   0.578
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-4.jpg",
+  "index": 4,
+  "page": 5
+ },
+ {
+  "bbox": [
+   0.589,
+   0.106,
+   0.85,
+   0.217
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-5.jpg",
+  "index": 5,
+  "page": 5
+ },
+ {
+  "bbox": [
+   0.588,
+   0.285,
+   0.851,
+   0.397
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-6.jpg",
+  "index": 6,
+  "page": 5
+ },
+ {
+  "bbox": [
+   0.586,
+   0.646,
+   0.852,
+   0.732
+  ],
+  "caption": null,
+  "imagePath": "assets/full-text-assets/frontiers-fmed-2023-1283512/fig-7.jpg",
+  "index": 7,
+  "page": 5
+ }
+]

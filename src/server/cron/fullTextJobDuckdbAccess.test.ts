@@ -41,7 +41,8 @@ test('full text conversion cron and on-demand conversion use background workload
   expect(conversionCronSource).toContain('maxResultRows: MAX_PROJECT_IMPORT_ROUTES_PER_SCAN')
   expect(conversionCronSource).toContain('maxResultRows: remaining')
   expect(conversionCronSource).toContain('maxResultRows: fallbackLimit')
-  expect(conversionCronSource).toContain('appendArticleReviewServingDeltas(tx')
+  expect(conversionCronSource).toContain('workloadContext: fullTextConversionWorkloadContext')
+  expect(conversionCronSource).toContain('storeConvertedFullText({')
 
   expect(ensureFullTextSource).toContain("routeOrJobKey: 'fullText.ensure'")
   expect(ensureFullTextSource).toContain("workloadClass: 'background.fullText.ensure'")
@@ -50,7 +51,9 @@ test('full text conversion cron and on-demand conversion use background workload
   expect(ensureFullTextSource).toContain('queryJsonBackground')
   expect(ensureFullTextSource).toContain('runBackground')
   expect(ensureFullTextSource).toContain('maxResultRows: 1')
-  expect(ensureFullTextSource).toContain('appendArticleReviewServingDeltas(tx')
+  expect(ensureFullTextSource).toContain('workloadContext: ensureFullTextWorkloadContext')
+  expect(ensureFullTextSource).toContain('storeConvertedFullText({')
+  expect(readSource('../fullText/canonicalFullTextStore.ts')).toContain('appendArticleReviewServingDeltas(tx')
 })
 
 test('article full_text_pdf update paths append review serving deltas', () => {

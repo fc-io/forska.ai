@@ -26,6 +26,10 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 type ConvertedArticleRow = {
   fullText: string | null
   fullTextAssets: string | null
+  fullTextCanonicalHash: string | null
+  fullTextCanonicalVersion: string | null
+  fullTextCharCount: number | string | null
+  fullTextFigureModeBuilt: string | null
   fullTextConversionAttempts: number | null
   fullTextConversionMetadata: string | null
   fullTextConversionModelId: string | null
@@ -127,6 +131,10 @@ const getConvertedArticle = async (articleId: string): Promise<ConvertedArticleR
         full_text AS fullText,
         full_text_html AS fullTextHtml,
         CAST(full_text_assets AS VARCHAR) AS fullTextAssets,
+        full_text_canonical_hash AS fullTextCanonicalHash,
+        full_text_canonical_version AS fullTextCanonicalVersion,
+        full_text_char_count AS fullTextCharCount,
+        full_text_figure_mode_built AS fullTextFigureModeBuilt,
         full_text_conversion_status AS fullTextConversionStatus,
         full_text_conversion_model_id AS fullTextConversionModelId,
         CAST(full_text_conversion_metadata AS VARCHAR) AS fullTextConversionMetadata,
@@ -138,10 +146,32 @@ const getConvertedArticle = async (articleId: string): Promise<ConvertedArticleR
   return row
 }
 
+const expectedCanonicalTail = [
+  'Figure 1: FIGURE 1 PRISMA flow diagram of study selection.',
+  '',
+  'TABLE1Characteristicsoftheincludedtrials.',
+  '| Study | Country |',
+  '| --- | --- |',
+  '| Xia 2023 | China |',
+  '',
+].join('\n')
+const expectedCanonicalHash = '6a00f6357e8eb73966e737f96cfeafdc3032ddc66ac57bfb4b49bc406f9a49f7'
+
+const expectCanonicalFullText = (text: string | null | undefined) => {
+  expect(text?.startsWith('Figure 1 describes the process of literature retrieval and screening.')).toBe(true)
+  expect(text?.endsWith(`(Table 1).\n\n${expectedCanonicalTail}`)).toBe(true)
+  expect(text).not.toContain('Frontiers in Medicine')
+  expect(text).not.toContain('Converted by MinerU')
+}
+
 const expectConvertedArticle = async (articleId: string) => {
   const row = await getConvertedArticle(articleId)
 
-  expect(row?.fullText).toBe('# Converted by MinerU\n\nBody text.\n')
+  expectCanonicalFullText(row?.fullText)
+  expect(row?.fullTextCanonicalHash).toBe(expectedCanonicalHash)
+  expect(row?.fullTextCanonicalVersion).toBe('canonical-v1')
+  expect(row?.fullTextFigureModeBuilt).toBe('none')
+  expect(Number(row?.fullTextCharCount)).toBe(row?.fullText?.length ?? -1)
   expect(row?.fullTextHtml).toBeNull()
   expect(row?.fullTextConversionStatus).toBe('success')
   expect(row?.fullTextConversionModelId).toBe('conversion-mineru-model')
@@ -149,8 +179,10 @@ const expectConvertedArticle = async (articleId: string) => {
   expect(JSON.parse(row?.fullTextConversionMetadata ?? 'null')).toEqual({
     baseURL: getMineruBaseURL(),
     converterKind: 'mineru',
+    converterMarkdownPath: `assets/full-text-assets/${articleId}/converter.md`,
     converterVersion: '4.0.12',
     layoutPath: `assets/full-text-assets/${articleId}/layout.json`,
+    layoutVersion: 'layout-v2',
     modelId: 'conversion-mineru-model',
     modelName: 'mineru-standard',
     optionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
@@ -166,12 +198,16 @@ const expectConvertedArticle = async (articleId: string) => {
     },
   ])
   expect((await readdir(join(tempRuntimeRoot.rootDirectory, `assets/full-text-assets/${articleId}`))).sort()).toEqual([
+    'converter.md',
     'fig-1.jpg',
     'layout.json',
   ])
+  expect(
+    readFileSync(join(tempRuntimeRoot.rootDirectory, `assets/full-text-assets/${articleId}/converter.md`), 'utf8'),
+  ).toBe('# Converted by MinerU\n\nBody text.\n')
 }
 
-test('conversion cron stores converter markdown, figure assets and converter identity metadata', async () => {
+test('conversion cron stores canonical text, converter markdown file, figure assets and converter identity metadata', async () => {
   if (!jobsModule) {
     throw new Error('Test dependencies not initialized')
   }
@@ -210,6 +246,14 @@ test('on-demand conversion uses the configured MinerU model and writes the same 
     'ensure-article-1',
   )
 
-  expect(result).toEqual({shouldSkip: false, text: '# Converted by MinerU\n\nBody text.\n'})
+  expect(result.shouldSkip).toBe(false)
+  expectCanonicalFullText(result.text)
   await expectConvertedArticle('ensure-article-1')
+})
+
+test('rebuilding from the stored layout.json and assets reproduces the conversion-time canonical bytes', async () => {
+  const {rebuildCanonicalFullText} = await import('../fullText/canonicalFullTextStore.ts')
+  const result = await rebuildCanonicalFullText({articleId: 'cron-article-1', figureMode: 'none'})
+
+  expect(result).toMatchObject({changed: false, hash: expectedCanonicalHash, version: 'canonical-v1'})
 })

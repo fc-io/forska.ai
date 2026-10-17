@@ -2,9 +2,17 @@ import {mkdir, rm, writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 
 import {resolveRuntimeWritablePath} from '../../utils/runtimeWritablePath.ts'
-import {type FullTextFigure, type FullTextLayoutBlock, type FullTextParsedFigure} from './fullTextConverterTypes.ts'
+import {
+  FULL_TEXT_LAYOUT_VERSION,
+  type FullTextFigure,
+  type FullTextLayoutBlock,
+  type FullTextLayoutFile,
+  type FullTextParsedFigure,
+} from './fullTextConverterTypes.ts'
 
 export const fullTextAssetsRelativeRoot = 'assets/full-text-assets'
+const fullTextLayoutFileName = 'layout.json'
+const fullTextConverterMarkdownFileName = 'converter.md'
 
 const toSafePathSegment = (value: string): string => {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -36,24 +44,32 @@ const writeFigureFile = async ({
   }
 }
 
+export const getFullTextLayoutFileContent = (layout: FullTextLayoutBlock[]): string => {
+  const file: FullTextLayoutFile = {blocks: layout, version: FULL_TEXT_LAYOUT_VERSION}
+
+  return JSON.stringify(file)
+}
+
 export const writeFullTextAssetFiles = async ({
   articleId,
   cwd,
   figures,
   layout,
+  markdown,
 }: {
   articleId: string
   cwd?: string
   figures: FullTextParsedFigure[]
   layout: FullTextLayoutBlock[]
-}): Promise<{figures: FullTextFigure[]; layoutPath: string}> => {
+  markdown: string
+}): Promise<{converterMarkdownPath: string; figures: FullTextFigure[]; layoutPath: string}> => {
   const relativeDir = getFullTextAssetsRelativeDir(articleId)
   const absoluteDir = resolveRuntimeWritablePath({cwd, pathValue: relativeDir})
-  const layoutPath = `${relativeDir}/layout.json`
 
   await rm(absoluteDir, {force: true, recursive: true})
   await mkdir(absoluteDir, {recursive: true})
-  await writeFile(join(absoluteDir, 'layout.json'), JSON.stringify(layout))
+  await writeFile(join(absoluteDir, fullTextLayoutFileName), getFullTextLayoutFileContent(layout))
+  await writeFile(join(absoluteDir, fullTextConverterMarkdownFileName), markdown)
 
   const writtenFigures = await Promise.all(
     figures.map((figure) => {
@@ -61,5 +77,9 @@ export const writeFullTextAssetFiles = async ({
     }),
   )
 
-  return {figures: writtenFigures, layoutPath}
+  return {
+    converterMarkdownPath: `${relativeDir}/${fullTextConverterMarkdownFileName}`,
+    figures: writtenFigures,
+    layoutPath: `${relativeDir}/${fullTextLayoutFileName}`,
+  }
 }
