@@ -199,7 +199,7 @@ const guardScriptBody = `
   const windowTargetState = await service.getTargetStateDirtyTokenSnapshot()
   await database.appendJudgments([{
     answeredOriginal: 'yes', answeredOriginalAsArray: ['yes'], articleId: 'target-article', chunkingStrategy: null,
-    confidenceOriginal: 0.9, createdAt: now, explanation: 'Judge completion in the commit window', id: 'window-judgment',
+    confidenceOriginal: 0.9, createdAt: now, explanation: 'Judge completion in the commit window', fullTextStrategyId: 'fts-none', id: 'window-judgment',
     isAnswered: true, modelId: 'target-model', projectId: null, promptId: 'target-prompt', quotes: [],
     snapshotProjectId: null, snapshotProjectModelName: null, systemPromptVariant: 'screening_v1', updatedAt: now,
     useAbstract: true, useFulltext: false, useFulltextNoImages: false, useMetadata: false, useTitle: true,
