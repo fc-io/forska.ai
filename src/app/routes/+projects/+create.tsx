@@ -4,6 +4,13 @@ import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid
 import {createStore} from 'solid-js/store'
 
 import {CollapsibleSelectionSection} from '../../../components/main/projects/collapsibleSelectionSection.tsx'
+import {
+  emptyFullTextStrategySelection,
+  type FullTextStrategySelection,
+  FullTextStrategySettings,
+  getFullTextSelectionError,
+  getFullTextStrategySelectionPayload,
+} from '../../../components/main/projects/fullTextStrategySettings.tsx'
 import {ImportRouteGroups} from '../../../components/main/projects/importRouteGroups.tsx'
 import {RuntimeModelNotice} from '../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../components/ui/button'
@@ -197,8 +204,8 @@ const CreateProject = () => {
   const [selectedImportRoutes, setSelectedImportRoutes] = createSignal<string[]>([])
   const [useTitle, setUseTitle] = createSignal(true)
   const [useAbstract, setUseAbstract] = createSignal(true)
-  const [useFulltext, setUseFulltext] = createSignal(false)
-  const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
+  const [fullTextSelection, setFullTextSelection] =
+    createSignal<FullTextStrategySelection>(emptyFullTextStrategySelection)
   const [useMetadata, setUseMetadata] = createSignal(false)
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
@@ -403,8 +410,7 @@ const CreateProject = () => {
       importRoutes: importRoutes.length > 0 ? Array.from(new Set(importRoutes)) : undefined,
       useTitle: useTitle(),
       useAbstract: useAbstract(),
-      useFulltext: useFulltext(),
-      useFulltextNoImages: useFulltextNoImages(),
+      ...getFullTextStrategySelectionPayload(fullTextSelection()),
       useMetadata: useMetadata(),
     })
 
@@ -434,6 +440,12 @@ const CreateProject = () => {
 
     if (startDateResult.date && endDateResult.date && startDateResult.date > endDateResult.date) {
       setError('Start date must be on or before the end date')
+      return
+    }
+
+    const fullTextSelectionError = getFullTextSelectionError(fullTextSelection())
+    if (fullTextSelectionError) {
+      setError(fullTextSelectionError)
       return
     }
 
@@ -648,44 +660,7 @@ const CreateProject = () => {
                     <p class="text-sm font-medium text-gray-900">Use Article Abstract</p>
                   </div>
                 </label>
-                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    class="mt-1"
-                    checked={useFulltext()}
-                    onChange={(e) => {
-                      const checked = e.currentTarget.checked
-                      setUseFulltext(checked)
-                      // Mutual exclusivity: uncheck the other if this is checked
-                      if (checked) setUseFulltextNoImages(false)
-                    }}
-                  />
-                  <div class="flex-1">
-                    <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
-                    <p class="text-xs text-gray-500 mt-0.5">
-                      Include the complete article text including embedded images
-                    </p>
-                  </div>
-                </label>
-                <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    class="mt-1"
-                    checked={useFulltextNoImages()}
-                    onChange={(e) => {
-                      const checked = e.currentTarget.checked
-                      setUseFulltextNoImages(checked)
-                      // Mutual exclusivity: uncheck the other if this is checked
-                      if (checked) setUseFulltext(false)
-                    }}
-                  />
-                  <div class="flex-1">
-                    <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
-                    <p class="text-xs text-gray-500 mt-0.5">
-                      Include article text but strip embedded base64 images to reduce token usage
-                    </p>
-                  </div>
-                </label>
+                <FullTextStrategySettings selection={fullTextSelection()} onChange={setFullTextSelection} />
                 <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
                   <input
                     type="checkbox"

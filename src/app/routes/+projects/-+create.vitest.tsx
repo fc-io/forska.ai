@@ -30,6 +30,7 @@ type MockPrompt = {
 const mockState = vi.hoisted(() => {
   return {
     createPayloads: [] as unknown[],
+    fullTextPreviewPayloads: [] as unknown[],
     importRoutes: [] as MockImportRoute[],
     models: [] as MockModel[],
     prompts: [] as MockPrompt[],
@@ -72,6 +73,48 @@ const buildCreatedProject = (payload: unknown) => {
     useMetadata: body.useMetadata === true,
     useTitle: body.useTitle === true,
   }
+}
+
+const getFullTextPreview = (payload: unknown) => {
+  const body = payload as {
+    fullTextChunkPolicy: {maxPromptTokens: number; mode: string} | null
+    fullTextFigureMode: string | null
+    useFulltext: boolean
+  }
+  const errors = [
+    body.fullTextFigureMode ? null : 'Full text needs a figure mode: choose None, Descriptions or Native images.',
+    body.fullTextChunkPolicy
+      ? null
+      : 'Full text needs a chunk policy: choose 24k, 48k or 96k and single only or chunked.',
+    body.fullTextFigureMode === 'native_images'
+      ? 'Figure mode Native images needs image transports, which this build does not include yet. Choose figure mode None.'
+      : null,
+  ].filter((error): error is string => {
+    return error !== null
+  })
+
+  return errors.length > 0
+    ? {current: null, errors, strategyId: null, strategyLabel: null}
+    : {
+        current: null,
+        errors,
+        strategyId: 'fts-0123456789abcdef',
+        strategyLabel: `mineru 4.0.12 / none / ${body.fullTextChunkPolicy?.mode === 'chunked' ? 'chunked' : 'single'} ${(body.fullTextChunkPolicy?.maxPromptTokens ?? 0) / 1000}k`,
+      }
+}
+
+const getFullTextCheckbox = (container: HTMLElement) => {
+  return (
+    container.querySelector<HTMLInputElement>('[data-testid="full-text-strategy-settings"] input[type="checkbox"]')
+    ?? null
+  )
+}
+
+const clickRadio = async (container: HTMLElement, name: string, value: string) => {
+  const radio = container.querySelector<HTMLInputElement>(`input[type="radio"][name="${name}"][value="${value}"]`)
+  expect(radio).not.toBeNull()
+  radio?.click()
+  await waitForUpdates()
 }
 
 const waitForUpdates = async () => {
@@ -211,6 +254,12 @@ vi.mock('../../../services/apiClient.ts', () => {
           },
         },
         projects: {
+          'full-text-strategy-preview': {
+            post: async (payload: unknown) => {
+              mockState.fullTextPreviewPayloads.push(payload)
+              return {data: {data: getFullTextPreview(payload)}}
+            },
+          },
           post: async (payload: unknown) => {
             mockState.createPayloads.push(payload)
             return {data: {data: buildCreatedProject(payload)}}
@@ -237,6 +286,7 @@ describe('project create route content flags', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
     mockState.createPayloads = []
+    mockState.fullTextPreviewPayloads = []
     mockState.importRoutes = []
     mockState.models = buildModels()
     mockState.prompts = []
@@ -283,7 +333,10 @@ describe('project create route content flags', () => {
       expect(payload.useTitle).toBe(true)
       expect(payload.useAbstract).toBe(true)
       expect(payload.useFulltext).toBe(false)
-      expect(payload.useFulltextNoImages).toBe(false)
+      expect(payload.fullTextFigureMode).toBeNull()
+      expect(payload.fullTextChunkPolicy).toBeNull()
+      expect(payload).not.toHaveProperty('useFulltextNoImages')
+      expect(mockState.fullTextPreviewPayloads).toHaveLength(0)
     } finally {
       queryClient.clear()
       dispose()
@@ -308,7 +361,7 @@ describe('project create route content flags', () => {
       expect(mockState.createPayloads).toHaveLength(1)
       expect(payload.useMetadata).toBe(true)
       expect(payload.useFulltext).toBe(false)
-      expect(payload.useFulltextNoImages).toBe(false)
+      expect(payload).not.toHaveProperty('useFulltextNoImages')
     } finally {
       queryClient.clear()
       dispose()
@@ -427,6 +480,113 @@ describe('project create route content flags', () => {
       browserFailures.assertNoFailures()
     } finally {
       browserFailures.dispose()
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+
+  test('full text shows figure mode and chunk policy selectors with nothing preselected and blocks submit', async () => {
+    const browserFailures = createBrowserFailureAssertions(window)
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      const text = container.textContent ?? ''
+
+      expect(text).not.toContain('Use Full Text (without images)')
+      expect(text).not.toContain('Use Full Text (with images)')
+      expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(0)
+
+      getFullTextCheckbox(container)?.click()
+      await waitForUpdates()
+      await waitForUpdates()
+
+      const radios = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
+
+      expect(
+        radios.map((radio) => {
+          return `${radio.name}:${radio.value}`
+        }),
+      ).toEqual([
+        'full-text-figure-mode:none',
+        'full-text-figure-mode:descriptions',
+        'full-text-figure-mode:native_images',
+        'full-text-max-prompt-tokens:24000',
+        'full-text-max-prompt-tokens:48000',
+        'full-text-max-prompt-tokens:96000',
+        'full-text-chunk-mode:single_only',
+        'full-text-chunk-mode:chunked',
+      ])
+      expect(
+        radios.some((radio) => {
+          return radio.checked
+        }),
+      ).toBe(false)
+      expect(container.querySelector('[data-testid="full-text-strategy-errors"]')?.textContent).toContain(
+        'Full text needs a figure mode',
+      )
+
+      await submitCreateForm(container)
+
+      expect(mockState.createPayloads).toHaveLength(0)
+      expect(container.textContent).toContain('Full text needs a figure mode and a chunk policy')
+      browserFailures.assertNoFailures()
+    } finally {
+      browserFailures.dispose()
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+
+  test('explicit full-text choices show the derived strategy and are sent on create', async () => {
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      getFullTextCheckbox(container)?.click()
+      await waitForUpdates()
+      await clickRadio(container, 'full-text-figure-mode', 'none')
+      await clickRadio(container, 'full-text-max-prompt-tokens', '48000')
+      await clickRadio(container, 'full-text-chunk-mode', 'chunked')
+      await waitForUpdates()
+
+      expect(container.querySelector('[data-testid="full-text-strategy-label"]')?.textContent).toBe(
+        'mineru 4.0.12 / none / chunked 48k',
+      )
+      expect(container.querySelector('[data-testid="full-text-strategy-id"]')?.textContent).toBe('fts-0123456789abcdef')
+
+      await submitCreateForm(container)
+
+      const payload = mockState.createPayloads[0] as Record<string, unknown>
+
+      expect(mockState.createPayloads).toHaveLength(1)
+      expect(payload.useFulltext).toBe(true)
+      expect(payload.fullTextFigureMode).toBe('none')
+      expect(payload.fullTextChunkPolicy).toEqual({maxPromptTokens: 48_000, mode: 'chunked'})
+      expect(payload).not.toHaveProperty('useFulltextNoImages')
+    } finally {
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+
+  test('a figure mode this build cannot serve shows the server reason instead of a strategy', async () => {
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      getFullTextCheckbox(container)?.click()
+      await waitForUpdates()
+      await clickRadio(container, 'full-text-figure-mode', 'native_images')
+      await clickRadio(container, 'full-text-max-prompt-tokens', '24000')
+      await clickRadio(container, 'full-text-chunk-mode', 'single_only')
+      await waitForUpdates()
+
+      expect(container.querySelector('[data-testid="full-text-strategy-errors"]')?.textContent).toContain(
+        'Native images needs image transports',
+      )
+      expect(container.querySelector('[data-testid="full-text-strategy-label"]')).toBeNull()
+    } finally {
       queryClient.clear()
       dispose()
       container.remove()
