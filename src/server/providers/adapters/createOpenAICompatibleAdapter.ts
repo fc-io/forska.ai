@@ -11,6 +11,7 @@ import {
   type ProviderListedModel,
 } from '../providerTypes.ts'
 import {invokeOpenAIChatModel, listNativeOllamaModels, listOpenAIChatModels} from '../transports/openaiChatTransport.ts'
+import {addLocalServerModelLimits} from './localServerModelLimits.ts'
 import {
   beginApiKeyProviderAuth,
   beginSecretlessProviderAuth,
@@ -222,7 +223,11 @@ export const createOpenAICompatibleAdapter = (
     },
     kind: catalog.kind,
     listModels: async ({runtimeCredentials}) => {
-      return listCompatibleModels(runtimeCredentials)
+      return addLocalServerModelLimits({
+        baseURL: runtimeCredentials.baseURL,
+        models: await listCompatibleModels(runtimeCredentials),
+        providerKind: catalog.kind,
+      })
     },
     parseUsage: (usage) => {
       return usage

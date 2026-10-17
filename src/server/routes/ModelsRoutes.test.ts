@@ -186,6 +186,9 @@ const registerModuleMocks = () => {
       getProviderModels: state.getProviderModels,
       listSelectableProviderModels: state.listSelectableProviderModels,
       updateProviderModel: state.updateProviderModel,
+      updateProviderModelCapabilityOverrides: mock(async () => {
+        return null
+      }),
       upsertDiscoveredModels: mock(async () => {
         return []
       }),

@@ -1,3 +1,4 @@
+import {resolveProviderModelCapabilities} from '../../providers/providerModelCapabilities.ts'
 import {getWorkerUrlMode, normalizeWorkerUrls} from '../../providers/providerWorkerUtils.ts'
 import {getProviderCatalogEntry} from '../../services/providerCatalog.ts'
 
@@ -48,6 +49,21 @@ export const getPublicProviderConnection = <T extends {secretRef: string | null}
   const {secretRef: _secretRef, ...rest} = connection
 
   return rest
+}
+
+export const getProviderModelWithCapabilities = <
+  T extends {metadataJson: unknown; provider: string; remoteModelId: string | null},
+>(
+  model: T,
+) => {
+  return {
+    ...model,
+    capabilities: resolveProviderModelCapabilities({
+      metadataJson: model.metadataJson,
+      providerKind: model.provider,
+      remoteModelId: model.remoteModelId,
+    }),
+  }
 }
 
 export const normalizeDisplayName = (value: string): string => {

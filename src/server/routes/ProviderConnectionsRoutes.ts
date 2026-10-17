@@ -49,6 +49,7 @@ import {withErrorHandler} from '../utils/routeErrorHandler'
 import {
   getProviderConnectionConfig,
   getProviderConnectionLabel,
+  getProviderModelWithCapabilities,
   getPublicProviderConnection,
   getTrimmedValue,
 } from './providerRoutes/providerRoutesShared.ts'
@@ -239,6 +240,7 @@ const getProviderConnectionsPayload = async () => {
       return {
         ...getPublicProviderConnection(connection),
         effectiveMaxInflightRequests: getEffectiveMaxInflightRequests(connection),
+        models: connection.models.map(getProviderModelWithCapabilities),
         runtimeState: getProviderConnectionRuntimeState({connection, runtimeSummaries}),
         workerState: getProviderConnectionWorkerState({
           baseURL: connection.baseURL,
@@ -543,7 +545,14 @@ export const providerConnectionsRoutes = new Elysia()
         const runtimeCredentials = await resolveMatchedProviderRuntimeCredentials(connection)
         const models = await definition.listModels({connection, runtimeCredentials})
 
-        return {data: {models}, error: null}
+        return {
+          data: {
+            models: models.map((model) => {
+              return getProviderModelWithCapabilities({...model, provider: connection.providerKind})
+            }),
+          },
+          error: null,
+        }
       } catch (error) {
         set.status = 400
         return {data: null, error: error instanceof Error ? error.message : 'Provider model discovery failed'}

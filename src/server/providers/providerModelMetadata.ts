@@ -22,7 +22,12 @@ type ProviderModelMetadataSource = 'manual' | 'provider' | 'provider+runtime' | 
 
 type ProviderModelMetadata = {
   discovery: {
-    capabilities: {reasoningEfforts: string[]; supportedOptions: ProviderModelSupportedOptions}
+    capabilities: {
+      reasoningEfforts: string[]
+      supportedOptions: ProviderModelSupportedOptions
+      supportsImageInput: boolean | null
+      supportsPdfInput: boolean | null
+    }
     contextWindow: ProviderModelContextWindow
     identity: {
       displayName: string
@@ -48,6 +53,8 @@ const getNormalizedDiscoveryMetadata = (value: unknown): ProviderModelMetadata['
 const contextWindowKeys = [
   'contextLength',
   'context_length',
+  'maxContextLength',
+  'max_context_length',
   'contextWindow',
   'context_window',
   'maxInputTokens',
@@ -162,6 +169,67 @@ const getInputTokenWindowFromMetadata = (value: unknown): number | null => {
           return resolved ?? getPositiveInteger(record[key]) ?? getInputTokenWindowFromMetadata(record[key])
         }, null)
       : null
+}
+
+const getCapabilitySupportFlag = (value: unknown): boolean | null => {
+  const supported = getJsonRecord(value)?.supported
+
+  return typeof supported === 'boolean' ? supported : null
+}
+
+const getStringList = (value: unknown): string[] | null => {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => {
+        return typeof entry === 'string'
+      })
+    : null
+}
+
+const getInputModalities = (record: Record<string, unknown>): string[] | null => {
+  return getStringList(record.inputModalities) ?? getStringList(record.input_modalities)
+}
+
+const getLmStudioImageInputSupport = (type: unknown): boolean | null => {
+  return type === 'vlm' ? true : type === 'llm' ? false : null
+}
+
+const getImageInputSupportFromRecord = (record: Record<string, unknown>): boolean | null => {
+  const ollamaCapabilities = getStringList(record.capabilities)
+  const llamaCppVision = getJsonRecord(record.modalities)?.vision
+  const inputModalities = getInputModalities(record)
+
+  return (
+    getCapabilitySupportFlag(getJsonRecord(record.capabilities)?.image_input)
+    ?? (ollamaCapabilities ? ollamaCapabilities.includes('vision') : null)
+    ?? (typeof llamaCppVision === 'boolean' ? llamaCppVision : null)
+    ?? (inputModalities ? inputModalities.includes('image') : null)
+    ?? getLmStudioImageInputSupport(record.type)
+  )
+}
+
+const getPdfInputSupportFromRecord = (record: Record<string, unknown>): boolean | null => {
+  return getCapabilitySupportFlag(getJsonRecord(record.capabilities)?.pdf_input)
+}
+
+const getInputSupportFromMetadata = (
+  value: unknown,
+  getSupport: (record: Record<string, unknown>) => boolean | null,
+): boolean | null => {
+  const record = getJsonRecord(value)
+
+  return record ? getSupport(record) : null
+}
+
+const getMetadataWithoutCapabilityOverrides = (value: unknown): unknown => {
+  const record = getJsonRecord(value)
+
+  return record && 'capabilityOverrides' in record
+    ? Object.fromEntries(
+        Object.entries(record).filter(([key]) => {
+          return key !== 'capabilityOverrides'
+        }),
+      )
+    : value
 }
 
 const getReasoningEffortsFromEntry = (value: unknown): string[] => {
@@ -297,18 +365,32 @@ export const getProviderModelMetadataContextLength = (value: unknown): number | 
   return discoveryContextLength ?? getContextWindowFromMetadata(value).totalTokens
 }
 
-export const getProviderModelMetadataPromptTokenLimit = (
+export const getProviderModelMetadataDiscoveredContextWindow = (
   value: unknown,
-  reservedCompletionTokens: number,
-): number | null => {
-  const metadataRecord = getJsonRecord(value)
-  const discovery = getJsonRecord(metadataRecord?.discovery)
+): {inputTokens: number | null; totalTokens: number | null} => {
+  const scannedValue = getMetadataWithoutCapabilityOverrides(value)
+  const discovery = getJsonRecord(getJsonRecord(scannedValue)?.discovery)
   const contextWindow = getJsonRecord(discovery?.contextWindow)
-  const normalizedContextWindow = getContextWindowFromMetadata(value)
-  const inputTokens = getPositiveInteger(contextWindow?.inputTokens) ?? getInputTokenWindowFromMetadata(value)
-  const totalTokens = getPositiveInteger(contextWindow?.totalTokens) ?? normalizedContextWindow.totalTokens
+  const scannedContextWindow = getContextWindowFromMetadata(scannedValue)
 
-  return inputTokens ?? (totalTokens === null ? null : Math.max(0, totalTokens - Math.max(0, reservedCompletionTokens)))
+  return {
+    inputTokens:
+      getPositiveInteger(contextWindow?.inputTokens)
+      ?? getInputTokenWindowFromMetadata(scannedValue)
+      ?? scannedContextWindow.inputTokens,
+    totalTokens: getPositiveInteger(contextWindow?.totalTokens) ?? scannedContextWindow.totalTokens,
+  }
+}
+
+export const getProviderModelMetadataDiscoveredInputSupport = (
+  value: unknown,
+): {supportsImageInput: boolean | null; supportsPdfInput: boolean | null} => {
+  const capabilities = getJsonRecord(getJsonRecord(getJsonRecord(value)?.discovery)?.capabilities)
+
+  return {
+    supportsImageInput: typeof capabilities?.supportsImageInput === 'boolean' ? capabilities.supportsImageInput : null,
+    supportsPdfInput: typeof capabilities?.supportsPdfInput === 'boolean' ? capabilities.supportsPdfInput : null,
+  }
 }
 
 export const getProviderModelMetadataReasoningEfforts = (value: unknown): string[] => {
@@ -373,6 +455,12 @@ export const getNormalizedProviderModelMetadata = ({
           ]),
         ),
         supportedOptions: getListedModelSupportedOptions(listedModel),
+        supportsImageInput:
+          getInputSupportFromMetadata(rawMetadata, getImageInputSupportFromRecord)
+          ?? getInputSupportFromMetadata(runtimeMetadata?.raw ?? null, getImageInputSupportFromRecord),
+        supportsPdfInput:
+          getInputSupportFromMetadata(rawMetadata, getPdfInputSupportFromRecord)
+          ?? getInputSupportFromMetadata(runtimeMetadata?.raw ?? null, getPdfInputSupportFromRecord),
       },
       contextWindow: getContextWindow({rawMetadata, runtimeMetadata: runtimeMetadata ?? null}),
       identity: {
