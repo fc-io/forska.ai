@@ -120,6 +120,13 @@ import {
 } from '../services/judgmentJobDeleteService.ts'
 import {getJudgmentJobFullTextClaimError} from '../services/judgmentJobFullTextPreconditions.ts'
 import {
+  assertProjectFullTextJudgable,
+  getProjectFullTextGate,
+  getProjectFullTextGatesByProjectId,
+  type ProjectFullTextGate,
+} from '../services/judgmentJobFullTextGate.ts'
+import {assertProjectFullTextArticlesMatchStrategy} from '../services/judgmentJobFullTextReconversion.ts'
+import {
   assertModelContextWindowResolvable,
   getJudgmentJobModelContextWindowClaimError,
   getModelContextWindowErrorForRow,
@@ -1596,19 +1603,30 @@ export const getProjectMartFreshnessState = async (
   }
 }
 
-const assertJudgmentJobFullTextStrategyCanResume = ({
+const getFullTextStrategyReference = (labelsById: Map<string, string>, strategyId: string): string => {
+  const label = labelsById.get(strategyId) ?? strategyId
+
+  return label === strategyId ? strategyId : `${label} (${strategyId})`
+}
+
+const assertJudgmentJobFullTextStrategyCanResume = async ({
   jobId,
   projectFullTextStrategyId,
 }: {
   jobId: string
   projectFullTextStrategyId: string
-}): void => {
+}): Promise<void> => {
   const storedFullTextStrategyId = getJudgmentJobSqliteService().getStoredFullTextStrategyId(jobId)
 
   if (storedFullTextStrategyId !== null && storedFullTextStrategyId !== projectFullTextStrategyId) {
+    const labelsById = await getFullTextStrategyLabelsById(getAppDatabaseService(), [
+      storedFullTextStrategyId,
+      projectFullTextStrategyId,
+    ])
+
     throw new HttpError(
       409,
-      `The project's full-text strategy changed since this job started (${storedFullTextStrategyId} → ${projectFullTextStrategyId}). Start the job clean to judge with the new strategy.`,
+      `The project's full-text strategy changed since this job started (${getFullTextStrategyReference(labelsById, storedFullTextStrategyId)} → ${getFullTextStrategyReference(labelsById, projectFullTextStrategyId)}). Start the job clean to judge with the new strategy.`,
     )
   }
 }
@@ -2237,6 +2255,18 @@ const getJudgmentJobModelContextWindowApi = (row: Parameters<typeof getModelCont
 const assertProjectModelContextWindow = async (projectId: string): Promise<void> => {
   return assertModelContextWindowResolvable(await getProjectModelId(projectId))
 }
+
+const assertProjectFullTextCanJudge = async (projectId: string): Promise<void> => {
+  const gate = await assertProjectFullTextJudgable(projectId)
+
+  return assertProjectFullTextArticlesMatchStrategy({projectId, strategy: gate.strategy})
+}
+
+const getProjectFullTextGateApi = (gate: ProjectFullTextGate): ProjectFullTextGate => {
+  return {errors: gate.errors, warnings: gate.warnings}
+}
+
+const emptyProjectFullTextGateApi: ProjectFullTextGate = {errors: [], warnings: []}
 
 const getJudgingRuntimeReason = async (): Promise<string | null> => {
   if (shouldCurrentServerRunJudgingLoops()) {
@@ -3160,6 +3190,7 @@ export const judgmentsJobsRoutes = new Elysia()
       await assertJudgingRuntimeCanRun()
       await assertProjectRuntimeModelMatch(body.projectId)
       await assertProjectModelContextWindow(body.projectId)
+      await assertProjectFullTextCanJudge(body.projectId)
 
       const [job] = await getAppDatabaseService().queryJson<{
         id: string
@@ -3448,6 +3479,7 @@ export const judgmentsJobsRoutes = new Elysia()
             providerHealth,
             admittedArticleCount,
             fullTextStrategyLabelsById,
+            fullTextGate,
           ] = await Promise.all([
             sqliteHealthPromise,
             leaseMetadataPromise,
@@ -3471,6 +3503,7 @@ export const judgmentsJobsRoutes = new Elysia()
             getProviderHealthForReadableRoute({db, jobId: job.id}),
             admittedArticleCountPromise,
             getFullTextStrategyLabelsById(db, [job.fullTextStrategyId]),
+            getProjectFullTextGate(job.projectId, db),
           ])
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
@@ -3516,6 +3549,7 @@ export const judgmentsJobsRoutes = new Elysia()
           return {
             ...job,
             admittedArticleCount,
+            fullTextGate: getProjectFullTextGateApi(fullTextGate),
             fullTextStrategyLabel: fullTextStrategyLabelsById.get(job.fullTextStrategyId) ?? job.fullTextStrategyId,
             leaseMetadata,
             promptStats,
@@ -3722,6 +3756,12 @@ export const judgmentsJobsRoutes = new Elysia()
         WHERE p.archived = FALSE
         ORDER BY jj.created_at ASC
       `)
+        const fullTextGatesByProjectId = await getProjectFullTextGatesByProjectId(
+          jobs.map((job) => {
+            return job.projectId
+          }),
+          db,
+        )
         const jobsWithStopFields = jobs.map(
           ({
             modelDisplayName,
@@ -3734,6 +3774,9 @@ export const judgmentsJobsRoutes = new Elysia()
             return {
               ...job,
               ...getJudgmentJobStopFields(job),
+              fullTextGate: getProjectFullTextGateApi(
+                fullTextGatesByProjectId.get(job.projectId) ?? emptyProjectFullTextGateApi,
+              ),
               modelContextWindow: getJudgmentJobModelContextWindowApi({
                 displayName: modelDisplayName,
                 metadataJson: modelMetadataJson,
@@ -4009,6 +4052,7 @@ export const judgmentsJobsRoutes = new Elysia()
         const {job, projectFullTextStrategyId, projectModelId} = await getJobContext({jobId: params.id})
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
         await assertModelContextWindowResolvable(projectModelId)
+        await assertProjectFullTextCanJudge(job.projectId)
 
         if (!sqliteService.hasJob(params.id)) {
           await sqliteService.initializeJob(params.id)
@@ -4041,7 +4085,7 @@ export const judgmentsJobsRoutes = new Elysia()
         })
 
         clearTransientQuarantine = clearTransientQuarantine || preflightResult.clearTransientQuarantine
-        assertJudgmentJobFullTextStrategyCanResume({jobId: params.id, projectFullTextStrategyId})
+        await assertJudgmentJobFullTextStrategyCanResume({jobId: params.id, projectFullTextStrategyId})
         await sqliteService.fillMissingFullTextStrategyId(params.id, projectFullTextStrategyId)
         await setJudgmentJobFullTextStrategyId(params.id, projectFullTextStrategyId)
       }
@@ -4098,6 +4142,7 @@ export const judgmentsJobsRoutes = new Elysia()
       await assertJudgmentJobStopConditionsAllowResume({jobId: params.id, update: {}})
       await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
       await assertModelContextWindowResolvable(projectModelId)
+      await assertProjectFullTextCanJudge(job.projectId)
       await resetJudgmentJobLocalSqliteState({jobId: params.id, storageState: job.storageState})
       await sqliteService.initializeJob(params.id)
       await assertJudgmentJobCanRunSqlitePreflight({jobId: params.id, quarantineReason: null, storageState: 'active'})

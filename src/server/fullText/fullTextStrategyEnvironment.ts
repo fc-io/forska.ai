@@ -13,14 +13,16 @@ import {
 
 type ConversionModelVersionRow = {modelLabel: string | null; serverVersion: string | null}
 
+type FullTextStrategyEnvironmentRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+
 const isFullTextStrategyConverterKind = (
   providerKind: string,
 ): providerKind is FullTextConversionModelStrategyInputs['converterKind'] => {
   return providerKind === 'mineru' || providerKind === 'docling'
 }
 
-const getConversionModelVersionRow = async (modelId: string) => {
-  const [row] = await getAppDatabaseService().queryJson<ConversionModelVersionRow>(`
+const getConversionModelVersionRow = async (modelId: string, runner: FullTextStrategyEnvironmentRunner) => {
+  const [row] = await runner.queryJson<ConversionModelVersionRow>(`
     SELECT
       COALESCE(m.display_name, m.remote_model_id, m.name) AS modelLabel,
       NULLIF(TRIM(json_extract_string(m.metadata_json, '$.converter.serverVersion')), '') AS serverVersion
@@ -32,35 +34,38 @@ const getConversionModelVersionRow = async (modelId: string) => {
   return row ?? null
 }
 
-export const getFullTextConversionModelStrategyInputs =
-  async (): Promise<FullTextConversionModelStrategyInputs | null> => {
-    const config = await getUserConfigQueryService().getFullTextConversionModelConfig()
-    const providerKind = config?.providerKind ?? null
-    const versionRow = config ? await getConversionModelVersionRow(config.modelId) : null
+export const getFullTextConversionModelStrategyInputs = async (
+  runner: FullTextStrategyEnvironmentRunner = getAppDatabaseService(),
+): Promise<FullTextConversionModelStrategyInputs | null> => {
+  const config = await getUserConfigQueryService().getFullTextConversionModelConfig(runner)
+  const providerKind = config?.providerKind ?? null
+  const versionRow = config ? await getConversionModelVersionRow(config.modelId, runner) : null
 
-    return config && providerKind && isFullTextStrategyConverterKind(providerKind)
-      ? {
-          converterKind: providerKind,
-          converterOptionsHash: getConverterOptionsHash(getFullTextConverter(providerKind).options),
-          converterVersion: versionRow?.serverVersion ?? null,
-          modelLabel: versionRow?.modelLabel ?? config.modelName,
-        }
-      : null
-  }
+  return config && providerKind && isFullTextStrategyConverterKind(providerKind)
+    ? {
+        converterKind: providerKind,
+        converterOptionsHash: getConverterOptionsHash(getFullTextConverter(providerKind).options),
+        converterVersion: versionRow?.serverVersion ?? null,
+        modelLabel: versionRow?.modelLabel ?? config.modelName,
+      }
+    : null
+}
 
-export const getFigureDescriptionStrategyInputs = async (): Promise<
-  FullTextStrategyEnvironment['figureDescription']
-> => {
-  const config = await getUserConfigQueryService().getFigureDescriptionModelConfig()
+export const getFigureDescriptionStrategyInputs = async (
+  runner: FullTextStrategyEnvironmentRunner = getAppDatabaseService(),
+): Promise<FullTextStrategyEnvironment['figureDescription']> => {
+  const config = await getUserConfigQueryService().getFigureDescriptionModelConfig(runner)
 
   return config ? {modelId: config.modelId, promptVersion: FIGURE_DESCRIPTION_PROMPT_VERSION} : null
 }
 
-export const getFullTextStrategyEnvironment = async (): Promise<FullTextStrategyEnvironment> => {
+export const getFullTextStrategyEnvironment = async (
+  runner: FullTextStrategyEnvironmentRunner = getAppDatabaseService(),
+): Promise<FullTextStrategyEnvironment> => {
   return {
     canonicalTextVersion: CANONICAL_TEXT_VERSION,
-    conversionModel: await getFullTextConversionModelStrategyInputs(),
-    figureDescription: await getFigureDescriptionStrategyInputs(),
+    conversionModel: await getFullTextConversionModelStrategyInputs(runner),
+    figureDescription: await getFigureDescriptionStrategyInputs(runner),
     imageTransportVersion: IMAGE_TRANSPORT_VERSION,
   }
 }

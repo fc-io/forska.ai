@@ -159,7 +159,8 @@ beforeAll(async () => {
   await getDatabase().run(`
     INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, metadata_json)
     VALUES
-      ('${judgeModelId}', '${judgeConnectionId}', 'judge', 'judge', 'Judge', 'manual', TRUE, NULL),
+      ('${judgeModelId}', '${judgeConnectionId}', 'judge', 'judge', 'Judge', 'manual', TRUE,
+        '{"discovery":{"contextWindow":{"inputTokens":131072,"outputTokens":null,"totalTokens":131072}}}'),
       ('${mineruModelId}', '${mineruConnectionId}', 'mineru-standard', 'mineru-standard', 'MinerU standard', 'provider', TRUE,
         '{"converter":{"kind":"mineru","serverVersion":"4.0.12","tier":"standard"}}'),
       ('${mineruUnversionedModelId}', '${mineruConnectionId}', 'mineru-manual', 'mineru-manual', 'MinerU manual', 'manual', TRUE, NULL)
@@ -367,7 +368,7 @@ test('the preview derives the strategy and reports the existing judgments under 
       ('fts-judgment-other', 'fts-article-1', 'fts-prompt', '${judgeModelId}', FALSE, FALSE, TRUE, FALSE, 'fts-0123456789abcdef', TRUE, 'no')
   `)
 
-  const response = await requestJson('/api/projects/full-text-strategy-preview', 'POST', {
+  const response = await requestJson('/api/projects/full-text-validation', 'POST', {
     fullTextChunkPolicy: chunkPolicy,
     fullTextFigureMode: 'none',
     projectId: 'fts-preview-project',
@@ -386,8 +387,8 @@ test('the preview derives the strategy and reports the existing judgments under 
 })
 
 test('the preview lists every missing input and reports no full text when it is off', async () => {
-  const missing = await requestJson('/api/projects/full-text-strategy-preview', 'POST', {useFulltext: true})
-  const off = await requestJson('/api/projects/full-text-strategy-preview', 'POST', {useFulltext: false})
+  const missing = await requestJson('/api/projects/full-text-validation', 'POST', {useFulltext: true})
+  const off = await requestJson('/api/projects/full-text-validation', 'POST', {useFulltext: false})
 
   expect((missing.json as PreviewResponse).data).toMatchObject({strategyId: null, strategyLabel: null})
   expect((missing.json as PreviewResponse).data.errors).toHaveLength(2)
@@ -453,4 +454,142 @@ test('a full-text strategy change marks comparisons linking the project stale', 
     {comparisonProjectId: 'fts-stale-linked', servingStatus: 'stale'},
     {comparisonProjectId: 'fts-stale-unlinked', servingStatus: 'ready'},
   ])
+})
+
+type ValidationResponse = {data: PreviewResponse['data'] & {recordStrategyOnSave: boolean; warnings: string[]}}
+
+const smallJudgeModelId = 'fts-small-judge-model'
+
+const insertSmallJudgeModel = async () => {
+  await getDatabase().run(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, metadata_json)
+    VALUES ('${smallJudgeModelId}', '${judgeConnectionId}', 'small-judge', 'small-judge', 'Small judge', 'manual', TRUE,
+      '{"discovery":{"contextWindow":{"inputTokens":32768,"outputTokens":null,"totalTokens":32768}}}')
+    ON CONFLICT (id) DO NOTHING
+  `)
+}
+
+const insertExplicitFullTextProject = async ({id, jobStatus}: {id: string; jobStatus: string | null}) => {
+  await insertProject({fullTextStrategyId: 'fts-0000000000000000', id, useFulltext: true, useFulltextNoImages: false})
+  await getDatabase().run(`
+    UPDATE app.project SET full_text_chunk_policy = '${JSON.stringify(chunkPolicy)}'::JSON WHERE id = '${id}'
+  `)
+
+  if (jobStatus) {
+    await getDatabase().run(`
+      INSERT INTO app.judgment_job (id, project_id, status) VALUES ('${id}-job', '${id}', '${jobStatus}')
+    `)
+  }
+}
+
+test('create with a model whose window is below the chunk prompt size is a 400 with both numbers', async () => {
+  await setConversionModel(mineruModelId)
+  await insertSmallJudgeModel()
+
+  const response = await requestJson('/api/projects', 'POST', {
+    fullTextChunkPolicy: chunkPolicy,
+    fullTextFigureMode: 'none',
+    modelId: smallJudgeModelId,
+    name: 'Small window',
+    useFulltext: true,
+  })
+
+  expect(response.status).toBe(400)
+  expect(response.text).toContain(
+    "Model Small judge (sglang) accepts 32,768 prompt tokens, fewer than the chunk policy's 48,000-token prompt size.",
+  )
+})
+
+test('create with native images and a model without verified image input lists every error', async () => {
+  await setConversionModel(mineruModelId)
+
+  const response = await requestJson('/api/projects', 'POST', {
+    fullTextChunkPolicy: chunkPolicy,
+    fullTextFigureMode: 'native_images',
+    modelId: judgeModelId,
+    name: 'Native images',
+    useFulltext: true,
+  })
+
+  expect(response.status).toBe(400)
+  expect(response.text).toContain('Figure mode Native images needs image transports')
+  expect(response.text).toContain('Model Judge (sglang) has no verified image input.')
+})
+
+test('the validation endpoint returns gate errors for the form model and the PDF-to-text health warning', async () => {
+  await setConversionModel(mineruModelId)
+  await insertSmallJudgeModel()
+  await getDatabase().run(`
+    UPDATE app.provider_connection SET last_checked_at = current_timestamp, last_error = 'connect ECONNREFUSED'
+    WHERE id = '${mineruConnectionId}'
+  `)
+
+  const response = await requestJson('/api/projects/full-text-validation', 'POST', {
+    fullTextChunkPolicy: chunkPolicy,
+    fullTextFigureMode: 'none',
+    modelId: smallJudgeModelId,
+    useFulltext: true,
+  })
+  const validation = (response.json as ValidationResponse).data
+
+  await getDatabase().run(`UPDATE app.provider_connection SET last_error = NULL WHERE id = '${mineruConnectionId}'`)
+
+  expect(response.status).toBe(200)
+  expect(validation.errors).toEqual([
+    "Model Small judge (sglang) accepts 32,768 prompt tokens, fewer than the chunk policy's 48,000-token prompt size. Choose a smaller prompt size or another model, or correct its context window on the Models page.",
+  ])
+  expect(validation.warnings).toHaveLength(1)
+  expect(validation.warnings[0]).toContain('PDF-to-text model MinerU standard: The last health check of MinerU failed')
+  expect(validation.warnings[0]).toContain(
+    'connect ECONNREFUSED. Conversion will not run until the server is reachable.',
+  )
+  expect(validation.recordStrategyOnSave).toBe(false)
+})
+
+test('with a paused job the edit page records a drifted strategy on save', async () => {
+  await setConversionModel(mineruModelId)
+  await insertExplicitFullTextProject({id: 'fts-record-paused', jobStatus: 'paused'})
+
+  const validationResponse = await requestJson('/api/projects/full-text-validation', 'POST', {
+    fullTextChunkPolicy: chunkPolicy,
+    fullTextFigureMode: 'none',
+    modelId: judgeModelId,
+    projectId: 'fts-record-paused',
+    useFulltext: true,
+  })
+  const validation = (validationResponse.json as ValidationResponse).data
+  const recordResponse = await requestJson('/api/projects/fts-record-paused/edit', 'PATCH', {
+    name: 'Recorded',
+    recordCurrentFullTextStrategy: true,
+  })
+
+  expect(validation.recordStrategyOnSave).toBe(true)
+  expect(validation.warnings).toEqual([
+    `Full-text settings changed since the project was saved: it records fts-0000000000000000 (fts-0000000000000000), current settings resolve to mineru 4.0.12 / none / chunked 48k (${validation.strategyId}). Saving this page records the new strategy; then start the judgment job clean.`,
+  ])
+  expect(recordResponse.status).toBe(200)
+  expect((await getStoredProject('fts-record-paused'))?.fullTextStrategyId).toBe(validation.strategyId)
+})
+
+test('with a running job recording the strategy is a 409 and the stored strategy stays', async () => {
+  await setConversionModel(mineruModelId)
+  await insertExplicitFullTextProject({id: 'fts-record-running', jobStatus: 'running'})
+
+  const validationResponse = await requestJson('/api/projects/full-text-validation', 'POST', {
+    fullTextChunkPolicy: chunkPolicy,
+    fullTextFigureMode: 'none',
+    modelId: judgeModelId,
+    projectId: 'fts-record-running',
+    useFulltext: true,
+  })
+  const validation = (validationResponse.json as ValidationResponse).data
+  const recordResponse = await requestJson('/api/projects/fts-record-running/edit', 'PATCH', {
+    recordCurrentFullTextStrategy: true,
+  })
+
+  expect(validation.recordStrategyOnSave).toBe(false)
+  expect(validation.warnings[0]).toContain('Pause the judgment job, then save this page to record the new strategy.')
+  expect(recordResponse.status).toBe(409)
+  expect(recordResponse.text).toContain('Pause the judgment job before recording a new full-text strategy.')
+  expect((await getStoredProject('fts-record-running'))?.fullTextStrategyId).toBe('fts-0000000000000000')
 })

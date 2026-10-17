@@ -34,6 +34,8 @@ type FullTextConversionModelConfigRow = {
   remoteModelId: string | null
 }
 
+type UserConfigQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+
 type FullTextConversionModelAvailabilityRow = Pick<
   FullTextConversionModelConfigRow,
   'modelId' | 'providerConfigJson' | 'providerKind'
@@ -302,13 +304,10 @@ const getUnpaywallEmail = async (): Promise<string | null> => {
   return normalized === '' ? null : normalized
 }
 
-const getFullTextConversionModelConfig = async (): Promise<{
-  baseURL: string
-  modelId: string
-  modelName: string
-  providerKind: string
-} | null> => {
-  const [row] = await getAppDatabaseService().queryJson<FullTextConversionModelConfigRow>(`
+const getFullTextConversionModelConfig = async (
+  runner: UserConfigQueryRunner = getAppDatabaseService(),
+): Promise<{baseURL: string; modelId: string; modelName: string; providerKind: string} | null> => {
+  const [row] = await runner.queryJson<FullTextConversionModelConfigRow>(`
     SELECT
       m.id AS modelId,
       COALESCE(m.display_name, m.remote_model_id, m.name) AS displayName,
@@ -344,8 +343,8 @@ const getFullTextConversionModelConfig = async (): Promise<{
     : null
 }
 
-const getFigureDescriptionModelConfig = async () => {
-  return getStoredFigureDescriptionModelConfig({userConfigWhereClause: localUserConfigAliasWhereClause})
+const getFigureDescriptionModelConfig = async (runner?: UserConfigQueryRunner) => {
+  return getStoredFigureDescriptionModelConfig({runner, userConfigWhereClause: localUserConfigAliasWhereClause})
 }
 
 export const userConfigQueryService = {
