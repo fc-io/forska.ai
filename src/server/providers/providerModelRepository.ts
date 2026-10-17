@@ -26,6 +26,7 @@ import {
 import {
   carryProviderModelCapabilityOverrides,
   type ProviderModelCapabilityOverrides,
+  refreshProviderModelDiscovery,
   setProviderModelCapabilityOverrides,
 } from './providerModelCapabilities.ts'
 import {
@@ -348,6 +349,33 @@ const hasReferencedProviderModel = async ({
   return (usage?.projectCount ?? 0) > 0 || (usage?.judgmentCount ?? 0) > 0
 }
 
+const refreshReferencedProviderModelDiscovery = async ({
+  databaseRunner,
+  existingRow,
+  nextMetadataJson,
+}: {
+  databaseRunner: DatabaseRunner
+  existingRow: ProviderModelRow
+  nextMetadataJson: unknown
+}): Promise<ProviderModelRow[]> => {
+  const previousMetadataJson = getProviderModelRecordFromRow(existingRow).metadataJson
+  const refreshedMetadataJson = refreshProviderModelDiscovery({nextMetadataJson, previousMetadataJson})
+
+  if (JSON.stringify(refreshedMetadataJson) === JSON.stringify(previousMetadataJson)) {
+    return [existingRow]
+  }
+
+  await databaseRunner.run(`
+    UPDATE app.model
+    SET metadata_json = ${getJsonSqlLiteral(refreshedMetadataJson)},
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(existingRow.id)}
+  `)
+  const refreshedRow = await getProviderModelRowByIdWithRunner(databaseRunner, existingRow.id)
+
+  return refreshedRow ? [refreshedRow] : [existingRow]
+}
+
 const upsertDiscoveredProviderModelsRecursively = async ({
   connection,
   databaseRunner,
@@ -408,7 +436,11 @@ const upsertDiscoveredProviderModelsRecursively = async ({
   })
   const [saved] =
     shouldPreserveReferencedModel && existingRow
-      ? [existingRow]
+      ? await refreshReferencedProviderModelDiscovery({
+          databaseRunner,
+          existingRow,
+          nextMetadataJson: persistedMetadataJson,
+        })
       : await queryProviderModelReturnRows({
           databaseRunner,
           providerConnectionId: connection.id,
