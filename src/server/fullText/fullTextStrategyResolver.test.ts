@@ -37,7 +37,7 @@ test('a complete selection resolves to the strategy built from the environment a
     figureDescriptionPromptVersion: null,
     figureMode: 'none',
     imageTransportVersion: null,
-    promptLayoutVersion: 'layout-v1',
+    promptLayoutVersion: 'layout-v2',
     tokenizerId: 'o200k_base',
   })
   expect(resolution.strategy?.id).toMatch(/^fts-[0-9a-f]{16}$/)

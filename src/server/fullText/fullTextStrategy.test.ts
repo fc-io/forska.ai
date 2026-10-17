@@ -44,7 +44,7 @@ const frozenStableJson =
 
 test('the shipped tokenizer and prompt layout constants are frozen', () => {
   expect(FULL_TEXT_TOKENIZER_ID).toBe('o200k_base')
-  expect(FULL_TEXT_PROMPT_LAYOUT_VERSION).toBe('layout-v1')
+  expect(FULL_TEXT_PROMPT_LAYOUT_VERSION).toBe('layout-v2')
   expect(FULL_TEXT_STRATEGY_NONE).toBe('fts-none')
   expect(FULL_TEXT_STRATEGY_LEGACY).toBe('fts-legacy-v0')
 })
