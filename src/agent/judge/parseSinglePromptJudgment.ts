@@ -222,3 +222,17 @@ export const parseSinglePromptJudgment = (response: string, promptType: string |
   schema.assert(data)
   return data as SinglePromptJudgmentResult
 }
+
+export type FullTextChunkJudgmentResult = SinglePromptJudgmentResult & {confidence: number}
+
+const fullTextChunkConfidenceSchema = arktype({confidence: '0 <= number <= 1'})
+
+export const parseFullTextChunkJudgment = (
+  response: string,
+  promptType: string | null,
+): FullTextChunkJudgmentResult => {
+  const judgment = parseSinglePromptJudgment(response, promptType)
+  const confidence = fullTextChunkConfidenceSchema.assert(judgment).confidence
+
+  return {answer: judgment.answer, confidence, explanation: judgment.explanation, quotes: judgment.quotes}
+}
