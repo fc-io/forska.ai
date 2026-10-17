@@ -4466,9 +4466,12 @@ test('project transfer set-based commit preserves judgment ids and counts from c
     newJudgmentRow: {
       articleId: string
       answeredOriginal: string | null
+      chunkCount: number | null
+      chunkPlanHash: string | null
       confidenceOriginal: number
       deleteGeneration: number
       deletedAt: string | null
+      fullTextMode: string | null
       fullTextStrategyId: string
       id: string
       isAnswered: boolean
@@ -4609,7 +4612,10 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       answeredOriginal: 'new-answer-staged',
       answeredOriginalAsArray: ['new-answer-staged'],
       explanation: 'new-answer-staged explanation',
+      chunkCount: 4,
+      chunkPlanHash: 'chunk-plan-hash-set-writer',
       contentSettings: {...settings, useMetadata: true},
+      fullTextMode: 'chunked',
       fullTextStrategyId: fullTextStrategy.id,
       quotes: [{quote: 'new-answer-staged quote'}],
       systemPromptVariant: 'screening_v1',
@@ -4863,7 +4869,7 @@ test('project transfer set-based commit preserves judgment ids and counts from c
       })
     })
     const targetNewArticleId = writeResult.articleIdBySourceId['source-decision-new']
-    const [newJudgmentRow] = await database.queryJson("SELECT id, article_id AS articleId, project_id AS projectId, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, is_answered AS isAnswered, answered_original AS answeredOriginal, confidence_original AS confidenceOriginal, delete_generation::INTEGER AS deleteGeneration, deleted_at AS deletedAt, system_prompt_variant AS systemPromptVariant, use_metadata AS useMetadata, full_text_strategy_id AS fullTextStrategyId FROM app.judgment WHERE article_id = '" + targetNewArticleId + "'")
+    const [newJudgmentRow] = await database.queryJson("SELECT id, article_id AS articleId, project_id AS projectId, snapshot_project_id AS snapshotProjectId, snapshot_project_model_name AS snapshotProjectModelName, is_answered AS isAnswered, answered_original AS answeredOriginal, confidence_original AS confidenceOriginal, delete_generation::INTEGER AS deleteGeneration, deleted_at AS deletedAt, system_prompt_variant AS systemPromptVariant, use_metadata AS useMetadata, full_text_strategy_id AS fullTextStrategyId, full_text_mode AS fullTextMode, chunk_count AS chunkCount, chunk_plan_hash AS chunkPlanHash FROM app.judgment WHERE article_id = '" + targetNewArticleId + "'")
     const [reusedJudgmentRow] = await database.queryJson("SELECT snapshot_project_model_name AS snapshotProjectModelName, system_prompt_variant AS systemPromptVariant, use_metadata AS useMetadata, full_text_strategy_id AS fullTextStrategyId FROM app.judgment WHERE id = 'target-judgment-reuse'")
     const [newAssessmentRow] = await database.queryJson("SELECT judgment_id AS judgmentId, assessment_is_correct AS assessmentIsCorrect FROM app.judgment_assessment WHERE judgment_id = '" + newJudgmentRow.id + "'")
     const [reusedAssessmentCount] = await database.queryJson("SELECT COUNT(*)::INTEGER AS count FROM app.judgment_assessment WHERE judgment_id = 'target-judgment-reuse'")
@@ -4890,7 +4896,10 @@ test('project transfer set-based commit preserves judgment ids and counts from c
 
   expect(result.newJudgmentRow).toMatchObject({
     answeredOriginal: 'new-answer-staged',
+    chunkCount: 4,
+    chunkPlanHash: 'chunk-plan-hash-set-writer',
     confidenceOriginal: 50,
+    fullTextMode: 'chunked',
     deleteGeneration: 0,
     deletedAt: null,
     isAnswered: true,
@@ -5910,6 +5919,12 @@ test('project transfer commit writer stores use_metadata from the package and re
 test('project transfer commit writer stores the full-text strategy, upserts its definition and maps old packages to legacy', () => {
   const result = runCommitWriterScript<{
     deltaJudgmentIds: string[]
+    executionRows: Array<{
+      answeredOriginal: string
+      chunkCount: number | null
+      chunkPlanHash: string | null
+      fullTextMode: string | null
+    }>
     judgmentRows: Array<{answeredOriginal: string; articleId: string; fullTextStrategyId: string}>
     oldProjectRow: {
       fullTextChunkPolicy: string | null
@@ -6076,6 +6091,9 @@ test('project transfer commit writer stores the full-text strategy, upserts its 
         judgments: [
           {
             ...getJudgmentPayload('source-strategy-judgment', 'source-strategy-article', 'strategy-answer'),
+            chunkCount: 2,
+            chunkPlanHash: 'chunk-plan-hash-row-writer',
+            fullTextMode: 'chunked',
             fullTextStrategyId: strategy.id,
           },
           getJudgmentPayload('source-old-package-judgment', 'source-old-article', 'old-package-answer'),
@@ -6121,9 +6139,11 @@ test('project transfer commit writer stores the full-text strategy, upserts its 
     const judgmentRows = await database.queryJson("SELECT id, article_id AS articleId, answered_original AS answeredOriginal, full_text_strategy_id AS fullTextStrategyId FROM app.judgment WHERE prompt_id = 'target-prompt-strategy' ORDER BY article_id ASC, answered_original ASC")
     const strategyRows = await database.queryJson("SELECT id, label, CAST(inputs AS VARCHAR) AS inputs FROM app.full_text_strategy ORDER BY id ASC")
     const deltaRows = await database.queryJson("SELECT judgment_id AS judgmentId FROM app.review_change_delta WHERE change_kind = 'judgment.llm.created' AND project_id = '" + writeResult.projectId + "' ORDER BY judgment_id ASC")
+    const executionRows = await database.queryJson("SELECT answered_original AS answeredOriginal, full_text_mode AS fullTextMode, chunk_count AS chunkCount, chunk_plan_hash AS chunkPlanHash FROM app.judgment WHERE prompt_id = 'target-prompt-strategy' ORDER BY answered_original ASC")
 
     console.log(JSON.stringify({
       deltaJudgmentIds: deltaRows.map((row) => row.judgmentId),
+      executionRows,
       judgmentRows: judgmentRows.map(({answeredOriginal, articleId, fullTextStrategyId}) => ({answeredOriginal, articleId, fullTextStrategyId})),
       oldProjectRow: await getProjectRow(oldWriteResult.projectId),
       projectRow: await getProjectRow(writeResult.projectId),
@@ -6156,6 +6176,16 @@ test('project transfer commit writer stores the full-text strategy, upserts its 
     figureMode: 'none',
   })
   expect(result.deltaJudgmentIds).toEqual([result.strategyJudgmentId])
+  expect(result.executionRows).toEqual([
+    {answeredOriginal: 'existing-legacy', chunkCount: null, chunkPlanHash: null, fullTextMode: null},
+    {answeredOriginal: 'old-package-answer', chunkCount: null, chunkPlanHash: null, fullTextMode: null},
+    {
+      answeredOriginal: 'strategy-answer',
+      chunkCount: 2,
+      chunkPlanHash: 'chunk-plan-hash-row-writer',
+      fullTextMode: 'chunked',
+    },
+  ])
 })
 
 test('project transfer analysis and commit writer agree on judgments that differ only in full-text strategy', () => {
