@@ -1821,7 +1821,7 @@ test('project-transfer judgment input signatures are stable across database id r
     getProjectTransferJudgmentAnalysisInputSignatureDigest(signature),
   )
   expect(getProjectTransferJudgmentAnalysisInputSignatureDigest(signature)).toBe(
-    '72b49c813ca49f460c680e19d266ffcaa615298a969b3426ad87adbed7c827af',
+    '24fa980be82475b5cc6c843b8c553720b6c13eed0581cfabcf1d6c4b8007d6b2',
   )
   expect(metadataOffSignature).toEqual(signature)
   expect(Object.hasOwn(signature.contentSettings, 'useMetadata')).toBe(false)

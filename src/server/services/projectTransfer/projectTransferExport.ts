@@ -6,10 +6,8 @@ import {dirname, join} from 'node:path'
 
 import {MAX_COMPLETION_TOKENS} from '../../../agent/judge.ts'
 import {getArticleMetadataPromptText} from '../../../agent/judge/articleMetadataPrompt.ts'
-import {
-  getSinglePromptEvidenceSystemPromptForArticle,
-  getSinglePromptSystemPromptForArticle,
-} from '../../../agent/judge/judgePromptSelection.ts'
+import {getSinglePromptSystemPromptForArticle} from '../../../agent/judge/judgePromptSelection.ts'
+import {getJudgmentFullTextExecution} from '../../../agent/judge/judgmentFullTextExecution.ts'
 import {
   defaultSystemPromptVariant,
   getSystemPromptVariant,
@@ -26,7 +24,6 @@ import {
 import {getProviderModelContextLimits} from '../../providers/providerModelCapabilities.ts'
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {getProviderRegistryEntry} from '../../providers/providerRegistry.ts'
-import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {AppQueryDatabaseService} from '../appQueryServiceCore.ts'
@@ -255,12 +252,15 @@ type ProjectTransferExportJudgmentRow = {
   answeredOriginal: string | null
   answeredOriginalAsArray: unknown
   articleId: string
+  chunkCount: number | null
+  chunkPlanHash: string | null
   chunkingStrategy: string | null
   confidenceOriginal: number | null
   createdAt: unknown
   deleteGeneration: number | null
   deletedAt: unknown
   explanation: string | null
+  fullTextMode: string | null
   fullTextStrategyId: string
   isAnswered: boolean | null
   judgmentId: string
@@ -1413,10 +1413,12 @@ const getProjectTransferExportAmbiguousJudgmentWarnings = async (
   })
 }
 
+const isProjectTransferExportChunkedJudgment = (row: ProjectTransferExportJudgmentRow): boolean => {
+  return row.chunkingStrategy !== null || row.fullTextMode === 'chunked'
+}
+
 const getProjectTransferExportChunkedJudgmentWarnings = (rows: ProjectTransferExportJudgmentRow[]) => {
-  const chunkedRows = rows.filter((row) => {
-    return row.chunkingStrategy !== null
-  })
+  const chunkedRows = rows.filter(isProjectTransferExportChunkedJudgment)
 
   return chunkedRows.length === 0
     ? []
@@ -1460,6 +1462,9 @@ const getProjectTransferExportJudgmentRows = async (projectId: string, database:
       j.system_prompt_variant AS systemPromptVariant,
       j.full_text_strategy_id AS fullTextStrategyId,
       j.chunking_strategy AS chunkingStrategy,
+      j.full_text_mode AS fullTextMode,
+      j.chunk_count AS chunkCount,
+      j.chunk_plan_hash AS chunkPlanHash,
       j.is_answered AS isAnswered,
       j.answered_original AS answeredOriginal,
       TO_JSON(j.answered_original_as_array) AS answeredOriginalAsArray,
@@ -2139,29 +2144,23 @@ const getProjectTransferExportFullTextProcessingSignature = ({
   article,
   contentSettings,
   fullTextStrategyId,
-  promptTokenLimit,
 }: {
   article: ProjectTransferExportArticlePayloadRecord
   contentSettings: ProjectTransferContentSettings
   fullTextStrategyId: string
-  promptTokenLimit: number | null
 }) => {
   const includeFullText = contentSettings.useFulltext || contentSettings.useFulltextNoImages
   const fullText = includeFullText ? getStringValue(article.fullText) : null
-  const result =
-    fullText && promptTokenLimit !== null
-      ? processFulltextForLLM(fullText, {promptTokenLimit, stripImages: contentSettings.useFulltextNoImages})
-      : null
 
   return {
     fullText,
     signature: {
       ...getProjectTransferExportFullTextStrategySignature(contentSettings, fullTextStrategyId),
-      maxTokens: result?.maxTokens ?? null,
-      processedTextDigest: getSignatureTextDigest(result?.processedText ?? null),
+      maxTokens: null,
+      processedTextDigest: getSignatureTextDigest(fullText),
       stripImages: contentSettings.useFulltextNoImages,
-      tokenCount: result?.tokenCount ?? null,
-      withinBudget: result?.withinBudget ?? null,
+      tokenCount: null,
+      withinBudget: null,
     },
   }
 }
@@ -2307,14 +2306,10 @@ export const getProjectTransferExportJudgmentInputSignature = ({
     article,
     contentSettings,
     fullTextStrategyId: resolvedFullTextStrategyId,
-    promptTokenLimit: modelRequestSignature.promptTokenLimit,
   })
   const articleRecord = getProjectTransferExportArticleRecordForSignature(article, fullTextProcessing.fullText)
   const resolvedSystemPromptVariant = getSystemPromptVariant(systemPromptVariant)
   const systemPrompt = getSinglePromptSystemPromptForArticle(articleRecord, providerKind, resolvedSystemPromptVariant)
-  const evidenceSystemPrompt = chunkingStrategy
-    ? getSinglePromptEvidenceSystemPromptForArticle(articleRecord, providerKind)
-    : null
 
   return {
     article: {
@@ -2336,7 +2331,7 @@ export const getProjectTransferExportJudgmentInputSignature = ({
     provider: getProjectTransferExportProviderRequestSignature(providerConnection),
     request: {
       evidenceOutputSchemaDigest: getDigestValue(singlePromptEvidenceOutputSchema),
-      evidenceSystemPromptDigest: getSignatureTextDigest(evidenceSystemPrompt),
+      evidenceSystemPromptDigest: getSignatureTextDigest(null),
       fullTextStrategyId: resolvedFullTextStrategyId,
       invocationTemperature: judgmentInvocationTemperature,
       maxRetries: judgmentMaxRetries,
@@ -2705,6 +2700,7 @@ const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTra
         answeredOriginal: row.answeredOriginal,
         answeredOriginalAsArray: getStringArrayValue(row.answeredOriginalAsArray),
         chunkingStrategy: row.chunkingStrategy,
+        ...getJudgmentFullTextExecution(row),
         confidenceOriginal: row.confidenceOriginal ?? 50,
         contentSettings,
         createdAt: getIsoDateValue(row.createdAt),
@@ -3070,7 +3066,7 @@ const getProjectTransferExportContext = async (
   const reviewRows = await getProjectTransferExportReviewRows(projectId, database)
   const chunkedJudgmentWarnings = getProjectTransferExportChunkedJudgmentWarnings(judgmentRows)
   const exportedJudgmentRows = judgmentRows.filter((row) => {
-    return row.chunkingStrategy === null
+    return !isProjectTransferExportChunkedJudgment(row)
   })
   const exportedJudgmentIdSet = new Set(
     exportedJudgmentRows.map((row) => {

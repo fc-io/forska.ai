@@ -1,3 +1,4 @@
+import {getJudgmentFullTextExecution} from '../../../agent/judge/judgmentFullTextExecution.ts'
 import {
   defaultSystemPromptVariant,
   getSystemPromptVariant,
@@ -245,9 +246,12 @@ type JudgmentCommitRow = {
   answeredOriginal: string | null
   answeredOriginalAsArray: string[]
   articleId: string
+  chunkCount: number | null
+  chunkPlanHash: string | null
   chunkingStrategy: string | null
   confidenceOriginal: number
   createdAt: Date
+  fullTextMode: string | null
   deleteGeneration: number
   explanation: string | null
   fullTextStrategyId: string
@@ -4205,6 +4209,11 @@ const getJudgmentRows = ({
       answeredOriginalAsArray: getStringArray(getRecordField(judgment, 'answeredOriginalAsArray')) ?? [],
       articleId,
       chunkingStrategy: getNullableString(getRecordField(judgment, 'chunkingStrategy')),
+      ...getJudgmentFullTextExecution({
+        chunkCount: getRecordField(judgment, 'chunkCount'),
+        chunkPlanHash: getRecordField(judgment, 'chunkPlanHash'),
+        fullTextMode: getRecordField(judgment, 'fullTextMode'),
+      }),
       confidenceOriginal: getNonNegativeInteger(getRecordField(judgment, 'confidenceOriginal'), 50),
       createdAt: getDateOrDefault(getRecordField(judgment, 'createdAt'), now),
       deleteGeneration: getNonNegativeInteger(getRecordField(judgment, 'deleteGeneration'), 0),
@@ -4512,6 +4521,9 @@ const getSetBasedJudgmentRowsSql = ({
       COALESCE(${getNullableJsonStringFieldSql('payload.payload_json', 'systemPromptVariant')}, ${getSqlLiteral(defaultSystemPromptVariant)}) AS system_prompt_variant,
       ${getJudgmentFullTextStrategyIdSql('payload.payload_json')} AS full_text_strategy_id,
       ${getNullableJsonStringFieldSql('payload.payload_json', 'chunkingStrategy')} AS chunking_strategy,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'fullTextMode')} AS full_text_mode,
+      TRY_CAST(${getJsonStringFieldSql('payload.payload_json', 'chunkCount')} AS INTEGER) AS chunk_count,
+      ${getNullableJsonStringFieldSql('payload.payload_json', 'chunkPlanHash')} AS chunk_plan_hash,
       ${getJsonBooleanPathSql('payload.payload_json', '$.isAnswered', false)} AS is_answered,
       ${getNullableJsonStringFieldSql('payload.payload_json', 'answeredOriginal')} AS answered_original,
       ${getJsonStringArrayFieldSql('payload.payload_json', 'answeredOriginalAsArray')} AS answered_original_as_array,
@@ -5026,6 +5038,9 @@ const insertJudgmentRowsSetBased = async ({
       system_prompt_variant,
       full_text_strategy_id,
       chunking_strategy,
+      full_text_mode,
+      chunk_count,
+      chunk_plan_hash,
       is_answered,
       answered_original,
       answered_original_as_array,
@@ -5053,6 +5068,9 @@ const insertJudgmentRowsSetBased = async ({
       system_prompt_variant,
       full_text_strategy_id,
       chunking_strategy,
+      full_text_mode,
+      chunk_count,
+      chunk_plan_hash,
       TRUE,
       answered_original,
       answered_original_as_array,
@@ -5122,6 +5140,9 @@ const insertJudgmentRows = async ({
           system_prompt_variant,
           full_text_strategy_id,
           chunking_strategy,
+          full_text_mode,
+          chunk_count,
+          chunk_plan_hash,
           is_answered,
           answered_original,
           answered_original_as_array,
@@ -5150,6 +5171,9 @@ const insertJudgmentRows = async ({
               ${getSqlLiteral(row.systemPromptVariant)},
               ${getSqlLiteral(row.fullTextStrategyId)},
               ${getSqlLiteral(row.chunkingStrategy)},
+              ${getSqlLiteral(row.fullTextMode)},
+              ${getSqlLiteral(row.chunkCount)},
+              ${getSqlLiteral(row.chunkPlanHash)},
               TRUE,
               ${getSqlLiteral(row.answeredOriginal)},
               ${getSqlLiteral(row.answeredOriginalAsArray)},
