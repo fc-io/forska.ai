@@ -151,14 +151,25 @@ export const getFullTextStrategyInputDifferences = (
   })
 }
 
+const getLegacyFullTextContentLabel = (useFulltextNoImages: boolean) => {
+  return useFulltextNoImages ? 'fulltext (legacy, no images)' : 'fulltext (legacy)'
+}
+
+const isDerivedFullTextStrategyId = (id: string | null | undefined): id is string => {
+  return Boolean(id) && id !== FULL_TEXT_STRATEGY_LEGACY && id !== FULL_TEXT_STRATEGY_NONE
+}
+
 export const getProjectFullTextContentLabel = (project: {
+  fullTextStrategyId?: string | null
   fullTextStrategyLabel?: string | null
   useFulltext: boolean
   useFulltextNoImages: boolean
 }): string | null => {
-  const strategyLabel = project.fullTextStrategyLabel ?? null
+  const isFullText = project.useFulltext || project.useFulltextNoImages
 
-  return project.useFulltext || project.useFulltextNoImages
-    ? `fulltext (${strategyLabel ?? (project.useFulltextNoImages ? 'no images' : 'legacy')})`
-    : null
+  return !isFullText
+    ? null
+    : isDerivedFullTextStrategyId(project.fullTextStrategyId)
+      ? `fulltext (${project.fullTextStrategyLabel ?? project.fullTextStrategyId})`
+      : getLegacyFullTextContentLabel(project.useFulltextNoImages)
 }
