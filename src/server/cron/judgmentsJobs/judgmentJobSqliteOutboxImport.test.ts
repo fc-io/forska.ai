@@ -1758,6 +1758,7 @@ test('imports a full-text strategy job judgment as its own identity next to a st
       useTitle: true,
     },
     fullTextStrategyId: claimed.fullTextStrategyId,
+    fullTextExecution: {chunkCount: 3, chunkPlanHash: 'plan-hash-1', fullTextMode: 'chunked'},
     judgmentsJobId: jobId,
     promptId,
     queueRecordId: claimed.recordId,
@@ -1769,8 +1770,19 @@ test('imports a full-text strategy job judgment as its own identity next to a st
 
   expect(await importOutboxBatch()).toBe(1)
 
-  const rows = await queryDatabase<{answeredOriginal: string; fullTextStrategyId: string}>(`
-    SELECT answered_original AS answeredOriginal, full_text_strategy_id AS fullTextStrategyId
+  const rows = await queryDatabase<{
+    answeredOriginal: string
+    chunkCount: number | null
+    chunkPlanHash: string | null
+    fullTextMode: string | null
+    fullTextStrategyId: string
+  }>(`
+    SELECT
+      answered_original AS answeredOriginal,
+      chunk_count AS chunkCount,
+      chunk_plan_hash AS chunkPlanHash,
+      full_text_mode AS fullTextMode,
+      full_text_strategy_id AS fullTextStrategyId
     FROM app.judgment
     WHERE article_id = '${articleId}'
       AND prompt_id = '${promptId}'
@@ -1793,10 +1805,52 @@ test('imports a full-text strategy job judgment as its own identity next to a st
 
   expect(claimed.fullTextStrategyId).toBe(strategyId)
   expect(rows).toEqual([
-    {answeredOriginal: 'yes', fullTextStrategyId: strategyId},
-    {answeredOriginal: 'no', fullTextStrategyId: 'fts-legacy-v0'},
+    {
+      answeredOriginal: 'yes',
+      chunkCount: 3,
+      chunkPlanHash: 'plan-hash-1',
+      fullTextMode: 'chunked',
+      fullTextStrategyId: strategyId,
+    },
+    {
+      answeredOriginal: 'no',
+      chunkCount: null,
+      chunkPlanHash: null,
+      fullTextMode: null,
+      fullTextStrategyId: 'fts-legacy-v0',
+    },
   ])
   expect(deltaRows).toEqual([{judgmentId: strategyJudgment?.id ?? '', projectId}])
+})
+
+test('a full-text strategy judgment without a full-text mode is refused before it reaches the outbox', async () => {
+  if (!storeSinglePromptJudgment) {
+    throw new Error('Test database not initialized')
+  }
+
+  const store = storeSinglePromptJudgment
+  const storeInput = {
+    article: {id: 'article-missing-mode'} as ArticleRecord,
+    chunkingStrategy: null,
+    judgment: {answer: 'yes', explanation: 'because', quotes: []},
+    judgmentsJobId: 'job-missing-mode',
+    modelId: 'model-missing-mode',
+    projectId: 'project-missing-mode',
+    promptId: 'prompt-missing-mode',
+    queueRecordId: 'queue-missing-mode',
+  }
+  const getMessage = (error: unknown) => {
+    return error instanceof Error ? error.message : String(error)
+  }
+  const missingMode = await store({...storeInput, fullTextStrategyId: 'fts-0123456789abcdef'}).catch(getMessage)
+  const unexpectedMode = await store({
+    ...storeInput,
+    fullTextExecution: {chunkCount: null, chunkPlanHash: null, fullTextMode: 'single'},
+    fullTextStrategyId: 'fts-none',
+  }).catch(getMessage)
+
+  expect(missingMode).toContain('needs a full-text mode')
+  expect(unexpectedMode).toContain('cannot have a full-text mode')
 })
 
 test('outbox import canonicalizes scoped external article ids before DuckDB writes', async () => {

@@ -3092,6 +3092,7 @@ test('job info, claims, claim identities and outbox rows carry the project full-
       claimId: prompt.claimId,
       executionSnapshotHash: prompt.executionSnapshotHash,
       executionSnapshotId: prompt.executionSnapshotId,
+      fullTextMode: fullTextStrategyId === undefined ? 'single' : null,
     }
   }
 
