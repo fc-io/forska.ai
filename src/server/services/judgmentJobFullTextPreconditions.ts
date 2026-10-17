@@ -48,6 +48,18 @@ const getChunkPolicyModelError = (
       })
 }
 
+const getNativeImagesModelPreconditionError = async (
+  model: FullTextPreconditionModel,
+  strategy: FullTextJudgingStrategy,
+): Promise<string | null> => {
+  return strategy.figureMode === 'native_images'
+    ? (await import('../fullText/nativeImagesModelCheck.ts')).getNativeImagesModelError({
+        figureMode: strategy.figureMode,
+        model: {...model.model, label: model.modelName},
+      })
+    : null
+}
+
 export const getFullTextJudgingPreconditionError = async ({
   fullTextStrategyId,
   model,
@@ -69,7 +81,11 @@ export const getFullTextJudgingPreconditionError = async ({
     return `Full-text strategy ${fullTextStrategyId} has no stored chunk policy and figure mode. Set them on the project's edit page and start the job again.`
   }
 
-  return getChunkPolicyModelError(model, strategy) ?? (await getFullTextJudgingFigureDescriptionConfigError(strategy))
+  return (
+    getChunkPolicyModelError(model, strategy)
+    ?? (await getNativeImagesModelPreconditionError(model, strategy))
+    ?? (await getFullTextJudgingFigureDescriptionConfigError(strategy))
+  )
 }
 
 const getModelFromRow = (row: FullTextPreconditionModelRow): FullTextPreconditionModel => {

@@ -3,6 +3,7 @@ import {
   FullTextArticleNotReadyError,
   type FullTextJudgingBlock,
   FullTextJudgingConfigError,
+  type FullTextJudgingFigureImage,
   type FullTextJudgingInput,
   type FullTextJudgingPreparation,
   prepareFullTextJudgingInput,
@@ -15,6 +16,7 @@ import {
 } from '../../../fullText/fullTextJudgingFigureDescriptions.ts'
 import {FULL_TEXT_STRATEGY_LEGACY, FULL_TEXT_STRATEGY_NONE} from '../../../fullText/fullTextStrategy.ts'
 import {loadFullTextTokenCounter} from '../../../fullText/fullTextTokenizer.ts'
+import {getNativeFigureImageInputs, isNativeFigureImageError} from '../../../fullText/nativeFigureImages.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 
@@ -79,6 +81,23 @@ const getPreparationResult = (
       }
 }
 
+const getFigureImages = async ({
+  block,
+  fullTextJudging,
+}: {
+  block: FullTextJudgingBlock | null
+  fullTextJudging: FullTextJudgingInput
+}): Promise<FullTextJudgingFigureImage[]> => {
+  return fullTextJudging.strategy.figureMode === 'native_images'
+    ? getNativeFigureImageInputs({
+        assets: (block?.article.figureAssets ?? []).flatMap((asset) => {
+          return asset.imagePath === null ? [] : [{imagePath: asset.imagePath, index: asset.index}]
+        }),
+        renderedText: fullTextJudging.renderedText,
+      })
+    : []
+}
+
 const getPreparedResult = async (input: FullTextJudgingPreparationInput): Promise<FullTextJudgingPreparedResult> => {
   const preparation = prepareFullTextJudgingInput({
     abstract: input.abstract,
@@ -98,7 +117,13 @@ const getPreparedResult = async (input: FullTextJudgingPreparationInput): Promis
   }
 
   return preparation.kind === 'ready'
-    ? {fullTextJudging: preparation.input, kind: 'ready'}
+    ? {
+        fullTextJudging: {
+          ...preparation.input,
+          figureImages: await getFigureImages({block: input.block, fullTextJudging: preparation.input}),
+        },
+        kind: 'ready',
+      }
     : getPreparationResult(input.articleId, preparation)
 }
 
@@ -107,7 +132,7 @@ const getErrorResult = (error: unknown): FullTextJudgingPreparedResult => {
     return {kind: 'requeue', message: error.message, reason: 'full_text_config'}
   }
 
-  if (error instanceof FullTextArticleNotReadyError) {
+  if (error instanceof FullTextArticleNotReadyError || isNativeFigureImageError(error)) {
     return {kind: 'closed', message: error.message}
   }
 

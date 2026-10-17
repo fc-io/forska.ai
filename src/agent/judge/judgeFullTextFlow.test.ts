@@ -8,7 +8,15 @@ import {JudgmentPersistenceError} from './storeSinglePromptJudgment.ts'
 
 type JudgeModule = typeof import('../judge.ts')
 type JudgeSinglePromptInput = Parameters<JudgeModule['judgeSinglePrompt']>[0]
-type InvokeInput = {outputSchema?: unknown; prompt: string; systemPrompt: string}
+type InvokeInput = {
+  outputSchema?: unknown
+  prompt: string | {images: Array<{bytes: Uint8Array; mimeType: string}>; text: string}
+  systemPrompt: string
+}
+
+const getPromptText = (input: InvokeInput): string => {
+  return typeof input.prompt === 'string' ? input.prompt : input.prompt.text
+}
 
 const judgeModulePath = new URL('../judge.ts', import.meta.url).href
 const judgmentsRequestRuntimeModulePath = new URL(
@@ -38,9 +46,13 @@ const shortFullText = '## Methods\n\nAdults with chronic pain were randomised to
 
 const getFullTextJudgingInput = async ({
   chunkPolicy,
+  figureImages = [],
+  figureMode = 'none',
   renderedText,
 }: {
   chunkPolicy: FullTextChunkPolicy
+  figureImages?: FullTextJudgingInput['figureImages']
+  figureMode?: 'native_images' | 'none'
   renderedText: string
 }): Promise<FullTextJudgingInput> => {
   const plan = buildFullTextChunkPlan({
@@ -53,13 +65,14 @@ const getFullTextJudgingInput = async ({
 
   return {
     chunkPlan: chunkPolicy.mode === 'chunked' ? plan : null,
+    figureImages,
     renderedText,
     strategy: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy,
       figureDescriptionModelId: null,
       figureDescriptionPromptVersion: null,
-      figureMode: 'none',
+      figureMode,
       id: strategyId,
     },
     textHash: plan.textHash,
@@ -184,8 +197,8 @@ test('an article that fits is judged in one call with the rendered full text and
   await judgeSinglePrompt(createInput(fullTextJudging))
 
   expect(prompts).toHaveLength(1)
-  expect(prompts[0]?.prompt).toContain('## article_fulltext')
-  expect(prompts[0]?.prompt).toContain(shortFullText)
+  expect(prompts[0] ? getPromptText(prompts[0]) : '').toContain('## article_fulltext')
+  expect(prompts[0] ? getPromptText(prompts[0]) : '').toContain(shortFullText)
   expect(storeSinglePromptJudgment.mock.calls[0]?.[0]).toMatchObject({
     fullTextExecution: {chunkCount: null, chunkPlanHash: null, fullTextMode: 'single'},
     fullTextStrategyId: strategyId,
@@ -217,8 +230,8 @@ test('chunked judges every part with the real question, merges once, validates q
   const partPrompts: string[] = []
   const mergePrompts: string[] = []
   const invokeStoredProviderModel = mock(async (input: InvokeInput) => {
-    if (input.prompt.includes('## part_judgments')) {
-      mergePrompts.push(input.prompt)
+    if (getPromptText(input).includes('## part_judgments')) {
+      mergePrompts.push(getPromptText(input))
 
       return getResponse({
         answer: 'yes',
@@ -229,7 +242,7 @@ test('chunked judges every part with the real question, merges once, validates q
       })
     }
 
-    partPrompts.push(input.prompt)
+    partPrompts.push(getPromptText(input))
 
     return getResponse({
       answer: 'yes',
@@ -268,7 +281,7 @@ test('chunked judges every part with the real question, merges once, validates q
 
 test('a failed part stops the article before the merge call', async () => {
   const invokeStoredProviderModel = mock(async (input: InvokeInput) => {
-    return input.prompt.includes('## part_judgments')
+    return getPromptText(input).includes('## part_judgments')
       ? getResponse({answer: 'yes', explanation: 'merged', quotes: []})
       : getResponse({answer: 'yes', explanation: 'no confidence key', quotes: []})
   })
@@ -285,8 +298,100 @@ test('a failed part stops the article before the merge call', async () => {
 
   expect(
     invokeStoredProviderModel.mock.calls.some(([input]) => {
-      return input.prompt.includes('## part_judgments')
+      return getPromptText(input).includes('## part_judgments')
     }),
   ).toBe(false)
   expect(storeSinglePromptJudgment).not.toHaveBeenCalled()
+})
+
+const getImage = (figureIndex: number) => {
+  return {bytes: new Uint8Array([figureIndex]), figureIndex, mimeType: 'image/png' as const}
+}
+
+test('native images: the single call sends the text plus one image per marker in document order', async () => {
+  const prompts: InvokeInput[] = []
+  const invokeStoredProviderModel = mock(async (input: InvokeInput) => {
+    prompts.push(input)
+
+    return getResponse({answer: 'yes', explanation: 'Randomised.', quotes: []})
+  })
+  const storeSinglePromptJudgment = mock(async (_input: unknown) => {})
+  const {judgeSinglePrompt} = await loadJudgeModule({invokeStoredProviderModel, storeSinglePromptJudgment})
+  const renderedText = `${shortFullText}\n\nFigure 2: Flow\n[figure:2]\n\nFigure 1: Pain\n[figure:1]`
+  const fullTextJudging = await getFullTextJudgingInput({
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
+    figureImages: [getImage(1), getImage(2)],
+    figureMode: 'native_images',
+    renderedText,
+  })
+
+  await judgeSinglePrompt(createInput(fullTextJudging))
+
+  const prompt = prompts[0]?.prompt
+
+  expect(typeof prompt === 'string' ? null : prompt?.text).toContain('[figure:2]')
+  expect(
+    typeof prompt === 'string'
+      ? null
+      : prompt?.images.map((image) => {
+          return image.bytes[0]
+        }),
+  ).toEqual([2, 1])
+})
+
+test('native images: each part carries only its own figures and the merge call is text only', async () => {
+  const promptImages: Array<{merge: boolean; images: number[]}> = []
+  const invokeStoredProviderModel = mock(async (input: InvokeInput) => {
+    const isMerge = getPromptText(input).includes('## part_judgments')
+
+    promptImages.push({
+      images:
+        typeof input.prompt === 'string'
+          ? []
+          : input.prompt.images.map((image) => {
+              return image.bytes[0] ?? -1
+            }),
+      merge: isMerge,
+    })
+
+    return getResponse(
+      isMerge
+        ? {answer: 'yes', explanation: 'merged', quotes: []}
+        : {answer: 'yes', confidence: 0.5, explanation: 'part', quotes: []},
+    )
+  })
+  const storeSinglePromptJudgment = mock(async (_input: unknown) => {})
+  const {judgeSinglePrompt} = await loadJudgeModule({invokeStoredProviderModel, storeSinglePromptJudgment})
+  const sections = longFullText.split('\n\n## ')
+  const renderedText = [
+    `${sections[0]}\n\nFigure 1: First\n[figure:1]`,
+    ...sections.slice(1, -1),
+    `${sections.at(-1)}\n\nFigure 2: Last\n[figure:2]`,
+  ].join('\n\n## ')
+  const fullTextJudging = await getFullTextJudgingInput({
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+    figureImages: [getImage(1), getImage(2)],
+    figureMode: 'native_images',
+    renderedText,
+  })
+
+  await judgeSinglePrompt(createInput(fullTextJudging))
+
+  const parts = promptImages.filter((entry) => {
+    return !entry.merge
+  })
+
+  expect(parts.length).toBe(fullTextJudging.chunkPlan?.chunkCount ?? 0)
+  expect(parts[0]?.images).toEqual([1])
+  expect(parts.at(-1)?.images).toEqual([2])
+  expect(
+    parts.slice(1, -1).every((entry) => {
+      return entry.images.length === 0
+    }),
+  ).toBe(true)
+  expect(
+    promptImages.filter((entry) => {
+      return entry.merge
+    }),
+  ).toEqual([{images: [], merge: true}])
 })

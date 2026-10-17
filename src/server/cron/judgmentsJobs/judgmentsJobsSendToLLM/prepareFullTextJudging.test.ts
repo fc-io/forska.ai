@@ -30,6 +30,7 @@ const getBlock = (states: Array<'described' | 'failed' | 'needed'>): FullTextJud
         return {
           description: descriptionState === 'described' ? `Figure ${position + 1} shows bars.` : '',
           descriptionState,
+          imagePath: `assets/full-text-assets/article-1/fig-${position + 1}.png`,
           index: position + 1,
         }
       }),
@@ -219,4 +220,51 @@ test('the local path never describes with a different installation model; it req
   expect(ensureFigureDescriptions).not.toHaveBeenCalled()
   expect(result).toMatchObject({kind: 'requeue', reason: 'full_text_config'})
   expect(result.kind === 'requeue' ? result.message : '').toContain('model vlm-2 (fig-desc-v1)')
+})
+
+test('native images: preparation loads one flattened image per marker and closes the prompt when a crop is missing', async () => {
+  const {prepareFullTextJudging} = await loadPrepareModule({
+    described: () => {
+      return false
+    },
+    ensureFigureDescriptions: mock(async () => {}),
+  })
+  const fixturePath = new URL('../../../fullText/fixtures/figureImages/opaque-2x1.png', import.meta.url).pathname
+  const nativeStrategy: FullTextJudgingStrategy = {
+    ...strategy,
+    figureDescriptionModelId: null,
+    figureDescriptionPromptVersion: null,
+    figureMode: 'native_images',
+  }
+  const getNativeBlock = (imagePath: string): FullTextJudgingBlock => {
+    return {
+      article: {
+        canonicalTextVersion: 'canonical-v1',
+        figureAssets: [1, 2].map((index) => {
+          return {description: '', descriptionState: null, imagePath, index}
+        }),
+        figureModeBuilt: 'markers',
+      },
+      chunkPlan: null,
+      strategy: nativeStrategy,
+    }
+  }
+
+  const ready = await prepareFullTextJudging(getPreparationInput(getNativeBlock(fixturePath)))
+
+  expect(ready.kind).toBe('ready')
+  expect(
+    ready.kind === 'ready'
+      ? ready.fullTextJudging.figureImages.map((image) => {
+          return [image.figureIndex, image.mimeType]
+        })
+      : [],
+  ).toEqual([
+    [1, 'image/png'],
+    [2, 'image/png'],
+  ])
+  expect(ready.kind === 'ready' ? ready.fullTextJudging.renderedText : '').toContain('[figure:1]')
+  expect(await prepareFullTextJudging(getPreparationInput(getNativeBlock(`${fixturePath}.missing.png`)))).toMatchObject(
+    {kind: 'closed'},
+  )
 })
