@@ -102,6 +102,18 @@ test('scales default review serving rebuild chunk batch size with DuckDB memory 
   expect(resolvedEnv.FORSKA_REVIEW_SERVING_REBUILD_CHUNK_BATCH_SIZE).toBe(4)
 })
 
+test('full-text crons default to on and the env flags only disable them', () => {
+  const defaults = loadEnv({envValues: {}})
+  const disabled = loadEnv({
+    envValues: {RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false', RUN_SERVER_FULL_TEXT_FETCHING: 'false'},
+  })
+
+  expect(defaults.RUN_SERVER_FULL_TEXT_FETCHING).toBe(true)
+  expect(defaults.RUN_SERVER_FULL_TEXT_CONVERSION_CRON).toBe(true)
+  expect(disabled.RUN_SERVER_FULL_TEXT_FETCHING).toBe(false)
+  expect(disabled.RUN_SERVER_FULL_TEXT_CONVERSION_CRON).toBe(false)
+})
+
 test('preserves explicit DuckDB append transaction opt-in', () => {
   const resolvedEnv = loadEnv({envValues: {FORSKA_DUCKDB_APPEND_TRANSACTION_ENABLED: 'true'}})
 
