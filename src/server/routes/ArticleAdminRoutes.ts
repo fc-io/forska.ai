@@ -3,10 +3,12 @@ import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
 import {emptyArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
+import {getFigureDescriptionConcurrency} from '../cron/figureDescriptionJobs.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
 import {fullTextFigureModes} from '../fullText/canonicalFullText.ts'
 import {rebuildCanonicalFullText, storeConvertedFullText} from '../fullText/canonicalFullTextStore.ts'
 import {convertArticlePdf, isPermanentConversionFailure} from '../fullText/converters/fullTextConverter.ts'
+import {ensureFigureDescriptions, resetFigureDescriptions} from '../fullText/figureDescriptionStore.ts'
 import {
   appendArticleReviewServingDeltas,
   getArticleReviewServingMutationValueHash,
@@ -327,6 +329,21 @@ export const articleAdminRoutes = new Elysia()
       void runConversion()
 
       return {success: true, message: 'Conversion started', status: 'pending'}
+    },
+    {params: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/articles/:id/figure-descriptions/rebuild',
+    async ({params}) => {
+      const reset = await resetFigureDescriptions(params.id)
+
+      void ensureFigureDescriptions(params.id, {concurrency: getFigureDescriptionConcurrency(reset.figures)}).catch(
+        (error: unknown) => {
+          console.error(`[figureDescriptions] Rebuild failed for article ${params.id}`, error)
+        },
+      )
+
+      return {...reset, status: 'started' as const}
     },
     {params: t.Object({id: t.String()})},
   )

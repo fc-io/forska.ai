@@ -36,6 +36,8 @@ const envShape = arktype({
   }),
   FULL_TEXT_CONVERSION_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   FULL_TEXT_CONVERSION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
+  FIGURE_DESCRIPTION_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
+  FIGURE_DESCRIPTION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: 'number | string.integer.parse | null | undefined',
@@ -211,6 +213,12 @@ export const loadEnv = ({
     || String(merged.FULL_TEXT_CONVERSION_CONCURRENCY).trim() === ''
   ) {
     ;(merged as Record<string, string>).FULL_TEXT_CONVERSION_CONCURRENCY = '2'
+  }
+  if (merged.FIGURE_DESCRIPTION_BATCH_SIZE == null || String(merged.FIGURE_DESCRIPTION_BATCH_SIZE).trim() === '') {
+    ;(merged as Record<string, string>).FIGURE_DESCRIPTION_BATCH_SIZE = '8'
+  }
+  if (merged.FIGURE_DESCRIPTION_CONCURRENCY == null || String(merged.FIGURE_DESCRIPTION_CONCURRENCY).trim() === '') {
+    ;(merged as Record<string, string>).FIGURE_DESCRIPTION_CONCURRENCY = '2'
   }
   if (
     merged.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE == null
