@@ -10,15 +10,17 @@ import {
 } from './canonicalFullText.ts'
 import {type FullTextConverterKind, type FullTextLayoutBlock} from './converters/fullTextConverterTypes.ts'
 
-type FixtureName = 'arxiv-2111.06377' | 'frontiers-fmed-2023-1283512'
+type FixtureName = 'arxiv-2111.06377' | 'frontiers-fmed-2023-1283512' | 'nejm-style'
 
 const frozenGoldenHashes = {
-  'arxiv-2111.06377.docling.none': '78d84e568894b305fe58409d19c47e1bb0ff6da96108e41910729f3be702a6d0',
+  'arxiv-2111.06377.docling.none': '97bbadee75f93b6ab6fcd876d3d810381a6c2effd3407c51fe3a47c49214cb83',
   'arxiv-2111.06377.mineru.none': '7439c8f5d2dfcd1a4b5c9e8d30c980f1c60c2d565a9360bbb80df781aaf1e1d5',
-  'frontiers-fmed-2023-1283512.docling.none': '5b095ff6379d10d4d41140d73e241771cad17dc953e474cf2700d7b79e5ca3c2',
+  'frontiers-fmed-2023-1283512.docling.none': 'deaf4388ab7a9e8ad05accc0404213251f8538c0c11420ca6698a132f94b2ca5',
   'frontiers-fmed-2023-1283512.mineru.native_images':
-    '401b62d6e2f1b97f09afe6af3b5e8563b58bdfd48677bcc45bd3c63208f544c4',
-  'frontiers-fmed-2023-1283512.mineru.none': 'cece6ecb280c032b4ebbd648c99e4239e8e79d16012d317f04fad7ed1074294e',
+    '762c21377944f8b420eb7ab6ba87f8b8123c870bdbb40a6d38f4a87dd6db473b',
+  'frontiers-fmed-2023-1283512.mineru.none': '348c442de102a8d8ea9204f44a1fcc58e3d702ae72db639acc9bea0605577f2f',
+  'nejm-style.docling.none': '6bed0b83deb11e63043d73c2b2759ea636282ad0275567cc1f08a04bb2806f16',
+  'nejm-style.mineru.none': '6bed0b83deb11e63043d73c2b2759ea636282ad0275567cc1f08a04bb2806f16',
 }
 
 const readFixture = (fileName: string): string => {
@@ -73,13 +75,14 @@ test('golden fixtures rebuild to the frozen bytes and hashes of canonical-v1', (
   })
 })
 
-test('Frontiers fixtures drop references, page furniture, front matter and affiliations but keep funding and COI', () => {
+test('Frontiers fixtures drop references, furniture, journal front matter, authors and affiliations but keep the unheaded abstract, funding and COI', () => {
   const texts = (['mineru', 'docling'] as const).map((converterKind) => {
     return buildFixture({converterKind, figureMode: 'none', name: 'frontiers-fmed-2023-1283512'}).text
   })
 
   texts.map((text) => {
-    expect(text.startsWith('## 1 Introduction\n\n')).toBe(true)
+    expect(text.startsWith('Background: Pudendal nerve block (PNB) is a commonly used anesthesia method')).toBe(true)
+    expect(text).toContain('\n\n## 1 Introduction\n\nHemorrhoids are normal vascular structures')
     expect(text).not.toContain('Ischiorectal fossa block decreases posthemorrhoidectomy pain')
     expect(text).not.toContain('Higgins J, Altman D')
     expect(text).not.toContain('frontiersin.org')
@@ -88,7 +91,10 @@ test('Frontiers fixtures drop references, page furniture, front matter and affil
     expect(text).not.toContain('1053660645@qq.com')
     expect(text).not.toContain('EDITED BY')
     expect(text).not.toContain('The role of pudendal nerve block in hemorrhoid surgery')
-    expect(text).not.toContain('Background: Pudendal nerve block')
+    expect(text).not.toContain('Shijun Xia, Lidan Luo')
+    expect(text).not.toContain('Sapienza University of Rome')
+    expect(text).not.toContain('© 2023')
+    expect(text).not.toContain('Check for updates')
     expect(text).not.toContain('KEYWORDS')
     expect(text).not.toContain('Abbreviations:')
     expect(text).toContain('## 2 Materials and methods > 2.1 Search strategy')
@@ -97,6 +103,39 @@ test('Frontiers fixtures drop references, page furniture, front matter and affil
     expect(text).toContain('## Data availability statement\n\nPublicly available datasets were analyzed')
   })
   expect(texts[1]).not.toContain('Study or Subgroup')
+})
+
+test('NEJM-style fixtures keep the unheaded abstract and introduction and drop title, authors, affiliations and correspondence', () => {
+  const texts = (['mineru', 'docling'] as const).map((converterKind) => {
+    return buildFixture({converterKind, figureMode: 'none', name: 'nejm-style'})
+  })
+
+  texts.map(({stats, text}) => {
+    expect(getBlocks(text).slice(1)).toEqual([
+      'Septic shock affects more than 1.5 million patients each year, and intravenous fluid remains the first treatment given.',
+      'Liberal fluid strategies were standard at Karolinska University Hospital and most other centers until 2020, when two pilot trials suggested harm from fluid accumulation.',
+      'We conducted a multicenter trial to compare restrictive and liberal fluid therapy in adults with septic shock.',
+      '## Methods',
+      'The trial was conducted at 31 intensive care units in 8 countries.',
+    ])
+    expect(text.startsWith('ABSTRACT BACKGROUND The effect of restricting intravenous fluid')).toBe(true)
+    expect(text).not.toContain('Restrictive versus Liberal Fluid Therapy in Septic Shock')
+    expect(text).not.toContain('A. Lindqvist, M.D.')
+    expect(text).not.toContain('From the Department of Intensive Care')
+    expect(text).not.toContain('a.lindqvist@example.org')
+    expect(text).not.toContain('Supplementary Appendix')
+    expect(text).not.toContain('NEJMoa9999999')
+    expect(text).not.toContain('Massachusetts Medical Society')
+    expect(stats.droppedBlocks).toMatchObject({
+      affiliation_line: 1,
+      author_line: 1,
+      correspondence: 1,
+      front_matter: 3,
+      supplementary_link: 1,
+      title: 1,
+    })
+  })
+  expect(texts[0]?.text).toBe(texts[1]?.text)
 })
 
 test('arXiv fixtures drop the title, authors, abstract and bibliography and keep appendix heading paths', () => {
@@ -299,8 +338,12 @@ test('correspondence, supplementary links and late reference entries are removed
   })
 })
 
-test('front matter needs a body heading within the first pages and late front-matter-like headings are body text', () => {
-  const noHeadings = buildMineru([block('text', 'Letter body one.'), block('text', 'Letter body two.')])
+test('front matter is dropped only where positively identified and never past the body start or page 2', () => {
+  const noHeadings = buildMineru([
+    block('text', 'Letter body one.'),
+    block('text', 'Copyright © 2026 The Authors.'),
+    block('text', 'Letter body two.'),
+  ])
   const lateOpenAccess = buildMineru([
     block('paragraph_title', 'Abstract', {level: 2}),
     block('text', 'Abstract text.'),
@@ -309,13 +352,31 @@ test('front matter needs a body heading within the first pages and late front-ma
     block('paragraph_title', 'Open Access', {level: 2, page: 9}),
     block('text', 'This article is licensed under CC BY.', {page: 9}),
   ])
+  const bodySummary = buildMineru([
+    block('doc_title', 'A trial'),
+    block('paragraph_title', '1 Introduction', {level: 2}),
+    block('text', 'Intro paragraph.'),
+    block('paragraph_title', 'Summary', {level: 2, page: 2}),
+    block('text', 'Summary of the evidence.', {page: 2}),
+  ])
+  const unheadedPageThree = buildMineru([
+    block('doc_title', 'A trial'),
+    block('text', 'Page one intro.'),
+    block('text', 'Department of Surgery, Example University', {page: 3}),
+    block('paragraph_title', 'Methods', {level: 2, page: 3}),
+    block('text', 'Methods text.', {page: 3}),
+  ])
 
   expect(noHeadings.text).toBe('Letter body one.\n\nLetter body two.\n')
-  expect(noHeadings.stats.droppedBlocks.front_matter).toBeUndefined()
+  expect(noHeadings.stats.droppedBlocks.front_matter).toBe(1)
   expect(lateOpenAccess.text).toBe(
     '## Introduction\n\nIntro.\n\n## Open Access\n\nThis article is licensed under CC BY.\n',
   )
   expect(lateOpenAccess.stats.droppedBlocks.front_matter).toBe(2)
+  expect(bodySummary.text).toBe('## 1 Introduction\n\nIntro paragraph.\n\n## Summary\n\nSummary of the evidence.\n')
+  expect(unheadedPageThree.text).toBe(
+    'Page one intro.\n\nDepartment of Surgery, Example University\n\n## Methods\n\nMethods text.\n',
+  )
 })
 
 test('Docling picture text, table captions and furniture are dropped while list items keep their markers', () => {

@@ -1,3 +1,11 @@
+Background: Pudendal nerve block (PNB) is a commonly used anesthesia method that has been widely used in postoperative analgesia for hemorrhoids in recent years. Therefore, we conducted a systematic review and meta-analysis of doubleblind randomized controlled trials (RCTs) to analyze the effectiveness of PNB in postoperative analgesia for hemorrhoids.
+
+Methods: Relevant data and studies published from inception until August 14, 2023, were retrieved from PubMed, Embase, and Web of Science to evaluate the beneficial effects of PNB for analgesia following hemorrhoidectomy.
+
+Results: This meta-analysis included 6 double-blind RCTs comprising 501 patients. We evaluated the function of PNB in improving outcomes of postoperative analgesia of hemorrhoids. Visual analogue scale (VAS) scores on postoperative within 6 h (MD, −3.04; 95% CI, −4.13 to −1.95; P < 0.0001), 12 h (MD, −3.14; 95% CI, −3.87 to −2.40; P < 0.0001), and 24 h (MD, −2.25; 95% CI, −2.95 to −1.55; P < 0.0001) were enhanced by the application of PNB, but not in 48 h (MD, −2.54; 95% CI, −5.29 to 0.20; P = 0.07).
+
+Conclusion: Pudendal nerve block (PNB) could effectively relieve postoperative pain of hemorrhoids. However, our results still need to be confirmed by multi-center clinical studies.
+
 ## 1 Introduction
 
 Hemorrhoids are normal vascular structures in the anal canal. Approximately 5% of the general population suffers from hemorrhoidal disease (1), the cardinal features of which include bleeding, anal pruritus, prolapse, and pain due to thrombosis or inflammatory crisis. Most patients with hemorrhoidal disease initially undergo conservative treatment. In cases where internal medicine treatment is unsuccessful, non-surgical outpatient treatment procedures may be suitable. Only patients with persistent symptoms after conservative or outpatient treatment are considered candidates for surgical intervention.

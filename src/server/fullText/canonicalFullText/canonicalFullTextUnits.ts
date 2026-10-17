@@ -6,8 +6,10 @@ import {
 import {getHtmlTableGridRows, getPipeTableRows, isHtmlTable, isPipeTable} from './canonicalFullTextTables.ts'
 
 export type CanonicalDropReason =
+  | 'affiliation_line'
   | 'affiliation_section'
   | 'attached_to_table'
+  | 'author_line'
   | 'correspondence'
   | 'empty'
   | 'empty_heading'
@@ -42,6 +44,7 @@ export type CanonicalTableUnit = {
 export type CanonicalFigureUnit = {figureIndex: number; kind: 'figure'; page: number}
 export type CanonicalEquationUnit = {kind: 'equation'; latex: boolean; page: number; text: string}
 export type CanonicalCodeUnit = {body: string; captions: string[]; footnotes: string[]; kind: 'code'; page: number}
+export type CanonicalTitleUnit = {kind: 'title'; page: number; text: string}
 
 export type CanonicalUnit =
   | CanonicalCodeUnit
@@ -51,6 +54,9 @@ export type CanonicalUnit =
   | CanonicalListItemUnit
   | CanonicalParagraphUnit
   | CanonicalTableUnit
+  | CanonicalTitleUnit
+
+export type CanonicalBodyUnit = Exclude<CanonicalUnit, CanonicalTitleUnit>
 
 export type CanonicalUnitSequence = {drops: CanonicalDropReason[]; units: CanonicalUnit[]}
 
@@ -164,6 +170,12 @@ const classifyHeading = (block: FullTextLayoutBlock, converterDepth: number | nu
   return text === '' ? dropped('empty') : kept([{converterDepth, kind: 'heading', page: block.page, text}])
 }
 
+const classifyTitle = (block: FullTextLayoutBlock): BlockClassification => {
+  const text = normalizeInlineText(block.text)
+
+  return text === '' ? dropped('empty') : kept([{kind: 'title', page: block.page, text}])
+}
+
 const classifyEquation = (block: FullTextLayoutBlock, latex: boolean): BlockClassification => {
   const text = block.text.normalize('NFC').trim()
 
@@ -241,7 +253,7 @@ const classifyMineruBlock = (block: FullTextLayoutBlock): BlockClassification =>
       return classifyCode(block)
     },
     doc_title: () => {
-      return dropped('title')
+      return classifyTitle(block)
     },
     equation: () => {
       return classifyEquation(block, true)
@@ -321,7 +333,7 @@ const classifyDoclingContent = (block: FullTextLayoutBlock): BlockClassification
       return classifyTable(block)
     },
     title: () => {
-      return dropped('title')
+      return classifyTitle(block)
     },
   }
   const classifier = classifiers[block.type]
