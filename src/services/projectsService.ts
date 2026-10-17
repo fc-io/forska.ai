@@ -24,6 +24,7 @@ export type ProjectListItem = {
   modelVersion: string | null
   name: string
   updatedAt: Date | string | null
+  fullTextStrategyLabel?: string | null
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
