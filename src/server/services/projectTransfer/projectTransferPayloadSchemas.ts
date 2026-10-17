@@ -314,6 +314,20 @@ const assertNonNegativeInteger = (value: unknown, label: string): number => {
     : failProjectTransferPayload(`${label} must be a non-negative integer`)
 }
 
+const assertOptionalJudgmentFullTextMode = (value: unknown, label: string) => {
+  return value === undefined || value === null || value === 'single' || value === 'chunked'
+    ? (value ?? null)
+    : failProjectTransferPayload(`${label} must be single, chunked or null`)
+}
+
+const assertOptionalNullableNonNegativeInteger = (value: unknown, label: string) => {
+  return value === undefined || value === null ? null : assertNonNegativeInteger(value, label)
+}
+
+const assertOptionalNullableNonEmptyString = (value: unknown, label: string) => {
+  return value === undefined ? null : assertNullableNonEmptyString(value, label)
+}
+
 const assertFieldPresent = (record: JsonRecord, field: string, label: string) => {
   return hasOwn(record, field) ? undefined : failProjectTransferPayload(`${label} is missing required field ${field}`)
 }
@@ -871,6 +885,9 @@ const assertJudgmentPayload = (record: JsonRecord, label: string) => {
   assertNonNegativeInteger(record.confidenceOriginal, `${label}.confidenceOriginal`)
   assertProjectTransferContentSettings(record.contentSettings, `${label}.contentSettings`)
   assertProjectTransferSystemPromptVariant(record.systemPromptVariant, label)
+  assertOptionalJudgmentFullTextMode(record.fullTextMode, `${label}.fullTextMode`)
+  assertOptionalNullableNonNegativeInteger(record.chunkCount, `${label}.chunkCount`)
+  assertOptionalNullableNonEmptyString(record.chunkPlanHash, `${label}.chunkPlanHash`)
 
   if (record.fullTextStrategyId !== undefined) {
     assertNonEmptyString(record.fullTextStrategyId, `${label}.fullTextStrategyId`)

@@ -49,6 +49,8 @@ import {
   getProjectTransferJudgmentKeyMatchSql,
   projectTransferJudgmentReviewVisibleKeyColumns,
 } from './projectTransferJudgmentIdentityKey.ts'
+import {getProjectTransferLegacyEvidenceSystemPromptDigest} from './projectTransferLegacyEvidenceSystemPromptDigest.ts'
+import {getProjectTransferLegacyFullTextSignature} from './projectTransferLegacyFullTextSignature.ts'
 import {
   assertProjectTransferPayload,
   getProjectTransferSchemaVNextFingerprintSortKey,
@@ -1413,8 +1415,39 @@ const getProjectTransferExportAmbiguousJudgmentWarnings = async (
   })
 }
 
-const isProjectTransferExportChunkedJudgment = (row: ProjectTransferExportJudgmentRow): boolean => {
-  return row.chunkingStrategy !== null || row.fullTextMode === 'chunked'
+const projectTransferExportUnchunkedJudgmentWhereSql = `j.chunking_strategy IS NULL
+        AND j.full_text_mode IS DISTINCT FROM 'chunked'`
+
+const hasProjectTransferExportChunkingStrategy = (
+  row: Pick<ProjectTransferExportJudgmentRow, 'chunkingStrategy' | 'fullTextMode'>,
+) => {
+  return row.chunkingStrategy !== null
+}
+
+const hasProjectTransferExportChunkedFullTextMode = (
+  row: Pick<ProjectTransferExportJudgmentRow, 'chunkingStrategy' | 'fullTextMode'>,
+) => {
+  return row.fullTextMode === 'chunked'
+}
+
+const isProjectTransferExportChunkedJudgment = (
+  row: Pick<ProjectTransferExportJudgmentRow, 'chunkingStrategy' | 'fullTextMode'>,
+) => {
+  return hasProjectTransferExportChunkingStrategy(row) || hasProjectTransferExportChunkedFullTextMode(row)
+}
+
+const getProjectTransferExportJudgmentIds = (rows: ProjectTransferExportJudgmentRow[]) => {
+  return rows.map((row) => {
+    return row.judgmentId
+  })
+}
+
+const getProjectTransferExportJudgmentFullTextExecution = (
+  row: Pick<ProjectTransferExportJudgmentRow, 'chunkCount' | 'chunkPlanHash' | 'fullTextMode'>,
+) => {
+  const execution = getJudgmentFullTextExecution(row)
+
+  return execution.fullTextMode === null ? {} : execution
 }
 
 const getProjectTransferExportChunkedJudgmentWarnings = (rows: ProjectTransferExportJudgmentRow[]) => {
@@ -1427,10 +1460,14 @@ const getProjectTransferExportChunkedJudgmentWarnings = (rows: ProjectTransferEx
           action: 'omitted',
           code: 'chunkedJudgmentInputProofMissing',
           details: {
+            chunkedFullTextJudgmentIds: getProjectTransferExportJudgmentIds(
+              chunkedRows.filter(hasProjectTransferExportChunkedFullTextMode),
+            ),
+            chunkingStrategyJudgmentIds: getProjectTransferExportJudgmentIds(
+              chunkedRows.filter(hasProjectTransferExportChunkingStrategy),
+            ),
             omittedJudgmentCount: chunkedRows.length,
-            sourceJudgmentIds: chunkedRows.map((row) => {
-              return row.judgmentId
-            }),
+            sourceJudgmentIds: getProjectTransferExportJudgmentIds(chunkedRows),
           },
           jsonPointer: '/judgments',
           message: 'Omitted chunked source judgments without durable final-prompt and evidence proof.',
@@ -2144,23 +2181,32 @@ const getProjectTransferExportFullTextProcessingSignature = ({
   article,
   contentSettings,
   fullTextStrategyId,
+  promptTokenLimit,
 }: {
   article: ProjectTransferExportArticlePayloadRecord
   contentSettings: ProjectTransferContentSettings
   fullTextStrategyId: string
+  promptTokenLimit: number | null
 }) => {
   const includeFullText = contentSettings.useFulltext || contentSettings.useFulltextNoImages
   const fullText = includeFullText ? getStringValue(article.fullText) : null
+  const result =
+    fullText && promptTokenLimit !== null
+      ? getProjectTransferLegacyFullTextSignature(fullText, {
+          promptTokenLimit,
+          stripImages: contentSettings.useFulltextNoImages,
+        })
+      : null
 
   return {
     fullText,
     signature: {
       ...getProjectTransferExportFullTextStrategySignature(contentSettings, fullTextStrategyId),
-      maxTokens: null,
-      processedTextDigest: getSignatureTextDigest(fullText),
+      maxTokens: result?.maxTokens ?? null,
+      processedTextDigest: getSignatureTextDigest(result?.processedText ?? null),
       stripImages: contentSettings.useFulltextNoImages,
-      tokenCount: null,
-      withinBudget: null,
+      tokenCount: result?.tokenCount ?? null,
+      withinBudget: result?.withinBudget ?? null,
     },
   }
 }
@@ -2306,10 +2352,14 @@ export const getProjectTransferExportJudgmentInputSignature = ({
     article,
     contentSettings,
     fullTextStrategyId: resolvedFullTextStrategyId,
+    promptTokenLimit: modelRequestSignature.promptTokenLimit,
   })
   const articleRecord = getProjectTransferExportArticleRecordForSignature(article, fullTextProcessing.fullText)
   const resolvedSystemPromptVariant = getSystemPromptVariant(systemPromptVariant)
   const systemPrompt = getSinglePromptSystemPromptForArticle(articleRecord, providerKind, resolvedSystemPromptVariant)
+  const evidenceSystemPromptDigest = chunkingStrategy
+    ? getProjectTransferLegacyEvidenceSystemPromptDigest(articleRecord, providerKind)
+    : null
 
   return {
     article: {
@@ -2331,7 +2381,7 @@ export const getProjectTransferExportJudgmentInputSignature = ({
     provider: getProjectTransferExportProviderRequestSignature(providerConnection),
     request: {
       evidenceOutputSchemaDigest: getDigestValue(singlePromptEvidenceOutputSchema),
-      evidenceSystemPromptDigest: getSignatureTextDigest(null),
+      evidenceSystemPromptDigest,
       fullTextStrategyId: resolvedFullTextStrategyId,
       invocationTemperature: judgmentInvocationTemperature,
       maxRetries: judgmentMaxRetries,
@@ -2699,8 +2749,8 @@ const getProjectTransferExportJudgmentsPayloadFromContext = (context: ProjectTra
       return {
         answeredOriginal: row.answeredOriginal,
         answeredOriginalAsArray: getStringArrayValue(row.answeredOriginalAsArray),
+        ...getProjectTransferExportJudgmentFullTextExecution(row),
         chunkingStrategy: row.chunkingStrategy,
-        ...getJudgmentFullTextExecution(row),
         confidenceOriginal: row.confidenceOriginal ?? 50,
         contentSettings,
         createdAt: getIsoDateValue(row.createdAt),
@@ -3176,7 +3226,7 @@ const getProjectTransferExportPreflightPackageEstimate = async (
       INNER JOIN project_transfer_source_project project ON TRUE
       INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
       WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
-        AND j.chunking_strategy IS NULL
+        AND ${projectTransferExportUnchunkedJudgmentWhereSql}
     ),
     project_transfer_required_model AS (
       SELECT project.model_id
@@ -3547,7 +3597,7 @@ export const getProjectTransferExportSummary = async (
         ON ${getProjectTransferExportJudgmentAmbiguityJoinSql()}
       WHERE ${getProjectTransferExportAnsweredJudgmentCandidateWhereSql()}
         AND ambiguous.article_id IS NULL
-        AND j.chunking_strategy IS NULL
+        AND ${projectTransferExportUnchunkedJudgmentWhereSql}
     )
     SELECT
       (SELECT COUNT(*) FROM project_transfer_scope_article)::DOUBLE AS articleCount,

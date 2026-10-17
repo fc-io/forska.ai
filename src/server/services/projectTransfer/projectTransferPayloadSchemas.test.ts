@@ -248,6 +248,40 @@ test('accepts known judgment system prompt variants, keeps judgments without one
   expect(getValidationError(getJudgmentResult(1))).toContain('systemPromptVariant must be one of legacy, screening_v1')
 })
 
+test('accepts judgment full-text execution facts, keeps judgments without them importable, and rejects invalid values', () => {
+  const judgment = getOnlyRecord(getProjectTransferPayloadFixture('judgments'))
+  const getJudgmentError = (fullTextExecution: Record<string, unknown>) => {
+    return getValidationError(validateProjectTransferPayload('judgments', [{...judgment, ...fullTextExecution}]))
+  }
+  const chunkedJudgments = [{...judgment, chunkCount: 3, chunkPlanHash: 'chunk-plan-hash', fullTextMode: 'chunked'}]
+  const parsedChunkedJudgments = parseProjectTransferPayload(
+    'judgments',
+    serializeProjectTransferPayload('judgments', chunkedJudgments),
+  )
+
+  expect(
+    ['chunkCount', 'chunkPlanHash', 'fullTextMode'].some((key) => {
+      return Object.hasOwn(judgment, key)
+    }),
+  ).toBe(false)
+  expect(getJudgmentError({})).toBeNull()
+  expect(getJudgmentError({chunkCount: null, chunkPlanHash: null, fullTextMode: null})).toBeNull()
+  expect(getJudgmentError({chunkCount: null, chunkPlanHash: null, fullTextMode: 'single'})).toBeNull()
+  expect(getJudgmentError({chunkCount: 0, chunkPlanHash: 'chunk-plan-hash', fullTextMode: 'chunked'})).toBeNull()
+  expect(parsedChunkedJudgments[0]).toMatchObject({
+    chunkCount: 3,
+    chunkPlanHash: 'chunk-plan-hash',
+    fullTextMode: 'chunked',
+  })
+  expect(getJudgmentError({fullTextMode: 'paged'})).toContain('fullTextMode must be single, chunked or null')
+  expect(getJudgmentError({fullTextMode: ''})).toContain('fullTextMode must be single, chunked or null')
+  expect(getJudgmentError({chunkCount: -1})).toContain('chunkCount must be a non-negative integer')
+  expect(getJudgmentError({chunkCount: 2.5})).toContain('chunkCount must be a non-negative integer')
+  expect(getJudgmentError({chunkCount: '3'})).toContain('chunkCount must be a non-negative integer')
+  expect(getJudgmentError({chunkPlanHash: ''})).toContain('chunkPlanHash must not be empty')
+  expect(getJudgmentError({chunkPlanHash: 7})).toContain('chunkPlanHash must be a string')
+})
+
 test('rejects missing required signature fields and source ids outside provenance', () => {
   const project = getProjectTransferPayloadFixture('project')
   const article = getOnlyRecord(getProjectTransferPayloadFixture('articles'))

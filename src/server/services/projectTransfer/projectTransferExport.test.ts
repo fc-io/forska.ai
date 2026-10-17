@@ -301,6 +301,15 @@ test('project-transfer export reads archived app-table scope and serializes lock
       sourceJudgmentId: string
     }>
     strategyProjectSettings: Record<string, unknown>
+    strategyChunkedWarning: unknown
+    strategyJudgmentExecutions: Array<{
+      chunkCount: number | null
+      chunkPlanHash: string | null
+      fullTextMode: string | null
+      sourceJudgmentId: string
+    }>
+    strategySummaryJudgmentCount: number
+    archivedJudgmentsHaveFullTextExecutionKeys: boolean
     summaryFullTextStrategies: unknown[]
     summaryJudgmentStrategies: Array<{
       fullTextStrategyId: unknown
@@ -591,6 +600,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
         ('pp-summary', 'project-summary-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-metadata', 'project-metadata-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-strategy', 'project-strategy-export', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
+        ('pp-strategy-chunked', 'project-strategy-export', 'prompt-chunked', 2, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z'),
         ('pp-missing-provider', 'project-missing-provider', 'prompt-enabled', 1, TRUE, FALSE, 'include', 'inclusion', 'Inclusion', TIMESTAMPTZ '2026-01-01T00:00:00Z', TIMESTAMPTZ '2026-01-02T00:00:00Z')
     \`)
     await database.run(\`
@@ -973,6 +983,39 @@ test('project-transfer export reads archived app-table scope and serializes lock
         ('judgment-strategy-legacy-twin', 'article-route-in', 'prompt-enabled', 'model-null-remote', 'project-strategy-export', TRUE, TRUE, TRUE, FALSE, 'legacy', 'fts-legacy-v0', TRUE, 'no', ['no'], 66, 'legacy full-text explanation', CAST('[]' AS JSON), 0, TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z')
     \`)
     await database.run(\`
+      UPDATE app.judgment
+      SET full_text_mode = 'single'
+      WHERE id = 'judgment-strategy'
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        system_prompt_variant,
+        full_text_strategy_id,
+        full_text_mode,
+        chunk_count,
+        chunk_plan_hash,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original,
+        explanation,
+        quotes,
+        delete_generation,
+        created_at,
+        updated_at
+      )
+      VALUES ('judgment-strategy-chunked', 'article-route-in', 'prompt-chunked', 'model-null-remote', 'project-strategy-export', TRUE, TRUE, TRUE, FALSE, 'legacy', '\${fullTextStrategy.id}', 'chunked', 3, 'chunk-plan-hash-export', TRUE, 'yes', ['yes'], 75, 'chunked full-text explanation', CAST('[]' AS JSON), 0, TIMESTAMPTZ '2026-04-01T00:00:00Z', TIMESTAMPTZ '2026-04-02T00:00:00Z')
+    \`)
+    await database.run(\`
       INSERT INTO app.judgment_assessment (
         id,
         judgment_id,
@@ -1045,6 +1088,7 @@ test('project-transfer export reads archived app-table scope and serializes lock
     const summary = await getProjectTransferExportPayloads('project-summary-export')
     const metadata = await getProjectTransferExportPayloads('project-metadata-export')
     const strategy = await getProjectTransferExportPayloads('project-strategy-export')
+    const strategySummary = await getProjectTransferExportSummary('project-strategy-export')
     const metadataSourceSettings = await getProjectTransferExportSourceProjectSettings('project-metadata-export')
     const summarySourceSettings = await getProjectTransferExportSourceProjectSettings('project-summary-export')
     const serialized = serializeProjectTransferExportPayloads(archived.payloads)
@@ -1322,6 +1366,19 @@ test('project-transfer export reads archived app-table scope and serializes lock
         }
       }),
       strategyProjectSettings: strategy.payloads.project.settings,
+      strategyChunkedWarning: strategy.warnings.find((warning) => warning.code === 'chunkedJudgmentInputProofMissing') ?? null,
+      strategyJudgmentExecutions: strategy.payloads.judgments.map((judgment) => {
+        return {
+          chunkCount: judgment.chunkCount,
+          chunkPlanHash: judgment.chunkPlanHash,
+          fullTextMode: judgment.fullTextMode,
+          sourceJudgmentId: judgment.sourceJudgmentId,
+        }
+      }),
+      strategySummaryJudgmentCount: strategySummary.judgmentCount,
+      archivedJudgmentsHaveFullTextExecutionKeys: archived.payloads.judgments.some((judgment) => {
+        return ['chunkCount', 'chunkPlanHash', 'fullTextMode'].some((key) => Object.hasOwn(judgment, key))
+      }),
       summaryFullTextStrategies: summary.payloads.project.fullTextStrategies,
       summaryJudgmentStrategies: summary.payloads.judgments.map((judgment) => {
         return {
@@ -1412,6 +1469,23 @@ test('project-transfer export reads archived app-table scope and serializes lock
       sourceJudgmentId: 'judgment-strategy',
     },
   ])
+  expect(result.strategyJudgmentExecutions).toEqual([
+    {chunkCount: null, chunkPlanHash: null, fullTextMode: 'single', sourceJudgmentId: 'judgment-strategy'},
+  ])
+  expect(result.strategySummaryJudgmentCount).toBe(1)
+  expect(result.strategyChunkedWarning).toMatchObject({
+    action: 'omitted',
+    code: 'chunkedJudgmentInputProofMissing',
+    details: {
+      chunkedFullTextJudgmentIds: ['judgment-strategy-chunked'],
+      chunkingStrategyJudgmentIds: [],
+      omittedJudgmentCount: 1,
+      sourceJudgmentIds: ['judgment-strategy-chunked'],
+    },
+    scope: 'judgments',
+    severity: 'fidelity',
+  })
+  expect(result.archivedJudgmentsHaveFullTextExecutionKeys).toBe(false)
   expect(result.summaryProjectSettings).toMatchObject({
     fullTextChunkPolicy: null,
     fullTextFigureMode: null,
@@ -1617,7 +1691,12 @@ test('project-transfer export reads archived app-table scope and serializes lock
   expect(result.chunkedWarning).toMatchObject({
     action: 'omitted',
     code: 'chunkedJudgmentInputProofMissing',
-    details: {omittedJudgmentCount: 1, sourceJudgmentIds: ['judgment-chunked-no-proof']},
+    details: {
+      chunkedFullTextJudgmentIds: [],
+      chunkingStrategyJudgmentIds: ['judgment-chunked-no-proof'],
+      omittedJudgmentCount: 1,
+      sourceJudgmentIds: ['judgment-chunked-no-proof'],
+    },
     scope: 'judgments',
     severity: 'fidelity',
   })
@@ -1821,7 +1900,7 @@ test('project-transfer judgment input signatures are stable across database id r
     getProjectTransferJudgmentAnalysisInputSignatureDigest(signature),
   )
   expect(getProjectTransferJudgmentAnalysisInputSignatureDigest(signature)).toBe(
-    '24fa980be82475b5cc6c843b8c553720b6c13eed0581cfabcf1d6c4b8007d6b2',
+    '72b49c813ca49f460c680e19d266ffcaa615298a969b3426ad87adbed7c827af',
   )
   expect(metadataOffSignature).toEqual(signature)
   expect(Object.hasOwn(signature.contentSettings, 'useMetadata')).toBe(false)
@@ -1900,6 +1979,74 @@ test('project-transfer judgment input signatures digest a full-text strategy and
   expect(getProjectTransferJudgmentAnalysisInputSignatureDigest(strategySignature)).not.toBe(
     getProjectTransferJudgmentAnalysisInputSignatureDigest(legacySignature),
   )
+})
+
+test('project-transfer chunked judgment input signatures keep the evidence prompt and legacy full-text digests byte for byte', () => {
+  type JudgmentSignatureInput = Parameters<typeof getProjectTransferExportJudgmentInputSignature>[0]
+  const input = {
+    article: {
+      articleId: 'ext-1',
+      articleSummary: 'Abstract',
+      articleTitle: 'Title',
+      fullText: `Body ![i](data:image/png;base64,AAAA) more text ${'x'.repeat(3000)}`,
+      fullTextSource: 'pdf',
+      identifierInputs: [],
+      importRoute: 'covidence',
+      provenance: {sourceArticleId: 's'},
+      signature: {identifierKeys: [], title: 'Title'},
+      sourceArticleId: 's',
+    },
+    chunkingStrategy: 'article_paragraph_greedy',
+    contentSettings: {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useTitle: true},
+    model: {
+      metadataJson: {discovery: {contextWindow: {totalTokens: 8000}}},
+      modelId: 'm',
+      name: 'M',
+      providerConnectionId: 'p',
+      remoteModelId: 'r',
+      variant: null,
+    },
+    prompt: {contentHash: 'h', originalText: 'Include?', promptHeading: null, type: 'string'},
+    providerConnection: {
+      authMode: 'apiKey',
+      baseURL: null,
+      configJson: null,
+      providerConnectionId: 'p',
+      providerKind: 'openai',
+    },
+  } as unknown as JudgmentSignatureInput
+  const signatures = ['openai', 'anthropic', 'codex'].map((providerKind) => {
+    return getProjectTransferExportJudgmentInputSignature({
+      ...input,
+      providerConnection: {...input.providerConnection, providerKind},
+    })
+  })
+
+  expect(
+    signatures.map((signature) => {
+      return [
+        signature.request.evidenceSystemPromptDigest,
+        getProjectTransferJudgmentAnalysisInputSignatureDigest(signature),
+      ]
+    }),
+  ).toEqual([
+    [
+      '6cdd5f8c60627808e58b7045a8bd2d79361bcb5ce9bc9b29afdb26983d446a75',
+      '1787f3dba30ccaa8da46ffcf0d7f8bae92387e817eea25d352c711f80cce67d3',
+    ],
+    [
+      '3e95a2b9b34cbf5baa3e8351d541cdfcb045b2179a6947df49a267c5db62482c',
+      '1d2cd71b095ce14b4d00d9d4ed572a5e5ce20c1fa2728b87a32e2b5092a629ed',
+    ],
+    [
+      '6cdd5f8c60627808e58b7045a8bd2d79361bcb5ce9bc9b29afdb26983d446a75',
+      '987dcfbe8c61f83125f94f7507a2507cd307426e8cce2a6c707939193c0ee0cf',
+    ],
+  ])
+  expect(
+    getProjectTransferExportJudgmentInputSignature({...input, chunkingStrategy: null}).request
+      .evidenceSystemPromptDigest,
+  ).toBeNull()
 })
 
 test('project-transfer human review input signatures omit database ids and detect content mismatches', () => {
