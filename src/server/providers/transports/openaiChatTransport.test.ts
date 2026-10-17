@@ -1,11 +1,23 @@
+import {readFileSync} from 'node:fs'
+
 import {expect, mock, test} from 'bun:test'
 
+import {flattenFigureImage} from '../../fullText/figureImageEncoding.ts'
+import {getProviderImageBase64} from '../providerImageInput.ts'
 import {
   getOpenAIChatCompletionRequest,
   getOpenAIListedModels,
   invokeOpenAIChatModel,
   isQwen35Model,
 } from './openaiChatTransport.ts'
+
+const transparentPng = {
+  bytes: new Uint8Array(
+    readFileSync(new URL('../../fullText/fixtures/figureImages/transparent-3x2.png', import.meta.url)),
+  ),
+  mimeType: 'image/png' as const,
+}
+const flattenedPngBase64 = getProviderImageBase64(flattenFigureImage(transparentPng))
 
 test('detects Qwen3.5 model ids', () => {
   expect(isQwen35Model('Qwen/Qwen3.5-27B')).toBe(true)
@@ -114,10 +126,7 @@ test('maps image prompts to a text part followed by image_url data URIs', () => 
     modelName: 'qwen3-vl:2b-instruct',
     outputSchema: {type: 'object'},
     prompt: {
-      images: [
-        {bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg'},
-        {bytes: new Uint8Array([4, 5]), mimeType: 'image/png'},
-      ],
+      images: [{bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xe0), mimeType: 'image/jpeg'}, transparentPng],
       text: 'Describe the figure.',
     },
     systemPrompt: 'System',
@@ -129,8 +138,8 @@ test('maps image prompts to a text part followed by image_url data URIs', () => 
     {
       content: [
         {text: 'Describe the figure.', type: 'text'},
-        {image_url: {url: 'data:image/jpeg;base64,AQID'}, type: 'image_url'},
-        {image_url: {url: 'data:image/png;base64,BAU='}, type: 'image_url'},
+        {image_url: {url: 'data:image/jpeg;base64,/9j/4A=='}, type: 'image_url'},
+        {image_url: {url: `data:image/png;base64,${flattenedPngBase64}`}, type: 'image_url'},
       ],
       role: 'user',
     },
@@ -173,7 +182,7 @@ test('posts the multipart chat payload over the wire', async () => {
     maxCompletionTokens: 256,
     modelName: 'qwen3-vl:2b-instruct',
     outputSchema: {type: 'object'},
-    prompt: {images: [{bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg'}], text: 'Describe.'},
+    prompt: {images: [{bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xe0), mimeType: 'image/jpeg'}], text: 'Describe.'},
     systemPrompt: 'System',
     temperature: 0,
   }).finally(() => {
@@ -187,7 +196,7 @@ test('posts the multipart chat payload over the wire', async () => {
   expect(body.messages[1]).toEqual({
     content: [
       {text: 'Describe.', type: 'text'},
-      {image_url: {url: 'data:image/jpeg;base64,AQID'}, type: 'image_url'},
+      {image_url: {url: 'data:image/jpeg;base64,/9j/4A=='}, type: 'image_url'},
     ],
     role: 'user',
   })
@@ -233,7 +242,7 @@ test('the Ollama adapter posts image prompts with max_tokens', async () => {
       request: {
         maxCompletionTokens: 1024,
         outputSchema: {type: 'object'},
-        prompt: {images: [{bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg'}], text: 'Describe.'},
+        prompt: {images: [{bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xe0), mimeType: 'image/jpeg'}], text: 'Describe.'},
         systemPrompt: 'System',
         temperature: 0.7,
       },
@@ -251,7 +260,7 @@ test('the Ollama adapter posts image prompts with max_tokens', async () => {
     {
       content: [
         {text: 'Describe.', type: 'text'},
-        {image_url: {url: 'data:image/jpeg;base64,AQID'}, type: 'image_url'},
+        {image_url: {url: 'data:image/jpeg;base64,/9j/4A=='}, type: 'image_url'},
       ],
       role: 'user',
     },

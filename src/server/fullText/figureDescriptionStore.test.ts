@@ -136,7 +136,7 @@ const seedArticle = async ({
 }) => {
   await Promise.all(
     assets.map((asset) => {
-      return writeFiles ? writeCrop(id, Number(asset.index), [255, 216, Number(asset.index)]) : Promise.resolve()
+      return writeFiles ? writeCrop(id, Number(asset.index), [255, 216, 255, Number(asset.index)]) : Promise.resolve()
     }),
   )
   await getDependencies().database.run(`
@@ -355,7 +355,7 @@ test('the batch describes each figure once, writes the asset fields and appends 
     }),
   ).toEqual({
     caption: 'Caption: Figure 1 of a-new\n\nDescribe the attached figure.',
-    imageUrls: ['data:image/jpeg;base64,/9gB'],
+    imageUrls: ['data:image/jpeg;base64,/9j/AQ=='],
     model: modelId,
   })
 })
@@ -497,4 +497,16 @@ test('ensureFigureDescriptions refuses to run without a figure-description model
 
   expect(error).toBe('No figure-description model is configured. Set it in Settings.')
   expect(await getDependencies().jobs.runFigureDescriptionBatch()).toEqual({candidates: 0, outcomes: {}})
+})
+
+test('oversize and undecodable figure images fail permanently instead of being retried', () => {
+  const {isPermanentFigureDescriptionFailure} = getDependencies().store
+
+  expect(
+    [
+      {code: 'provider_image_too_large'},
+      {code: 'figure_image_encoding_invalid'},
+      {code: 'provider_request_failed'},
+    ].map(isPermanentFigureDescriptionFailure),
+  ).toEqual([true, true, false])
 })

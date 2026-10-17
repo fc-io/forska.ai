@@ -1,4 +1,4 @@
-import {getProviderImageBase64, getProviderPromptParts} from '../providerImageInput.ts'
+import {getProviderImageBase64, getProviderPromptParts, getProviderTransportImages} from '../providerImageInput.ts'
 import {type ProviderInvocationResult, type ProviderInvokePrompt, type ProviderListedModel} from '../providerTypes.ts'
 import {getRequiredApiKey, getRequiredBaseURL, getTrimmedValue} from './providerTransportUtils.ts'
 
@@ -13,7 +13,7 @@ const getGeminiUserParts = (prompt: ProviderInvokePrompt): GeminiContentPart[] =
 
   return [
     {text: parts.text},
-    ...parts.images.map((image): GeminiContentPart => {
+    ...getProviderTransportImages(parts.images).map((image): GeminiContentPart => {
       return {inlineData: {data: getProviderImageBase64(image), mimeType: image.mimeType}}
     }),
   ]

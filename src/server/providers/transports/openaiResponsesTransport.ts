@@ -1,4 +1,4 @@
-import {getProviderImageDataUrl, getProviderPromptParts} from '../providerImageInput.ts'
+import {getProviderImageDataUrl, getProviderPromptParts, getProviderTransportImages} from '../providerImageInput.ts'
 import {type ProviderInvocationResult, type ProviderInvokePrompt, type ProviderListedModel} from '../providerTypes.ts'
 import {
   getJsonSchemaTextFormat,
@@ -16,7 +16,7 @@ const getOpenAIResponsesUserContent = (prompt: ProviderInvokePrompt): OpenAIResp
     ? parts.text
     : [
         {text: parts.text, type: 'input_text'},
-        ...parts.images.map((image): OpenAIResponsesContentPart => {
+        ...getProviderTransportImages(parts.images).map((image): OpenAIResponsesContentPart => {
           return {image_url: getProviderImageDataUrl(image), type: 'input_image'}
         }),
       ]

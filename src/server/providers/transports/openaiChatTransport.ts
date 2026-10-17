@@ -1,6 +1,6 @@
 import {getProviderModelOptions, type ProviderModelOptions} from '../../../utils/providerModelOptions.ts'
 import {isQwen35Model} from '../../../utils/qwen35Thinking.ts'
-import {getProviderImageDataUrl, getProviderPromptParts} from '../providerImageInput.ts'
+import {getProviderImageDataUrl, getProviderPromptParts, getProviderTransportImages} from '../providerImageInput.ts'
 import {type ProviderInvocationResult, type ProviderInvokePrompt, type ProviderListedModel} from '../providerTypes.ts'
 import {
   getJsonSchemaResponseFormat,
@@ -50,7 +50,7 @@ const getOpenAIChatUserContent = (prompt: ProviderInvokePrompt): OpenAIChatConte
     ? parts.text
     : [
         {text: parts.text, type: 'text'},
-        ...parts.images.map((image): OpenAIChatContentPart => {
+        ...getProviderTransportImages(parts.images).map((image): OpenAIChatContentPart => {
           return {image_url: {url: getProviderImageDataUrl(image)}, type: 'image_url'}
         }),
       ]

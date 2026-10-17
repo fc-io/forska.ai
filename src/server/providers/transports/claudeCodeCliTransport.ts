@@ -3,11 +3,15 @@ import {statSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import {flattenFigureImages} from '../../fullText/figureImageEncoding.ts'
 import {ensureClaudeCodeCliWorkDir, getDefaultClaudeCodeCliWorkDir} from '../../utils/claudeCodeCliHome.ts'
 import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
 import {claudeCodeFailureCodes} from '../claudeCodeFailureCodes.ts'
-import {getProviderImageBase64, getProviderPromptParts, isProviderMultipartPrompt} from '../providerImageInput.ts'
+import {
+  getProviderImageBase64,
+  getProviderPromptParts,
+  getProviderTransportImages,
+  isProviderMultipartPrompt,
+} from '../providerImageInput.ts'
 import {
   type ProviderHealthResult,
   ProviderInvocationError,
@@ -682,7 +686,7 @@ const getClaudeCodeImageBlock = (image: ProviderInvokeImage) => {
 }
 
 export const getClaudeCodeStreamJsonUserMessage = ({images, text}: ProviderMultipartPrompt): string => {
-  const content = [{text, type: 'text'}, ...flattenFigureImages(images).map(getClaudeCodeImageBlock)]
+  const content = [{text, type: 'text'}, ...getProviderTransportImages(images).map(getClaudeCodeImageBlock)]
 
   return `${JSON.stringify({message: {content, role: 'user'}, type: 'user'})}\n`
 }
