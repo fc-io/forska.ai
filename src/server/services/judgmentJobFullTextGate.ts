@@ -12,12 +12,15 @@ import {
 } from '../fullText/fullTextStrategy.ts'
 import {getFullTextStrategyEnvironment} from '../fullText/fullTextStrategyEnvironment.ts'
 import {type FullTextStrategyEnvironment, resolveFullTextStrategy} from '../fullText/fullTextStrategyResolver.ts'
+import {getNativeImagesModelErrorMessage, nativeImagesModelAcceptsImages} from '../fullText/nativeImagesModelCheck.ts'
+import {providerTransportSupportsImageInput} from '../providers/providerImageInput.ts'
 import {
   getModelContextWindowMissingMessage,
   getProviderModelContextLimits,
   type ProviderModelCapabilityModel,
   resolveProviderModelCapabilities,
 } from '../providers/providerModelCapabilities.ts'
+import {getProviderRegistryEntry} from '../providers/providerRegistry.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
@@ -87,7 +90,7 @@ export const getModelPromptLimitTooSmallMessage = ({
 }
 
 export const getModelImageInputUnsupportedMessage = (model: ProjectFullTextGateModel): string => {
-  return `Model ${getModelReference(model)} cannot receive images. Choose figure mode Descriptions or None, or another model.`
+  return getNativeImagesModelErrorMessage(getModelReference(model))
 }
 
 export const getModelImageInputUnverifiedMessage = (model: ProjectFullTextGateModel): string => {
@@ -158,6 +161,12 @@ const getContextWindowError = ({
       : null
 }
 
+const isImageInputTransport = (providerKind: string | null): boolean => {
+  const transportFamily = getProviderRegistryEntry(providerKind)?.transportFamily ?? null
+
+  return transportFamily !== null && providerTransportSupportsImageInput(transportFamily)
+}
+
 const getImageInputError = ({
   model,
   selection,
@@ -167,9 +176,10 @@ const getImageInputError = ({
 }): string | null => {
   const imageInput = resolveProviderModelCapabilities(model).supportsImageInput
 
-  return selection.fullTextFigureMode !== 'native_images' || imageInput?.value === true
+  return selection.fullTextFigureMode !== 'native_images'
+    || nativeImagesModelAcceptsImages({...model, label: model.modelName})
     ? null
-    : imageInput === null
+    : imageInput === null && isImageInputTransport(model.providerKind)
       ? getModelImageInputUnverifiedMessage(model)
       : getModelImageInputUnsupportedMessage(model)
 }

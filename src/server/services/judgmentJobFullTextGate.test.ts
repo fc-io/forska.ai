@@ -22,7 +22,7 @@ const environment: FullTextStrategyEnvironment = {
   canonicalTextVersion: 'canonical-v1',
   conversionModel,
   figureDescription: null,
-  imageTransportVersion: null,
+  imageTransportVersion: 'img-v1',
 }
 
 const context: ProjectFullTextGateContext = {
@@ -134,15 +134,34 @@ test('native images needs a model whose image input is verified true', () => {
     selection: nativeImages,
   })
 
+  const textOnlyTransport = evaluateProjectFullTextGate({
+    context,
+    model: {...getDiscoveredModel(131_072), providerKind: 'mineru'},
+    selection: nativeImages,
+  })
+
   expect(unsupported.errors).toEqual([
-    fullTextStrategyErrorMessages.imageTransportMissing,
     'Model Judge (sglang) cannot receive images. Choose figure mode Descriptions or None, or another model.',
   ])
   expect(unverified.errors).toEqual([
-    fullTextStrategyErrorMessages.imageTransportMissing,
     'Model Judge (sglang) has no verified image input. Set it on the Models page, or choose figure mode Descriptions or None, or another model.',
   ])
-  expect(supported.errors).toEqual([fullTextStrategyErrorMessages.imageTransportMissing])
+  expect(supported.errors).toEqual([])
+  expect(textOnlyTransport.errors).toEqual([
+    'Model Judge (mineru) cannot receive images. Choose figure mode Descriptions or None, or another model.',
+  ])
+})
+
+test('native images without image transports in this build is the resolver error', () => {
+  const gate = evaluateProjectFullTextGate({
+    context: {...context, environment: {...environment, imageTransportVersion: null}},
+    model: getDiscoveredModel(131_072, {
+      capabilityOverrides: {supportsImageInput: true, updatedAt: '2026-10-17T10:00:00.000Z'},
+    }),
+    selection: {...selection, fullTextFigureMode: 'native_images'},
+  })
+
+  expect(gate.errors).toEqual([fullTextStrategyErrorMessages.imageTransportMissing])
 })
 
 test('descriptions without a figure-description model is the resolver error pointing at Settings', () => {
