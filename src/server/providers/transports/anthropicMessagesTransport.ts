@@ -1,5 +1,11 @@
 import {getAnthropicThinkingConfig} from '../../../utils/anthropicThinking.ts'
-import {ProviderInvocationError, type ProviderInvocationResult, type ProviderListedModel} from '../providerTypes.ts'
+import {getProviderImageBase64, getProviderPromptParts} from '../providerImageInput.ts'
+import {
+  ProviderInvocationError,
+  type ProviderInvocationResult,
+  type ProviderInvokePrompt,
+  type ProviderListedModel,
+} from '../providerTypes.ts'
 import {
   getAnthropicJsonSchemaOutputConfig,
   getRequiredApiKey,
@@ -74,6 +80,22 @@ const getAnthropicMaxOutputTokens = (modelName: string): number | null => {
       : null
 }
 
+export const getAnthropicUserContent = (prompt: ProviderInvokePrompt): AnthropicContentBlock[] | string => {
+  const parts = getProviderPromptParts(prompt)
+
+  return parts.images.length === 0
+    ? parts.text
+    : [
+        {text: parts.text, type: 'text'},
+        ...parts.images.map((image): AnthropicContentBlock => {
+          return {
+            source: {data: getProviderImageBase64(image), media_type: image.mimeType, type: 'base64'},
+            type: 'image',
+          }
+        }),
+      ]
+}
+
 const getAnthropicMessagesRequestBody = ({
   maxCompletionTokens,
   messages,
@@ -124,13 +146,13 @@ const invokeAnthropicMessagesRun = async ({
   maxCompletionTokens: number
   modelName: string
   outputSchema: unknown
-  prompt: string
+  prompt: ProviderInvokePrompt
   signal?: AbortSignal
   systemPrompt: string
   temperature: number
   thinkingVersion: string | null
 }): Promise<AnthropicInvocationRunResult> => {
-  const messages: AnthropicMessage[] = [{content: prompt, role: 'user'}]
+  const messages: AnthropicMessage[] = [{content: getAnthropicUserContent(prompt), role: 'user'}]
   let completionTokens = 0
   let promptTokens = 0
   let text = ''
@@ -314,7 +336,7 @@ export const invokeAnthropicMessagesModel = async ({
   maxCompletionTokens: number
   modelName: string
   outputSchema: unknown
-  prompt: string
+  prompt: ProviderInvokePrompt
   signal?: AbortSignal
   systemPrompt: string
   temperature: number

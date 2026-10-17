@@ -242,10 +242,16 @@ export type ProviderManualModelInput = {
   variant: string | null
 }
 
+export type ProviderInvokeImage = {bytes: Uint8Array; mimeType: 'image/jpeg' | 'image/png'}
+
+export type ProviderMultipartPrompt = {images: ProviderInvokeImage[]; text: string}
+
+export type ProviderInvokePrompt = ProviderMultipartPrompt | string
+
 export type ProviderInvokeRequest = {
   maxCompletionTokens: number
   outputSchema: unknown
-  prompt: string
+  prompt: ProviderInvokePrompt
   signal?: AbortSignal
   systemPrompt: string
   temperature: number

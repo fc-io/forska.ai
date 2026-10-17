@@ -1,6 +1,7 @@
 import {getProviderModelOptions, type ProviderModelOptions} from '../../../utils/providerModelOptions.ts'
 import {isQwen35Model} from '../../../utils/qwen35Thinking.ts'
-import {type ProviderInvocationResult, type ProviderListedModel} from '../providerTypes.ts'
+import {getProviderImageDataUrl, getProviderPromptParts} from '../providerImageInput.ts'
+import {type ProviderInvocationResult, type ProviderInvokePrompt, type ProviderListedModel} from '../providerTypes.ts'
 import {
   getJsonSchemaResponseFormat,
   getOpenAIClient,
@@ -12,10 +13,12 @@ import {
 
 export {isQwen35Model} from '../../../utils/qwen35Thinking.ts'
 
+type OpenAIChatContentPart = {text: string; type: 'text'} | {image_url: {url: string}; type: 'image_url'}
+
 type OpenAIChatCompletionRequest = {
   chat_template_kwargs?: {enable_thinking: boolean}
   max_completion_tokens: number
-  messages: Array<{content: string; role: 'system' | 'user'}>
+  messages: Array<{content: OpenAIChatContentPart[] | string; role: 'system' | 'user'}>
   model: string
   presence_penalty?: number
   reasoning_effort?: string
@@ -35,6 +38,19 @@ const getQwen35SamplingConfig = (): Pick<
   'presence_penalty' | 'temperature' | 'top_k' | 'top_p'
 > => {
   return {presence_penalty: 2.0, temperature: 1.0, top_k: 40, top_p: 1.0}
+}
+
+const getOpenAIChatUserContent = (prompt: ProviderInvokePrompt): OpenAIChatContentPart[] | string => {
+  const parts = getProviderPromptParts(prompt)
+
+  return parts.images.length === 0
+    ? parts.text
+    : [
+        {text: parts.text, type: 'text'},
+        ...parts.images.map((image): OpenAIChatContentPart => {
+          return {image_url: {url: getProviderImageDataUrl(image)}, type: 'image_url'}
+        }),
+      ]
 }
 
 export const getOpenAIListedModels = ({
@@ -60,7 +76,7 @@ export const getOpenAIChatCompletionRequest = ({
   modelOptions?: ProviderModelOptions | null
   modelName: string
   outputSchema: unknown
-  prompt: string
+  prompt: ProviderInvokePrompt
   systemPrompt: string
   temperature: number
 }): OpenAIChatCompletionRequest => {
@@ -68,7 +84,7 @@ export const getOpenAIChatCompletionRequest = ({
     max_completion_tokens: maxCompletionTokens,
     messages: [
       {content: systemPrompt, role: 'system' as const},
-      {content: prompt, role: 'user' as const},
+      {content: getOpenAIChatUserContent(prompt), role: 'user' as const},
     ],
     model: modelName,
     response_format: getJsonSchemaResponseFormat(outputSchema),
@@ -129,7 +145,7 @@ export const invokeOpenAIChatModel = async ({
   modelOptions?: ProviderModelOptions | null
   modelName: string
   outputSchema: unknown
-  prompt: string
+  prompt: ProviderInvokePrompt
   signal?: AbortSignal
   systemPrompt: string
   temperature: number

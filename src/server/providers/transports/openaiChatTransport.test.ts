@@ -1,6 +1,11 @@
-import {expect, test} from 'bun:test'
+import {expect, mock, test} from 'bun:test'
 
-import {getOpenAIChatCompletionRequest, getOpenAIListedModels, isQwen35Model} from './openaiChatTransport.ts'
+import {
+  getOpenAIChatCompletionRequest,
+  getOpenAIListedModels,
+  invokeOpenAIChatModel,
+  isQwen35Model,
+} from './openaiChatTransport.ts'
 
 test('detects Qwen3.5 model ids', () => {
   expect(isQwen35Model('Qwen/Qwen3.5-27B')).toBe(true)
@@ -101,4 +106,89 @@ test('lists OpenAI models without transport-specific variants', () => {
       version: null,
     },
   ])
+})
+
+test('maps image prompts to a text part followed by image_url data URIs', () => {
+  const request = getOpenAIChatCompletionRequest({
+    maxCompletionTokens: 256,
+    modelName: 'qwen3-vl:2b-instruct',
+    outputSchema: {type: 'object'},
+    prompt: {
+      images: [
+        {bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg'},
+        {bytes: new Uint8Array([4, 5]), mimeType: 'image/png'},
+      ],
+      text: 'Describe the figure.',
+    },
+    systemPrompt: 'System',
+    temperature: 0,
+  })
+
+  expect(request.messages).toEqual([
+    {content: 'System', role: 'system'},
+    {
+      content: [
+        {text: 'Describe the figure.', type: 'text'},
+        {image_url: {url: 'data:image/jpeg;base64,AQID'}, type: 'image_url'},
+        {image_url: {url: 'data:image/png;base64,BAU='}, type: 'image_url'},
+      ],
+      role: 'user',
+    },
+  ])
+})
+
+test('keeps text-only prompts as a plain string user message', () => {
+  const request = getOpenAIChatCompletionRequest({
+    maxCompletionTokens: 256,
+    modelName: 'qwen2.5:1.5b',
+    outputSchema: {type: 'object'},
+    prompt: 'Prompt',
+    systemPrompt: 'System',
+    temperature: 0,
+  })
+
+  expect(request.messages[1]).toEqual({content: 'Prompt', role: 'user'})
+})
+
+test('posts the multipart chat payload over the wire', async () => {
+  const originalFetch = globalThis.fetch
+  const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    return new Response(
+      JSON.stringify({
+        choices: [{finish_reason: 'stop', index: 0, message: {content: '{"description":"x"}', role: 'assistant'}}],
+        created: 0,
+        id: 'chatcmpl-test',
+        model: 'qwen3-vl:2b-instruct',
+        object: 'chat.completion',
+        usage: {completion_tokens: 3, prompt_tokens: 40, total_tokens: 43},
+      }),
+      {headers: {'content-type': 'application/json'}, status: 200},
+    )
+  })
+  globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+
+  const result = await invokeOpenAIChatModel({
+    apiKey: null,
+    baseURL: `http://openai-chat-image-${Date.now()}.test/v1`,
+    maxCompletionTokens: 256,
+    modelName: 'qwen3-vl:2b-instruct',
+    outputSchema: {type: 'object'},
+    prompt: {images: [{bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg'}], text: 'Describe.'},
+    systemPrompt: 'System',
+    temperature: 0,
+  }).finally(() => {
+    globalThis.fetch = originalFetch
+  })
+  const init = fetchMock.mock.calls[0]?.[1]
+  const body = JSON.parse(init?.body as string) as {messages: unknown[]}
+
+  expect(result.text).toBe('{"description":"x"}')
+  expect(String(fetchMock.mock.calls[0]?.[0] as string)).toEndWith('/v1/chat/completions')
+  expect(body.messages[1]).toEqual({
+    content: [
+      {text: 'Describe.', type: 'text'},
+      {image_url: {url: 'data:image/jpeg;base64,AQID'}, type: 'image_url'},
+    ],
+    role: 'user',
+  })
 })

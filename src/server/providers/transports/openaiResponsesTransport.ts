@@ -1,10 +1,53 @@
-import {type ProviderInvocationResult, type ProviderListedModel} from '../providerTypes.ts'
+import {getProviderImageDataUrl, getProviderPromptParts} from '../providerImageInput.ts'
+import {type ProviderInvocationResult, type ProviderInvokePrompt, type ProviderListedModel} from '../providerTypes.ts'
 import {
   getJsonSchemaTextFormat,
   getOpenAIClient,
   getRequiredApiKey,
   getRequiredBaseURL,
 } from './providerTransportUtils.ts'
+
+type OpenAIResponsesContentPart = {text: string; type: 'input_text'} | {image_url: string; type: 'input_image'}
+
+const getOpenAIResponsesUserContent = (prompt: ProviderInvokePrompt): OpenAIResponsesContentPart[] | string => {
+  const parts = getProviderPromptParts(prompt)
+
+  return parts.images.length === 0
+    ? parts.text
+    : [
+        {text: parts.text, type: 'input_text'},
+        ...parts.images.map((image): OpenAIResponsesContentPart => {
+          return {image_url: getProviderImageDataUrl(image), type: 'input_image'}
+        }),
+      ]
+}
+
+export const getOpenAIResponsesRequest = ({
+  maxCompletionTokens,
+  modelName,
+  outputSchema,
+  prompt,
+  systemPrompt,
+  temperature,
+}: {
+  maxCompletionTokens?: number | null
+  modelName: string
+  outputSchema: unknown
+  prompt: ProviderInvokePrompt
+  systemPrompt: string
+  temperature: number
+}) => {
+  return {
+    input: [
+      {content: systemPrompt, role: 'system'},
+      {content: getOpenAIResponsesUserContent(prompt), role: 'user'},
+    ],
+    model: modelName,
+    temperature,
+    text: getJsonSchemaTextFormat(outputSchema),
+    ...(typeof maxCompletionTokens === 'number' ? {max_output_tokens: maxCompletionTokens} : {}),
+  }
+}
 
 export const listOpenAIResponseModels = async ({
   apiKey,
@@ -50,7 +93,7 @@ export const invokeOpenAIResponsesModel = async ({
   maxCompletionTokens?: number | null
   modelName: string
   outputSchema: unknown
-  prompt: string
+  prompt: ProviderInvokePrompt
   signal?: AbortSignal
   systemPrompt: string
   temperature: number
@@ -59,16 +102,14 @@ export const invokeOpenAIResponsesModel = async ({
   const requiredApiKey = getRequiredApiKey({apiKey, providerLabel: 'OpenAI API'})
   const client = getOpenAIClient({apiKey: requiredApiKey, baseURL: resolvedBaseURL})
   const response = await client.responses.create(
-    {
-      input: [
-        {content: systemPrompt, role: 'system'},
-        {content: prompt, role: 'user'},
-      ],
-      model: modelName,
+    getOpenAIResponsesRequest({
+      maxCompletionTokens,
+      modelName,
+      outputSchema,
+      prompt,
+      systemPrompt,
       temperature,
-      text: getJsonSchemaTextFormat(outputSchema),
-      ...(typeof maxCompletionTokens === 'number' ? {max_output_tokens: maxCompletionTokens} : {}),
-    } as never,
+    }) as never,
     {signal},
   )
   const usage = response.usage
