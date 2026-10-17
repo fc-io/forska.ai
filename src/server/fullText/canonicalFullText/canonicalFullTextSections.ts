@@ -1,13 +1,15 @@
+import {type CanonicalBodySequence, dropFrontMatter} from './canonicalFullTextFrontMatter.ts'
+import {getHeadingKey, getHeadingNumberDepth, isCorrespondenceText} from './canonicalFullTextPatterns.ts'
 import {
+  type CanonicalBodyUnit,
   type CanonicalDropReason,
   type CanonicalHeadingUnit,
-  type CanonicalUnit,
   type CanonicalUnitSequence,
 } from './canonicalFullTextUnits.ts'
 
 export type CanonicalBreadcrumbHeading = {breadcrumb: string[]; kind: 'heading'; page: number}
 
-export type CanonicalRenderUnit = Exclude<CanonicalUnit, CanonicalHeadingUnit> | CanonicalBreadcrumbHeading
+export type CanonicalRenderUnit = Exclude<CanonicalBodyUnit, CanonicalHeadingUnit> | CanonicalBreadcrumbHeading
 
 type DroppedSection = {depth: number; reason: CanonicalDropReason}
 
@@ -16,34 +18,13 @@ type SectionState = {
   droppedSection: DroppedSection | null
   referencesSeen: boolean
   supplementaryDepth: number | null
-  units: CanonicalUnit[]
+  units: CanonicalBodyUnit[]
 }
 
 type BreadcrumbState = {stack: {depth: number; text: string}[]; units: CanonicalRenderUnit[]}
 
-const frontMatterMaxHeadingPage = 2
-const frontMatterMaxBodyStartPage = 3
 const supplementaryLinkMaxLength = 400
 const referenceFragmentMaxLength = 400
-
-const frontMatterHeadingKeys = new Set([
-  'abstract',
-  'articlehistory',
-  'articleinfo',
-  'articleinformation',
-  'citation',
-  'copyright',
-  'correspondence',
-  'editedby',
-  'graphicalabstract',
-  'highlights',
-  'keypoints',
-  'keyword',
-  'keywords',
-  'openaccess',
-  'reviewedby',
-  'summary',
-])
 
 const referenceHeadingKeys = new Set([
   'bibliography',
@@ -78,75 +59,8 @@ const supplementaryHeadingKeys = new Set([
   'supportinginformation',
 ])
 
-export const getHeadingKey = (text: string): string => {
-  return text
-    .normalize('NFKD')
-    .toLowerCase()
-    .replace(/^[^a-z0-9]*(?:\d+(?:\.\d+)*\.?|[ivxlcdm]+\.|[a-z]\.)\s+/, '')
-    .replace(/[^a-z]/g, '')
-}
-
-const getHeadingNumberDepth = (text: string): number | null => {
-  const match = /^(\d{1,2}(?:\.\d{1,2}){0,5}|[A-Z](?=\.)(?:\.\d{1,2}){0,5})\.?\s+\S/.exec(text)
-
-  return match ? (match[1] as string).split('.').length : null
-}
-
 export const getHeadingDepth = (unit: CanonicalHeadingUnit): number => {
   return getHeadingNumberDepth(unit.text) ?? unit.converterDepth ?? 1
-}
-
-const isFrontMatterHeading = (unit: CanonicalUnit): boolean => {
-  return (
-    unit.kind === 'heading'
-    && unit.page <= frontMatterMaxHeadingPage
-    && frontMatterHeadingKeys.has(getHeadingKey(unit.text))
-  )
-}
-
-const getBodyStartIndex = (units: CanonicalUnit[]): number => {
-  const lastFrontMatterHeadingIndex = units.findLastIndex(isFrontMatterHeading)
-  const bodyStartIndex = units.findIndex((unit, index) => {
-    return (
-      index > lastFrontMatterHeadingIndex
-      && unit.kind === 'heading'
-      && !frontMatterHeadingKeys.has(getHeadingKey(unit.text))
-    )
-  })
-  const bodyStart = units[bodyStartIndex]
-
-  return bodyStart && bodyStart.page <= frontMatterMaxBodyStartPage ? bodyStartIndex : 0
-}
-
-const isKeptFrontMatterUnit = (unit: CanonicalUnit, captionedFigureIndices: Set<number>): boolean => {
-  return unit.kind === 'table' || (unit.kind === 'figure' && captionedFigureIndices.has(unit.figureIndex))
-}
-
-const dropFrontMatter = (
-  sequence: CanonicalUnitSequence,
-  captionedFigureIndices: Set<number>,
-): CanonicalUnitSequence => {
-  const bodyStartIndex = getBodyStartIndex(sequence.units)
-  const frontUnits = sequence.units.slice(0, bodyStartIndex)
-  const keptFrontUnits = frontUnits.filter((unit) => {
-    return isKeptFrontMatterUnit(unit, captionedFigureIndices)
-  })
-
-  return {
-    drops: [
-      ...sequence.drops,
-      ...Array.from({length: frontUnits.length - keptFrontUnits.length}, (): CanonicalDropReason => {
-        return 'front_matter'
-      }),
-    ],
-    units: [...keptFrontUnits, ...sequence.units.slice(bodyStartIndex)],
-  }
-}
-
-const isCorrespondenceText = (text: string): boolean => {
-  return /^[\s*†‡§¶#✉]*(?:correspondence\b|corresponding authors?\b|address for correspondence\b|address correspondence\b|reprint requests?\b|e-?mail\s*:)/i.test(
-    text,
-  )
 }
 
 const isSupplementaryLinkText = (text: string): boolean => {
@@ -175,7 +89,7 @@ const isReferenceEntryText = (text: string): boolean => {
   )
 }
 
-const getTextUnitDropReason = (unit: CanonicalUnit, state: SectionState): CanonicalDropReason | null => {
+const getTextUnitDropReason = (unit: CanonicalBodyUnit, state: SectionState): CanonicalDropReason | null => {
   const text = unit.kind === 'paragraph' || unit.kind === 'list_item' ? unit.text : null
 
   return text === null
@@ -193,7 +107,7 @@ const dropUnit = (state: SectionState, reason: CanonicalDropReason): SectionStat
   return {...state, drops: [...state.drops, reason]}
 }
 
-const keepUnit = (state: SectionState, unit: CanonicalUnit): SectionState => {
+const keepUnit = (state: SectionState, unit: CanonicalBodyUnit): SectionState => {
   return {...state, units: [...state.units, unit]}
 }
 
@@ -231,7 +145,7 @@ const applyHeading = (state: SectionState, unit: CanonicalHeadingUnit): SectionS
       : {...keepUnit(state, unit), droppedSection: null, supplementaryDepth: getSupplementaryDepth(state, key, depth)}
 }
 
-const applyContentUnit = (state: SectionState, unit: CanonicalUnit): SectionState => {
+const applyContentUnit = (state: SectionState, unit: CanonicalBodyUnit): SectionState => {
   const isFloat = unit.kind === 'figure' || unit.kind === 'table'
   const textDropReason = getTextUnitDropReason(unit, state)
 
@@ -242,7 +156,7 @@ const applyContentUnit = (state: SectionState, unit: CanonicalUnit): SectionStat
       : keepUnit(state, unit)
 }
 
-const applySectionRules = (sequence: CanonicalUnitSequence): CanonicalUnitSequence => {
+const applySectionRules = (sequence: CanonicalBodySequence): CanonicalBodySequence => {
   const initialState: SectionState = {
     drops: sequence.drops,
     droppedSection: null,
@@ -257,7 +171,7 @@ const applySectionRules = (sequence: CanonicalUnitSequence): CanonicalUnitSequen
   return {drops: finalState.drops, units: finalState.units}
 }
 
-const applyBreadcrumb = (state: BreadcrumbState, unit: CanonicalUnit): BreadcrumbState => {
+const applyBreadcrumb = (state: BreadcrumbState, unit: CanonicalBodyUnit): BreadcrumbState => {
   const depth = unit.kind === 'heading' ? getHeadingDepth(unit) : 0
   const stack =
     unit.kind === 'heading'

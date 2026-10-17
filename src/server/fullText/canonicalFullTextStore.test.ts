@@ -153,13 +153,13 @@ test('rebuild writes the canonical text, hash, version and figure mode and appen
     articleId: 'rebuild-article-1',
     changed: true,
     figureMode: 'none',
-    hash: 'cece6ecb280c032b4ebbd648c99e4239e8e79d16012d317f04fad7ed1074294e',
+    hash: '348c442de102a8d8ea9204f44a1fcc58e3d702ae72db639acc9bea0605577f2f',
     version: 'canonical-v1',
   })
   expect(await getCanonicalArticle('rebuild-article-1')).toEqual({
     figureMode: 'none',
     fullText: readFixture(`${fixtureName}.none.md`),
-    hash: 'cece6ecb280c032b4ebbd648c99e4239e8e79d16012d317f04fad7ed1074294e',
+    hash: '348c442de102a8d8ea9204f44a1fcc58e3d702ae72db639acc9bea0605577f2f',
     version: 'canonical-v1',
   })
   expect(await getDeltaCount('rebuild-article-1')).toBeGreaterThan(0)
@@ -181,12 +181,12 @@ test('the rebuild route switches the stored text to another figure mode', async 
   expect(body).toMatchObject({
     changed: true,
     figureMode: 'native_images',
-    hash: '401b62d6e2f1b97f09afe6af3b5e8563b58bdfd48677bcc45bd3c63208f544c4',
+    hash: '762c21377944f8b420eb7ab6ba87f8b8123c870bdbb40a6d38f4a87dd6db473b',
   })
   expect(await getCanonicalArticle('rebuild-article-1')).toEqual({
     figureMode: 'native_images',
     fullText: readFixture(`${fixtureName}.native_images.md`),
-    hash: '401b62d6e2f1b97f09afe6af3b5e8563b58bdfd48677bcc45bd3c63208f544c4',
+    hash: '762c21377944f8b420eb7ab6ba87f8b8123c870bdbb40a6d38f4a87dd6db473b',
     version: 'canonical-v1',
   })
 })
