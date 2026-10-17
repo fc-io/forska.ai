@@ -382,13 +382,14 @@ const addJobToProviderHealthBannerGroup = (
   }
 }
 
+const sortBannerJobs = (jobs: JobsProviderHealthBannerJob[]): JobsProviderHealthBannerJob[] => {
+  return jobs.slice().sort((left, right) => {
+    return left.projectName.localeCompare(right.projectName) || left.id.localeCompare(right.id)
+  })
+}
+
 const sortProviderHealthBannerGroupJobs = (group: JobsProviderHealthBannerGroup): JobsProviderHealthBannerGroup => {
-  return {
-    ...group,
-    jobs: group.jobs.slice().sort((left, right) => {
-      return left.projectName.localeCompare(right.projectName) || left.id.localeCompare(right.id)
-    }),
-  }
+  return {...group, jobs: sortBannerJobs(group.jobs)}
 }
 
 const compareProviderHealthBannerGroups = (
@@ -429,6 +430,72 @@ export const buildJobsProviderHealthBanner = (
           ? 'rose'
           : 'amber',
       }
+}
+
+export type JudgmentJobModelContextWindow = {
+  linkPath: string | null
+  linkText: string
+  message: string
+  modelName: string
+  providerKind: string | null
+}
+
+export type JobsModelContextWindowBannerGroup = {
+  jobs: JobsProviderHealthBannerJob[]
+  linkPath: string | null
+  linkText: string
+  message: string
+}
+
+export type JobsModelContextWindowBanner = {groups: JobsModelContextWindowBannerGroup[]; title: string}
+
+const jobsModelContextWindowBannerTitle = 'Model context window missing'
+
+export const getJobModelContextWindow = (job: object | null | undefined): JudgmentJobModelContextWindow | null => {
+  return (
+    (job as {modelContextWindow?: JudgmentJobModelContextWindow | null} | null | undefined)?.modelContextWindow ?? null
+  )
+}
+
+const addJobToModelContextWindowBannerGroup = ({
+  group,
+  job,
+  missing,
+}: {
+  group: JobsModelContextWindowBannerGroup | undefined
+  job: ProviderHealthBannerSourceJob
+  missing: JudgmentJobModelContextWindow
+}): JobsModelContextWindowBannerGroup => {
+  return {
+    jobs: [...(group?.jobs ?? []), toProviderHealthBannerJob(job)],
+    linkPath: missing.linkPath,
+    linkText: missing.linkText,
+    message: missing.message,
+  }
+}
+
+export const buildJobsModelContextWindowBanner = (
+  jobs: readonly ProviderHealthBannerSourceJob[] | null | undefined,
+): JobsModelContextWindowBanner | null => {
+  const groupsByMessage = (jobs ?? []).reduce((groups, job) => {
+    const missing = getJobModelContextWindow(job)
+
+    return missing
+      ? groups.set(
+          missing.message,
+          addJobToModelContextWindowBannerGroup({group: groups.get(missing.message), job, missing}),
+        )
+      : groups
+  }, new Map<string, JobsModelContextWindowBannerGroup>())
+  const groups = [...groupsByMessage.values()]
+    .map((group) => {
+      return {...group, jobs: sortBannerJobs(group.jobs)}
+    })
+    .sort((left, right) => {
+      return left.message.localeCompare(right.message)
+    })
+
+  return groups.length === 0 ? null : {groups, title: jobsModelContextWindowBannerTitle}
 }
 
 const providerBottleneckDetails: Record<string, {description: string; label: string}> = {

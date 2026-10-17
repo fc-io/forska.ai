@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {
+  buildJobsModelContextWindowBanner,
   buildJobsProviderHealthBanner,
   formatJudgmentJobStopReason,
   formatNumber,
@@ -447,4 +448,38 @@ test('the jobs list stop hint prefers the stop reason over the active conditions
   expect(getJudgmentJobListStopHint({stopAfterArticles: 2000, stopReason: 'unknown'}, now)).toBe(
     'stop: ≤ 2,000 articles',
   )
+})
+
+test('buildJobsModelContextWindowBanner groups jobs by missing-window message and links the Models page', () => {
+  const missing = {
+    linkPath: '/providers/connection-1',
+    linkText: 'Models page',
+    message: 'Model LM Studio Qwen (llmstudio) has no verified context window. Add it on the Models page.',
+    modelName: 'LM Studio Qwen',
+    providerKind: 'llmstudio',
+  }
+
+  expect(buildJobsModelContextWindowBanner(undefined)).toBeNull()
+  expect(
+    buildJobsModelContextWindowBanner([{id: 'job-ok', modelContextWindow: null, projectName: 'OK'} as never]),
+  ).toBeNull()
+  expect(
+    buildJobsModelContextWindowBanner([
+      {id: 'job-b', modelContextWindow: missing, projectName: 'Beta', status: 'paused'} as never,
+      {id: 'job-a', modelContextWindow: missing, projectName: 'Alpha', status: 'running'} as never,
+    ]),
+  ).toEqual({
+    groups: [
+      {
+        jobs: [
+          {id: 'job-a', projectName: 'Alpha', status: 'running'},
+          {id: 'job-b', projectName: 'Beta', status: 'paused'},
+        ],
+        linkPath: '/providers/connection-1',
+        linkText: 'Models page',
+        message: missing.message,
+      },
+    ],
+    title: 'Model context window missing',
+  })
 })

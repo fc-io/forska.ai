@@ -38,6 +38,7 @@ export type ProjectPromptPreview = {
   reason:
     | 'conversion_failed'
     | 'indexing'
+    | 'model_context_window_missing'
     | 'no_articles'
     | 'no_fulltext'
     | 'ready'
