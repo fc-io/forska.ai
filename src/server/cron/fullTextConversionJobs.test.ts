@@ -148,6 +148,7 @@ const getConvertedArticle = async (articleId: string): Promise<ConvertedArticleR
 
 const expectedCanonicalTail = [
   'Figure 1: FIGURE 1 PRISMA flow diagram of study selection.',
+  '[figure:1]',
   '',
   'TABLE1Characteristicsoftheincludedtrials.',
   '| Study | Country |',
@@ -155,7 +156,7 @@ const expectedCanonicalTail = [
   '| Xia 2023 | China |',
   '',
 ].join('\n')
-const expectedCanonicalHash = '6a00f6357e8eb73966e737f96cfeafdc3032ddc66ac57bfb4b49bc406f9a49f7'
+const expectedCanonicalHash = '2b8108ea6614217063c4a466f432daed11f5aaa1bada596d72e2d27a5de34424'
 
 const expectCanonicalFullText = (text: string | null | undefined) => {
   expect(text?.startsWith('Figure 1 describes the process of literature retrieval and screening.')).toBe(true)
@@ -170,7 +171,7 @@ const expectConvertedArticle = async (articleId: string) => {
   expectCanonicalFullText(row?.fullText)
   expect(row?.fullTextCanonicalHash).toBe(expectedCanonicalHash)
   expect(row?.fullTextCanonicalVersion).toBe('canonical-v1')
-  expect(row?.fullTextFigureModeBuilt).toBe('none')
+  expect(row?.fullTextFigureModeBuilt).toBe('markers')
   expect(Number(row?.fullTextCharCount)).toBe(row?.fullText?.length ?? -1)
   expect(row?.fullTextHtml).toBeNull()
   expect(row?.fullTextConversionStatus).toBe('success')
@@ -253,7 +254,7 @@ test('on-demand conversion uses the configured MinerU model and writes the same 
 
 test('rebuilding from the stored layout.json and assets reproduces the conversion-time canonical bytes', async () => {
   const {rebuildCanonicalFullText} = await import('../fullText/canonicalFullTextStore.ts')
-  const result = await rebuildCanonicalFullText({articleId: 'cron-article-1', figureMode: 'none'})
+  const result = await rebuildCanonicalFullText({articleId: 'cron-article-1'})
 
   expect(result).toMatchObject({changed: false, hash: expectedCanonicalHash, version: 'canonical-v1'})
 })

@@ -137,74 +137,79 @@ const postRebuild = async (articleId: string, body: unknown): Promise<Response> 
 
   return routes.handle(
     new Request(`http://localhost/api/articles/${articleId}/canonical-fulltext/rebuild`, {
-      body: JSON.stringify(body),
-      headers: {'content-type': 'application/json'},
+      ...(body === undefined ? {} : {body: JSON.stringify(body), headers: {'content-type': 'application/json'}}),
       method: 'POST',
     }),
   )
 }
 
-test('rebuild writes the canonical text, hash, version and figure mode and appends a review-serving delta', async () => {
+const markerHash = '762c21377944f8b420eb7ab6ba87f8b8123c870bdbb40a6d38f4a87dd6db473b'
+
+test('rebuild writes the marker-form canonical text, hash, version and form and appends a review-serving delta', async () => {
   await seedConvertedArticle({articleId: 'rebuild-article-1'})
 
-  const result = await getStoreModule().rebuildCanonicalFullText({articleId: 'rebuild-article-1', figureMode: 'none'})
+  const result = await getStoreModule().rebuildCanonicalFullText({articleId: 'rebuild-article-1'})
 
   expect(result).toMatchObject({
     articleId: 'rebuild-article-1',
     changed: true,
-    figureMode: 'none',
-    hash: '348c442de102a8d8ea9204f44a1fcc58e3d702ae72db639acc9bea0605577f2f',
+    form: 'markers',
+    hash: markerHash,
     version: 'canonical-v1',
   })
   expect(await getCanonicalArticle('rebuild-article-1')).toEqual({
-    figureMode: 'none',
-    fullText: readFixture(`${fixtureName}.none.md`),
-    hash: '348c442de102a8d8ea9204f44a1fcc58e3d702ae72db639acc9bea0605577f2f',
+    figureMode: 'markers',
+    fullText: readFixture(`${fixtureName}.native_images.md`),
+    hash: markerHash,
     version: 'canonical-v1',
   })
   expect(await getDeltaCount('rebuild-article-1')).toBeGreaterThan(0)
 })
 
-test('rebuilding with unchanged inputs writes nothing', async () => {
+test('rebuilding with unchanged inputs writes nothing, and the legacy native_images form counts as markers', async () => {
   const deltasBefore = await getDeltaCount('rebuild-article-1')
-  const result = await getStoreModule().rebuildCanonicalFullText({articleId: 'rebuild-article-1', figureMode: 'none'})
+  const unchanged = await getStoreModule().rebuildCanonicalFullText({articleId: 'rebuild-article-1'})
 
-  expect(result.changed).toBe(false)
+  await getDatabase().run(
+    `UPDATE app.article SET full_text_figure_mode_built = 'native_images' WHERE id = 'rebuild-article-1'`,
+  )
+
+  const legacyForm = await getStoreModule().rebuildCanonicalFullText({articleId: 'rebuild-article-1'})
+
+  expect(unchanged.changed).toBe(false)
+  expect(legacyForm.changed).toBe(false)
   expect(await getDeltaCount('rebuild-article-1')).toBe(deltasBefore)
 })
 
-test('the rebuild route switches the stored text to another figure mode', async () => {
-  const response = await postRebuild('rebuild-article-1', {figureMode: 'native_images'})
-  const body = (await response.json()) as {changed: boolean; figureMode: string; hash: string}
+test('the rebuild route takes no figure mode: omitted or markers is accepted, any other mode is a 400', async () => {
+  await getDatabase().run(`UPDATE app.article SET full_text_figure_mode_built = 'none' WHERE id = 'rebuild-article-1'`)
 
-  expect(response.status).toBe(200)
-  expect(body).toMatchObject({
-    changed: true,
-    figureMode: 'native_images',
-    hash: '762c21377944f8b420eb7ab6ba87f8b8123c870bdbb40a6d38f4a87dd6db473b',
-  })
-  expect(await getCanonicalArticle('rebuild-article-1')).toEqual({
-    figureMode: 'native_images',
-    fullText: readFixture(`${fixtureName}.native_images.md`),
-    hash: '762c21377944f8b420eb7ab6ba87f8b8123c870bdbb40a6d38f4a87dd6db473b',
-    version: 'canonical-v1',
-  })
+  const noBody = await postRebuild('rebuild-article-1', undefined)
+  const markers = await postRebuild('rebuild-article-1', {figureMode: 'markers'})
+  const none = await postRebuild('rebuild-article-1', {figureMode: 'none'})
+  const nativeImages = await postRebuild('rebuild-article-1', {figureMode: 'native_images'})
+
+  expect(noBody.status).toBe(200)
+  expect(await noBody.json()).toMatchObject({changed: true, form: 'markers', hash: markerHash})
+  expect(markers.status).toBe(200)
+  expect(await markers.json()).toMatchObject({changed: false})
+  expect(none.status).toBe(400)
+  expect(await none.text()).toContain('figure mode none is applied when judging')
+  expect(nativeImages.status).toBe(400)
+  expect((await getCanonicalArticle('rebuild-article-1'))?.figureMode).toBe('markers')
 })
 
-test('the rebuild route refuses unknown figure modes, unknown articles and unconverted articles', async () => {
+test('the rebuild route refuses unknown articles and unconverted articles', async () => {
   await seedConvertedArticle({articleId: 'rebuild-article-unconverted', conversionStatus: null})
 
-  const badMode = await postRebuild('rebuild-article-1', {figureMode: 'pictures'})
-  const missing = await postRebuild('rebuild-article-missing', {figureMode: 'none'})
-  const unconverted = await postRebuild('rebuild-article-unconverted', {figureMode: 'none'})
+  const missing = await postRebuild('rebuild-article-missing', {})
+  const unconverted = await postRebuild('rebuild-article-unconverted', {})
 
-  expect(badMode.status).toBe(422)
   expect(missing.status).toBe(404)
   expect(unconverted.status).toBe(409)
   expect(await unconverted.text()).toContain(
     'Article rebuild-article-unconverted has no successful full-text conversion',
   )
-  expect((await getCanonicalArticle('rebuild-article-1'))?.figureMode).toBe('native_images')
 })
 
 test('a layout file without the layout-v2 envelope asks for a reconversion instead of rebuilding', async () => {
@@ -212,7 +217,7 @@ test('a layout file without the layout-v2 envelope asks for a reconversion inste
 
   await seedConvertedArticle({articleId: 'rebuild-article-old-layout', layoutContent: JSON.stringify(blocks)})
 
-  const response = await postRebuild('rebuild-article-old-layout', {figureMode: 'none'})
+  const response = await postRebuild('rebuild-article-old-layout', {})
 
   expect(response.status).toBe(409)
   expect(await response.text()).toContain(
