@@ -1723,6 +1723,119 @@ test('failed resume probe blocks the real request and preserves the normalized f
   expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
 })
 
+test('owner lease acquire failures surface as lease errors instead of provider outages', async () => {
+  const {getJudgmentRequestStats, isProviderAdmissionLeaseLostError, withJudgmentRequest} = await loadRuntime()
+  const {getJudgmentEndpointAvailability} = await import('./judgmentEndpointAvailability.ts')
+  const fallbackBaseURL = 'http://owner-acquire-runtime.test/v1'
+  const providerConnectionId = 'connection-owner-acquire'
+  const requestScope = {
+    provider: 'openai',
+    fallbackBaseURL,
+    providerConnectionId,
+    providerMaxInflightRequests: 1,
+    providerUsesFamilyDefault: false,
+    workerUrls: [],
+  }
+  let runStarted = false
+  let secondStarted = false
+  let acquireError: unknown = null
+
+  acquireProviderAdmissionLeasePersisted.mockImplementationOnce(async (_input: ProviderAdmissionLeaseAcquireInput) => {
+    throw new TypeError('fetch failed')
+  })
+
+  try {
+    await withJudgmentRequest({...requestScope, judgmentsJobId: 'job-owner-acquire-1'}, async () => {
+      runStarted = true
+    })
+  } catch (error) {
+    acquireError = error
+  }
+
+  expect(runStarted).toBe(false)
+  expect(isProviderAdmissionLeaseLostError(acquireError)).toBe(true)
+  expect((acquireError as Error).message).toContain('fetch failed')
+  expect(
+    classifyConnectionFailure({
+      context: {effectiveBaseURL: fallbackBaseURL, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+      error: acquireError,
+    }),
+  ).toMatchObject({kind: 'other', shouldPauseConnection: false})
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: fallbackBaseURL, modelProvider: 'openai', providerConnectionId})
+      .status,
+  ).toBe('healthy')
+  expect(getJudgmentRequestStats('job-owner-acquire-1')).toEqual({
+    inFlight: 0,
+    pendingPersistedAttempts: 0,
+    requestSlotWaiters: {codex: 0, fallback: 0, providerAdmission: 0, worker: 0},
+    requestWorkBacklog: 0,
+    waitingForRequestSlot: 0,
+  })
+
+  await withJudgmentRequest({...requestScope, judgmentsJobId: 'job-owner-acquire-2'}, async () => {
+    secondStarted = true
+  })
+
+  expect(secondStarted).toBe(true)
+})
+
+test('owner probe lease acquire failures surface as lease errors and leave the endpoint probeable', async () => {
+  const {isProviderAdmissionLeaseLostError, withJudgmentRequest} = await loadRuntime()
+  const {getJudgmentEndpointAvailability} = await import('./judgmentEndpointAvailability.ts')
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const providerConnectionId = 'connection-owner-probe-acquire'
+  const fallbackBaseURL = 'http://owner-probe-acquire-runtime.test/v1'
+  const requestScope = {
+    provider: 'openai',
+    fallbackBaseURL,
+    providerConnectionId,
+    providerMaxInflightRequests: 2,
+    providerUsesFamilyDefault: false,
+    workerUrls: [],
+  }
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: fallbackBaseURL, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 503},
+  })
+  let runStarted = false
+  let recoveredStarted = false
+  let acquireError: unknown = null
+
+  recordConnectionFailure({effectiveBaseURL: fallbackBaseURL, failure, providerConnectionId})
+  now += 30_001
+  acquireProviderAdmissionLeasePersisted.mockImplementationOnce(async (_input: ProviderAdmissionLeaseAcquireInput) => {
+    throw new Error('The operation timed out.')
+  })
+
+  try {
+    await withJudgmentRequest({...requestScope, judgmentsJobId: 'job-owner-probe-acquire-1'}, async () => {
+      runStarted = true
+    })
+  } catch (error) {
+    acquireError = error
+  }
+
+  expect(runStarted).toBe(false)
+  expect(isProviderAdmissionLeaseLostError(acquireError)).toBe(true)
+  expect(testProviderConnectionHealth).not.toHaveBeenCalled()
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: fallbackBaseURL, modelProvider: 'openai', providerConnectionId})
+      .status,
+  ).toBe('cooldown')
+
+  await withJudgmentRequest({...requestScope, judgmentsJobId: 'job-owner-probe-acquire-2'}, async () => {
+    recoveredStarted = true
+  })
+
+  expect(recoveredStarted).toBe(true)
+  expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
+})
+
 test('resume probe can use supplied provider connection without repository lookup', async () => {
   const {withJudgmentRequest} = await loadRuntime()
   let now = 1_000
