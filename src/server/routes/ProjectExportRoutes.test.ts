@@ -704,6 +704,98 @@ test('project export download hydrates completed durable job selection as CSV', 
   expect(queryStatements.join('\n')).not.toContain("AND detail.list_mode_key = 'llm'")
 })
 
+test('project export download adds the full-text strategy column when a source project uses full text', async () => {
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('FROM app.project') && statement.includes('LIMIT 1') && statement.includes('id, name')) {
+      return [{id: 'project-1', name: 'Project 1'}]
+    }
+
+    if (statement.includes('FROM app.review_bulk_operation_job')) {
+      return [
+        {
+          criteriaJson: {
+            sourceProjectIds: ['project-1'],
+            exportContract: {promptOutput: {promptIds: ['prompt-1']}, selectedMetadata: {includeArticleId: true}},
+          },
+          latestSnapshotSemantics: true,
+          resultManifestJson: {batches: {'article-1': ['article-1']}},
+          reviewConfigHash: 'config-1',
+          snapshotId: null,
+          status: 'completed',
+        },
+      ]
+    }
+
+    if (statement.includes('AS fullTextStrategyId') && statement.includes('FROM app.project project')) {
+      return [{fullTextStrategyId: 'fts-0123456789abcdef'}]
+    }
+
+    if (statement.includes('FROM app.full_text_strategy')) {
+      return [{id: 'fts-0123456789abcdef', label: 'mineru 4.0.12 / none / chunked 48k'}]
+    }
+
+    if (statement.includes(articleServingBaseFixtureTable)) {
+      return [
+        {
+          articleCreatedAt: '2026-01-01T00:00:00.000Z',
+          articleExternalId: 'article-1',
+          articleId: 'article-1',
+          articleOriginalData: null,
+          articleAuthors: [],
+          articleSourceMetadata: null,
+          articleSummary: null,
+          articleTitle: 'Article 1',
+          articleUpdatedAt: '2026-01-02T00:00:00.000Z',
+          articleUrl: null,
+          arxivId: null,
+          biorxivId: null,
+          doi: null,
+          medrxivId: null,
+          pubmedId: null,
+        },
+      ]
+    }
+
+    if (statement.includes('FROM export_scope') && statement.includes('LEFT JOIN app.project_prompt project_prompt')) {
+      return [
+        {
+          id: 'prompt-1',
+          originalText: 'V4 prompt content',
+          promptHeading: 'V4 Prompt Heading',
+          promptOrder: 0,
+          sourceProjectOrder: 0,
+          type: 'V4 prompt type',
+        },
+      ]
+    }
+
+    if (statement.includes(judgmentDetailServingFixtureTable)) {
+      return [
+        {
+          answeredOriginal: 'yes',
+          answeredOriginalAsArray: null,
+          articleId: 'article-1',
+          explanation: null,
+          fullTextStrategyId: 'fts-0123456789abcdef',
+          promptId: 'prompt-1',
+          quotes: null,
+        },
+      ]
+    }
+
+    return []
+  }
+  const {projectExportRoutes} = await loadRoutes()
+  const app = new Elysia().use(projectExportRoutes)
+  const response = await app.handle(new Request('http://localhost/api/projects/project-1/export/export-job-1/download'))
+  const text = await readCsvResponseWithBom(response)
+
+  expect(response.status).toBe(200)
+  expect(text).toContain('Title,Article ID,Full-text strategy,V4 Prompt Heading')
+  expect(text).toContain('Article 1,article-1,mineru 4.0.12 / none / chunked 48k,yes')
+  expect(queryStatements.join('\n')).toContain('judgment.full_text_strategy_id AS fullTextStrategyId')
+})
+
 test('project prompt csv export includes a UTF-8 BOM for Chinese spreadsheet text', async () => {
   queryJsonRef.current = async (statement) => {
     if (statement.includes('FROM app.project') && statement.includes('LIMIT 1')) {
