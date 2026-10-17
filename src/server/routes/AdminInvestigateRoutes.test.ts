@@ -58,6 +58,7 @@ test('admin append metrics route returns append lane metrics', () => {
             confidenceOriginal: 50,
             createdAt: now,
             explanation: 'route test',
+            fullTextStrategyId: 'fts-none',
             id: 'judgment-route-test',
             isAnswered: true,
             modelId,

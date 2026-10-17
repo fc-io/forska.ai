@@ -124,6 +124,7 @@ const tableWriteScriptBody = `
     confidenceOriginal: 0.9,
     createdAt: now,
     explanation: 'Judge completion',
+    fullTextStrategyId: 'fts-none',
     id: 'appended-judgment',
     isAnswered: true,
     modelId: 'target-model',
