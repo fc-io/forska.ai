@@ -1,17 +1,23 @@
 import {extname} from 'node:path'
 
+import {resolveProviderModelCapabilities} from './providerModelCapabilities.ts'
 import {
   ProviderInvocationError,
   type ProviderInvokeImage,
   type ProviderInvokePrompt,
+  type ProviderModelRecord,
   type ProviderMultipartPrompt,
   type ProviderTransportFamily,
 } from './providerTypes.ts'
 
 export const providerImageInputUnsupportedCode = 'provider_image_input_unsupported'
 
+export const providerModelImageInputUnsupportedCode = 'provider_model_image_input_unsupported'
+
 const imageInputTransportFamilies: ReadonlySet<ProviderTransportFamily> = new Set([
   'anthropic-messages',
+  'claude-code-cli',
+  'codex-app',
   'gemini-generate-content',
   'ollama-native-discovery',
   'openai-chat',
@@ -51,6 +57,37 @@ export const getProviderTextOnlyPrompt = ({
   }
 
   return prompt
+}
+
+const getProviderModelLabel = (model: ProviderModelRecord): string => {
+  return model.displayName ?? model.remoteModelId ?? model.modelName ?? model.name
+}
+
+export const assertProviderModelAcceptsPromptImages = ({
+  model,
+  prompt,
+  providerKind,
+}: {
+  model: ProviderModelRecord
+  prompt: ProviderInvokePrompt
+  providerKind: string
+}): void => {
+  const imageCount = isProviderMultipartPrompt(prompt) ? prompt.images.length : 0
+  const supportsImageInput =
+    imageCount === 0
+    || resolveProviderModelCapabilities({
+      metadataJson: model.metadataJson,
+      providerKind,
+      remoteModelId: model.remoteModelId,
+    }).supportsImageInput?.value === true
+
+  if (!supportsImageInput) {
+    throw new ProviderInvocationError(`Model ${getProviderModelLabel(model)} cannot receive images`, {
+      code: providerModelImageInputUnsupportedCode,
+      diagnostics: {imageCount, modelId: model.id},
+      providerKind,
+    })
+  }
 }
 
 export const getProviderPromptParts = (prompt: ProviderInvokePrompt): ProviderMultipartPrompt => {

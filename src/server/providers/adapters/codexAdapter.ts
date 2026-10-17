@@ -1,5 +1,5 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
-import {getProviderTextOnlyPrompt} from '../providerImageInput.ts'
+import {assertProviderModelAcceptsPromptImages} from '../providerImageInput.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {type ProviderDefinition} from '../providerTypes.ts'
 import {
@@ -142,10 +142,12 @@ export const createCodexAdapter = (catalog: ProviderCatalogEntry): ProviderDefin
       return getHealth()
     },
     invoke: async ({model, request}) => {
+      assertProviderModelAcceptsPromptImages({model, prompt: request.prompt, providerKind: catalog.kind})
+
       return invokeCodexAppModel({
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         outputSchema: request.outputSchema,
-        prompt: getProviderTextOnlyPrompt({prompt: request.prompt, transportFamily: 'codex-app'}),
+        prompt: request.prompt,
         signal: request.signal,
         systemPrompt: request.systemPrompt,
         version: model.variant ?? model.version,

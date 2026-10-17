@@ -5,6 +5,7 @@ import path from 'node:path'
 import {afterAll, beforeAll, describe, expect, test} from 'bun:test'
 
 import {classifyConnectionFailure} from '../../cron/judgmentsJobs/connectionHealth.ts'
+import {flattenFigureImage} from '../../fullText/figureImageEncoding.ts'
 import {
   classifyJudgmentJobProviderFailure,
   parseProviderRetryAfterAt,
@@ -13,6 +14,7 @@ import {ProviderInvocationError} from '../providerTypes.ts'
 import {
   getClaudeCodeChildEnv,
   getClaudeCodeCliArgs,
+  getClaudeCodeCliInput,
   getClaudeCodeCliRuntime,
   getClaudeCodeCliStatus,
   getClaudeCodeUsageLimitResetHint,
@@ -35,6 +37,7 @@ if (args[0] === 'auth') {
   print(scenario === 'logged-out' ? {loggedIn: false} : {loggedIn: true, authMethod: 'claude.ai', email: 'me@example.com', subscriptionType: 'max'})
   process.exit(0)
 }
+if (args.includes('--input-format')) print({type: 'system', subtype: 'init', tools: []}); if (args.includes('--input-format')) print('\\n')
 if (scenario === 'success') print({...base, result: '{"answer":"yes"}', structured_output: {answer: 'yes'}})
 if (scenario === 'structured-only') print({...base, result: '', structured_output: {answer: 'yes'}})
 if (scenario === 'not-logged-in') { print({...base, is_error: true, result: 'Not logged in · Please run /login', usage: undefined}); process.exit(1) }
@@ -147,6 +150,44 @@ describe('getClaudeCodeCliArgs', () => {
     ])
   })
 
+  test('switches to stream-json input and output with --verbose for image prompts and keeps every other flag', () => {
+    expect(
+      getClaudeCodeCliArgs({
+        effort: 'high',
+        modelName: 'claude-opus-5-5',
+        outputSchema: {type: 'object'},
+        streamJsonInput: true,
+        systemPrompt: 'system',
+      }),
+    ).toEqual([
+      '-p',
+      '--system-prompt',
+      'system',
+      '--input-format',
+      'stream-json',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--json-schema',
+      '{"type":"object"}',
+      '--model',
+      'claude-opus-5-5',
+      '--effort',
+      'high',
+      '--no-session-persistence',
+      '--max-turns',
+      '1',
+      '--tools',
+      '',
+      '--setting-sources',
+      '',
+      '--strict-mcp-config',
+      '--disable-slash-commands',
+      '--permission-mode',
+      'dontAsk',
+    ])
+  })
+
   test('omits --json-schema and --effort when absent', () => {
     const args = getClaudeCodeCliArgs({
       effort: null,
@@ -206,6 +247,92 @@ describe('invokeClaudeCodeCliModel', () => {
     expect(record.envKeys).not.toContain('ANTHROPIC_BASE_URL')
     expect(record.envKeys).not.toContain('CLAUDECODE')
     expect(record.envKeys).not.toContain('CLAUDE_CODE_USE_BEDROCK')
+  })
+
+  test('sends image prompts as one stream-json user message with text first and flattened base64 image blocks', async () => {
+    const transparent = new Uint8Array(
+      await readFile(new URL('../../fullText/fixtures/figureImages/transparent-3x2.png', import.meta.url)),
+    )
+    const jpeg = Uint8Array.of(0xff, 0xd8, 0xff, 0xe0)
+    const outputSchema = {additionalProperties: false, properties: {answer: {type: 'string'}}, type: 'object'}
+    const result = await invokeClaudeCodeCliModel({
+      effort: 'low',
+      modelName: 'claude-haiku-5-5',
+      outputSchema,
+      prompt: {
+        images: [
+          {bytes: transparent, mimeType: 'image/png'},
+          {bytes: jpeg, mimeType: 'image/jpeg'},
+        ],
+        text: 'long article prompt\n\n[figure:1]',
+      },
+      runtime: getRuntime('success'),
+      systemPrompt: 'You are a judge.',
+    })
+    const record = await readRecord()
+    const flattened = flattenFigureImage({bytes: transparent, mimeType: 'image/png'})
+
+    expect(result.structuredOutput).toEqual({answer: 'yes'})
+    expect(record.args).toEqual(
+      getClaudeCodeCliArgs({
+        effort: 'low',
+        modelName: 'claude-haiku-5-5',
+        outputSchema,
+        streamJsonInput: true,
+        systemPrompt: 'You are a judge.',
+      }),
+    )
+    expect(record.stdin.endsWith('}\n')).toBe(true)
+    expect(record.stdin.split('\n')).toHaveLength(2)
+    expect(JSON.parse(record.stdin)).toEqual({
+      message: {
+        content: [
+          {text: 'long article prompt\n\n[figure:1]', type: 'text'},
+          {
+            source: {data: Buffer.from(flattened.bytes).toString('base64'), media_type: 'image/png', type: 'base64'},
+            type: 'image',
+          },
+          {source: {data: '/9j/4A==', media_type: 'image/jpeg', type: 'base64'}, type: 'image'},
+        ],
+        role: 'user',
+      },
+      type: 'user',
+    })
+  })
+
+  test('text prompts, including multipart prompts without images, keep the plain stdin path byte for byte', async () => {
+    const expectedArgs = getClaudeCodeCliArgs({
+      effort: 'low',
+      modelName: 'claude-haiku-5-5',
+      outputSchema: {type: 'object'},
+      systemPrompt: 'You are a judge.',
+    })
+    const records = await ['long article prompt', {images: [], text: 'long article prompt'}].reduce<
+      Promise<Array<{args: string[]; stdin: string}>>
+    >(async (previous, prompt) => {
+      const done = await previous
+      await invokeClaudeCodeCliModel({
+        effort: 'low',
+        modelName: 'claude-haiku-5-5',
+        outputSchema: {type: 'object'},
+        prompt,
+        runtime: getRuntime('success'),
+        systemPrompt: 'You are a judge.',
+      })
+      return [...done, await readRecord()]
+    }, Promise.resolve([]))
+
+    expect(
+      records.map((record) => {
+        return [record.stdin, record.args]
+      }),
+    ).toEqual([
+      ['long article prompt', expectedArgs],
+      ['long article prompt', expectedArgs],
+    ])
+    expect(expectedArgs).not.toContain('--input-format')
+    expect(expectedArgs.slice(3, 5)).toEqual(['--output-format', 'json'])
+    expect(getClaudeCodeCliInput('long article prompt')).toBe('long article prompt')
   })
 
   test('falls back to structured_output when result text is empty', async () => {

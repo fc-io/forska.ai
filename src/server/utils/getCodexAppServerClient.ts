@@ -180,11 +180,33 @@ export type CodexAppServerClient = {
   runJsonTurn: (params: {
     model: string
     effort?: string | null
+    inputImageUrls?: string[]
     inputText: string
     outputSchema: unknown
     signal?: AbortSignal
     timeoutMs?: number
   }) => Promise<{text: string; usage: CodexThreadTokenUsage | null}>
+}
+
+export const codexTurnImageDetail = 'high'
+
+export type CodexTurnInputItem =
+  | {detail: typeof codexTurnImageDetail; type: 'image'; url: string}
+  | {text: string; type: 'text'}
+
+export const getCodexTurnInput = ({
+  inputImageUrls = [],
+  inputText,
+}: {
+  inputImageUrls?: string[]
+  inputText: string
+}): CodexTurnInputItem[] => {
+  return [
+    {type: 'text', text: inputText},
+    ...inputImageUrls.map((url): CodexTurnInputItem => {
+      return {type: 'image', url, detail: codexTurnImageDetail}
+    }),
+  ]
 }
 
 let singleton: CodexAppServerClient | null = null
@@ -907,6 +929,7 @@ export const createCodexAppServerClient = ({
   const runJsonTurn = async (params: {
     model: string
     effort?: string | null
+    inputImageUrls?: string[]
     inputText: string
     outputSchema: unknown
     signal?: AbortSignal
@@ -932,7 +955,7 @@ export const createCodexAppServerClient = ({
         'turn/start',
         {
           threadId,
-          input: [{type: 'text', text: params.inputText}],
+          input: getCodexTurnInput(params),
           model: params.model,
           effort: params.effort ?? null,
           approvalPolicy: safe.approvalPolicy,

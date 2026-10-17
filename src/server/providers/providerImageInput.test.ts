@@ -1,11 +1,13 @@
 import {expect, test} from 'bun:test'
 
 import {
+  assertProviderModelAcceptsPromptImages,
   getProviderImageDataUrl,
   getProviderImageMimeType,
   getProviderPromptParts,
   getProviderTextOnlyPrompt,
   providerImageInputUnsupportedCode,
+  providerModelImageInputUnsupportedCode,
   providerTransportSupportsImageInput,
 } from './providerImageInput.ts'
 import {requireProviderRegistryEntry} from './providerRegistry.ts'
@@ -44,6 +46,8 @@ test('lists exactly the transports that can send image input', () => {
 
   expect(families.filter(providerTransportSupportsImageInput)).toEqual([
     'anthropic-messages',
+    'claude-code-cli',
+    'codex-app',
     'gemini-generate-content',
     'ollama-native-discovery',
     'openai-chat',
@@ -52,11 +56,11 @@ test('lists exactly the transports that can send image input', () => {
 })
 
 test('text-only transports accept strings and reject image prompts with a typed error', () => {
-  expect(getProviderTextOnlyPrompt({prompt: 'Hello', transportFamily: 'codex-app'})).toBe('Hello')
+  expect(getProviderTextOnlyPrompt({prompt: 'Hello', transportFamily: 'docling-convert'})).toBe('Hello')
 
   const error = ((): unknown => {
     try {
-      return getProviderTextOnlyPrompt({prompt: imagePrompt, transportFamily: 'codex-app'})
+      return getProviderTextOnlyPrompt({prompt: imagePrompt, transportFamily: 'mineru-convert'})
     } catch (caught) {
       return caught
     }
@@ -79,7 +83,7 @@ test('prompt parts, data URLs and mime types', () => {
   expect(getProviderImageMimeType('assets/full-text-assets/a/fig-4')).toBeNull()
 })
 
-test('Codex and Claude Code adapters refuse image prompts before invoking their CLI', async () => {
+test('Codex and Claude Code adapters refuse image prompts for models that cannot receive images before any CLI call', async () => {
   const request = {
     maxCompletionTokens: 64,
     outputSchema: {type: 'object'},
@@ -87,14 +91,32 @@ test('Codex and Claude Code adapters refuse image prompts before invoking their 
     systemPrompt: 'System',
     temperature: 0,
   }
-  const model = {modelName: 'gpt-5.5', name: 'gpt-5.5', remoteModelId: 'gpt-5.5', variant: null, version: null}
+  const textOnlyModels = {
+    'claude-code': {
+      metadataJson: {capabilityOverrides: {supportsImageInput: false, updatedAt: '2026-10-17T00:00:00.000Z'}},
+      modelName: 'claude-haiku-5-5',
+      name: 'claude-haiku-5-5',
+      remoteModelId: 'claude-haiku-5-5',
+    },
+    codex: {
+      metadataJson: null,
+      modelName: 'gpt-5.3-codex-spark',
+      name: 'gpt-5.3-codex-spark',
+      remoteModelId: 'gpt-5.3-codex-spark',
+    },
+  }
   const runtimeCredentials = {apiKey: null, baseURL: null, headers: {}, secretRef: null}
   const errors = await Promise.all(
     (['codex', 'claude-code'] as const).map((providerKind) => {
       return getRejection(() => {
         return requireProviderRegistryEntry(providerKind).invoke({
           connection: {providerKind} as unknown as ProviderConnectionRecord,
-          model: model as unknown as ProviderModelRecord,
+          model: {
+            ...textOnlyModels[providerKind],
+            id: `${providerKind}-model`,
+            variant: null,
+            version: null,
+          } as unknown as ProviderModelRecord,
           request,
           runtimeCredentials,
         })
@@ -104,7 +126,36 @@ test('Codex and Claude Code adapters refuse image prompts before invoking their 
 
   expect(
     errors.map((error) => {
-      return error instanceof ProviderInvocationError ? error.code : String(error)
+      return error instanceof ProviderInvocationError ? [error.code, error.providerKind] : String(error)
     }),
-  ).toEqual([providerImageInputUnsupportedCode, providerImageInputUnsupportedCode])
+  ).toEqual([
+    [providerModelImageInputUnsupportedCode, 'codex'],
+    [providerModelImageInputUnsupportedCode, 'claude-code'],
+  ])
+})
+
+test('the model image guard passes text prompts, image-free prompts and image-capable models', () => {
+  const textOnlyModel = {
+    id: 'spark',
+    metadataJson: null,
+    modelName: 'gpt-5.3-codex-spark',
+    name: 'gpt-5.3-codex-spark',
+    remoteModelId: 'gpt-5.3-codex-spark',
+  } as unknown as ProviderModelRecord
+  const imageModel = {...textOnlyModel, id: 'gpt', remoteModelId: 'gpt-5.5'} as ProviderModelRecord
+  const check = (model: ProviderModelRecord, prompt: typeof imagePrompt | string) => {
+    try {
+      assertProviderModelAcceptsPromptImages({model, prompt, providerKind: 'codex'})
+      return null
+    } catch (error) {
+      return error instanceof ProviderInvocationError ? error.message : String(error)
+    }
+  }
+
+  expect([
+    check(textOnlyModel, 'Hello'),
+    check(textOnlyModel, {images: [], text: 'Hello'}),
+    check(imageModel, imagePrompt),
+    check(textOnlyModel, imagePrompt),
+  ]).toEqual([null, null, null, 'Model gpt-5.3-codex-spark cannot receive images'])
 })

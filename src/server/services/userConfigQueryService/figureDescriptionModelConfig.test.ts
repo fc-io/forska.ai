@@ -150,6 +150,7 @@ beforeAll(async () => {
   })
   await seedModel({connectionId: 'llama-off', id: 'vlm-connection-off', metadataJson: imageDiscoveryMetadata(true)})
   await seedModel({connectionId: 'codex', id: 'codex-gpt-5.5', remoteModelId: 'gpt-5.5'})
+  await seedModel({connectionId: 'codex', id: 'codex-spark', remoteModelId: 'gpt-5.3-codex-spark'})
   await seedModel({connectionId: 'anthropic', id: 'anthropic-sonnet', remoteModelId: 'claude-sonnet-5-5'})
   await seedModel({connectionId: 'docling', id: 'docling-standard', metadataJson: imageDiscoveryMetadata(true)})
 })
@@ -168,6 +169,7 @@ test('figure-description model options list only enabled image-capable models on
     }),
   ).toEqual([
     ['anthropic-sonnet', 'shipped'],
+    ['codex-gpt-5.5', 'shipped'],
     ['vlm-discovered', 'discovery'],
     ['vlm-user-override', 'user'],
   ])
@@ -186,6 +188,7 @@ test('GET /api/users/figure-description-models returns the same options', async 
     }),
   ).toEqual([
     ['anthropic-sonnet', 'anthropic-sonnet (anthropic)', 'anthropic'],
+    ['codex-gpt-5.5', 'codex-gpt-5.5 (codex)', 'codex'],
     ['vlm-discovered', 'vlm-discovered (llama)', 'llamacpp'],
     ['vlm-user-override', 'vlm-user-override (llama)', 'llamacpp'],
   ])
@@ -193,7 +196,7 @@ test('GET /api/users/figure-description-models returns the same options', async 
 
 test('saving refuses models that cannot receive images and keeps None explicit', async () => {
   const refused = await Promise.all(
-    ['text-discovered', 'text-unknown', 'vlm-user-off', 'vlm-disabled', 'codex-gpt-5.5', 'docling-standard'].map(
+    ['text-discovered', 'text-unknown', 'vlm-user-off', 'vlm-disabled', 'codex-spark', 'docling-standard'].map(
       async (modelId) => {
         return (await patchUsers(modelId)).status
       },
@@ -230,6 +233,7 @@ test('a saved image-capable model fills the strategy environment and the resolve
   )
 
   expect(environment.figureDescription).toEqual({modelId: 'vlm-discovered', promptVersion: 'fig-desc-v1'})
+  expect(environment.imageTransportVersion).toBe('img-v1')
   expect(resolution.errors).not.toContain(fullTextStrategyErrorMessages.figureDescriptionModelMissing)
 
   const omitted = await patchUsers(undefined)

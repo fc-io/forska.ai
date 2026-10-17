@@ -1,3 +1,4 @@
+import {flattenFigureImages} from '../../fullText/figureImageEncoding.ts'
 import {
   type CodexDeviceLoginJob,
   getCodexCliLoginStatus,
@@ -10,10 +11,12 @@ import {
   getCodexAppServerClient,
   getCodexBinPath,
 } from '../../utils/getCodexAppServerClient.ts'
+import {getProviderImageDataUrl, getProviderPromptParts, isProviderMultipartPrompt} from '../providerImageInput.ts'
 import {
   type ProviderHealthResult,
   ProviderInvocationError,
   type ProviderInvocationResult,
+  type ProviderInvokePrompt,
   type ProviderListedModel,
   type ProviderUsageSnapshot,
 } from '../providerTypes.ts'
@@ -129,6 +132,14 @@ const getCodexTransientTurnError = (error: unknown): ProviderInvocationError => 
   })
 }
 
+export const getCodexAppTurnImageUrls = (prompt: ProviderInvokePrompt): string[] => {
+  return flattenFigureImages(getProviderPromptParts(prompt).images).map(getProviderImageDataUrl)
+}
+
+const getCodexAppTurnImageParams = (prompt: ProviderInvokePrompt): {inputImageUrls?: string[]} => {
+  return isProviderMultipartPrompt(prompt) ? {inputImageUrls: getCodexAppTurnImageUrls(prompt)} : {}
+}
+
 export const invokeCodexAppModel = async ({
   modelName,
   outputSchema,
@@ -139,7 +150,7 @@ export const invokeCodexAppModel = async ({
 }: {
   modelName: string
   outputSchema: unknown
-  prompt: string
+  prompt: ProviderInvokePrompt
   signal?: AbortSignal
   systemPrompt: string
   version: string | null
@@ -148,7 +159,8 @@ export const invokeCodexAppModel = async ({
   const result = await client
     .runJsonTurn({
       effort: version,
-      inputText: `${systemPrompt}\n\n${prompt}`,
+      ...getCodexAppTurnImageParams(prompt),
+      inputText: `${systemPrompt}\n\n${getProviderPromptParts(prompt).text}`,
       model: modelName,
       outputSchema,
       signal,

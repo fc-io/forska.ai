@@ -3,14 +3,19 @@ import {statSync} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import {flattenFigureImages} from '../../fullText/figureImageEncoding.ts'
 import {ensureClaudeCodeCliWorkDir, getDefaultClaudeCodeCliWorkDir} from '../../utils/claudeCodeCliHome.ts'
 import {writeRuntimeLogEvent} from '../../utils/runtimeLogger.ts'
 import {claudeCodeFailureCodes} from '../claudeCodeFailureCodes.ts'
+import {getProviderImageBase64, getProviderPromptParts, isProviderMultipartPrompt} from '../providerImageInput.ts'
 import {
   type ProviderHealthResult,
   ProviderInvocationError,
   type ProviderInvocationResult,
+  type ProviderInvokeImage,
+  type ProviderInvokePrompt,
   type ProviderListedModel,
+  type ProviderMultipartPrompt,
   type ProviderUsageSnapshot,
 } from '../providerTypes.ts'
 
@@ -110,6 +115,8 @@ const notLoggedInPattern =
 const usageLimitPattern = /usage limit|hit your limit|limit reached|resets? (?:at )?\d/i
 const rateLimitPattern = /rate limit|too many requests|rate_limit_error/i
 const transientPattern = /overloaded|internal server error|api error.*\b5\d\d\b|service unavailable|bad gateway/i
+const claudeCodeJsonOutputArgs = ['--output-format', 'json']
+const claudeCodeStreamJsonIoArgs = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
 
 const getTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
@@ -208,19 +215,20 @@ export const getClaudeCodeCliArgs = ({
   effort,
   modelName,
   outputSchema,
+  streamJsonInput = false,
   systemPrompt,
 }: {
   effort: string | null
   modelName: string
   outputSchema: unknown
+  streamJsonInput?: boolean
   systemPrompt: string
 }): string[] => {
   return [
     '-p',
     '--system-prompt',
     systemPrompt,
-    '--output-format',
-    'json',
+    ...(streamJsonInput ? claudeCodeStreamJsonIoArgs : claudeCodeJsonOutputArgs),
     ...(outputSchema == null ? [] : ['--json-schema', JSON.stringify(outputSchema)]),
     '--model',
     modelName,
@@ -669,6 +677,26 @@ const getClaudeCodeInvocationResult = ({
   }
 }
 
+const getClaudeCodeImageBlock = (image: ProviderInvokeImage) => {
+  return {source: {data: getProviderImageBase64(image), media_type: image.mimeType, type: 'base64'}, type: 'image'}
+}
+
+export const getClaudeCodeStreamJsonUserMessage = ({images, text}: ProviderMultipartPrompt): string => {
+  const content = [{text, type: 'text'}, ...flattenFigureImages(images).map(getClaudeCodeImageBlock)]
+
+  return `${JSON.stringify({message: {content, role: 'user'}, type: 'user'})}\n`
+}
+
+const hasClaudeCodePromptImages = (prompt: ProviderInvokePrompt): prompt is ProviderMultipartPrompt => {
+  return isProviderMultipartPrompt(prompt) && prompt.images.length > 0
+}
+
+export const getClaudeCodeCliInput = (prompt: ProviderInvokePrompt): string => {
+  return hasClaudeCodePromptImages(prompt)
+    ? getClaudeCodeStreamJsonUserMessage(prompt)
+    : getProviderPromptParts(prompt).text
+}
+
 export const invokeClaudeCodeCliModel = async ({
   effort,
   modelName,
@@ -681,17 +709,23 @@ export const invokeClaudeCodeCliModel = async ({
   effort: string | null
   modelName: string
   outputSchema: unknown
-  prompt: string
+  prompt: ProviderInvokePrompt
   runtime?: ClaudeCodeCliRuntime
   signal?: AbortSignal
   systemPrompt: string
 }): Promise<ProviderInvocationResult> => {
   const context = {effort: getTrimmedValue(effort), modelName}
-  const args = getClaudeCodeCliArgs({effort: context.effort, modelName, outputSchema, systemPrompt})
+  const args = getClaudeCodeCliArgs({
+    effort: context.effort,
+    modelName,
+    outputSchema,
+    streamJsonInput: hasClaudeCodePromptImages(prompt),
+    systemPrompt,
+  })
   const cwd = await ensureClaudeCodeCliWorkDir({workDir: runtime.cwd})
   const run = await runClaudeCodeCli({
     args,
-    input: prompt,
+    input: getClaudeCodeCliInput(prompt),
     runtime: {...runtime, cwd},
     signal,
     timeoutMs: runtime.timeoutMs,
