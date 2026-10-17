@@ -17,16 +17,25 @@ import {
   type FullTextConverter,
   type FullTextConverterRequest,
   type FullTextLayoutBlock,
+  type FullTextLayoutPart,
   type FullTextParsedConversion,
   type FullTextParsedFigure,
 } from './fullTextConverterTypes.ts'
 
-type MineruBlock = {bbox: unknown; content: unknown; image_path?: unknown; type: string}
+type MineruBlock = {
+  bbox: unknown
+  content: unknown
+  continues_prev?: unknown
+  image_path?: unknown
+  level?: unknown
+  type: string
+}
 type MineruPage = {blocks: MineruBlock[]; page_idx: number}
 type MineruPageBlock = {block: MineruBlock; page: number}
 
 const mineruLabel = 'MinerU'
 const mineruFigureBlockTypes = ['image', 'chart']
+const mineruVisualBlockTypes = ['image', 'chart', 'table', 'code']
 const mineruMaxWaitSeconds = 3600
 const mineruWaitMarginSeconds = 15
 
@@ -43,7 +52,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
 
 const getMineruBlock = (value: unknown): MineruBlock | null => {
   return isRecord(value) && typeof value.type === 'string'
-    ? {bbox: value.bbox, content: value.content, image_path: value.image_path, type: value.type}
+    ? {
+        bbox: value.bbox,
+        content: value.content,
+        continues_prev: value.continues_prev,
+        image_path: value.image_path,
+        level: value.level,
+        type: value.type,
+      }
     : null
 }
 
@@ -77,13 +93,19 @@ const isMineruSubBlock = (value: unknown): boolean => {
   return isRecord(value) && Array.isArray(value.bbox)
 }
 
+const getMineruSpanText = (entry: Record<string, unknown>): string => {
+  const text = getMineruContentText(entry.content)
+
+  return entry.type === 'equation_inline' && text.trim() !== '' ? `$${text.trim()}$` : text
+}
+
 const getMineruContentText = (content: unknown): string => {
   return typeof content === 'string'
     ? content
     : Array.isArray(content)
       ? content
           .map((entry) => {
-            return isRecord(entry) ? getMineruContentText(entry.content) : ''
+            return isRecord(entry) ? getMineruSpanText(entry) : ''
           })
           .filter((text) => {
             return text !== ''
@@ -132,35 +154,79 @@ const getMineruPageBlocks = (pages: MineruPage[]): MineruPageBlock[] => {
   })
 }
 
-const getMineruLayout = (pageBlocks: MineruPageBlock[]): FullTextLayoutBlock[] => {
-  return pageBlocks.map(({block, page}) => {
-    return {bbox: getMineruBoundingBox(block.bbox), page, text: getMineruContentText(block.content), type: block.type}
+const getMineruListParts = (block: MineruBlock, depth: number): FullTextLayoutPart[] => {
+  return getMineruSubBlocks(block).flatMap((entry) => {
+    return entry.type === 'list'
+      ? getMineruListParts(entry, depth + 1)
+      : [{...(depth > 0 ? {depth} : {}), text: getMineruContentText(entry.content), type: entry.type}]
   })
 }
 
-const getMineruFigures = (pageBlocks: MineruPageBlock[], entries: ConverterZipEntries): FullTextParsedFigure[] => {
-  return pageBlocks
-    .filter(({block}) => {
-      return mineruFigureBlockTypes.includes(block.type)
-    })
-    .flatMap(({block, page}) => {
-      const imagePath = getMineruImagePath(block)
-      const bytes = imagePath ? entries[imagePath] : undefined
+const getMineruVisualParts = (block: MineruBlock): FullTextLayoutPart[] => {
+  return getMineruSubBlocks(block).map((entry) => {
+    return {text: getMineruContentText(entry.content), type: entry.type}
+  })
+}
 
-      return imagePath && bytes
-        ? [
-            {
-              bbox: getMineruBoundingBox(block.bbox),
-              caption: getMineruCaption(block),
-              image: {bytes, extension: getZipFileExtension(imagePath)},
-              page,
-            },
-          ]
-        : []
-    })
-    .map((figure, index) => {
-      return {...figure, index: index + 1}
-    })
+const getMineruLayoutParts = (block: MineruBlock): FullTextLayoutPart[] | null => {
+  return block.type === 'list'
+    ? getMineruListParts(block, 0)
+    : mineruVisualBlockTypes.includes(block.type)
+      ? getMineruVisualParts(block)
+      : null
+}
+
+const getMineruLayoutBlock = ({
+  figureIndex,
+  pageBlock,
+}: {
+  figureIndex: number | undefined
+  pageBlock: MineruPageBlock
+}): FullTextLayoutBlock => {
+  const {block, page} = pageBlock
+  const parts = getMineruLayoutParts(block)
+
+  return {
+    bbox: getMineruBoundingBox(block.bbox),
+    ...(block.continues_prev === true ? {continuesPrevious: true as const} : {}),
+    ...(figureIndex === undefined ? {} : {figureIndex}),
+    ...(typeof block.level === 'number' ? {level: block.level} : {}),
+    page,
+    ...(parts ? {parts} : {}),
+    text: getMineruContentText(block.content),
+    type: block.type,
+  }
+}
+
+const getMineruLayout = (
+  pageBlocks: MineruPageBlock[],
+  figureIndexByBlock: Map<MineruBlock, number>,
+): FullTextLayoutBlock[] => {
+  return pageBlocks.map((pageBlock) => {
+    return getMineruLayoutBlock({figureIndex: figureIndexByBlock.get(pageBlock.block), pageBlock})
+  })
+}
+
+const getMineruFigureBlocks = (pageBlocks: MineruPageBlock[], entries: ConverterZipEntries): MineruPageBlock[] => {
+  return pageBlocks.filter(({block}) => {
+    const imagePath = getMineruImagePath(block)
+
+    return mineruFigureBlockTypes.includes(block.type) && imagePath !== null && entries[imagePath] !== undefined
+  })
+}
+
+const getMineruFigures = (figureBlocks: MineruPageBlock[], entries: ConverterZipEntries): FullTextParsedFigure[] => {
+  return figureBlocks.map(({block, page}, index) => {
+    const imagePath = getMineruImagePath(block) ?? ''
+
+    return {
+      bbox: getMineruBoundingBox(block.bbox),
+      caption: getMineruCaption(block),
+      image: {bytes: entries[imagePath] as Uint8Array, extension: getZipFileExtension(imagePath)},
+      index: index + 1,
+      page,
+    }
+  })
 }
 
 const getMineruProducerVersion = (middleJson: Record<string, unknown>): string => {
@@ -198,12 +264,18 @@ export const parseMineruZipEntries = (entries: ConverterZipEntries): FullTextPar
       return page !== null
     }),
   )
+  const figureBlocks = getMineruFigureBlocks(pageBlocks, entries)
+  const figureIndexByBlock = new Map(
+    figureBlocks.map(({block}, index): [MineruBlock, number] => {
+      return [block, index + 1]
+    }),
+  )
 
   return {
     converterVersion: getMineruProducerVersion(middleJson),
-    figures: getMineruFigures(pageBlocks, entries),
+    figures: getMineruFigures(figureBlocks, entries),
     html: null,
-    layout: getMineruLayout(pageBlocks),
+    layout: getMineruLayout(pageBlocks, figureIndexByBlock),
     markdown,
   }
 }

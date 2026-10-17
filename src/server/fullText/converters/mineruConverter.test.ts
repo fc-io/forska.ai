@@ -69,6 +69,21 @@ test('MinerU zip parsing returns markdown, layout in page order and figures with
   expect(parsed.layout[1]?.text).toContain('TYPE Systematic Review')
   expect(parsed.layout[2]?.bbox).toEqual([0.077, 0.152, 0.492, 0.295])
   expect(parsed.layout[4]?.text).toContain('<table><tr><td>Study</td>')
+  expect(parsed.layout[3]).toMatchObject({
+    figureIndex: 1,
+    parts: [
+      {text: '', type: 'image_body'},
+      {text: 'FIGURE 1 PRISMA flow diagram of study selection.', type: 'image_caption'},
+    ],
+  })
+  expect(parsed.layout[4]?.parts).toEqual([
+    {text: 'TABLE1Characteristicsoftheincludedtrials.', type: 'table_caption'},
+    {
+      text: '<table><tr><td>Study</td><td>Country</td></tr><tr><td>Xia 2023</td><td>China</td></tr></table>',
+      type: 'table_body',
+    },
+  ])
+  expect(parsed.layout[4]?.figureIndex).toBeUndefined()
   expect(parsed.figures).toEqual([
     {
       bbox: [0.082, 0.513, 0.488, 0.915],
@@ -84,6 +99,57 @@ test('MinerU zip parsing skips figure blocks whose crop is missing from the zip'
   const parsed = parseMineruZipEntries({'markdown.md': strToU8('# Title'), 'middle_json.json': strToU8(middleJsonText)})
 
   expect(parsed.figures).toEqual([])
+  expect(parsed.layout[3]?.figureIndex).toBeUndefined()
+})
+
+test('MinerU layout keeps heading levels, continuation flags, list items and inline equation delimiters', () => {
+  const middleJson = {
+    metadata: {producer: {name: 'mineru', version: '4.0.12'}},
+    pages: [
+      {
+        blocks: [
+          {
+            bbox: [0.1, 0.1, 0.9, 0.12],
+            content: [{content: '2.1 Participants', type: 'text'}],
+            level: 3,
+            type: 'paragraph_title',
+          },
+          {
+            bbox: [0.1, 0.2, 0.9, 0.3],
+            content: [
+              {content: 'Each grid has an ', type: 'text'},
+              {content: 'S \\times S', type: 'equation_inline'},
+              {content: ' layout.', type: 'text'},
+            ],
+            continues_prev: true,
+            type: 'text',
+          },
+          {
+            bbox: [0.1, 0.4, 0.9, 0.5],
+            content: [
+              {content: [{content: 'First item', type: 'text'}], type: 'text'},
+              {content: [{content: [{content: 'Nested item', type: 'text'}], type: 'text'}], type: 'list'},
+              {content: [{content: 'Smith J. A reference.', type: 'text'}], type: 'ref_text'},
+            ],
+            type: 'list',
+          },
+        ],
+        page_idx: 0,
+      },
+    ],
+  }
+  const parsed = parseMineruZipEntries({
+    'markdown.md': strToU8('# Title'),
+    'middle_json.json': strToU8(JSON.stringify(middleJson)),
+  })
+
+  expect(parsed.layout[0]).toMatchObject({level: 3, text: '2.1 Participants', type: 'paragraph_title'})
+  expect(parsed.layout[1]).toMatchObject({continuesPrevious: true, text: 'Each grid has an $S \\times S$ layout.'})
+  expect(parsed.layout[2]?.parts).toEqual([
+    {text: 'First item', type: 'text'},
+    {depth: 1, text: 'Nested item', type: 'text'},
+    {text: 'Smith J. A reference.', type: 'ref_text'},
+  ])
 })
 
 test('MinerU zip parsing fails permanently without markdown or producer version', () => {

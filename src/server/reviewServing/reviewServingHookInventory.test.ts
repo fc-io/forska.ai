@@ -122,14 +122,20 @@ const hookInventory: HookInventoryEntry[] = [
     symbol: 'fetchAndStoreForRow',
   },
   {
+    filePath: 'src/server/fullText/canonicalFullTextStore.ts',
+    label: 'converted and rebuilt canonical full-text update paths',
+    markers: ['appendArticleReviewServingDeltas'],
+    symbol: 'storeConvertedFullText',
+  },
+  {
     filePath: 'src/server/cron/fullTextConversionJobs.ts',
     label: 'full-text conversion cron update path',
-    markers: ['appendArticleReviewServingDeltas'],
+    markers: ['storeConvertedFullText'],
   },
   {
     filePath: 'src/server/utils/ensureFullText.ts',
     label: 'on-demand full-text conversion update path',
-    markers: ['appendArticleReviewServingDeltas'],
+    markers: ['storeConvertedFullText'],
     symbol: 'ensureFullText',
   },
   {

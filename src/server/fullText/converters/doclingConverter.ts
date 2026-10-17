@@ -17,6 +17,7 @@ import {
   type FullTextConverter,
   type FullTextConverterRequest,
   type FullTextLayoutBlock,
+  type FullTextLayoutPart,
   type FullTextParsedConversion,
   type FullTextParsedFigure,
 } from './fullTextConverterTypes.ts'
@@ -174,92 +175,222 @@ const getDoclingBoundingBox = (item: JsonRecord, pageSizes: DoclingPageSizes): F
     : null
 }
 
-const getDoclingTableText = (item: JsonRecord): string => {
+const getDoclingTableCellText = (cell: JsonRecord): string => {
+  return (typeof cell.text === 'string' ? cell.text : '').replace(/\s+/g, ' ').trim().replaceAll('|', '\\|')
+}
+
+const getDoclingTableRows = (item: JsonRecord): string[][] => {
   const data = isRecord(item.data) ? item.data : null
   const grid = Array.isArray(data?.grid) ? data.grid : []
 
-  return grid
-    .map((row) => {
-      return getRecordArray(row)
-        .map((cell) => {
-          return typeof cell.text === 'string' ? cell.text : ''
-        })
-        .join(' | ')
-    })
-    .join('\n')
+  return grid.map((row) => {
+    return getRecordArray(row).map(getDoclingTableCellText)
+  })
+}
+
+const getPipeTableRow = (cells: string[]): string => {
+  return `| ${cells.join(' | ')} |`
+}
+
+const getDoclingTableText = (item: JsonRecord): string => {
+  const [header, ...rows] = getDoclingTableRows(item)
+
+  return header
+    ? [
+        getPipeTableRow(header),
+        getPipeTableRow(
+          header.map(() => {
+            return '---'
+          }),
+        ),
+        ...rows.map(getPipeTableRow),
+      ].join('\n')
+    : ''
 }
 
 const getDoclingItemText = (item: JsonRecord): string => {
   return typeof item.text === 'string' ? item.text : item.label === 'table' ? getDoclingTableText(item) : ''
 }
 
-const getDoclingCaption = (item: JsonRecord, index: Map<string, JsonRecord>): string | null => {
-  const caption = (Array.isArray(item.captions) ? item.captions : [])
+const getDoclingRefTexts = (refs: unknown, index: Map<string, JsonRecord>): string[] => {
+  return (Array.isArray(refs) ? refs : [])
     .map((value) => {
       const ref = getRefValue(value)
-      const captionItem = ref ? index.get(ref) : undefined
+      const refItem = ref ? index.get(ref) : undefined
 
-      return captionItem && typeof captionItem.text === 'string' ? captionItem.text.trim() : ''
+      return refItem && typeof refItem.text === 'string' ? refItem.text.trim() : ''
     })
     .filter((text) => {
       return text !== ''
     })
-    .join(' ')
+}
+
+const getDoclingChildCaptionRefs = (item: JsonRecord, index: Map<string, JsonRecord>): JsonRecord[] => {
+  return getChildRefs(item)
+    .filter((ref) => {
+      return index.get(ref)?.label === 'caption'
+    })
+    .map((ref) => {
+      return {$ref: ref}
+    })
+}
+
+const getDoclingCaptionRefs = (item: JsonRecord, index: Map<string, JsonRecord>): unknown[] => {
+  const captionRefs = Array.isArray(item.captions) ? item.captions : []
+
+  return captionRefs.length > 0 ? captionRefs : getDoclingChildCaptionRefs(item, index)
+}
+
+const getDoclingCaption = (item: JsonRecord, index: Map<string, JsonRecord>): string | null => {
+  const caption = getDoclingRefTexts(getDoclingCaptionRefs(item, index), index).join(' ')
 
   return caption === '' ? null : caption
 }
 
-const getDoclingLayout = (items: DoclingItem[], pageSizes: DoclingPageSizes): FullTextLayoutBlock[] => {
-  return items.flatMap(({item}) => {
+const getDoclingContainer = ({
+  depth,
+  index,
+  item,
+}: {
+  depth: number
+  index: Map<string, JsonRecord>
+  item: JsonRecord
+}): 'picture' | 'table' | null => {
+  const parentRef = getRefValue(item.parent)
+  const parent = parentRef ? index.get(parentRef) : undefined
+
+  return !parentRef || !parent || depth > 32
+    ? null
+    : parentRef.startsWith('#/pictures/')
+      ? 'picture'
+      : parentRef.startsWith('#/tables/')
+        ? 'table'
+        : parentRef.startsWith('#/groups/')
+          ? getDoclingContainer({depth: depth + 1, index, item: parent})
+          : null
+}
+
+const getDoclingPartsOfType = ({
+  index,
+  refs,
+  type,
+}: {
+  index: Map<string, JsonRecord>
+  refs: unknown
+  type: string
+}): FullTextLayoutPart[] => {
+  return getDoclingRefTexts(refs, index).map((text) => {
+    return {text, type}
+  })
+}
+
+const getDoclingLayoutParts = (item: JsonRecord, index: Map<string, JsonRecord>): FullTextLayoutPart[] | null => {
+  return item.label === 'table'
+    ? [
+        ...getDoclingPartsOfType({index, refs: getDoclingCaptionRefs(item, index), type: 'table_caption'}),
+        {text: getDoclingTableText(item), type: 'table_body'},
+        ...getDoclingPartsOfType({index, refs: item.footnotes, type: 'table_footnote'}),
+      ]
+    : item.label === 'picture' || item.label === 'chart'
+      ? [
+          ...getDoclingPartsOfType({index, refs: getDoclingCaptionRefs(item, index), type: 'image_caption'}),
+          ...getDoclingPartsOfType({index, refs: item.footnotes, type: 'image_footnote'}),
+        ]
+      : null
+}
+
+const getDoclingListMarker = (item: JsonRecord): string | null => {
+  return item.label === 'list_item' && typeof item.marker === 'string' && item.marker.trim() !== ''
+    ? item.marker.trim()
+    : null
+}
+
+const getDoclingLayoutBlock = ({
+  figureIndex,
+  index,
+  item,
+  page,
+  pageSizes,
+}: {
+  figureIndex: number | undefined
+  index: Map<string, JsonRecord>
+  item: JsonRecord
+  page: number
+  pageSizes: DoclingPageSizes
+}): FullTextLayoutBlock => {
+  const container = getDoclingContainer({depth: 0, index, item})
+  const listMarker = getDoclingListMarker(item)
+  const parts = getDoclingLayoutParts(item, index)
+
+  return {
+    bbox: getDoclingBoundingBox(item, pageSizes),
+    ...(container ? {container} : {}),
+    ...(figureIndex === undefined ? {} : {figureIndex}),
+    ...(typeof item.level === 'number' && item.label === 'section_header' ? {level: item.level} : {}),
+    ...(listMarker ? {listMarker} : {}),
+    page,
+    ...(parts ? {parts} : {}),
+    text: getDoclingItemText(item),
+    type: typeof item.label === 'string' ? item.label : 'unknown',
+  }
+}
+
+const getDoclingLayout = ({
+  figureIndexByRef,
+  index,
+  items,
+  pageSizes,
+}: {
+  figureIndexByRef: Map<string, number>
+  index: Map<string, JsonRecord>
+  items: DoclingItem[]
+  pageSizes: DoclingPageSizes
+}): FullTextLayoutBlock[] => {
+  return items.flatMap(({item, ref}) => {
     const page = getDoclingPageNumber(item)
 
     return page === null
       ? []
-      : [
-          {
-            bbox: getDoclingBoundingBox(item, pageSizes),
-            page,
-            text: getDoclingItemText(item),
-            type: typeof item.label === 'string' ? item.label : 'unknown',
-          },
-        ]
+      : [getDoclingLayoutBlock({figureIndex: figureIndexByRef.get(ref), index, item, page, pageSizes})]
+  })
+}
+
+const getDoclingImageUri = (item: JsonRecord): string | null => {
+  const image = isRecord(item.image) ? item.image : null
+
+  return typeof image?.uri === 'string' ? image.uri : null
+}
+
+const getDoclingFigureItems = (items: DoclingItem[], entries: ConverterZipEntries): DoclingItem[] => {
+  return items.filter(({item, ref}) => {
+    const uri = getDoclingImageUri(item)
+
+    return ref.startsWith('#/pictures/') && uri !== null && entries[uri] !== undefined
   })
 }
 
 const getDoclingFigures = ({
   entries,
+  figureItems,
   index,
-  items,
   pageSizes,
 }: {
   entries: ConverterZipEntries
+  figureItems: DoclingItem[]
   index: Map<string, JsonRecord>
-  items: DoclingItem[]
   pageSizes: DoclingPageSizes
 }): FullTextParsedFigure[] => {
-  return items
-    .filter(({ref}) => {
-      return ref.startsWith('#/pictures/')
-    })
-    .flatMap(({item}) => {
-      const image = isRecord(item.image) ? item.image : null
-      const uri = typeof image?.uri === 'string' ? image.uri : null
-      const bytes = uri ? entries[uri] : undefined
+  return figureItems.map(({item}, figureIndex) => {
+    const uri = getDoclingImageUri(item) ?? ''
 
-      return uri && bytes
-        ? [
-            {
-              bbox: getDoclingBoundingBox(item, pageSizes),
-              caption: getDoclingCaption(item, index),
-              image: {bytes, extension: getZipFileExtension(uri)},
-              page: getDoclingPageNumber(item),
-            },
-          ]
-        : []
-    })
-    .map((figure, figureIndex) => {
-      return {...figure, index: figureIndex + 1}
-    })
+    return {
+      bbox: getDoclingBoundingBox(item, pageSizes),
+      caption: getDoclingCaption(item, index),
+      image: {bytes: entries[uri] as Uint8Array, extension: getZipFileExtension(uri)},
+      index: figureIndex + 1,
+      page: getDoclingPageNumber(item),
+    }
+  })
 }
 
 const getRootZipPath = (entries: ConverterZipEntries, extension: string): string | null => {
@@ -303,12 +434,18 @@ export const parseDoclingZipEntries = ({
   const index = getDoclingItemIndex(document)
   const items = getDoclingOrderedItems(document)
   const pageSizes = getDoclingPageSizes(document)
+  const figureItems = getDoclingFigureItems(items, entries)
+  const figureIndexByRef = new Map(
+    figureItems.map(({ref}, figureIndex): [string, number] => {
+      return [ref, figureIndex + 1]
+    }),
+  )
 
   return {
     converterVersion,
-    figures: getDoclingFigures({entries, index, items, pageSizes}),
+    figures: getDoclingFigures({entries, figureItems, index, pageSizes}),
     html: htmlPath ? getZipText(entries, htmlPath) : null,
-    layout: getDoclingLayout(items, pageSizes),
+    layout: getDoclingLayout({figureIndexByRef, index, items, pageSizes}),
     markdown,
   }
 }

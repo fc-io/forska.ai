@@ -1,8 +1,25 @@
 export type FullTextConverterKind = 'docling' | 'mineru'
 
+export const FULL_TEXT_LAYOUT_VERSION = 'layout-v2'
+
 export type FullTextBoundingBox = [number, number, number, number]
 
-export type FullTextLayoutBlock = {bbox: FullTextBoundingBox | null; page: number; text: string; type: string}
+export type FullTextLayoutPart = {depth?: number; text: string; type: string}
+
+export type FullTextLayoutBlock = {
+  bbox: FullTextBoundingBox | null
+  container?: 'picture' | 'table'
+  continuesPrevious?: true
+  figureIndex?: number
+  level?: number
+  listMarker?: string
+  page: number
+  parts?: FullTextLayoutPart[]
+  text: string
+  type: string
+}
+
+export type FullTextLayoutFile = {blocks: FullTextLayoutBlock[]; version: typeof FULL_TEXT_LAYOUT_VERSION}
 
 export type FullTextFigure = {
   bbox: FullTextBoundingBox | null
@@ -14,6 +31,7 @@ export type FullTextFigure = {
 
 export type FullTextConversionResult = {
   converterKind: FullTextConverterKind
+  converterMarkdownPath: string
   converterVersion: string
   figures: FullTextFigure[]
   html: string | null
