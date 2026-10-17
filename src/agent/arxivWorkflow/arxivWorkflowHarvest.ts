@@ -210,10 +210,43 @@ const extractCategories = (categories: unknown): string | string[] => {
   return catString ? [catString] : []
 }
 
-const fetchRecords = async (arxivQueryUrl: string): Promise<typeof arxivFeedSchema.infer> => {
+const arxivRetryDelaysMs = [5_000, 15_000, 60_000, 300_000] as const
+const maxArxivRetryAfterMs = 10 * 60 * 1000
+const retryableArxivStatuses = new Set([429, 500, 502, 503, 504])
+
+const getArxivRetryAfterMs = (response: Response) => {
+  const seconds = Number.parseInt(response.headers.get('retry-after') ?? '', 10)
+
+  return Number.isNaN(seconds) ? 0 : Math.min(Math.max(seconds, 0) * 1000, maxArxivRetryAfterMs)
+}
+
+const fetchArxivResponse = async (arxivQueryUrl: string, attemptIndex = 0): Promise<Response> => {
   console.log('Fetching ArXiv URL:', decodeURIComponent(arxivQueryUrl))
   const response = await fetch(arxivQueryUrl)
   console.log('ArXiv response:', response.status, response.statusText)
+
+  if (response.ok) {
+    return response
+  }
+
+  const delayMs = arxivRetryDelaysMs[attemptIndex]
+
+  if (delayMs === undefined || !retryableArxivStatuses.has(response.status)) {
+    throw new Error(`arXiv HTTP ${response.status}`)
+  }
+
+  const waitMs = Math.max(delayMs, getArxivRetryAfterMs(response))
+
+  console.log(
+    `ArXiv request failed with status ${response.status}. Retrying in ${waitMs / 1000}s (attempt ${attemptIndex + 1}/${arxivRetryDelaysMs.length})`,
+  )
+  await sleep(waitMs)
+
+  return await fetchArxivResponse(arxivQueryUrl, attemptIndex + 1)
+}
+
+const fetchRecords = async (arxivQueryUrl: string): Promise<typeof arxivFeedSchema.infer> => {
+  const response = await fetchArxivResponse(arxivQueryUrl)
   const xml = await response.text()
   const raw: unknown = fxp.parse(xml)
 
