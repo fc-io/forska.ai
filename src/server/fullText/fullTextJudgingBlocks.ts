@@ -67,6 +67,13 @@ const loadFullTextJudgingStrategies = async (
   )
 }
 
+export const getFullTextJudgingStrategy = async (
+  database: FullTextChunkPlanQueryService,
+  id: string,
+): Promise<FullTextJudgingStrategy | null> => {
+  return (await loadFullTextJudgingStrategies(database, [id])).get(id) ?? null
+}
+
 export const resetFullTextJudgingStrategyCacheForTests = (): void => {
   strategyById.clear()
 }
@@ -95,7 +102,11 @@ const getRenderedTextForPlan = (
       })()
     : null
 
-  return rendered && rendered.missingDescriptionFigureIndexes.length === 0 ? rendered.text : null
+  return rendered
+    && rendered.missingDescriptionFigureIndexes.length === 0
+    && rendered.failedDescriptionFigureIndexes.length === 0
+    ? rendered.text
+    : null
 }
 
 const getChunkPlan = ({
@@ -164,13 +175,15 @@ export const getFullTextJudgingBlocks = async ({
   const cachedPlans = await getCachedFullTextChunkPlans(database, uniqueRows)
   const countTokens = await loadFullTextTokenCounter()
   const entries = uniqueRows.map((row) => {
+    const strategy = strategies.get(row.fullTextStrategyId) ?? null
     const block = {
       article: getFullTextJudgingArticleForm({
         canonicalTextVersion: row.fullTextCanonicalVersion,
         figureModeBuilt: row.fullTextFigureModeBuilt,
         fullTextAssets: row.fullTextAssets,
+        strategy,
       }),
-      strategy: strategies.get(row.fullTextStrategyId) ?? null,
+      strategy,
     }
     const renderedText = getRenderedTextForPlan(row, block)
     const chunkPlan =

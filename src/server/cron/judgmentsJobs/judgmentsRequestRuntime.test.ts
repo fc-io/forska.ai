@@ -1953,6 +1953,18 @@ test('judge-worker prompt execution uses owner-backed snapshots instead of live 
           publicationStatus: null,
           url: null,
         },
+        fullTextJudging: {
+          article: {canonicalTextVersion: 'canonical-v1', figureAssets: [], figureModeBuilt: 'markers'},
+          chunkPlan: null,
+          strategy: {
+            canonicalTextVersion: 'canonical-v1',
+            chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
+            figureDescriptionModelId: null,
+            figureDescriptionPromptVersion: null,
+            figureMode: 'none',
+            id: 'fts-0123456789abcdef',
+          },
+        },
         prompt: {
           id: 'prompt-a',
           order: 1,
@@ -1965,11 +1977,16 @@ test('judge-worker prompt execution uses owner-backed snapshots instead of live 
     })
   })
 
-  await processPromptWithLLM({...createPromptToProcess(), useFulltext: true})
+  await processPromptWithLLM({
+    ...createPromptToProcess(),
+    fullTextStrategyId: 'fts-0123456789abcdef',
+    useFulltext: true,
+  })
 
   const firstJudgeCall = judgeSinglePrompt.mock.calls[0]?.[0] as
     | {
         article: {articleTitle: string; fullText: string | null; importRoute: string | null}
+        fullTextJudging: {renderedText: string; strategy: {id: string}} | null
         modelConfig: {
           providerInvocationContext?: {
             connection: {baseURL: string | null; id: string; providerKind: string; secretRef: string | null}
@@ -1990,6 +2007,10 @@ test('judge-worker prompt execution uses owner-backed snapshots instead of live 
     articleTitle: 'Owner-backed title',
     fullText: 'Owner-backed full text',
     importRoute: 'import-route-owner',
+  })
+  expect(firstJudgeCall?.fullTextJudging).toMatchObject({
+    renderedText: 'Owner-backed full text',
+    strategy: {id: 'fts-0123456789abcdef'},
   })
   expect(firstJudgeCall?.prompt).toMatchObject({
     originalText: 'Owner-backed prompt text',
@@ -2336,7 +2357,11 @@ test('judge-worker prompt execution requeues when snapshot fulltext is not yet f
     })
   })
 
-  await processPromptWithLLM({...createPromptToProcess(), useFulltext: true})
+  await processPromptWithLLM({
+    ...createPromptToProcess(),
+    fullTextStrategyId: 'fts-0123456789abcdef',
+    useFulltext: true,
+  })
 
   expect(judgeSinglePrompt).not.toHaveBeenCalled()
   expect(ensureFullTextMock).not.toHaveBeenCalled()
