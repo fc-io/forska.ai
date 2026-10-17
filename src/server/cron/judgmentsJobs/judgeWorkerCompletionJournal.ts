@@ -5,6 +5,7 @@ import {Database} from 'bun:sqlite'
 
 import type {SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
+import {getLegacyFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
 import type {JudgmentExecutionSnapshotRecord} from '../../services/judgmentExecutionSnapshotService.ts'
 import {getEnv} from '../../utils/env.ts'
@@ -90,6 +91,7 @@ export type JudgeWorkerCompletionPayload = {
   executionSnapshotHash: string
   executionSnapshotId: string
   explanation?: string | null
+  fullTextStrategyId?: string | null
   isAnswered?: boolean
   jobId: string
   judgment?: unknown
@@ -113,6 +115,7 @@ export type JudgeWorkerCompletionPayload = {
 }
 
 export type OwnerBackedJudgmentJobInfo = ProviderBucketSnapshot & {
+  fullTextStrategyId: string
   modelBaseUrl: string | null
   modelId: string
   modelMetadataJson: unknown
@@ -191,6 +194,7 @@ type CompletionClaimIdentityKey =
   | 'claimId'
   | 'executionSnapshotHash'
   | 'executionSnapshotId'
+  | 'fullTextStrategyId'
   | 'jobId'
   | 'modelId'
   | 'projectId'
@@ -1407,6 +1411,7 @@ const getRolloutCompletionPayload = (row: AcceptedClaimRolloutRow): JudgeWorkerC
     claimId: row.claimId,
     executionSnapshotHash: prompt.executionSnapshotHash,
     executionSnapshotId: prompt.executionSnapshotId,
+    fullTextStrategyId: prompt.fullTextStrategyId,
     jobId: row.jobId,
     modelId: prompt.modelId,
     projectId: prompt.projectId,
@@ -2072,6 +2077,7 @@ const applyJudgedCompletionLocally = async (
     explanation: payload.explanation ?? (typeof judgment.explanation === 'string' ? judgment.explanation : null),
     executionSnapshotHash: payload.executionSnapshotHash,
     executionSnapshotId: payload.executionSnapshotId,
+    fullTextStrategyId: payload.fullTextStrategyId ?? null,
     isAnswered: payload.isAnswered ?? true,
     judgmentId: payload.judgmentId ?? crypto.randomUUID(),
     modelId: payload.modelId,
@@ -2199,6 +2205,7 @@ const completionClaimIdentityKeys: CompletionClaimIdentityKey[] = [
   'claimId',
   'executionSnapshotHash',
   'executionSnapshotId',
+  'fullTextStrategyId',
   'jobId',
   'modelId',
   'projectId',
@@ -2228,12 +2235,20 @@ const getClaimIdentityMismatch = (
   return mismatchedKey ? `snapshot claim identity mismatch for ${mismatchedKey}` : null
 }
 
+const getEffectiveFullTextStrategyIdForPayload = (payload: JudgeWorkerCompletionPayload): string => {
+  return (
+    payload.fullTextStrategyId
+    ?? getLegacyFullTextStrategyId({useFulltext: payload.useFulltext, useFulltextNoImages: payload.useFulltextNoImages})
+  )
+}
+
 const getCompletionClaimIdentity = (payload: JudgeWorkerCompletionPayload): CompletionClaimIdentity => {
   return {
     articleId: payload.articleId,
     claimId: payload.claimId,
     executionSnapshotHash: payload.executionSnapshotHash,
     executionSnapshotId: payload.executionSnapshotId,
+    fullTextStrategyId: getEffectiveFullTextStrategyIdForPayload(payload),
     jobId: payload.jobId,
     modelId: payload.modelId,
     projectId: payload.projectId,
@@ -2253,6 +2268,7 @@ const getPromptClaimIdentity = (prompt: PromptToProcess): CompletionClaimIdentit
     claimId: prompt.claimId,
     executionSnapshotHash: prompt.executionSnapshotHash,
     executionSnapshotId: prompt.executionSnapshotId,
+    fullTextStrategyId: prompt.fullTextStrategyId,
     jobId: prompt.jobId,
     modelId: prompt.modelId,
     projectId: prompt.projectId,

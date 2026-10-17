@@ -361,6 +361,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
       const projectList = ids.projectIds.map(getSqlLiteral).join(', ')
       const judgments = await getAppDatabaseService().queryJson<{
         count: number
+        fullTextStrategyId: string
         modelId: string
         projectId: string
         systemPromptVariant: string
@@ -373,6 +374,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         SELECT project_id AS projectId,
                model_id AS modelId,
                system_prompt_variant AS systemPromptVariant,
+               full_text_strategy_id AS fullTextStrategyId,
                COUNT(*) AS count,
                BOOL_AND(use_title) AS useTitle,
                BOOL_AND(use_abstract) AS useAbstract,
@@ -381,8 +383,8 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
                BOOL_OR(use_metadata) AS useMetadata
         FROM app.judgment
         WHERE project_id IN (${projectList})
-        GROUP BY project_id, model_id, system_prompt_variant
-        ORDER BY project_id, system_prompt_variant
+        GROUP BY project_id, model_id, system_prompt_variant, full_text_strategy_id
+        ORDER BY project_id, system_prompt_variant, full_text_strategy_id
       `)
       const [queue] = await getAppDatabaseService().queryJson<{count: number}>(`
         WITH required_dispatch_component(component) AS (
@@ -543,6 +545,7 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
         articleId: string
         confidenceOriginal: string | null
         explanation: string | null
+        fullTextStrategyId: string
         isAnswered: boolean | null
         modelId: string
         projectId: string
@@ -569,7 +572,8 @@ export const judgmentWorkflowTopologyTestRoutes = new Elysia()
                use_fulltext AS useFulltext,
                use_fulltext_no_images AS useFulltextNoImages,
                use_metadata AS useMetadata,
-               system_prompt_variant AS systemPromptVariant
+               system_prompt_variant AS systemPromptVariant,
+               full_text_strategy_id AS fullTextStrategyId
         FROM app.judgment
         WHERE project_id = ${getSqlLiteral(body.projectId)}
           AND model_id = ${getSqlLiteral(body.modelId)}

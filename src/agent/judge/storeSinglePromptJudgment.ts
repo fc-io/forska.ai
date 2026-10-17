@@ -54,6 +54,7 @@ const enqueueOwnerBackedCompletion = async ({
   article,
   claimIdentity,
   contentSettings,
+  fullTextStrategyId,
   judgmentsJobId,
   promptId,
   queueRecordId,
@@ -68,6 +69,7 @@ const enqueueOwnerBackedCompletion = async ({
   article: ArticleRecord
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
   contentSettings: ContentSettings
+  fullTextStrategyId: string
   judgmentsJobId: string
   promptId: string
   queueRecordId: string
@@ -106,6 +108,7 @@ const enqueueOwnerBackedCompletion = async ({
       executionSnapshotHash: claimIdentity.executionSnapshotHash,
       executionSnapshotId: claimIdentity.executionSnapshotId,
       explanation: judgment.explanation || null,
+      fullTextStrategyId,
       isAnswered: true,
       jobId: judgmentsJobId,
       judgment,
@@ -152,6 +155,7 @@ export const storeSinglePromptJudgment = async ({
   chunkingStrategy,
   requestAttempts = [],
   systemPromptVariant: inputSystemPromptVariant,
+  fullTextStrategyId,
 }: {
   article: ArticleRecord
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
@@ -166,6 +170,7 @@ export const storeSinglePromptJudgment = async ({
   chunkingStrategy: JudgmentChunkingStrategy | null
   requestAttempts?: JudgmentRequestAttemptJsonEntry[]
   systemPromptVariant?: SystemPromptVariant | null
+  fullTextStrategyId: string
 }): Promise<void> => {
   const systemPromptVariant = getSystemPromptVariant(inputSystemPromptVariant)
 
@@ -175,6 +180,7 @@ export const storeSinglePromptJudgment = async ({
         article,
         claimIdentity,
         contentSettings,
+        fullTextStrategyId,
         judgmentsJobId,
         promptId,
         queueRecordId,
@@ -216,6 +222,7 @@ export const storeSinglePromptJudgment = async ({
         AND use_fulltext_no_images = ${useFulltextNoImages ? 'TRUE' : 'FALSE'}
         AND use_metadata = ${useMetadata ? 'TRUE' : 'FALSE'}
         AND system_prompt_variant = '${escapeSqlString(systemPromptVariant)}'
+        AND full_text_strategy_id = '${escapeSqlString(fullTextStrategyId)}'
         AND deleted_at IS NULL
       LIMIT 1
     `,
@@ -231,7 +238,7 @@ export const storeSinglePromptJudgment = async ({
       console.error(
         `${article.id} | Judgment already exists: promptId=${promptId}, modelId=${modelId}, `
           + `content=[T:${useTitle},A:${useAbstract},F:${useFulltext},FNI:${useFulltextNoImages},M:${useMetadata}], `
-          + `systemPromptVariant=${systemPromptVariant}, `
+          + `systemPromptVariant=${systemPromptVariant}, fullTextStrategyId=${fullTextStrategyId}, `
           + `projectId=${projectId}, existingId=${existingId}, createdAt=${existingCreatedAt ?? 'unknown'}`,
       )
       return
@@ -264,6 +271,7 @@ export const storeSinglePromptJudgment = async ({
           explanation: answeredExplanation || null,
           executionSnapshotHash: claimIdentity?.executionSnapshotHash,
           executionSnapshotId: claimIdentity?.executionSnapshotId,
+          fullTextStrategyId,
           isAnswered: true,
           judgmentId,
           modelId,

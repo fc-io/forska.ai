@@ -42,6 +42,7 @@ export type JudgmentInsertRow = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
   chunkingStrategy: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
@@ -99,7 +100,7 @@ const getAppendJudgmentRowPlaceholders = () => {
     ?, ?, ?, ?,
     ?, ?, ?, (?::JSON)::VARCHAR[],
     ?, ?, ?::JSON,
-    ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?,
     ?::TIMESTAMPTZ, ?::TIMESTAMPTZ
   )`
@@ -124,6 +125,7 @@ const getAppendJudgmentParameters = (row: JudgmentInsertRow) => {
     row.useFulltextNoImages,
     row.useMetadata,
     row.systemPromptVariant,
+    row.fullTextStrategyId,
     row.chunkingStrategy,
     row.snapshotProjectId,
     row.snapshotProjectModelName,
@@ -158,6 +160,7 @@ const getAppendJudgmentsSql = (rows: JudgmentInsertRow[]) => {
       use_fulltext_no_images,
       use_metadata,
       system_prompt_variant,
+      full_text_strategy_id,
       chunking_strategy,
       snapshot_project_id,
       snapshot_project_model_name,
@@ -168,7 +171,7 @@ const getAppendJudgmentsSql = (rows: JudgmentInsertRow[]) => {
         return getAppendJudgmentRowPlaceholders()
       })
       .join(', ')}
-    ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant, delete_generation) DO NOTHING
+    ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant, full_text_strategy_id, delete_generation) DO NOTHING
     RETURNING id
   `
 }

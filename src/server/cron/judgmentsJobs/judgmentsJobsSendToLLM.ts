@@ -397,6 +397,7 @@ const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
           claimId: prompt.claimId,
           executionSnapshotHash: prompt.executionSnapshotHash,
           executionSnapshotId: prompt.executionSnapshotId,
+          fullTextStrategyId: prompt.fullTextStrategyId,
           jobId: prompt.jobId,
           modelId: prompt.modelId,
           projectId: prompt.projectId,

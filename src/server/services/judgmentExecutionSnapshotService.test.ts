@@ -300,7 +300,7 @@ test('snapshot article resolution prefers project-scoped imports over legacy ids
 test('snapshots carry use_metadata and the PubMed id, and the identity check compares use_metadata', () => {
   const result = runScript<{
     article: {pubmedId: string | null; sourceMetadata: {journalTitle?: string} | null}
-    contentSettings: Record<string, boolean>
+    contentSettings: Record<string, boolean | string>
     identityValidWithMetadata: boolean
     identityValidWithoutMetadata: boolean
     snapshotUseMetadata: boolean
@@ -367,6 +367,7 @@ test('snapshots carry use_metadata and the PubMed id, and the identity check com
       claimId: 'claim-snapshot-metadata',
       executionSnapshotHash: snapshot.executionSnapshotHash,
       executionSnapshotId: snapshot.executionSnapshotId,
+      fullTextStrategyId: 'fts-none',
       jobId: 'job-snapshot-metadata',
       modelId: 'model-snapshot-metadata',
       projectId: 'project-snapshot-metadata',
@@ -394,6 +395,7 @@ test('snapshots carry use_metadata and the PubMed id, and the identity check com
   expect(result).toEqual({
     article: {pubmedId: '12345678', sourceMetadata: {journalTitle: 'The Lancet'}},
     contentSettings: {
+      fullTextStrategyId: 'fts-none',
       useAbstract: true,
       useFulltext: false,
       useFulltextNoImages: false,
@@ -403,7 +405,122 @@ test('snapshots carry use_metadata and the PubMed id, and the identity check com
     identityValidWithMetadata: true,
     identityValidWithoutMetadata: false,
     snapshotUseMetadata: true,
-    snapshotVersion: 3,
+    snapshotVersion: 4,
     storedUseMetadata: true,
+  })
+})
+
+test('snapshots carry the job full-text strategy and the identity check compares it', () => {
+  const result = runScript<{
+    contentStrategyId: string
+    identityValidWithLegacy: boolean
+    identityValidWithStrategy: boolean
+    projectFallbackStrategyId: string
+    snapshotStrategyId: string
+    storedStrategyId: string
+  }>(`
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+    const {
+      createJudgmentExecutionSnapshotsForClaims,
+      getJudgmentExecutionSnapshot,
+      isJudgmentExecutionSnapshotIdentityValid,
+    } = await import('./src/server/services/judgmentExecutionSnapshotService.ts')
+
+    await migrateDuckdb()
+
+    const database = getAppDatabaseService()
+
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('provider-snapshot-strategy', 'sglang', 'Provider Snapshot Strategy', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+    await database.run(\`
+      INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, variant, source, enabled, metadata_json)
+      VALUES ('model-snapshot-strategy', 'provider-snapshot-strategy', 'Model Snapshot Strategy', 'model-snapshot-strategy', 'Model Snapshot Strategy', 'manual', 'manual', TRUE, '{}'::JSON)
+    \`)
+    await database.run(\`
+      INSERT INTO app.project (id, name, description, model_id, human_judgment_mode, use_fulltext, full_text_strategy_id)
+      VALUES
+        ('project-snapshot-strategy', 'Project Snapshot Strategy', NULL, 'model-snapshot-strategy', 'prompt', TRUE, 'fts-fedcba9876543210'),
+        ('project-snapshot-strategy-fallback', 'Project Snapshot Strategy Fallback', NULL, 'model-snapshot-strategy', 'prompt', TRUE, 'fts-0123456789abcdef')
+    \`)
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash)
+      VALUES ('prompt-snapshot-strategy', 'Prompt text', 'Prompt text', 'Prompt', 'boolean', 'snapshot-strategy-prompt')
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order)
+      VALUES
+        ('project-prompt-snapshot-strategy', 'project-snapshot-strategy', 'prompt-snapshot-strategy', 1),
+        ('project-prompt-snapshot-strategy-fallback', 'project-snapshot-strategy-fallback', 'prompt-snapshot-strategy', 1)
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment_job (id, project_id, status, full_text_strategy_id)
+      VALUES
+        ('job-snapshot-strategy', 'project-snapshot-strategy', 'ready', 'fts-0123456789abcdef'),
+        ('job-snapshot-strategy-fallback', 'project-snapshot-strategy-fallback', 'ready', NULL)
+    \`)
+    await database.run(\`
+      INSERT INTO app.article (id, article_id, article_title, article_summary)
+      VALUES ('article-snapshot-strategy', 'article-snapshot-strategy', 'Strategy Article', 'Strategy summary')
+    \`)
+
+    const getClaim = (jobId) => {
+      return {
+        articleId: 'article-snapshot-strategy',
+        claimId: \`claim-\${jobId}\`,
+        claimedBy: 'server-1',
+        jobId,
+        promptId: 'prompt-snapshot-strategy',
+        queueRecordId: \`queue-\${jobId}\`,
+        useFulltext: true,
+        useFulltextNoImages: false,
+      }
+    }
+    const [snapshot, fallbackSnapshot] = await createJudgmentExecutionSnapshotsForClaims([
+      getClaim('job-snapshot-strategy'),
+      getClaim('job-snapshot-strategy-fallback'),
+    ])
+    const record = await getJudgmentExecutionSnapshot({
+      executionSnapshotHash: snapshot.executionSnapshotHash,
+      executionSnapshotId: snapshot.executionSnapshotId,
+    })
+    const identityInput = {
+      articleId: 'article-snapshot-strategy',
+      claimId: 'claim-job-snapshot-strategy',
+      executionSnapshotHash: snapshot.executionSnapshotHash,
+      executionSnapshotId: snapshot.executionSnapshotId,
+      jobId: 'job-snapshot-strategy',
+      modelId: 'model-snapshot-strategy',
+      projectId: 'project-snapshot-strategy',
+      promptId: 'prompt-snapshot-strategy',
+      queueRecordId: 'queue-job-snapshot-strategy',
+      useAbstract: true,
+      useFulltext: true,
+      useFulltextNoImages: false,
+      useMetadata: false,
+      useTitle: true,
+    }
+
+    console.log(JSON.stringify({
+      contentStrategyId: record.payload.contentSettings.fullTextStrategyId,
+      identityValidWithLegacy: await isJudgmentExecutionSnapshotIdentityValid({...identityInput, fullTextStrategyId: 'fts-legacy-v0'}),
+      identityValidWithStrategy: await isJudgmentExecutionSnapshotIdentityValid({...identityInput, fullTextStrategyId: 'fts-0123456789abcdef'}),
+      projectFallbackStrategyId: fallbackSnapshot.fullTextStrategyId,
+      snapshotStrategyId: snapshot.fullTextStrategyId,
+      storedStrategyId: record.fullTextStrategyId,
+    }))
+
+    await database.close()
+  `)
+
+  expect(result).toEqual({
+    contentStrategyId: 'fts-0123456789abcdef',
+    identityValidWithLegacy: false,
+    identityValidWithStrategy: true,
+    projectFallbackStrategyId: 'fts-0123456789abcdef',
+    snapshotStrategyId: 'fts-0123456789abcdef',
+    storedStrategyId: 'fts-0123456789abcdef',
   })
 })

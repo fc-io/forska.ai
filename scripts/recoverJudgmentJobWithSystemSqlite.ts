@@ -8,6 +8,7 @@ import {
   type JudgmentJobRecoveredOutboxRow,
 } from '../src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import type {JudgmentJobSqliteOutboxEntry} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {getLegacyFullTextStrategyId} from '../src/server/fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
@@ -22,6 +23,7 @@ type ExportedOutboxRow = {
   confidenceOriginal: number
   createdAt: string
   explanation: string | null
+  fullTextStrategyId: string | null
   isAnswered: number
   jobId: string
   judgmentId: string
@@ -43,6 +45,7 @@ type ExportedOutboxRow = {
   useTitle: number
 }
 type JobInfoRow = {
+  fullTextStrategyId: string | null
   modelId: string
   systemPromptVariant: string | null
   useAbstract: number
@@ -79,6 +82,7 @@ type JudgmentJobOutboxEntry = {
   confidenceOriginal: number
   createdAt: Date
   explanation: string | null
+  fullTextStrategyId: string
   isAnswered: boolean
   jobId: string
   judgmentId: string
@@ -142,6 +146,20 @@ const toBoolean = (value: number | boolean | null | undefined) => {
   return value === true || value === 1
 }
 
+const getStoredFullTextStrategyId = (row: {
+  fullTextStrategyId: string | null
+  useFulltext: number | boolean | null
+  useFulltextNoImages: number | boolean | null
+}) => {
+  return (
+    row.fullTextStrategyId
+    ?? getLegacyFullTextStrategyId({
+      useFulltext: toBoolean(row.useFulltext),
+      useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+    })
+  )
+}
+
 const getTrimmedStdout = (stdout: string) => {
   const trimmed = stdout.trim()
   return trimmed === '' ? '[]' : trimmed
@@ -200,7 +218,23 @@ const getOutboxUseMetadataSql = (sqlitePath: string) => {
     : jobInfoUseMetadataSql
 }
 
-const getOutboxExportSql = (jobId: string, systemPromptVariantSql: string, useMetadataSql: string) => {
+const getOutboxFullTextStrategyIdSql = (sqlitePath: string) => {
+  return getSqliteColumnNames(sqlitePath, 'judgment_outbox').has('full_text_strategy_id')
+    ? 'full_text_strategy_id'
+    : 'NULL'
+}
+
+const getOutboxExportSql = ({
+  fullTextStrategyIdSql,
+  jobId,
+  systemPromptVariantSql,
+  useMetadataSql,
+}: {
+  fullTextStrategyIdSql: string
+  jobId: string
+  systemPromptVariantSql: string
+  useMetadataSql: string
+}) => {
   return `
     SELECT
       answered_original AS answeredOriginal,
@@ -210,6 +244,7 @@ const getOutboxExportSql = (jobId: string, systemPromptVariantSql: string, useMe
       confidence_original AS confidenceOriginal,
       created_at AS createdAt,
       explanation AS explanation,
+      ${fullTextStrategyIdSql} AS fullTextStrategyId,
       is_answered AS isAnswered,
       job_id AS jobId,
       judgment_id AS judgmentId,
@@ -239,6 +274,7 @@ const getOutboxExportSql = (jobId: string, systemPromptVariantSql: string, useMe
 const getJobInfoSql = (jobId: string, jobInfoColumnNames: Set<string>) => {
   return `
     SELECT
+      ${jobInfoColumnNames.has('full_text_strategy_id') ? 'full_text_strategy_id' : 'NULL'} AS fullTextStrategyId,
       model_id AS modelId,
       ${jobInfoColumnNames.has('system_prompt_variant') ? 'system_prompt_variant' : 'NULL'} AS systemPromptVariant,
       use_abstract AS useAbstract,
@@ -278,6 +314,7 @@ const mapExportedOutboxRow = (row: ExportedOutboxRow): JudgmentJobOutboxEntry =>
     confidenceOriginal: Number(row.confidenceOriginal ?? 0),
     createdAt: new Date(row.createdAt),
     explanation: row.explanation,
+    fullTextStrategyId: getStoredFullTextStrategyId(row),
     isAnswered: toBoolean(row.isAnswered),
     jobId: row.jobId,
     judgmentId: row.judgmentId,
@@ -345,6 +382,7 @@ const getExistingJudgmentPairs = async ({jobInfo, rows}: {jobInfo: JobInfoRow; r
         AND use_fulltext_no_images = ${getSqlLiteral(toBoolean(jobInfo.useFulltextNoImages))}
         AND use_metadata = ${getSqlLiteral(toBoolean(jobInfo.useMetadata))}
         AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(jobInfo.systemPromptVariant))}
+        AND full_text_strategy_id = ${getSqlLiteral(getStoredFullTextStrategyId(jobInfo))}
         AND delete_generation = 0
         AND deleted_at IS NULL
         AND (${chunk
@@ -533,7 +571,12 @@ const recoverJudgmentJob = async (jobId: string): Promise<RecoverySummary> => {
   const sqlUpdatePath = `${sqlitePath}.recovery-update.sql`
   const exportedRows = runSqliteJsonQuery<ExportedOutboxRow>(
     sqlitePath,
-    getOutboxExportSql(jobId, getOutboxSystemPromptVariantSql(sqlitePath), getOutboxUseMetadataSql(sqlitePath)),
+    getOutboxExportSql({
+      fullTextStrategyIdSql: getOutboxFullTextStrategyIdSql(sqlitePath),
+      jobId,
+      systemPromptVariantSql: getOutboxSystemPromptVariantSql(sqlitePath),
+      useMetadataSql: getOutboxUseMetadataSql(sqlitePath),
+    }),
   )
   const jobInfo = runSqliteJsonQuery<JobInfoRow>(
     sqlitePath,

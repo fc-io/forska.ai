@@ -1,4 +1,5 @@
 import type {JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
+import {FULL_TEXT_STRATEGY_NONE, getProjectFullTextStrategyIdSql} from '../../server/fullText/fullTextStrategy.ts'
 import {
   type AppendLlmJudgmentReviewServingDeltaInput,
   appendLlmJudgmentReviewServingDeltas,
@@ -18,6 +19,7 @@ type JudgmentStoreRunner = {
 type StoredJudgmentRow = {
   articleId: string
   changeKind: 'judgment.llm.created' | 'judgment.llm.updated'
+  fullTextStrategyId: string
   id: string
   modelId: string
   projectId: string | null
@@ -58,6 +60,7 @@ const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
 const storeJudgmentForPrompt = async ({
   articleId,
   chunkingStrategy,
+  fullTextStrategyId,
   judgment,
   modelId,
   promptId,
@@ -74,6 +77,7 @@ const storeJudgmentForPrompt = async ({
 }: {
   articleId: string
   chunkingStrategy: JudgmentChunkingStrategy | null
+  fullTextStrategyId: string
   judgment: Record<string, unknown>
   modelId: string
   promptId: string
@@ -109,7 +113,8 @@ const storeJudgmentForPrompt = async ({
       use_fulltext_no_images AS useFulltextNoImages,
       use_metadata AS useMetadata,
       use_title AS useTitle,
-      system_prompt_variant AS systemPromptVariant
+      system_prompt_variant AS systemPromptVariant,
+      full_text_strategy_id AS fullTextStrategyId
     FROM app.judgment
     WHERE article_id = ${getSqlLiteral(articleId)}
       AND model_id = ${getSqlLiteral(modelId)}
@@ -120,6 +125,7 @@ const storeJudgmentForPrompt = async ({
       AND use_fulltext_no_images = ${getSqlLiteral(useFulltextNoImages)}
       AND use_metadata = ${getSqlLiteral(useMetadata)}
       AND system_prompt_variant = ${getSqlLiteral(systemPromptVariant)}
+      AND full_text_strategy_id = ${getSqlLiteral(fullTextStrategyId)}
       AND deleted_at IS NULL
     LIMIT 1
   `)
@@ -151,7 +157,8 @@ const storeJudgmentForPrompt = async ({
             use_fulltext_no_images AS useFulltextNoImages,
             use_metadata AS useMetadata,
             use_title AS useTitle,
-            system_prompt_variant AS systemPromptVariant
+            system_prompt_variant AS systemPromptVariant,
+            full_text_strategy_id AS fullTextStrategyId
         `)
       )[0]
     : (
@@ -168,6 +175,7 @@ const storeJudgmentForPrompt = async ({
             use_fulltext_no_images,
             use_metadata,
             system_prompt_variant,
+            full_text_strategy_id,
             is_answered,
             answered_original,
             answered_original_as_array,
@@ -190,6 +198,7 @@ const storeJudgmentForPrompt = async ({
             ${getSqlLiteral(useFulltextNoImages)},
             ${getSqlLiteral(useMetadata)},
             ${getSqlLiteral(systemPromptVariant)},
+            ${getSqlLiteral(fullTextStrategyId)},
             TRUE,
             ${getSqlLiteral(answeredOriginal)},
             ${getSqlLiteral(answeredOriginalAsArray)},
@@ -213,7 +222,8 @@ const storeJudgmentForPrompt = async ({
             use_fulltext_no_images AS useFulltextNoImages,
             use_metadata AS useMetadata,
             use_title AS useTitle,
-            system_prompt_variant AS systemPromptVariant
+            system_prompt_variant AS systemPromptVariant,
+            full_text_strategy_id AS fullTextStrategyId
         `)
       )[0]
 }
@@ -234,6 +244,7 @@ const getAffectedProjectIdsForStoredJudgment = async (runner: JudgmentStoreRunne
       AND project.use_fulltext_no_images = ${getSqlLiteral(result.useFulltextNoImages)}
       AND COALESCE(project.use_metadata, FALSE) = ${getSqlLiteral(result.useMetadata)}
       AND COALESCE(project.system_prompt_variant, 'legacy') = ${getSqlLiteral(result.systemPromptVariant)}
+      AND ${getProjectFullTextStrategyIdSql('project')} = ${getSqlLiteral(result.fullTextStrategyId)}
       AND (
         EXISTS (
           SELECT 1
@@ -289,6 +300,7 @@ export const judgeStoreJudgment = async (
             useFulltextNoImages: boolean
             useMetadata: boolean | null
             systemPromptVariant: string | null
+            fullTextStrategyId: string
           }>(
             `
             SELECT
@@ -298,8 +310,9 @@ export const judgeStoreJudgment = async (
               use_fulltext AS useFulltext,
               use_fulltext_no_images AS useFulltextNoImages,
               use_metadata AS useMetadata,
-              system_prompt_variant AS systemPromptVariant
-            FROM app.project
+              system_prompt_variant AS systemPromptVariant,
+              ${getProjectFullTextStrategyIdSql('project')} AS fullTextStrategyId
+            FROM app.project project
             WHERE id = '${escapeSqlString(projectId)}'
             LIMIT 1
           `,
@@ -323,6 +336,7 @@ export const judgeStoreJudgment = async (
       snapshotProjectModelName: modelRow?.modelName ?? null,
     } as const
     const systemPromptVariant = getSystemPromptVariant(projectRow?.systemPromptVariant)
+    const fullTextStrategyId = projectRow?.fullTextStrategyId ?? FULL_TEXT_STRATEGY_NONE
     await getAppDatabaseService().transaction(async (runner) => {
       const results = await promptIds.reduce<Promise<Array<StoredJudgmentRow | undefined>>>(
         async (promise, promptId) => {
@@ -330,6 +344,7 @@ export const judgeStoreJudgment = async (
           const stored = await storeJudgmentForPrompt({
             articleId,
             chunkingStrategy,
+            fullTextStrategyId,
             judgment,
             modelId,
             promptId,
@@ -365,6 +380,7 @@ export const judgeStoreJudgment = async (
               return {
                 articleId: result.articleId,
                 changeKind: result.changeKind,
+                fullTextStrategyId: result.fullTextStrategyId,
                 judgmentId: result.id,
                 modelId: result.modelId,
                 projectId,
@@ -388,6 +404,7 @@ export const judgeStoreJudgment = async (
           promptIds.map((promptId) => {
             return {
               articleId,
+              fullTextStrategyId,
               modelId,
               promptId,
               systemPromptVariant,

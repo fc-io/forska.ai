@@ -39,6 +39,7 @@ const createJudgeSinglePromptInput = (): JudgeSinglePromptInput => {
       useMetadata: false,
       useTitle: true,
     },
+    fullTextStrategyId: 'fts-none',
     judgmentsJobId: 'job-1',
     modelConfig: {
       baseURL: 'http://runtime.test/v1',

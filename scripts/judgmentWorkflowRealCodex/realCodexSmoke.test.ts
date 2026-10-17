@@ -99,6 +99,7 @@ const getEvidence = async (): Promise<RealCodexEvidence> => {
           useMetadata: false,
           useTitle: true,
         },
+        fullTextStrategyId: 'fts-none',
         modelId: 'model-real-codex',
         providerKind: 'codex',
         schemaValid: true,

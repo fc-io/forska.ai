@@ -1,3 +1,4 @@
+import {getProjectFullTextStrategyIdSql} from '../src/server/fullText/fullTextStrategy.ts'
 import {getReviewServingFilteredCountSignature} from '../src/server/reviewServing/reviewServingFilteredCountService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
@@ -101,6 +102,7 @@ const getSourceCountRows = async (projectIds: readonly string[]) => {
         project.use_fulltext_no_images,
         COALESCE(project.use_metadata, FALSE) AS use_metadata,
         COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant,
+        ${getProjectFullTextStrategyIdSql('project')} AS full_text_strategy_id,
         COALESCE(project.human_judgment_mode, 'prompt') AS human_judgment_mode
       FROM app.project project
       WHERE project.id IN (${projectIdList})
@@ -159,6 +161,7 @@ const getSourceCountRows = async (projectIds: readonly string[]) => {
        AND judgment.use_fulltext_no_images = project.use_fulltext_no_images
        AND judgment.use_metadata = project.use_metadata
        AND judgment.system_prompt_variant = project.system_prompt_variant
+       AND judgment.full_text_strategy_id = project.full_text_strategy_id
        AND judgment.deleted_at IS NULL
     ),
     llm_article_status AS (

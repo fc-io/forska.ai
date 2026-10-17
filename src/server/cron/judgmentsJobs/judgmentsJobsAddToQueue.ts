@@ -1,5 +1,6 @@
 import type {SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import {getJudgmentJobStopConditions, hasJudgmentJobStopCondition} from '../../../utils/judgmentJobStopConditions.ts'
+import {getProjectFullTextStrategyIdSql} from '../../fullText/fullTextStrategy.ts'
 import type {JudgmentJobHumanAnsweredMode} from '../../reviewServing/reviewServingJudgmentJobQueueService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
@@ -43,6 +44,7 @@ type JobConfig = {
   useFulltextNoImages: boolean
   useMetadata: boolean
   systemPromptVariant: SystemPromptVariant
+  fullTextStrategyId: string
   stopAfterArticles?: number | null
   stopAfterTotalTokens?: number | string | null
   stopAt?: string | null
@@ -914,6 +916,7 @@ const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
       p.use_fulltext_no_images AS useFulltextNoImages,
       COALESCE(p.use_metadata, FALSE) AS useMetadata,
       COALESCE(p.system_prompt_variant, 'legacy') AS systemPromptVariant,
+      ${getProjectFullTextStrategyIdSql('p')} AS fullTextStrategyId,
       jj.stop_after_articles AS stopAfterArticles,
       jj.stop_after_total_tokens AS stopAfterTotalTokens,
       jj.stop_at AS stopAt,

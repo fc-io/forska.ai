@@ -699,6 +699,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
     }>
     judgments: Array<{
       count: number
+      fullTextStrategyId: string
       modelId: string
       projectId: string
       useAbstract: boolean
@@ -741,6 +742,7 @@ export const runJudgmentWorkflowTopologyLifecycle = async ({
         }>
         judgments: Array<{
           count: number
+          fullTextStrategyId: string
           modelId: string
           projectId: string
           useAbstract: boolean

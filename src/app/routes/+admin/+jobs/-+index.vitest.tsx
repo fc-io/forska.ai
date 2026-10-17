@@ -102,6 +102,8 @@ const buildJob = ({
   return {
     createdAt: '2026-10-02T12:00:00.000Z',
     error: null,
+    fullTextStrategyId: 'fts-none',
+    fullTextStrategyLabel: 'no full text',
     health: {badges, isHealthy: badges.length === 1 && badges[0] === 'Healthy'},
     id,
     importFailureCount: 0,
@@ -290,6 +292,34 @@ describe('judgment jobs list stop condition hint', () => {
       expect(getRowText('Stopped project')).toContain('stop: 2,000 articles reached')
       expect(getRowText('Limited project')).toContain('stop: human-answered · ≤ 5,000,000 tokens')
       expect(getRowText('Plain project')).not.toContain('stop:')
+    } finally {
+      cleanup()
+    }
+  })
+})
+
+describe('judgment jobs list full-text strategy', () => {
+  test('shows each job full-text strategy label under the project name', async () => {
+    mockState.jobs = [
+      {
+        ...buildJob({id: 'job-strategy', projectName: 'Strategy project'}),
+        fullTextStrategyId: 'fts-0123456789abcdef',
+        fullTextStrategyLabel: 'MinerU 4 · figures: none · single chunk',
+      },
+      buildJob({id: 'job-plain', projectName: 'Plain project'}),
+    ]
+    const {cleanup, container} = await renderJobsPage()
+    const getRowText = (projectName: string) => {
+      return (
+        Array.from(container.querySelectorAll('tbody tr')).find((row) => {
+          return row.textContent?.includes(projectName)
+        })?.textContent ?? ''
+      )
+    }
+
+    try {
+      expect(getRowText('Strategy project')).toContain('Full-text strategy: MinerU 4 · figures: none · single chunk')
+      expect(getRowText('Plain project')).toContain('Full-text strategy: no full text')
     } finally {
       cleanup()
     }

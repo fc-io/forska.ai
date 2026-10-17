@@ -64,6 +64,7 @@ const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): 
       AND use_fulltext_no_images = ${promptToProcess.useFulltextNoImages ? 'TRUE' : 'FALSE'}
       AND use_metadata = ${promptToProcess.useMetadata ? 'TRUE' : 'FALSE'}
       AND system_prompt_variant = '${escapeSqlString(getSystemPromptVariant(promptToProcess.systemPromptVariant))}'
+      AND full_text_strategy_id = '${escapeSqlString(promptToProcess.fullTextStrategyId)}'
       AND deleted_at IS NULL
     LIMIT 1
   `)
@@ -503,6 +504,7 @@ const processSinglePrompt = async (
         useMetadata: promptToProcess.useMetadata,
       },
       systemPromptVariant: promptToProcess.systemPromptVariant,
+      fullTextStrategyId: promptToProcess.fullTextStrategyId,
     })
   } finally {
     releaseRequestWork()
@@ -771,6 +773,7 @@ const enqueueJudgeWorkerTerminalCompletion = async (
     claimId: promptToProcess.claimId,
     executionSnapshotHash: promptToProcess.executionSnapshotHash,
     executionSnapshotId: promptToProcess.executionSnapshotId,
+    fullTextStrategyId: promptToProcess.fullTextStrategyId,
     jobId: promptToProcess.jobId,
     modelId: promptToProcess.modelId,
     projectId: promptToProcess.projectId,

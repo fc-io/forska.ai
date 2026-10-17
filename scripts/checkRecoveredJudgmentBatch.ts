@@ -2,6 +2,7 @@ import {readFile} from 'node:fs/promises'
 
 import {getSystemPromptVariant} from '../src/agent/judge/systemPromptVariant.ts'
 import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmentJobPaths.ts'
+import {getLegacyFullTextStrategyId} from '../src/server/fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
@@ -10,6 +11,7 @@ import {getMaintenanceDuckdbWorkloadContext} from '../src/server/utils/duckdbSer
 type CliOptions = {jobId: string | null; limit: number; offset: number}
 type ExportedOutboxRow = {
   articleId: string
+  fullTextStrategyId?: string | null
   modelId: string
   outboxSeq: number
   promptId: string
@@ -22,6 +24,16 @@ type ExportedOutboxRow = {
 }
 
 const workloadContext = getMaintenanceDuckdbWorkloadContext('checkRecoveredJudgmentBatch')
+
+const getRowFullTextStrategyId = (row: ExportedOutboxRow) => {
+  return (
+    row.fullTextStrategyId
+    ?? getLegacyFullTextStrategyId({
+      useFulltext: row.useFulltext === 1,
+      useFulltextNoImages: row.useFulltextNoImages === 1,
+    })
+  )
+}
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -65,6 +77,7 @@ const checkBatch = async ({jobId, limit, offset}: {jobId: string; limit: number;
             AND use_fulltext_no_images = ${getSqlLiteral(row.useFulltextNoImages === 1)}
             AND use_metadata = ${getSqlLiteral(row.useMetadata === 1)}
             AND system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(row.systemPromptVariant))}
+            AND full_text_strategy_id = ${getSqlLiteral(getRowFullTextStrategyId(row))}
             AND delete_generation = 0
             AND deleted_at IS NULL
         `,

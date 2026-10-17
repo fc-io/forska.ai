@@ -87,6 +87,8 @@ import {
 } from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {getProviderBucketSnapshot, type ProviderBucketSnapshot} from '../cron/judgmentsJobs/providerAdmissionLease.ts'
 import type {JudgmentsCleanupStaleCronActivity} from '../cron/judgmentsJobsCronState.ts'
+import {getLegacyFullTextStrategyId, getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
+import {getFullTextStrategyLabelsById} from '../fullText/fullTextStrategyRepository.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
 import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
 import {resolveProviderConnectionRuntimeMatch} from '../providers/providerRuntimeMatchResolver.ts'
@@ -257,6 +259,7 @@ type JudgmentJobProgressState =
   | 'repair_required'
   | 'waiting_for_owner_ack'
 type JudgmentJobWorkIdentity = {
+  fullTextStrategyId: string
   modelId: string
   projectId: string
   systemPromptVariant: SystemPromptVariant
@@ -376,6 +379,7 @@ type JudgmentCompletionIdentity = {
   claimId: string
   executionSnapshotHash: string
   executionSnapshotId: string
+  fullTextStrategyId: string
   jobId: string
   modelId: string
   projectId: string
@@ -387,12 +391,13 @@ type JudgmentCompletionIdentity = {
   useMetadata: boolean
   useTitle: boolean
 }
-type JudgmentCompletionBody = Omit<JudgmentCompletionIdentity, 'useMetadata'> & {
+type JudgmentCompletionBody = Omit<JudgmentCompletionIdentity, 'fullTextStrategyId' | 'useMetadata'> & {
   answeredOriginal?: unknown
   answeredOriginalAsArray?: unknown
   chunkingStrategy?: string | null
   confidenceOriginal?: number
   explanation?: string | null
+  fullTextStrategyId?: string | null
   isAnswered?: boolean
   judgment?: unknown
   judgmentId?: string
@@ -453,6 +458,7 @@ const judgmentCompletionBodySchema = t.Object({
   chunkingStrategy: t.Optional(t.Union([t.String(), t.Null()])),
   confidenceOriginal: t.Optional(t.Number()),
   explanation: t.Optional(t.Union([t.String(), t.Null()])),
+  fullTextStrategyId: t.Optional(t.Union([t.String(), t.Null()])),
   isAnswered: t.Optional(t.Boolean()),
   judgment: t.Optional(t.Any()),
   judgmentId: t.Optional(t.String()),
@@ -796,6 +802,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     providerConnectionUpdatedAt: Date | string | null
     providerName: string | null
     systemPromptVariant: string | null
+    fullTextStrategyId: string
     useAbstract: boolean | null
     useFulltext: boolean | null
     useFulltextNoImages: boolean | null
@@ -817,6 +824,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
       pc.updated_at AS providerConnectionUpdatedAt,
       TO_JSON(pc.config_json) AS providerConfigJson,
       p.system_prompt_variant AS systemPromptVariant,
+      COALESCE(jj.full_text_strategy_id, ${getProjectFullTextStrategyIdSql('p')}) AS fullTextStrategyId,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
@@ -856,6 +864,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
   })
 
   return {
+    fullTextStrategyId: jobInfo?.fullTextStrategyId ?? row.fullTextStrategyId,
     modelBaseUrl: row.modelBaseUrl ?? null,
     modelId: row.modelId,
     modelMetadataJson: getJsonValue(row.modelMetadataJson),
@@ -1103,7 +1112,14 @@ const getCompletionRequestAttemptsJson = (
 }
 
 const getCompletionIdentity = (jobId: string, body: JudgmentCompletionBody): JudgmentCompletionIdentity => {
-  return {...body, jobId, useMetadata: body.useMetadata === true}
+  return {
+    ...body,
+    fullTextStrategyId:
+      body.fullTextStrategyId
+      ?? getLegacyFullTextStrategyId({useFulltext: body.useFulltext, useFulltextNoImages: body.useFulltextNoImages}),
+    jobId,
+    useMetadata: body.useMetadata === true,
+  }
 }
 
 const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCompletionBody) => {
@@ -1303,6 +1319,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
         explanation: body.explanation ?? (typeof judgment.explanation === 'string' ? judgment.explanation : null),
         executionSnapshotHash: body.executionSnapshotHash,
         executionSnapshotId: body.executionSnapshotId,
+        fullTextStrategyId: body.fullTextStrategyId ?? null,
         isAnswered: body.isAnswered ?? true,
         judgmentId,
         modelId: body.modelId,
@@ -1403,13 +1420,14 @@ const getUnassessedCountCacheKey = (
   useFulltextNoImages: boolean,
   useMetadata: boolean,
   systemPromptVariant: SystemPromptVariant,
+  fullTextStrategyId: string,
   dirtyToken: number | null,
   lastCompletedDirtyToken: number | null,
 ) => {
   const from = projectDateFrom ? projectDateFrom.toISOString() : ''
   const to = projectDateTo ? projectDateTo.toISOString() : ''
   const routes = importRouteIds.slice().sort().join(',')
-  const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}|${useMetadata}|${systemPromptVariant}`
+  const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}|${useMetadata}|${systemPromptVariant}|${fullTextStrategyId}`
   return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}|${dirtyToken ?? 'null'}|${lastCompletedDirtyToken ?? 'null'}`
 }
 
@@ -1547,6 +1565,31 @@ export const getProjectMartFreshnessState = async (
   }
 }
 
+const assertJudgmentJobFullTextStrategyCanResume = ({
+  jobId,
+  projectFullTextStrategyId,
+}: {
+  jobId: string
+  projectFullTextStrategyId: string
+}): void => {
+  const storedFullTextStrategyId = getJudgmentJobSqliteService().getStoredFullTextStrategyId(jobId)
+
+  if (storedFullTextStrategyId !== null && storedFullTextStrategyId !== projectFullTextStrategyId) {
+    throw new HttpError(
+      409,
+      `The project's full-text strategy changed since this job started (${storedFullTextStrategyId} → ${projectFullTextStrategyId}). Start the job clean to judge with the new strategy.`,
+    )
+  }
+}
+
+const setJudgmentJobFullTextStrategyId = async (jobId: string, fullTextStrategyId: string): Promise<void> => {
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job
+    SET full_text_strategy_id = ${getSqlLiteral(fullTextStrategyId)}
+    WHERE id = ${getSqlLiteral(jobId)}
+  `)
+}
+
 const getJobContext = async ({
   db = getAppDatabaseService(),
   jobId,
@@ -1573,12 +1616,14 @@ const getJobContext = async ({
     pauseRequestedAt: Date | null
     projectName: string | null
     systemPromptVariant: SystemPromptVariant
+    fullTextStrategyId: string
     useTitle: boolean
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
     useMetadata: boolean
   } & ReturnType<typeof getJudgmentJobStopFields>
+  projectFullTextStrategyId: string
   projectModelId: string
   projectDateFrom: Date | null
   projectDateTo: Date | null
@@ -1607,6 +1652,8 @@ const getJobContext = async ({
       projectDateFrom: unknown
       projectDateTo: unknown
       projectSystemPromptVariant: string | null
+      jobFullTextStrategyId: string
+      projectFullTextStrategyId: string
       projectUseTitle: boolean | null
       projectUseAbstract: boolean | null
       projectUseFulltext: boolean | null
@@ -1647,6 +1694,8 @@ const getJobContext = async ({
         p.date_from AS projectDateFrom,
         p.date_to AS projectDateTo,
         p.system_prompt_variant AS projectSystemPromptVariant,
+        COALESCE(jj.full_text_strategy_id, ${getProjectFullTextStrategyIdSql('p')}) AS jobFullTextStrategyId,
+        ${getProjectFullTextStrategyIdSql('p')} AS projectFullTextStrategyId,
         p.use_title AS projectUseTitle,
         p.use_abstract AS projectUseAbstract,
         p.use_fulltext AS projectUseFulltext,
@@ -1676,6 +1725,8 @@ const getJobContext = async ({
     projectDateTo,
     projectModelId,
     projectSystemPromptVariant,
+    jobFullTextStrategyId,
+    projectFullTextStrategyId,
     projectUseTitle,
     projectUseAbstract,
     projectUseFulltext,
@@ -1714,6 +1765,7 @@ const getJobContext = async ({
     importFailureCount: Number(rest.importFailureCount ?? 0),
     pauseRequestedAt: getDateValue(rest.pauseRequestedAt),
     systemPromptVariant: getSystemPromptVariant(projectSystemPromptVariant),
+    fullTextStrategyId: jobFullTextStrategyId,
     useTitle: projectUseTitle ?? true,
     useAbstract: projectUseAbstract ?? true,
     useFulltext: projectUseFulltext ?? false,
@@ -1727,6 +1779,7 @@ const getJobContext = async ({
 
   return {
     job,
+    projectFullTextStrategyId,
     projectModelId,
     projectDateFrom: getDateValue(projectDateFrom),
     projectDateTo: getDateValue(projectDateTo),
@@ -2188,6 +2241,7 @@ const getJudgmentJobWorkIdentity = ({
   modelId,
 }: {
   job: {
+    fullTextStrategyId: string
     projectId: string
     systemPromptVariant: SystemPromptVariant
     useAbstract: boolean
@@ -2199,6 +2253,7 @@ const getJudgmentJobWorkIdentity = ({
   modelId: string
 }): JudgmentJobWorkIdentity => {
   return {
+    fullTextStrategyId: job.fullTextStrategyId,
     modelId,
     projectId: job.projectId,
     systemPromptVariant: job.systemPromptVariant,
@@ -3091,8 +3146,10 @@ export const judgmentsJobsRoutes = new Elysia()
         createdAt: unknown
         projectId: string
       }>(`
-        INSERT INTO app.judgment_job (id, project_id, status)
-        VALUES (${getQuotedStringList([crypto.randomUUID(), body.projectId, 'running']).join(', ')})
+        INSERT INTO app.judgment_job (id, project_id, status, full_text_strategy_id)
+        SELECT ${getQuotedStringList([crypto.randomUUID(), body.projectId, 'running']).join(', ')}, ${getProjectFullTextStrategyIdSql('p')}
+        FROM app.project p
+        WHERE p.id = ${getSqlLiteral(body.projectId)}
         RETURNING
           id,
           status,
@@ -3359,6 +3416,7 @@ export const judgmentsJobsRoutes = new Elysia()
             providerConnection,
             providerHealth,
             admittedArticleCount,
+            fullTextStrategyLabelsById,
           ] = await Promise.all([
             sqliteHealthPromise,
             leaseMetadataPromise,
@@ -3381,6 +3439,7 @@ export const judgmentsJobsRoutes = new Elysia()
             providerConnectionPromise,
             getProviderHealthForReadableRoute({db, jobId: job.id}),
             admittedArticleCountPromise,
+            getFullTextStrategyLabelsById(db, [job.fullTextStrategyId]),
           ])
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
@@ -3426,6 +3485,7 @@ export const judgmentsJobsRoutes = new Elysia()
           return {
             ...job,
             admittedArticleCount,
+            fullTextStrategyLabel: fullTextStrategyLabelsById.get(job.fullTextStrategyId) ?? job.fullTextStrategyId,
             leaseMetadata,
             promptStats,
             providerHealth: getProviderHealthApi(providerHealth),
@@ -3489,6 +3549,7 @@ export const judgmentsJobsRoutes = new Elysia()
         job.useFulltextNoImages,
         job.useMetadata,
         job.systemPromptVariant,
+        job.fullTextStrategyId,
         freshness.dirtyToken,
         freshness.lastCompletedDirtyToken,
       )
@@ -3580,6 +3641,7 @@ export const judgmentsJobsRoutes = new Elysia()
           importFailureCount: number | null
           pauseRequestedAt: unknown
           projectName: string | null
+          fullTextStrategyId: string
           modelDisplayName: string | null
           modelMetadataJson: unknown
           modelProviderConnectionId: string | null
@@ -3616,6 +3678,7 @@ export const judgmentsJobsRoutes = new Elysia()
           jj.stop_reason AS stopReason,
           jj.stop_reason_at AS stopReasonAt,
           p.name AS projectName,
+          COALESCE(jj.full_text_strategy_id, ${getProjectFullTextStrategyIdSql('p')}) AS fullTextStrategyId,
           COALESCE(m.display_name, m.name) AS modelDisplayName,
           TO_JSON(m.metadata_json) AS modelMetadataJson,
           m.provider_connection_id AS modelProviderConnectionId,
@@ -3650,20 +3713,28 @@ export const judgmentsJobsRoutes = new Elysia()
             }
           },
         )
-        const [sqliteHealthByJobId, providerHealthByJobId, stopProgressByJobId] = await Promise.all([
-          getSqliteHealthMapForReadableRoute({db, jobs}),
-          getProviderHealthMapForReadableRoute({
-            db,
-            jobIds: jobs.map((job) => {
-              return job.id
+        const [sqliteHealthByJobId, providerHealthByJobId, stopProgressByJobId, fullTextStrategyLabelsById] =
+          await Promise.all([
+            getSqliteHealthMapForReadableRoute({db, jobs}),
+            getProviderHealthMapForReadableRoute({
+              db,
+              jobIds: jobs.map((job) => {
+                return job.id
+              }),
             }),
-          }),
-          getStopProgressForJobs({db, jobs: jobsWithStopFields}),
-        ])
+            getStopProgressForJobs({db, jobs: jobsWithStopFields}),
+            getFullTextStrategyLabelsById(
+              db,
+              jobs.map((job) => {
+                return job.fullTextStrategyId
+              }),
+            ),
+          ])
         const jobsWithHealth = jobsWithStopFields.map((job) => {
           const normalizedJob = {
             ...job,
             ...(stopProgressByJobId.get(job.id) ?? {admittedArticleCount: null, totalTokens: null}),
+            fullTextStrategyLabel: fullTextStrategyLabelsById.get(job.fullTextStrategyId) ?? job.fullTextStrategyId,
             createdAt: getDateValue(job.createdAt),
             updatedAt: getDateValue(job.updatedAt),
             error: getJsonValue(job.error) as string[] | null,
@@ -3708,6 +3779,7 @@ export const judgmentsJobsRoutes = new Elysia()
           projectId: string
           projectModelId: string
           systemPromptVariant: string | null
+          fullTextStrategyId: string
           useTitle: boolean | null
           useAbstract: boolean | null
           useFulltext: boolean | null
@@ -3730,6 +3802,7 @@ export const judgmentsJobsRoutes = new Elysia()
           jj.project_id AS projectId,
           COALESCE(p.model_id, '') AS projectModelId,
           p.system_prompt_variant AS systemPromptVariant,
+          COALESCE(jj.full_text_strategy_id, ${getProjectFullTextStrategyIdSql('p')}) AS fullTextStrategyId,
           p.use_title AS useTitle,
           p.use_abstract AS useAbstract,
           p.use_fulltext AS useFulltext,
@@ -3902,7 +3975,7 @@ export const judgmentsJobsRoutes = new Elysia()
       if (body.status === 'running') {
         await assertJudgmentJobStopConditionsAllowResume({jobId: params.id, update: stopConditionUpdate})
         await assertJudgingRuntimeCanRun()
-        const {job, projectModelId} = await getJobContext({jobId: params.id})
+        const {job, projectFullTextStrategyId, projectModelId} = await getJobContext({jobId: params.id})
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
         await assertModelContextWindowResolvable(projectModelId)
 
@@ -3937,6 +4010,9 @@ export const judgmentsJobsRoutes = new Elysia()
         })
 
         clearTransientQuarantine = clearTransientQuarantine || preflightResult.clearTransientQuarantine
+        assertJudgmentJobFullTextStrategyCanResume({jobId: params.id, projectFullTextStrategyId})
+        await sqliteService.fillMissingFullTextStrategyId(params.id, projectFullTextStrategyId)
+        await setJudgmentJobFullTextStrategyId(params.id, projectFullTextStrategyId)
       }
 
       const updatedJob = await updateJudgmentJobStatus({
@@ -3982,7 +4058,7 @@ export const judgmentsJobsRoutes = new Elysia()
       await assertJudgingRuntimeCanRun()
 
       const sqliteService = getJudgmentJobSqliteService()
-      const {job, projectModelId} = await getJobContext({jobId: params.id})
+      const {job, projectFullTextStrategyId, projectModelId} = await getJobContext({jobId: params.id})
 
       if (job.status === 'running') {
         throw new HttpError(409, `Pause job ${params.id} before starting it clean.`)
@@ -3999,6 +4075,7 @@ export const judgmentsJobsRoutes = new Elysia()
         await tx.run(`
           UPDATE app.judgment_job
           SET status = 'running',
+              full_text_strategy_id = ${getSqlLiteral(projectFullTextStrategyId)},
               error = NULL,
               storage_state = 'active',
               pause_requested_at = NULL,

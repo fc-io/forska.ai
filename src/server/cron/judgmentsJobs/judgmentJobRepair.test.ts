@@ -66,12 +66,14 @@ afterAll(async () => {
 
 const insertProjectFixture = async ({
   connectionId,
+  fullTextStrategyId = null,
   modelId,
   projectId,
   systemPromptVariant = null,
   useMetadata = false,
 }: {
   connectionId: string
+  fullTextStrategyId?: string | null
   modelId: string
   projectId: string
   systemPromptVariant?: string | null
@@ -92,11 +94,12 @@ const insertProjectFixture = async ({
   await runDatabase(`
     INSERT INTO app.project (
       id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata,
-      system_prompt_variant
+      system_prompt_variant, full_text_strategy_id
     )
     VALUES (
       '${projectId}', 'Judgment job repair test', '${modelId}', TRUE, TRUE, FALSE, FALSE, ${useMetadata ? 'TRUE' : 'FALSE'},
-      ${systemPromptVariant === null ? 'NULL' : `'${systemPromptVariant}'`}
+      ${systemPromptVariant === null ? 'NULL' : `'${systemPromptVariant}'`},
+      ${fullTextStrategyId === null ? 'NULL' : `'${fullTextStrategyId}'`}
     )
   `)
 }
@@ -337,6 +340,67 @@ test('orphan repair only counts a stored judgment with the job use_metadata flag
     requeuedRows: 1,
   })
   expect(await service.repairOrphanedJudgedQueueRows({jobId: sameFlagJobId, maxRows: 10})).toMatchObject({
+    deletedRows: 1,
+    requeuedRows: 0,
+  })
+})
+
+test('orphan repair only counts a stored judgment of the job full-text strategy as already judged', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const now = Date.now()
+  const strategyId = 'fts-0123456789abcdef'
+  const connectionId = `strategy-repair-connection-${now}`
+  const modelId = `strategy-repair-model-${now}`
+  const projectId = `strategy-repair-project-${now}`
+  const otherStrategyJobId = `strategy-repair-other-job-${now}`
+  const sameStrategyJobId = `strategy-repair-same-job-${now}`
+  const insertStoredJudgment = (input: {articleId: string; fullTextStrategyId: string; promptId: string}) => {
+    return runDatabase?.(`
+      INSERT INTO app.judgment (
+        id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+        full_text_strategy_id, is_answered, answered_original
+      )
+      VALUES (
+        '${input.articleId}-judgment', '${input.articleId}', '${input.promptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE,
+        '${input.fullTextStrategyId}', TRUE, 'yes'
+      )
+    `)
+  }
+
+  await insertProjectFixture({connectionId, fullTextStrategyId: strategyId, modelId, projectId})
+  await insertJobFixture({jobId: otherStrategyJobId, projectId, status: 'running', storageState: 'active'})
+  await insertJobFixture({jobId: sameStrategyJobId, projectId, status: 'running', storageState: 'active'})
+  await insertOrphanedJudgedQueueFixture({
+    articleId: `strategy-repair-other-article-${now}`,
+    jobId: otherStrategyJobId,
+    promptId: `strategy-repair-other-prompt-${now}`,
+  })
+  await insertOrphanedJudgedQueueFixture({
+    articleId: `strategy-repair-same-article-${now}`,
+    jobId: sameStrategyJobId,
+    promptId: `strategy-repair-same-prompt-${now}`,
+  })
+  await insertStoredJudgment({
+    articleId: `strategy-repair-other-article-${now}`,
+    fullTextStrategyId: 'fts-none',
+    promptId: `strategy-repair-other-prompt-${now}`,
+  })
+  await insertStoredJudgment({
+    articleId: `strategy-repair-same-article-${now}`,
+    fullTextStrategyId: strategyId,
+    promptId: `strategy-repair-same-prompt-${now}`,
+  })
+
+  const service = sqliteService()
+
+  expect(await service.repairOrphanedJudgedQueueRows({jobId: otherStrategyJobId, maxRows: 10})).toMatchObject({
+    deletedRows: 0,
+    requeuedRows: 1,
+  })
+  expect(await service.repairOrphanedJudgedQueueRows({jobId: sameStrategyJobId, maxRows: 10})).toMatchObject({
     deletedRows: 1,
     requeuedRows: 0,
   })

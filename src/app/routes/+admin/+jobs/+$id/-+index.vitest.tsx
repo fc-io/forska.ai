@@ -132,6 +132,8 @@ const buildJob = (providerHealth: JudgmentJobProviderHealth | null | undefined) 
   return {
     createdAt: '2026-10-02T12:00:00.000Z',
     error: [],
+    fullTextStrategyId: 'fts-0123456789abcdef',
+    fullTextStrategyLabel: 'MinerU 4 · figures: none · single chunk',
     id: mockState.jobId,
     importFailureCount: 0,
     judgingRuntime: {enabled: true, reason: null},
@@ -307,6 +309,19 @@ const clickButtonByText = (container: HTMLElement, text: string) => {
   expect(button).toBeInstanceOf(HTMLButtonElement)
   button?.click()
 }
+
+describe('judgment job detail full-text strategy', () => {
+  test('shows the job full-text strategy label in the work definition', async () => {
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      expect(container.textContent).toContain('Full-text strategy')
+      expect(container.textContent).toContain('MinerU 4 · figures: none · single chunk')
+    } finally {
+      cleanup()
+    }
+  })
+})
 
 describe('judgment job detail action feedback', () => {
   test('shows a failed repair result as an error instead of a success notice', async () => {
