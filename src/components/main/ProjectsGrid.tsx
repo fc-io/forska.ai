@@ -240,12 +240,12 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                         </Button>
                       </Show>
                       <Button
+                        as={Link}
+                        to="/projects/$id/edit"
+                        params={{id: project.id} as never}
                         size="sm"
                         variant="outline"
                         class="px-3 py-1 text-sm"
-                        onClick={() => {
-                          window.location.assign(`/projects/${project.id}/edit`)
-                        }}
                       >
                         Edit
                       </Button>
