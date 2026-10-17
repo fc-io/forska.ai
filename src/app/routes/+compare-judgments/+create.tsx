@@ -562,6 +562,9 @@ const CreateCompareJudgmentsPage = () => {
                             <p class="text-xs text-muted-foreground mt-1">
                               Summary prompts: {summaryPromptCount()} of {sourceProject.prompts.length}
                             </p>
+                            <p class="text-xs text-muted-foreground mt-1">
+                              Full text: {sourceProject.fullTextStrategyLabel}
+                            </p>
                             <Show when={isDisabled()}>
                               <p class="text-xs text-red-600 mt-1">
                                 This project has no prompts with summary criteria metadata.

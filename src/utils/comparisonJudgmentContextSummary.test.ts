@@ -253,3 +253,46 @@ test('says other settings differ only when neither direction explains the differ
     getComparisonJudgmentContextSummaryLines(getSummary('context-older', {systemPromptVariants: []}), current),
   ).not.toContain(otherSettingsLine)
 })
+
+test('lists full-text strategy labels and marks a strategy that is no longer used', () => {
+  const getFullTextSummary = (id: string, fullTextStrategyId: string, fullTextStrategyLabel: string) => {
+    return getSummary(id, {
+      context: {
+        columns: [
+          getLlmColumn({
+            contentKey: `0010~${fullTextStrategyId}`,
+            fullTextStrategyId,
+            fullTextStrategyLabel,
+            useAbstract: false,
+            useFulltext: true,
+            useTitle: false,
+          }),
+        ],
+        humanJudgmentMode: 'prompt',
+        sourceProjectIds: ['project-1'],
+        summarySourceProjectId: null,
+        v: 1,
+      },
+      modelIds: ['model-a'],
+      models: [{id: 'model-a', name: 'gpt-5.5'}],
+    })
+  }
+  const legacySummary = getFullTextSummary(
+    'context-legacy',
+    'fts-legacy-v0',
+    'legacy full text (before strategy tracking)',
+  )
+  const currentSummary = getFullTextSummary('context-current', 'fts-aaaaaaaaaaaaaaaa', 'mineru 4.0 / none / single 96k')
+
+  expect(getComparisonJudgmentContextSummaryLines(currentSummary)).toContain(
+    'Full-text strategies: mineru 4.0 / none / single 96k',
+  )
+  expect(getComparisonJudgmentContextSummaryLines(legacySummary, currentSummary)).toContain(
+    'Full-text strategies: legacy full text (before strategy tracking) (no longer used); added since: mineru 4.0 / none / single 96k',
+  )
+  expect(
+    getComparisonJudgmentContextSummaryLines(getSummary('context-plain')).some((line) => {
+      return line.startsWith('Full-text strategies')
+    }),
+  ).toBe(false)
+})

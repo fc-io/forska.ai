@@ -149,6 +149,19 @@ const getVariantEntries = (summary: ComparisonJudgmentContextSummary) => {
   })
 }
 
+const getFullTextStrategyEntries = (summary: ComparisonJudgmentContextSummary) => {
+  return getLlmColumns(summary).flatMap((column) => {
+    return column.fullTextStrategyId
+      ? [
+          {
+            id: column.fullTextStrategyId,
+            label: getEntryLabel(column.fullTextStrategyLabel ?? null, column.fullTextStrategyId),
+          },
+        ]
+      : []
+  })
+}
+
 const getContentEntry = (column: ComparisonJudgmentContextLlmColumn): ComparisonJudgmentContextSummaryEntry => {
   const label = contentFlagLabels
     .filter(([flag]) => {
@@ -172,6 +185,7 @@ const contextSummaryLineDefinitions: ComparisonJudgmentContextSummaryLineDefinit
   {getEntries: getPromptEntries, label: 'Prompts'},
   {getEntries: getCriteriaEntries, label: 'Criteria'},
   {getEntries: getContentEntries, label: 'Content'},
+  {getEntries: getFullTextStrategyEntries, label: 'Full-text strategies'},
 ]
 
 const getLinePart = (

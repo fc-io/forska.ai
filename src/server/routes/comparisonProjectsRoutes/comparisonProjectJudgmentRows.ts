@@ -20,6 +20,7 @@ import {
   type ComparisonProjectRowFilter,
   getComparisonProjectPassesRowFilter,
 } from '../../../utils/comparisonProjectRowFilter.ts'
+import {FULL_TEXT_STRATEGY_NONE, getEffectiveFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgmentDisplayAnswer, hasAnyJudgmentAnswer} from '../../utils/judgmentAnswers.ts'
 import {
@@ -53,6 +54,7 @@ export type ComparisonProjectJudgmentLlmRow = {
   explanation?: string | null
   quotes?: unknown
   systemPromptVariant?: SystemPromptVariant | null
+  fullTextStrategyId?: string | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -241,6 +243,15 @@ const comparisonProjectServingDifferenceFilterPredicates = {
 
 const comparisonProjectContentKeySystemPromptVariantSeparator = '-'
 const comparisonProjectContentKeyMetadataSuffix = 'm'
+export const comparisonProjectContentKeyFullTextStrategySeparator = '~'
+
+const getComparisonProjectContentKeyFullTextStrategySuffix = (fullTextStrategyId: string | null | undefined) => {
+  const effectiveFullTextStrategyId = getEffectiveFullTextStrategyId(fullTextStrategyId)
+
+  return effectiveFullTextStrategyId === FULL_TEXT_STRATEGY_NONE
+    ? ''
+    : `${comparisonProjectContentKeyFullTextStrategySeparator}${effectiveFullTextStrategyId}`
+}
 
 export const getComparisonProjectContentKey = (settings: {
   useTitle: boolean
@@ -249,6 +260,7 @@ export const getComparisonProjectContentKey = (settings: {
   useFulltextNoImages: boolean
   useMetadata?: boolean | null
   systemPromptVariant?: string | null
+  fullTextStrategyId?: string | null
 }) => {
   const flagKey = [settings.useTitle, settings.useAbstract, settings.useFulltext, settings.useFulltextNoImages]
     .map((value) => {
@@ -257,10 +269,12 @@ export const getComparisonProjectContentKey = (settings: {
     .join('')
   const contentKey = settings.useMetadata ? `${flagKey}${comparisonProjectContentKeyMetadataSuffix}` : flagKey
   const systemPromptVariant = getSystemPromptVariant(settings.systemPromptVariant)
+  const variantContentKey =
+    systemPromptVariant === defaultSystemPromptVariant
+      ? contentKey
+      : `${contentKey}${comparisonProjectContentKeySystemPromptVariantSeparator}${systemPromptVariant}`
 
-  return systemPromptVariant === defaultSystemPromptVariant
-    ? contentKey
-    : `${contentKey}${comparisonProjectContentKeySystemPromptVariantSeparator}${systemPromptVariant}`
+  return `${variantContentKey}${getComparisonProjectContentKeyFullTextStrategySuffix(settings.fullTextStrategyId)}`
 }
 
 export const getComparisonProjectColumnId = (

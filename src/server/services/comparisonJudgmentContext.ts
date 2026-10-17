@@ -3,6 +3,11 @@ import {createHash} from 'node:crypto'
 import {type as arktype} from 'arktype'
 
 import {defaultSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {
+  FULL_TEXT_STRATEGY_NONE,
+  getEffectiveFullTextStrategyId,
+  getFullTextStrategyDisplayLabel,
+} from '../fullText/fullTextStrategy.ts'
 import {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 
 type ComparisonJudgmentContextRunner = {
@@ -25,6 +30,8 @@ export type ComparisonJudgmentContextCriterion = {
 export type ComparisonJudgmentContextLlmColumn = {
   contentKey: string
   criteria?: ComparisonJudgmentContextCriterion[]
+  fullTextStrategyId?: string
+  fullTextStrategyLabel?: string
   kind: 'llm'
   modelId: string
   modelName: string | null
@@ -53,6 +60,8 @@ export type ComparisonJudgmentContext = {
 
 export type ComparisonJudgmentContextColumnRow = {
   contentKey: string | null
+  fullTextStrategyId?: string | null
+  fullTextStrategyStoredLabel?: string | null
   kind: string
   modelId: string | null
   modelName: string | null
@@ -89,7 +98,7 @@ const comparisonJudgmentContextServingTable = 'mart.comparison_judgment_context_
 const comparisonJudgmentContextVersion = 1
 const comparisonJudgmentContextIdPattern = /^[0-9a-f]{64}$/
 const summaryPromptId = 'summary'
-const comparisonJudgmentContextDisplayKeys = new Set(['modelName', 'promptHeading'])
+const comparisonJudgmentContextDisplayKeys = new Set(['fullTextStrategyLabel', 'modelName', 'promptHeading'])
 
 const ComparisonJudgmentContextCriterionSchema = arktype({
   criteriaDisposition: 'string | null',
@@ -99,6 +108,8 @@ const ComparisonJudgmentContextCriterionSchema = arktype({
 const ComparisonJudgmentContextLlmColumnSchema = arktype({
   contentKey: 'string',
   'criteria?': ComparisonJudgmentContextCriterionSchema.array(),
+  'fullTextStrategyId?': 'string',
+  'fullTextStrategyLabel?': 'string',
   kind: '"llm"',
   modelId: 'string',
   modelName: 'string | null',
@@ -222,10 +233,25 @@ const getCanonicalCriteria = (criteria: readonly ComparisonJudgmentContextCriter
   )
 }
 
+const getFullTextStrategyContextFields = (
+  fullTextStrategyId: string | null | undefined,
+  fullTextStrategyLabel: string | null | undefined,
+): Pick<ComparisonJudgmentContextLlmColumn, 'fullTextStrategyId' | 'fullTextStrategyLabel'> => {
+  const effectiveFullTextStrategyId = getEffectiveFullTextStrategyId(fullTextStrategyId)
+
+  return effectiveFullTextStrategyId === FULL_TEXT_STRATEGY_NONE
+    ? {}
+    : {
+        fullTextStrategyId: effectiveFullTextStrategyId,
+        fullTextStrategyLabel: getFullTextStrategyDisplayLabel(effectiveFullTextStrategyId, fullTextStrategyLabel),
+      }
+}
+
 const getCanonicalLlmColumn = (column: ComparisonJudgmentContextLlmColumn): ComparisonJudgmentContextLlmColumn => {
   return {
     contentKey: column.contentKey,
     ...(column.criteria ? {criteria: getCanonicalCriteria(column.criteria)} : {}),
+    ...getFullTextStrategyContextFields(column.fullTextStrategyId, column.fullTextStrategyLabel),
     kind: 'llm',
     modelId: column.modelId,
     modelName: column.modelName,
@@ -275,6 +301,7 @@ const getLlmColumnFromRow = (
   return {
     contentKey: row.contentKey ?? '',
     ...(row.promptId === summaryPromptId ? {criteria: getColumnCriteria(row.sourceProjectId, criteria)} : {}),
+    ...getFullTextStrategyContextFields(row.fullTextStrategyId, row.fullTextStrategyStoredLabel),
     kind: 'llm',
     modelId: row.modelId ?? '',
     modelName: row.modelName,

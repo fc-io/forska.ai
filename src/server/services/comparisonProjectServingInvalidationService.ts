@@ -1,4 +1,5 @@
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {getLegacyFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {getComparisonProjectServingRebuildService} from './comparisonProjectServingRebuildService.ts'
@@ -30,6 +31,7 @@ type ComparisonProjectServingInvalidationOptions = Partial<ComparisonProjectServ
 
 export type ComparisonProjectLlmJudgmentChange = {
   articleId: string
+  fullTextStrategyId?: string
   modelId: string
   promptId: string
   systemPromptVariant: SystemPromptVariant
@@ -96,6 +98,10 @@ const getUniqueEntries = <T>(entries: readonly T[], getKey: (entry: T) => string
   )
 }
 
+const getLlmJudgmentChangeFullTextStrategyId = (change: ComparisonProjectLlmJudgmentChange) => {
+  return change.fullTextStrategyId ?? getLegacyFullTextStrategyId(change)
+}
+
 const getLlmJudgmentChangeKey = (change: ComparisonProjectLlmJudgmentChange) => {
   return [
     change.articleId,
@@ -107,6 +113,7 @@ const getLlmJudgmentChangeKey = (change: ComparisonProjectLlmJudgmentChange) => 
     change.useFulltextNoImages,
     change.useMetadata,
     getSystemPromptVariant(change.systemPromptVariant),
+    getLlmJudgmentChangeFullTextStrategyId(change),
   ].join('|')
 }
 
@@ -129,7 +136,8 @@ const getLlmJudgmentChangeCteSql = (changes: ComparisonProjectLlmJudgmentChange[
       use_fulltext,
       use_fulltext_no_images,
       use_metadata,
-      system_prompt_variant
+      system_prompt_variant,
+      full_text_strategy_id
     ) AS (
       VALUES ${changes
         .map((change) => {
@@ -142,7 +150,8 @@ const getLlmJudgmentChangeCteSql = (changes: ComparisonProjectLlmJudgmentChange[
             ${getSqlLiteral(change.useFulltext)},
             ${getSqlLiteral(change.useFulltextNoImages)},
             ${getSqlLiteral(change.useMetadata)},
-            ${getSqlLiteral(getSystemPromptVariant(change.systemPromptVariant))}
+            ${getSqlLiteral(getSystemPromptVariant(change.systemPromptVariant))},
+            ${getSqlLiteral(getLlmJudgmentChangeFullTextStrategyId(change))}
           )`
         })
         .join(', ')}

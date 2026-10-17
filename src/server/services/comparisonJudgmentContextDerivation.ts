@@ -48,7 +48,15 @@ export const getComparisonJudgmentContextConfigColumnsSql = (params: ComparisonJ
       SELECT prompt_id FROM ${tables.promptConfig} WHERE ${filterSql}
     ),
     content_variant AS (
-      SELECT content_key, system_prompt_variant, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata
+      SELECT
+        content_key,
+        system_prompt_variant,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        use_metadata,
+        full_text_strategy_id
       FROM ${tables.contentVariant}
       WHERE ${filterSql}
     ),
@@ -59,7 +67,7 @@ export const getComparisonJudgmentContextConfigColumnsSql = (params: ComparisonJ
       SELECT model_id FROM ${tables.modelConfig} WHERE ${filterSql} AND mode = 'summary'
     ),
     source_column AS (
-      SELECT source_project_id, model_id, system_prompt_variant, use_metadata
+      SELECT source_project_id, model_id, system_prompt_variant, use_metadata, full_text_strategy_id
       FROM ${tables.sourceProjectColumnConfig}
       WHERE ${filterSql}
     ),
@@ -96,6 +104,7 @@ export const getComparisonJudgmentContextConfigColumnsSql = (params: ComparisonJ
       INNER JOIN content_variant
         ON content_variant.system_prompt_variant = source_column.system_prompt_variant
        AND content_variant.use_metadata = source_column.use_metadata
+       AND content_variant.full_text_strategy_id = source_column.full_text_strategy_id
       WHERE comparison_project.is_summary
 
       UNION ALL BY NAME
@@ -131,10 +140,13 @@ export const getComparisonJudgmentContextConfigColumnsSql = (params: ComparisonJ
       context_column.use_abstract AS useAbstract,
       context_column.use_fulltext AS useFulltext,
       context_column.use_fulltext_no_images AS useFulltextNoImages,
-      context_column.use_metadata AS useMetadata
+      context_column.use_metadata AS useMetadata,
+      context_column.full_text_strategy_id AS fullTextStrategyId,
+      full_text_strategy.label AS fullTextStrategyStoredLabel
     FROM context_column
     LEFT JOIN app.prompt prompt ON prompt.id = context_column.prompt_id
     LEFT JOIN app.model model ON model.id = context_column.model_id
+    LEFT JOIN app.full_text_strategy full_text_strategy ON full_text_strategy.id = context_column.full_text_strategy_id
   `
 }
 

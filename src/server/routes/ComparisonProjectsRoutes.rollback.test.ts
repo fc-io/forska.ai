@@ -134,6 +134,7 @@ type MockDatabaseState = {
     id: string
     modelIds: string[]
     summarySourceProjectId: string | null
+    useFulltext?: boolean
   }
   cleanedServingProjectIds: string[]
   createdComparisonProjectIds: string[]
@@ -193,6 +194,8 @@ type MockDatabaseState = {
   servingRebuildGate?: Promise<void>
   servingStatus: MockServingStatus
   sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
+  fullTextStrategyRows?: Record<string, {inputs: Record<string, unknown>; label: string}>
+  sourceProjectFullTextStrategyIds?: Record<string, string>
   sourceProjectSystemPromptVariants?: Record<string, string>
   sourceProjectUseMetadata?: Record<string, boolean>
   staleServingIds: string[]
@@ -297,6 +300,18 @@ const sourceProjects = {
     useTitle: true,
   },
 } as const
+
+const getMockSourceProjectFullTextStrategyRow = <T extends {id: string}>(sourceProject: T) => {
+  const fullTextStrategyId = getMockDatabaseState().sourceProjectFullTextStrategyIds?.[sourceProject.id] ?? 'fts-none'
+  const fullTextStrategyRow = getMockDatabaseState().fullTextStrategyRows?.[fullTextStrategyId]
+
+  return {
+    ...sourceProject,
+    fullTextStrategyId,
+    fullTextStrategyInputs: fullTextStrategyRow ? JSON.stringify(fullTextStrategyRow.inputs) : null,
+    fullTextStrategyStoredLabel: fullTextStrategyRow?.label ?? null,
+  }
+}
 
 const sourceProjectPromptRows = [
   {
@@ -412,7 +427,7 @@ const getComparisonProjectRow = (comparisonProject: MockDatabaseState['compariso
     summarySourceProjectId: comparisonProject.summarySourceProjectId,
     updatedAt: new Date('2026-03-29T00:00:00.000Z'),
     useAbstract: true,
-    useFulltext: false,
+    useFulltext: comparisonProject.useFulltext ?? false,
     useFulltextNoImages: false,
     useTitle: true,
   }
@@ -2080,8 +2095,18 @@ const queryJson = async (
     ]
   }
 
+  if (statement.includes('FROM app.full_text_strategy')) {
+    return Object.entries(getMockDatabaseState().fullTextStrategyRows ?? {})
+      .filter(([id]) => {
+        return statement.includes(`'${id}'`)
+      })
+      .map(([id, row]) => {
+        return {id, label: row.label}
+      })
+  }
+
   if (statement.includes('FROM app.project p') && statement.includes('WHERE p.archived = FALSE')) {
-    return Object.values(sourceProjects)
+    return Object.values(sourceProjects).map(getMockSourceProjectFullTextStrategyRow)
   }
 
   if (statement.includes('FROM app.project p') && statement.includes('WHERE p.id IN')) {
@@ -2090,7 +2115,8 @@ const queryJson = async (
         return statement.includes(`'${sourceProject.id}'`)
       })
       .map((sourceProject) => {
-        const {modelMetadataJson: _modelMetadataJson, ...sourceProjectRow} = sourceProject
+        const {modelMetadataJson: _modelMetadataJson, ...sourceProjectRow} =
+          getMockSourceProjectFullTextStrategyRow(sourceProject)
         const systemPromptVariant = getMockDatabaseState().sourceProjectSystemPromptVariants?.[sourceProject.id]
         const useMetadata = getMockDatabaseState().sourceProjectUseMetadata?.[sourceProject.id] ?? false
         return systemPromptVariant
@@ -9134,4 +9160,166 @@ test('comparison metadata orders article metadata columns after every column wit
     'llm:model-1:1100m:prompt-1',
     'llm:model-1:1100m-screening_v1:prompt-1',
   ])
+})
+
+const mockFullTextStrategyA = 'fts-aaaaaaaaaaaaaaaa'
+const mockFullTextStrategyB = 'fts-bbbbbbbbbbbbbbbb'
+const mockFullTextStrategyRows = {
+  [mockFullTextStrategyA]: {
+    inputs: {chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'}, converterKind: 'mineru', figureMode: 'none'},
+    label: 'mineru 4.0 / none / single 96k',
+  },
+  [mockFullTextStrategyB]: {
+    inputs: {
+      chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
+      converterKind: 'mineru',
+      figureMode: 'descriptions',
+    },
+    label: 'mineru 4.0 / descriptions / single 48k',
+  },
+}
+
+const postComparisonProjectRequest = async (path: string, body: Record<string, unknown>) => {
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request(`http://localhost${path}`, {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  return {bodyText: await response.text(), status: response.status}
+}
+
+const getMixedFullTextStrategyFromProjectBody = () => {
+  return {
+    allowConflictResolution: false,
+    compareWithHumans: true,
+    description: null,
+    humanJudgmentMode: 'summary',
+    name: 'Mixed strategies',
+    sourceProjectId: 'source-project-1',
+    sourceProjectIds: ['source-project-1', 'source-project-2'],
+  }
+}
+
+test('comparison metadata splits full-text LLM columns by strategy and labels non-default strategies', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {...createMockDatabaseStateWithReadyServing().comparisonProject, useFulltext: true},
+    fullTextStrategyRows: mockFullTextStrategyRows,
+    sourceProjectFullTextStrategyIds: {'source-project-2': mockFullTextStrategyA},
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-none', sourceProjectId: 'prompt-project-1'},
+      {id: 'comparison-project-source-strategy-a', sourceProjectId: 'source-project-2'},
+    ],
+  }
+
+  const {body, status} = await getMockComparisonProjectMetadata()
+
+  expect(status).toBe(200)
+  expect(
+    body.data.columns.map((column) => {
+      return [column.id, column.contentLabel]
+    }),
+  ).toEqual([
+    ['llm:model-1:1100:prompt-1', 'Article Title and Abstract'],
+    [
+      `llm:model-1:0010~${mockFullTextStrategyA}:prompt-1`,
+      'Use Full Text (with images) · Full text: mineru 4.0 / none / single 96k',
+    ],
+  ])
+})
+
+test('comparison create-from-project refuses source projects with different full-text strategies', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    fullTextStrategyRows: mockFullTextStrategyRows,
+    sourceProjectFullTextStrategyIds: {
+      'source-project-1': mockFullTextStrategyA,
+      'source-project-2': mockFullTextStrategyB,
+    },
+  }
+
+  const {bodyText, status} = await postComparisonProjectRequest(
+    '/api/comparison-projects/from-project',
+    getMixedFullTextStrategyFromProjectBody(),
+  )
+
+  expect(status).toBe(400)
+  expect(bodyText).toContain(
+    'Selected projects use different full-text strategies: Summary Source: mineru 4.0 / none / single 96k; Summary Peer: mineru 4.0 / descriptions / single 48k. Differing inputs: chunkPolicy, figureMode',
+  )
+  expect(getMockDatabaseState().transactionCalls).toBe(0)
+  expect(getMockDatabaseState().createdComparisonProjectIds).toEqual([])
+})
+
+test('comparison create-from-project lists full text as the differing input for reserved strategies', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    sourceProjectFullTextStrategyIds: {'source-project-1': 'fts-legacy-v0'},
+  }
+
+  const {bodyText, status} = await postComparisonProjectRequest(
+    '/api/comparison-projects/from-project',
+    getMixedFullTextStrategyFromProjectBody(),
+  )
+
+  expect(status).toBe(400)
+  expect(bodyText).toContain(
+    'Selected projects use different full-text strategies: Summary Source: legacy full text (before strategy tracking); Summary Peer: no full text. Differing inputs: full text',
+  )
+  expect(getMockDatabaseState().transactionCalls).toBe(0)
+})
+
+test('comparison create refuses summary source projects with different full-text strategies', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    fullTextStrategyRows: mockFullTextStrategyRows,
+    sourceProjectFullTextStrategyIds: {'source-project-2': mockFullTextStrategyB},
+  }
+
+  const {bodyText, status} = await postComparisonProjectRequest('/api/comparison-projects', {
+    compareWithHumans: true,
+    humanJudgmentMode: 'summary',
+    name: 'Mixed strategies',
+    sourceProjectIds: ['source-project-2'],
+    summarySourceProjectId: 'source-project-1',
+    useAbstract: true,
+    useFulltext: true,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  expect(status).toBe(400)
+  expect(bodyText).toContain(
+    'Selected projects use different full-text strategies: Summary Source: no full text; Summary Peer: mineru 4.0 / descriptions / single 48k. Differing inputs: full text',
+  )
+  expect(getMockDatabaseState().transactionCalls).toBe(0)
+})
+
+test('comparison CSV export headers carry the full-text strategy label of each column', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseStateWithReadyServing(),
+    comparisonProject: {...createMockDatabaseStateWithReadyServing().comparisonProject, useFulltext: true},
+    fullTextStrategyRows: mockFullTextStrategyRows,
+    sourceProjectFullTextStrategyIds: {'source-project-2': mockFullTextStrategyA},
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-none', sourceProjectId: 'prompt-project-1'},
+      {id: 'comparison-project-source-strategy-a', sourceProjectId: 'source-project-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectExport(app, {differenceFilter: 'all', rowFilter: 'all'})
+  const [headerLine = ''] = (await readCsvResponseWithBom(response)).trim().split('\n')
+
+  expect(response.status).toBe(200)
+  expect(headerLine).toContain('Prompt 1 - LLM - Model 1 - Article Title and Abstract')
+  expect(headerLine).toContain(
+    'Prompt 1 - LLM - Model 1 - Use Full Text (with images) · Full text: mineru 4.0 / none / single 96k',
+  )
 })
