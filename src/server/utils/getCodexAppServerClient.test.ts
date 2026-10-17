@@ -14,6 +14,7 @@ import {
   getCodexAppServerSingletonForTests,
   getCodexThreadTokenUsageUpdate,
   getCodexTurnAgentMessageText,
+  getCodexTurnInput,
   type PrepareCodexAppServerHome,
   resetCodexStderrLogRateLimitForTests,
   setCodexAppServerSingletonForTests,
@@ -23,7 +24,11 @@ import {
 type MockJsonRpcRequest = {
   id?: number
   method?: string
-  params?: Record<string, unknown> & {input?: Array<{text?: string}>; sandboxPolicy?: unknown; threadId?: string}
+  params?: Record<string, unknown> & {
+    input?: Array<{detail?: string; text?: string; type?: string; url?: string}>
+    sandboxPolicy?: unknown
+    threadId?: string
+  }
 }
 
 type MockNotification =
@@ -411,6 +416,48 @@ test('runJsonTurn sends Codex-safe sandbox policy without deprecated readOnlyAcc
     sandboxPolicy: {excludeSlashTmp: true, excludeTmpdirEnvVar: true, networkAccess: false, type: 'workspaceWrite'},
   })
   expect(JSON.stringify(turnStartParams[0])).not.toContain('readOnlyAccess')
+})
+
+test('runJsonTurn keeps the text-only turn/start input byte-identical', async () => {
+  const turnStartParams: Array<MockJsonRpcRequest['params']> = []
+  const {client} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    notifications: [{inputText: 'text only', kind: 'complete', status: 'completed'}],
+    onTurnStart: (params) => {
+      turnStartParams.push(params)
+    },
+    threadReadTextByInputText: {'text only': 'ok'},
+  })
+
+  await client.runJsonTurn({model: 'gpt-5.5', inputText: 'text only', outputSchema: {type: 'object'}})
+
+  expect(JSON.stringify(turnStartParams[0]?.input)).toBe('[{"type":"text","text":"text only"}]')
+  expect(getCodexTurnInput({inputImageUrls: [], inputText: 'text only'})).toEqual([{type: 'text', text: 'text only'}])
+})
+
+test('runJsonTurn sends each image as an image input item with an explicit detail after the text', async () => {
+  const turnStartParams: Array<MockJsonRpcRequest['params']> = []
+  const {client} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    notifications: [{inputText: 'figures', kind: 'complete', status: 'completed'}],
+    onTurnStart: (params) => {
+      turnStartParams.push(params)
+    },
+    threadReadTextByInputText: {figures: 'seen'},
+  })
+  const result = await client.runJsonTurn({
+    inputImageUrls: ['data:image/png;base64,AAA=', 'data:image/jpeg;base64,BBB='],
+    inputText: 'figures',
+    model: 'gpt-5.5',
+    outputSchema: {type: 'object'},
+  })
+
+  expect(result.text).toBe('seen')
+  expect(turnStartParams[0]?.input).toEqual([
+    {type: 'text', text: 'figures'},
+    {type: 'image', url: 'data:image/png;base64,AAA=', detail: 'high'},
+    {type: 'image', url: 'data:image/jpeg;base64,BBB=', detail: 'high'},
+  ])
 })
 
 test('runJsonTurn rejects an aborted turn before a racing completion can be accepted', async () => {

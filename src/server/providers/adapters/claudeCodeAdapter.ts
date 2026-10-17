@@ -1,5 +1,5 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
-import {getProviderTextOnlyPrompt} from '../providerImageInput.ts'
+import {assertProviderModelAcceptsPromptImages} from '../providerImageInput.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {
   type ProviderAuthLifecycleResult,
@@ -73,11 +73,13 @@ export const createClaudeCodeAdapter = (catalog: ProviderCatalogEntry): Provider
       return getHealth()
     },
     invoke: async ({model, request}) => {
+      assertProviderModelAcceptsPromptImages({model, prompt: request.prompt, providerKind: catalog.kind})
+
       return invokeClaudeCodeCliModel({
         effort: model.variant ?? model.version,
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         outputSchema: request.outputSchema,
-        prompt: getProviderTextOnlyPrompt({prompt: request.prompt, transportFamily: 'claude-code-cli'}),
+        prompt: request.prompt,
         signal: request.signal,
         systemPrompt: request.systemPrompt,
       })

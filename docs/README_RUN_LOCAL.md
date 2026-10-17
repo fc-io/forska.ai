@@ -186,7 +186,7 @@ RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true FULL_TEXT_CONVERSION_BATCH_SIZE=5 FULL
 
 ### Figure descriptions
 
-Projects with figure mode Descriptions need an installation-wide figure-description model (Settings → Figure-description model). The selector lists only enabled models whose capability record accepts image input and whose transport can send images (OpenAI-compatible chat, OpenAI Responses, Anthropic Messages, Gemini). Codex and Claude Code cannot send images yet. None is an explicit choice and makes figure mode Descriptions unavailable.
+Projects with figure mode Descriptions need an installation-wide figure-description model (Settings → Figure-description model). The selector lists only enabled models whose capability record accepts image input and whose transport can send images (OpenAI-compatible chat, OpenAI Responses, Anthropic Messages, Gemini, Codex app-server, Claude Code CLI). None is an explicit choice and makes figure mode Descriptions unavailable.
 
 The cron `full-text-jobs-describe-figures` runs every minute when `RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true` and a figure-description model is set. It describes figures of converted articles that belong to at least one project with figure mode Descriptions, one model call per figure with prompt `fig-desc-v1`, and writes `description`, `descriptionModelId`, `descriptionPromptVersion` and `describedAt` into the article's `full_text_assets` entry. Changing the model or the prompt version re-describes. A failed figure records `descriptionError` and `descriptionAttempts` and is given up after 3 attempts, or at once when the crop is missing or not JPEG/PNG. `POST /api/articles/:id/figure-descriptions/rebuild` clears one article's descriptions and describes it again.
 
@@ -195,6 +195,10 @@ RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true FIGURE_DESCRIPTION_BATCH_SIZE=8 FIGURE
 ```
 
 A local vision model through Ollama works, for example `ollama pull qwen3-vl:2b-instruct`, then refresh the Ollama provider's models so the model shows image input.
+
+### Native images
+
+Figure mode Native images sends the canonical text plus one image per `[figure:N]` marker, in marker order, with image transport version `img-v1` in the strategy. Transparent PNG crops are flattened onto white first (Codex renders transparency black); JPEG and opaque PNG crops are sent unchanged. Codex app-server gets `{type: 'image', url: 'data:…', detail: 'high'}` input items after the text; Claude Code switches to `--input-format stream-json --output-format stream-json --verbose` with one user message holding the text block and base64 image blocks. Text-only prompts keep the plain stdin and `--output-format json` path. Both CLI adapters refuse an image prompt when the model's capability record does not accept image input.
 
 ## Build
 

@@ -1,10 +1,12 @@
+import {readFileSync} from 'node:fs'
+
 import {beforeEach, expect, mock, test} from 'bun:test'
 
 import {ProviderInvocationError} from '../providerTypes.ts'
 
 const getCodexAppServerClientModulePath = new URL('../../utils/getCodexAppServerClient.ts', import.meta.url).href
 
-const runJsonTurn = mock(async (): Promise<{text: string; usage: unknown}> => {
+const runJsonTurn = mock(async (_params: Record<string, unknown>): Promise<{text: string; usage: unknown}> => {
   return {text: 'codex-response', usage: null}
 })
 
@@ -104,4 +106,55 @@ test('getProviderUsageFromCodexThreadTokenUsage falls back to output totals when
   })
 
   expect(result).toEqual({completionTokens: 18, promptTokens: 0, totalTokens: 0})
+})
+
+test('invokeCodexAppModel sends text-only prompts with exactly the previous turn parameters', async () => {
+  runJsonTurn.mockResolvedValue({text: 'codex-response', usage: null})
+  const {invokeCodexAppModel} = await loadTransport()
+
+  await invokeCodexAppModel({
+    modelName: 'gpt-5.5',
+    outputSchema: {type: 'object'},
+    prompt: 'hello',
+    systemPrompt: 'system',
+    version: 'high',
+  })
+
+  expect(Object.keys(runJsonTurn.mock.calls[0]?.[0] ?? {}).sort()).toEqual([
+    'effort',
+    'inputText',
+    'model',
+    'outputSchema',
+    'signal',
+    'timeoutMs',
+  ])
+  expect(runJsonTurn.mock.calls[0]?.[0]).toMatchObject({inputText: 'system\n\nhello', model: 'gpt-5.5'})
+})
+
+test('invokeCodexAppModel flattens image parts and passes them as data URLs after the prompt text', async () => {
+  runJsonTurn.mockResolvedValue({text: 'codex-response', usage: null})
+  const {getProviderImageDataUrl} = await import('../providerImageInput.ts')
+  const {flattenFigureImage} = await import('../../fullText/figureImageEncoding.ts')
+  const transparent = {
+    bytes: new Uint8Array(
+      readFileSync(new URL('../../fullText/fixtures/figureImages/transparent-3x2.png', import.meta.url)),
+    ),
+    mimeType: 'image/png' as const,
+  }
+  const jpeg = {bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xe0), mimeType: 'image/jpeg' as const}
+  const {invokeCodexAppModel} = await loadTransport()
+
+  await invokeCodexAppModel({
+    modelName: 'gpt-5.5',
+    outputSchema: {type: 'object'},
+    prompt: {images: [transparent, jpeg], text: 'Article\n\n[figure:1]'},
+    systemPrompt: 'system',
+    version: 'high',
+  })
+
+  expect(runJsonTurn.mock.calls[0]?.[0]).toMatchObject({
+    inputImageUrls: [getProviderImageDataUrl(flattenFigureImage(transparent)), 'data:image/jpeg;base64,/9j/4A=='],
+    inputText: 'system\n\nArticle\n\n[figure:1]',
+  })
+  expect(getProviderImageDataUrl(flattenFigureImage(transparent))).not.toBe(getProviderImageDataUrl(transparent))
 })
