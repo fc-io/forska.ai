@@ -258,3 +258,45 @@ test('rebuilding from the stored layout.json and assets reproduces the conversio
 
   expect(result).toMatchObject({changed: false, hash: expectedCanonicalHash, version: 'canonical-v1'})
 })
+
+test('reconversion keeps cached chunk plans while the canonical hash is unchanged and drops them once it changes', async () => {
+  if (!jobsModule || !database) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  const reconvert = () => {
+    return jobsModule?.convertArticle({
+      article: {
+        fullTextConversionAttempts: 1,
+        fullTextPDF: 'assets/article_pdfs/cron-article-1.pdf',
+        id: 'cron-article-1',
+      },
+      runtimeConfig: {
+        baseURL: getMineruBaseURL(),
+        modelId: 'conversion-mineru-model',
+        modelName: 'mineru-standard',
+        providerKind: 'mineru',
+      },
+    })
+  }
+  const countPlans = async () => {
+    const [row] =
+      (await database?.queryJson<{count: number | string}>(
+        `SELECT COUNT(*) AS count FROM app.article_full_text_chunk_plan WHERE article_id = 'cron-article-1'`,
+      )) ?? []
+
+    return Number(row?.count ?? -1)
+  }
+
+  await database.run(`
+    INSERT INTO app.article_full_text_chunk_plan (article_id, full_text_strategy_id, plan_hash, text_hash, chunk_count, chunks)
+    VALUES ('cron-article-1', 'fts-cached', 'plan', 'text', 1, '[]'::JSON)
+  `)
+  await reconvert()
+  expect(await countPlans()).toBe(1)
+
+  await database.run(`UPDATE app.article SET full_text_canonical_hash = 'older-hash' WHERE id = 'cron-article-1'`)
+  await reconvert()
+  expect(await countPlans()).toBe(0)
+  expect((await getConvertedArticle('cron-article-1'))?.fullTextCanonicalHash).toBe(expectedCanonicalHash)
+})

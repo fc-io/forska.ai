@@ -24,6 +24,7 @@ import {
   type FullTextConverterKind,
   type FullTextLayoutBlock,
 } from './converters/fullTextConverterTypes.ts'
+import {getDeleteChunkPlansForChangedCanonicalHashSql} from './fullTextChunkPlanStore.ts'
 
 type DuckdbWorkloadContext = Parameters<ReturnType<typeof getAppDatabaseService>['transaction']>[1]
 
@@ -89,6 +90,7 @@ export const storeConvertedFullText = async ({
   const valueHash = getArticleReviewServingMutationValueHash({html: result.html, md: canonical.text})
 
   await getAppDatabaseService().transaction(async (tx) => {
+    await tx.run(getDeleteChunkPlansForChangedCanonicalHashSql({articleId, canonicalHash: canonical.hash}))
     await tx.run(`
       UPDATE app.article
       SET ${getCanonicalFullTextSetSql(canonical)},
@@ -213,6 +215,7 @@ const writeRebuiltCanonicalFullText = async (articleId: string, canonical: Canon
   const sourceUpdatedAt = new Date()
 
   await getAppDatabaseService().transaction(async (tx) => {
+    await tx.run(getDeleteChunkPlansForChangedCanonicalHashSql({articleId, canonicalHash: canonical.hash}))
     await tx.run(`
       UPDATE app.article
       SET ${getCanonicalFullTextSetSql(canonical)},
