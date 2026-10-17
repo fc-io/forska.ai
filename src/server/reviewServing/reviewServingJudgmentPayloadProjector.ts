@@ -1,4 +1,5 @@
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getReviewServingArticlesInRunningRebuildChunks} from './reviewServingCandidateRebuildCoverage.ts'
@@ -20,6 +21,7 @@ export type ProjectReviewServingJudgmentPayloadInput = {
   chunkStartArticleId?: string | null
   claims?: readonly ReviewServingDirtyWorkClaim[]
   definitionVersion?: string
+  fullTextStrategyId: string
   listModeKeys: readonly ReviewServingListMode[]
   modelId: string
   projectId: string
@@ -43,6 +45,7 @@ export type ProjectReviewServingJudgmentPayloadArticleRangeInput = ProjectReview
 
 type JudgmentPayloadKind = 'human' | 'llm'
 type ProjectReviewServingJudgmentPayloadProjectSettings = {
+  fullTextStrategyId: string
   modelId: string
   systemPromptVariant: SystemPromptVariant
   useAbstract: boolean
@@ -387,6 +390,7 @@ const getLlmJudgmentDirectInsertStatement = (
           AND judgment.use_fulltext_no_images = ${getSqlLiteral(input.useFulltextNoImages)}
           AND judgment.system_prompt_variant = ${getSqlLiteral(getSystemPromptVariant(input.systemPromptVariant))}
           AND judgment.use_metadata = ${getSqlLiteral(input.useMetadata === true)}
+          AND judgment.full_text_strategy_id = ${getSqlLiteral(input.fullTextStrategyId)}
           AND judgment.deleted_at IS NULL
       ),
       payload AS (
@@ -700,8 +704,9 @@ const getProjectReviewServingJudgmentPayloadProjectSettings = async (
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
       COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant,
-      COALESCE(use_metadata, FALSE) AS useMetadata
-    FROM app.project
+      COALESCE(use_metadata, FALSE) AS useMetadata,
+      ${getProjectFullTextStrategyIdSql('project')} AS fullTextStrategyId
+    FROM app.project project
     WHERE id = ${getSqlLiteral(projectId)}
     LIMIT 1
   `)
@@ -737,6 +742,7 @@ export const ensureReviewServingJudgmentPayloadRowsForArticleSet = async (
     {
       acknowledgeClaims: false,
       claims: getArticleIdClaims({articleIds, projectId: input.projectId, projectionIdentity: 'lazy-detail-hydration'}),
+      fullTextStrategyId: project.fullTextStrategyId,
       listModeKeys: input.listModeKeys,
       modelId: project.modelId,
       projectId: input.projectId,
@@ -798,6 +804,7 @@ const canUseSetBasedJudgmentPayloadRangeInsert = (
         && range.chunkEndArticleId !== undefined
         && range.chunkStartArticleId !== null
         && range.chunkStartArticleId !== undefined
+        && range.fullTextStrategyId === firstRange.fullTextStrategyId
         && range.listModeKeys.join('\n') === firstRange.listModeKeys.join('\n')
         && range.modelId === firstRange.modelId
         && range.projectId === firstRange.projectId

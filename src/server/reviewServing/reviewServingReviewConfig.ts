@@ -1,4 +1,5 @@
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
 import {getJsonValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import type {DuckdbWorkloadContext} from '../utils/duckdbService.ts'
 import {
@@ -21,6 +22,7 @@ export type ReviewServingProjectPromptConfigRow = {
 }
 
 export type ReviewServingProjectReviewSettingsRow = {
+  fullTextStrategyId: string
   humanJudgmentMode: 'prompt' | 'summary'
   modelExecutionOptions: string | null
   modelId: string | null
@@ -85,7 +87,8 @@ export const getReviewServingProjectReviewSettings = async (
       project.use_fulltext AS useFulltext,
       project.use_fulltext_no_images AS useFulltextNoImages,
       COALESCE(project.system_prompt_variant, 'legacy') AS systemPromptVariant,
-      COALESCE(project.use_metadata, FALSE) AS useMetadata
+      COALESCE(project.use_metadata, FALSE) AS useMetadata,
+      ${getProjectFullTextStrategyIdSql('project')} AS fullTextStrategyId
     FROM app.project project
     LEFT JOIN app.model model
       ON model.id = project.model_id
@@ -119,6 +122,7 @@ export const getReviewServingReviewConfigHash = (
   input: ReviewServingProjectReviewSettingsRow & {promptConfigRows: readonly ReviewServingProjectPromptConfigRow[]},
 ) => {
   return buildReviewConfigHash({
+    fullTextStrategyId: input.fullTextStrategyId,
     humanJudgmentMode: input.humanJudgmentMode,
     modelExecutionIdentity: {
       modelExecutionOptions: getJsonValue(input.modelExecutionOptions) as ReviewServingIdentityValue,

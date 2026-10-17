@@ -134,6 +134,7 @@ test('bulk and single delta appends write the typed system prompt variant column
   ])
   const llmDelta = {
     articleId: 'article-append',
+    fullTextStrategyId: 'fts-none',
     judgmentId: 'judgment-append',
     modelId: 'model-1',
     projectId: 'project-1',

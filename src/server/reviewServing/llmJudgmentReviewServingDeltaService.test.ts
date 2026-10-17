@@ -66,6 +66,7 @@ test('LLM judgment deltas preserve persisted benchmark-critical model and conten
     {
       articleId: 'article-1',
       changeKind: 'judgment.llm.updated',
+      fullTextStrategyId: 'fts-legacy-v0',
       judgmentId: 'judgment-1',
       modelId: 'model-persisted',
       projectId: 'project-1',
@@ -108,6 +109,7 @@ test('LLM judgment deltas carry the system prompt variant in the typed column an
     {
       articleId: 'article-1',
       changeKind: 'judgment.llm.created',
+      fullTextStrategyId: 'fts-none',
       judgmentId: 'judgment-screening',
       modelId: 'model-1',
       projectId: 'project-1',
@@ -142,6 +144,7 @@ test('LLM judgment deltas carry article metadata in the typed column and payload
     {
       articleId: 'article-1',
       changeKind: 'judgment.llm.created',
+      fullTextStrategyId: 'fts-none',
       judgmentId: 'judgment-metadata',
       modelId: 'model-1',
       projectId: 'project-1',
@@ -167,4 +170,40 @@ test('LLM judgment deltas carry article metadata in the typed column and payload
   expect(bulkRows).toContain("'screening_v1', TRUE")
   expect(bulkRows).toContain('"useMetadata":true')
   expect(reviewChangeInsert).toContain('use_metadata')
+})
+
+test('LLM judgment deltas carry the full-text strategy in the typed column and payload content flags', async () => {
+  const {statements, tx} = createFakeLedgerTransaction()
+
+  await appendLlmJudgmentReviewServingDeltas(tx, [
+    {
+      articleId: 'article-1',
+      changeKind: 'judgment.llm.created',
+      fullTextStrategyId: 'fts-0123456789abcdef',
+      judgmentId: 'judgment-full-text',
+      modelId: 'model-1',
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      sourceMutationKey: 'judgment-full-text:created',
+      sourceOperation: 'insert',
+      systemPromptVariant: 'screening_v1',
+      useAbstract: true,
+      useFulltext: true,
+      useFulltextNoImages: false,
+      useMetadata: true,
+      useTitle: true,
+    },
+  ])
+
+  const bulkRows = statements
+    .filter((statement) => {
+      return statement.includes('INSERT INTO temp_review_serving_delta_bulk_')
+    })
+    .join('\n')
+  const reviewChangeInsert = getReviewChangeInsertStatements(statements).join('\n')
+
+  expect(bulkRows).toContain("'screening_v1', TRUE, 'fts-0123456789abcdef'")
+  expect(bulkRows).toContain('"fullTextStrategyId":"fts-0123456789abcdef"')
+  expect(bulkRows).not.toContain("'fts-legacy-v0'")
+  expect(reviewChangeInsert).toContain('full_text_strategy_id')
 })

@@ -1,11 +1,13 @@
 import {createHash} from 'node:crypto'
 
 import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {getLegacyFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getIntegerValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {getReviewServingDeltaIntakeGroups, runReviewServingDeltaIntakeGroups} from './reviewServingDeltaIntakeGroups.ts'
+import {getReviewChangeDeltaFullTextStrategyIdSql} from './reviewServingDeltaLedger.ts'
 import {
   type ReviewServingDirtyWorkTransaction,
   upsertReviewServingDirtyWorkBatch,
@@ -43,6 +45,7 @@ type ReviewChangeDeltaRow = {
   changeKind: string
   configFieldSet: string | null
   deltaId: string
+  fullTextStrategyId?: string | null
   humanJudgmentKey: string | null
   judgmentId: string | null
   modelId: string | null
@@ -117,6 +120,9 @@ const getContentFlags = (row: ReviewChangeDeltaRow) => {
     || row.useFulltextNoImages === null
     ? undefined
     : {
+        fullTextStrategyId:
+          row.fullTextStrategyId
+          ?? getLegacyFullTextStrategyId({useFulltext: row.useFulltext, useFulltextNoImages: row.useFulltextNoImages}),
         systemPromptVariant: getSystemPromptVariant(row.systemPromptVariant),
         useAbstract: row.useAbstract,
         useFulltext: row.useFulltext,
@@ -397,6 +403,7 @@ const getReviewChangeDeltaRows = async (
           use_fulltext_no_images AS useFulltextNoImages,
           COALESCE(system_prompt_variant, 'legacy') AS systemPromptVariant,
           COALESCE(use_metadata, FALSE) AS useMetadata,
+          ${getReviewChangeDeltaFullTextStrategyIdSql('review_change_delta')} AS fullTextStrategyId,
           judgment_id AS judgmentId,
           human_judgment_key AS humanJudgmentKey,
           config_field_set AS configFieldSet,

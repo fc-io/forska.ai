@@ -101,6 +101,7 @@ const promptConfigRow = () => {
 
 const projectSettingsRow = () => {
   return {
+    fullTextStrategyId: 'fts-none',
     humanJudgmentMode: 'prompt' as const,
     modelExecutionOptions: '{"thinking":{"effort":"medium"}}',
     modelId: 'model-1',

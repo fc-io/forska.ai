@@ -11,6 +11,7 @@ export type LlmJudgmentReviewServingDeltaKind = 'judgment.llm.created' | 'judgme
 
 export type LlmJudgmentReviewServingDeltaRow = {
   articleId: string
+  fullTextStrategyId: string
   judgmentId: string
   modelId: string
   projectId: string | null
@@ -35,6 +36,7 @@ export type AppendLlmJudgmentReviewServingDeltaInput = LlmJudgmentReviewServingD
 
 const getContentFlags = (input: LlmJudgmentReviewServingDeltaRow) => {
   return {
+    fullTextStrategyId: input.fullTextStrategyId,
     systemPromptVariant: input.systemPromptVariant,
     useAbstract: input.useAbstract,
     useFulltext: input.useFulltext,
@@ -52,6 +54,7 @@ const getLlmJudgmentReviewServingDeltaInput = (
   return {
     articleId: input.articleId,
     changeKind: input.changeKind,
+    fullTextStrategyId: input.fullTextStrategyId,
     judgmentId: input.judgmentId,
     modelId: input.modelId,
     payloadJson: {

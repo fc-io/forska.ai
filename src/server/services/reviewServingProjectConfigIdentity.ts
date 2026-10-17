@@ -1,4 +1,5 @@
 import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {getEffectiveFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import {
   buildPromptConfigHash,
   buildReviewConfigHash,
@@ -18,6 +19,7 @@ export const getCurrentReviewConfigHash = async (
 ) => {
   const database = options.database ?? getAppDatabaseService()
   const [project] = await database.queryJson<{
+    fullTextStrategyId: string | null
     humanJudgmentMode: 'prompt' | 'summary' | null
     modelExecutionOptions: unknown
     modelId: string
@@ -48,7 +50,8 @@ export const getCurrentReviewConfigHash = async (
       app.project.use_fulltext AS useFulltext,
       app.project.use_fulltext_no_images AS useFulltextNoImages,
       app.project.system_prompt_variant AS systemPromptVariant,
-      COALESCE(app.project.use_metadata, FALSE) AS useMetadata
+      COALESCE(app.project.use_metadata, FALSE) AS useMetadata,
+      app.project.full_text_strategy_id AS fullTextStrategyId
     FROM app.project
     LEFT JOIN app.model model
       ON model.id = app.project.model_id
@@ -84,6 +87,7 @@ export const getCurrentReviewConfigHash = async (
   return project === undefined
     ? null
     : buildReviewConfigHash({
+        fullTextStrategyId: getEffectiveFullTextStrategyId(project.fullTextStrategyId),
         humanJudgmentMode: project.humanJudgmentMode ?? 'prompt',
         modelExecutionIdentity: {
           modelExecutionOptions: getJsonValue(project.modelExecutionOptions) as ReviewServingIdentityValue,

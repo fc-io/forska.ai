@@ -154,6 +154,13 @@ test('LLM judgment deltas update serving directly from persisted benchmark confi
   expect(selectStatement).toContain('judgment.use_metadata = COALESCE(delta.use_metadata, FALSE)')
   expect(selectStatement).toContain('newer_judgment.use_metadata = judgment.use_metadata')
   expect(selectStatement).toContain('COALESCE(delta.use_metadata, FALSE) AS useMetadata')
+  expect(selectStatement).toContain(
+    "judgment.full_text_strategy_id = COALESCE(delta.full_text_strategy_id, CASE WHEN COALESCE(delta.use_fulltext, FALSE) OR COALESCE(delta.use_fulltext_no_images, FALSE) THEN 'fts-legacy-v0' ELSE 'fts-none' END)",
+  )
+  expect(selectStatement).toContain('newer_judgment.full_text_strategy_id = judgment.full_text_strategy_id')
+  expect(selectStatement).toContain(
+    "COALESCE(delta.full_text_strategy_id, CASE WHEN COALESCE(delta.use_fulltext, FALSE) OR COALESCE(delta.use_fulltext_no_images, FALSE) THEN 'fts-legacy-v0' ELSE 'fts-none' END) AS fullTextStrategyId",
+  )
   expect(selectStatement).toContain('FROM app."judgment" newer_judgment')
   expect(selectStatement).not.toContain('judgment.id = delta.judgment_id')
   expect(selectStatement).toContain("VALUES ('article-1')")
@@ -291,6 +298,14 @@ test('project review config claims rebuild project-scoped LLM status rows', asyn
   expect(projectSelect).toContain('COALESCE(project_judgment.use_metadata, FALSE) = judgment.use_metadata')
   expect(projectSelect).toContain('judgment.system_prompt_variant, judgment.use_metadata')
   expect(projectSelect).toContain('COALESCE(project.use_metadata, FALSE) AS useMetadata')
+  expect(projectSelect).toContain(
+    "judgment.full_text_strategy_id = COALESCE(project.full_text_strategy_id, 'fts-none')",
+  )
+  expect(projectSelect).toContain(
+    "COALESCE(project_judgment.full_text_strategy_id, 'fts-none') = judgment.full_text_strategy_id",
+  )
+  expect(projectSelect).toContain('judgment.use_metadata, judgment.full_text_strategy_id')
+  expect(projectSelect).toContain("COALESCE(project.full_text_strategy_id, 'fts-none') AS fullTextStrategyId")
   expect(projectSelect).toContain(
     'COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone',
   )
@@ -466,6 +481,8 @@ test('LLM range rebuild batches write one SQL-native serving replacement stateme
   expect(joined).toContain('judgment.use_fulltext_no_images, judgment.system_prompt_variant')
   expect(joined).toContain('COALESCE(project.use_metadata, FALSE) = judgment.use_metadata')
   expect(joined).toContain('judgment.system_prompt_variant, judgment.use_metadata')
+  expect(joined).toContain("COALESCE(project.full_text_strategy_id, 'fts-none') = judgment.full_text_strategy_id")
+  expect(joined).toContain('judgment.use_metadata, judgment.full_text_strategy_id')
   expect(joined).not.toContain('judgment.*')
 })
 
@@ -493,6 +510,13 @@ test('article judgment-input claims rebuild article-scoped LLM status rows', asy
   expect(articleSelect).toContain('judgment.use_metadata = COALESCE(project.use_metadata, FALSE)')
   expect(articleSelect).toContain('COALESCE(project_judgment.use_metadata, FALSE) = judgment.use_metadata')
   expect(articleSelect).toContain('judgment.system_prompt_variant, judgment.use_metadata')
+  expect(articleSelect).toContain(
+    "judgment.full_text_strategy_id = COALESCE(project.full_text_strategy_id, 'fts-none')",
+  )
+  expect(articleSelect).toContain(
+    "COALESCE(project_judgment.full_text_strategy_id, 'fts-none') = judgment.full_text_strategy_id",
+  )
+  expect(articleSelect).toContain('judgment.use_metadata, judgment.full_text_strategy_id')
 })
 
 test('newly scoped articles emit unanswered status rows for enabled prompts', async () => {
@@ -595,4 +619,17 @@ test('LLM status rows hash article metadata only when the row uses it', async ()
   expect(metadataOff).toEqual(withoutMetadata)
   expect(metadataOn).toHaveLength(1)
   expect(metadataOn).not.toEqual(metadataOff)
+})
+
+test('LLM status rows under another full-text strategy hash to another review config', async () => {
+  const withoutStrategy = await getProjectedReviewConfigHashes({fullTextStrategyId: undefined})
+  const legacyStrategy = await getProjectedReviewConfigHashes({fullTextStrategyId: 'fts-legacy-v0'})
+  const strategyA = await getProjectedReviewConfigHashes({fullTextStrategyId: 'fts-0123456789abcdef'})
+  const strategyB = await getProjectedReviewConfigHashes({fullTextStrategyId: 'fts-fedcba9876543210'})
+
+  expect(withoutStrategy).toHaveLength(1)
+  expect(legacyStrategy).toEqual(withoutStrategy)
+  expect(strategyA).toHaveLength(1)
+  expect(strategyA).not.toEqual(legacyStrategy)
+  expect(strategyB).not.toEqual(strategyA)
 })

@@ -782,3 +782,40 @@ test('article judgment-input changes that mix metadata with other content still 
   expect(judgmentInputInserts.join('\n')).toContain('project-metadata-off:article-1')
   expect(judgmentInputInserts.join('\n')).toContain('project-metadata-on:article-1')
 })
+
+test('delta intake reads the typed full-text strategy and maps a missing one from the row flags', async () => {
+  const getDelta = (input: {deltaId: string; fullTextStrategyId: string | null; judgmentId: string}) => {
+    return createReviewChangeDelta({
+      articleId: 'article-1',
+      deltaId: input.deltaId,
+      fullTextStrategyId: input.fullTextStrategyId,
+      judgmentId: input.judgmentId,
+      modelId: 'model-1',
+      payloadJson: {articleId: 'article-1', judgmentId: input.judgmentId, projectId: 'project-1', promptId: 'prompt-1'},
+      projectId: 'project-1',
+      promptId: 'prompt-1',
+      sourceHighWaterMark: 7,
+      useAbstract: true,
+      useFulltext: true,
+      useFulltextNoImages: false,
+      useTitle: true,
+    })
+  }
+  const {database, statements} = createFakeIntakeDatabase([
+    getDelta({deltaId: 'delta-strategy', fullTextStrategyId: 'fts-0123456789abcdef', judgmentId: 'judgment-1'}),
+    getDelta({deltaId: 'delta-legacy', fullTextStrategyId: null, judgmentId: 'judgment-2'}),
+  ])
+
+  const result = await intakeReviewChangeDeltasToDirtyWork(
+    {endSourceHighWaterMark: 7, limit: 10, sourcePartition: 'reviewChange:project-1', startSourceHighWaterMark: 1},
+    database,
+  )
+  const deltaSelect = statements.find((statement) => {
+    return statement.includes('FROM app.review_change_delta')
+  })
+
+  expect(result).toMatchObject({maxSourceHighWaterMark: 7, status: 'converted'})
+  expect(deltaSelect).toContain(
+    "COALESCE(review_change_delta.full_text_strategy_id, CASE WHEN COALESCE(review_change_delta.use_fulltext, FALSE) OR COALESCE(review_change_delta.use_fulltext_no_images, FALSE) THEN 'fts-legacy-v0' ELSE 'fts-none' END) AS fullTextStrategyId",
+  )
+})

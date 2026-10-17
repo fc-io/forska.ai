@@ -48,6 +48,7 @@ const createJudgmentPayloadDatabase = (input?: {humanCount?: number; llmCount?: 
       if (statement.includes('FROM app.project')) {
         return [
           {
+            fullTextStrategyId: 'fts-0123456789abcdef',
             modelId: 'model-1',
             systemPromptVariant: 'screening_v1',
             useAbstract: true,
@@ -75,6 +76,7 @@ const createJudgmentPayloadDatabase = (input?: {humanCount?: number; llmCount?: 
 const projectInput = (claims: readonly ReviewServingDirtyWorkClaim[] = []) => {
   return {
     claims,
+    fullTextStrategyId: 'fts-none',
     listModeKeys: ['llm', 'human', 'both'] as const,
     modelId: 'model-1',
     projectId: 'project-1',
@@ -421,6 +423,9 @@ test('lazy article-set judgment payload ensure builds only requested visible art
   expect(joined).toContain('COALESCE(use_metadata, FALSE) AS useMetadata')
   expect(joined).toContain('AND judgment.use_metadata = TRUE')
   expect(joined).not.toContain('AND judgment.use_metadata = FALSE')
+  expect(joined).toContain("COALESCE(project.full_text_strategy_id, 'fts-none') AS fullTextStrategyId")
+  expect(joined).toContain("AND judgment.full_text_strategy_id = 'fts-0123456789abcdef'")
+  expect(joined).not.toContain("AND judgment.full_text_strategy_id = 'fts-none'")
 })
 
 test('claimless judgment payload range batches with different system prompt variants filter each range separately', async () => {
@@ -474,4 +479,34 @@ test('claimless judgment payload range batches with different article metadata s
   expect(llmInserts).toHaveLength(2)
   expect(llmInserts[0]).toContain('AND judgment.use_metadata = FALSE')
   expect(llmInserts[1]).toContain('AND judgment.use_metadata = TRUE')
+})
+
+test('claimless judgment payload range batches with different full-text strategies filter each range separately', async () => {
+  const {database, statements} = createJudgmentPayloadDatabase()
+
+  await projectReviewServingJudgmentPayloadArticleRanges(
+    {
+      ranges: [
+        {...projectInput(), chunkEndArticleId: 'article-050', chunkStartArticleId: 'article-001'},
+        {
+          ...projectInput(),
+          chunkEndArticleId: 'article-099',
+          chunkStartArticleId: 'article-051',
+          fullTextStrategyId: 'fts-0123456789abcdef',
+        },
+      ],
+    },
+    database,
+  )
+  const llmInserts = statements.filter((statement) => {
+    return (
+      statement.includes('INSERT INTO mart.review_article_judgment_detail_serving_v4')
+      && statement.includes("'llm' AS payload_kind")
+    )
+  })
+
+  expect(llmInserts).toHaveLength(2)
+  expect(llmInserts[0]).toContain("AND judgment.full_text_strategy_id = 'fts-none'")
+  expect(llmInserts[1]).toContain("AND judgment.full_text_strategy_id = 'fts-0123456789abcdef'")
+  expect(llmInserts[1]).not.toContain("AND judgment.full_text_strategy_id = 'fts-none'")
 })

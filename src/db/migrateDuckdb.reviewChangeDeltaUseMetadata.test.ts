@@ -145,6 +145,7 @@ test('bulk and single delta appends write the typed article metadata column', as
   ])
   const llmDelta = {
     articleId: 'article-append',
+    fullTextStrategyId: 'fts-none',
     judgmentId: 'judgment-append',
     modelId: 'model-1',
     projectId: 'project-1',

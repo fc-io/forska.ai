@@ -1,6 +1,11 @@
 import {createHash, randomUUID} from 'node:crypto'
 
 import {defaultSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {
+  FULL_TEXT_STRATEGY_LEGACY,
+  FULL_TEXT_STRATEGY_NONE,
+  getLegacyFullTextStrategyId,
+} from '../fullText/fullTextStrategy.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
 import {type ReviewServingChangeKind} from './reviewServingContracts.ts'
@@ -32,6 +37,7 @@ export type ReviewServingDeltaAppendInput = ReviewServingIdempotencyKeyInput & {
   articleId?: string | null
   changeKind: ReviewServingChangeKind
   configFieldSet?: string | null
+  fullTextStrategyId?: string | null
   humanJudgmentKey?: string | null
   judgmentId?: string | null
   modelId?: string | null
@@ -138,6 +144,7 @@ const reviewServingBulkTempColumns = [
   'use_fulltext_no_images',
   'system_prompt_variant',
   'use_metadata',
+  'full_text_strategy_id',
   'judgment_id',
   'human_judgment_key',
   'config_field_set',
@@ -184,6 +191,22 @@ const getReviewServingDeltaSystemPromptVariant = (
 
 const getReviewServingDeltaUseMetadata = (input: Pick<ReviewServingDeltaAppendInput, 'useMetadata'>) => {
   return input.useMetadata ?? false
+}
+
+const getReviewServingDeltaFullTextStrategyId = (
+  input: Pick<ReviewServingDeltaAppendInput, 'fullTextStrategyId' | 'useFulltext' | 'useFulltextNoImages'>,
+) => {
+  return (
+    input.fullTextStrategyId
+    ?? getLegacyFullTextStrategyId({
+      useFulltext: input.useFulltext === true,
+      useFulltextNoImages: input.useFulltextNoImages === true,
+    })
+  )
+}
+
+export const getReviewChangeDeltaFullTextStrategyIdSql = (deltaAlias: string) => {
+  return `COALESCE(${deltaAlias}.full_text_strategy_id, CASE WHEN COALESCE(${deltaAlias}.use_fulltext, FALSE) OR COALESCE(${deltaAlias}.use_fulltext_no_images, FALSE) THEN '${FULL_TEXT_STRATEGY_LEGACY}' ELSE '${FULL_TEXT_STRATEGY_NONE}' END)`
 }
 
 const validateReviewServingChangeKind = (changeKind: string) => {
@@ -488,6 +511,7 @@ const getCreateBulkDeltaTempTableSql = (tableName: string) => {
       use_fulltext_no_images BOOLEAN,
       system_prompt_variant VARCHAR,
       use_metadata BOOLEAN,
+      full_text_strategy_id VARCHAR,
       judgment_id VARCHAR,
       human_judgment_key VARCHAR,
       config_field_set VARCHAR,
@@ -533,6 +557,7 @@ const getReviewChangeBulkRowValuesSql = (row: ResolvedBulkDelta<ReviewServingDel
     getSqlLiteral(row.input.useFulltextNoImages),
     getSqlLiteral(getReviewServingDeltaSystemPromptVariant(row.input)),
     getSqlLiteral(getReviewServingDeltaUseMetadata(row.input)),
+    getSqlLiteral(getReviewServingDeltaFullTextStrategyId(row.input)),
     getSqlLiteral(row.input.judgmentId),
     getSqlLiteral(row.input.humanJudgmentKey),
     getSqlLiteral(row.input.configFieldSet),
@@ -550,6 +575,7 @@ const getImportRunArticleBulkRowValuesSql = (row: ResolvedBulkDelta<ReviewServin
     ...getCommonBulkDeltaRowValues(row),
     'NULL',
     getSqlLiteral(row.input.articleId),
+    'NULL',
     'NULL',
     'NULL',
     'NULL',
@@ -593,6 +619,7 @@ const getReviewChangeBulkInsertSql = (tableName: string) => {
       use_fulltext_no_images,
       system_prompt_variant,
       use_metadata,
+      full_text_strategy_id,
       judgment_id,
       human_judgment_key,
       config_field_set,
@@ -622,6 +649,7 @@ const getReviewChangeBulkInsertSql = (tableName: string) => {
       use_fulltext_no_images,
       system_prompt_variant,
       use_metadata,
+      full_text_strategy_id,
       judgment_id,
       human_judgment_key,
       config_field_set,
@@ -898,6 +926,7 @@ export const appendReviewServingChangeDelta = async (
       use_fulltext_no_images,
       system_prompt_variant,
       use_metadata,
+      full_text_strategy_id,
       judgment_id,
       human_judgment_key,
       config_field_set,
@@ -926,6 +955,7 @@ export const appendReviewServingChangeDelta = async (
       ${getSqlLiteral(input.useFulltextNoImages)},
       ${getSqlLiteral(getReviewServingDeltaSystemPromptVariant(input))},
       ${getSqlLiteral(getReviewServingDeltaUseMetadata(input))},
+      ${getSqlLiteral(getReviewServingDeltaFullTextStrategyId(input))},
       ${getSqlLiteral(input.judgmentId)},
       ${getSqlLiteral(input.humanJudgmentKey)},
       ${getSqlLiteral(input.configFieldSet)},

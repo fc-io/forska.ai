@@ -240,6 +240,7 @@ const getRequestedComponentFilterFromSql = (statement: string) => {
 
 const getFakeProjectReviewSettings = (stats: FakeStats): ReviewServingProjectReviewSettingsRow => {
   return {
+    fullTextStrategyId: 'fts-none',
     humanJudgmentMode: 'prompt',
     modelExecutionOptions: null,
     modelId: `model-${stats.modelExecutionIdentityDigest ?? 'default'}`,
@@ -991,6 +992,8 @@ test('V4 rebuild request service estimates admission budget from project data', 
   expect(joined).toContain("COALESCE(project.system_prompt_variant, 'legacy') AS system_prompt_variant")
   expect(joined).toContain('judgment.use_metadata = project.use_metadata')
   expect(joined).toContain('COALESCE(project.use_metadata, FALSE) AS use_metadata')
+  expect(joined).toContain('judgment.full_text_strategy_id = project.full_text_strategy_id')
+  expect(joined).toContain("COALESCE(project.full_text_strategy_id, 'fts-none') AS full_text_strategy_id")
   expect(joined).toContain('FROM app.judgment_human_summary')
 })
 
