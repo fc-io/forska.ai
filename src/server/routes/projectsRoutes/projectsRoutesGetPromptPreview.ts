@@ -8,13 +8,19 @@ import {
 import {getSinglePromptSystemPromptForArticle} from '../../../agent/judge/judgePromptSelection.ts'
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
+import {
+  isFullTextJudgingStrategy,
+  prepareFullTextJudging,
+} from '../../cron/judgmentsJobs/judgmentsJobsSendToLLM/prepareFullTextJudging.ts'
+import {getFullTextChunkPlanKey} from '../../fullText/fullTextChunkPlanStore.ts'
+import {getFullTextJudgingBlocks} from '../../fullText/fullTextJudgingBlocks.ts'
+import {getEffectiveFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {getProviderModelContextLimits} from '../../providers/providerModelCapabilities.ts'
 import type {ReviewServingFreshnessState} from '../../reviewServing/reviewServingContracts.ts'
 import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
-import {processFulltextForLLM} from '../../utils/fulltextProcessing.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 type PromptPreviewServingRow = {
@@ -37,7 +43,13 @@ type PromptPreviewServingRow = {
   source_metadata: unknown
   url: string | null
 }
-type PromptPreviewArticleDetailsRow = {fullText: string | null; publicationStatus: string | null}
+type PromptPreviewArticleDetailsRow = {
+  fullText: string | null
+  fullTextAssets: unknown
+  fullTextCanonicalVersion: string | null
+  fullTextFigureModeBuilt: string | null
+  publicationStatus: string | null
+}
 
 const getPromptPreviewWorkloadContext = (params: {maxResultRows?: number; operation: string; projectId: string}) => {
   return {
@@ -52,8 +64,14 @@ const getPromptPreviewWorkloadContext = (params: {maxResultRows?: number; operat
 const getUnavailablePromptPreview = (input: {
   articleId: string | null
   articleTitle?: string | null
+  detail?: string | null
   diagnostics?: ReviewServingReaderResult<PromptPreviewServingRow>['diagnostics'] | null
-  reason: 'model_context_window_missing' | 'no_articles' | 'no_fulltext' | ReviewServingFreshnessState
+  reason:
+    | 'full_text_not_ready'
+    | 'model_context_window_missing'
+    | 'no_articles'
+    | 'no_fulltext'
+    | ReviewServingFreshnessState
   systemPrompt: string
   systemPromptVariant: SystemPromptVariant
 }) => {
@@ -61,6 +79,7 @@ const getUnavailablePromptPreview = (input: {
     data: {
       articleId: input.articleId,
       articleTitle: input.articleTitle ?? null,
+      detail: input.detail ?? null,
       diagnostics: input.diagnostics ?? null,
       previewText: null,
       reason: input.reason,
@@ -113,6 +132,9 @@ const getPromptPreviewArticleDetails = async (params: {
     `
     SELECT
       ${params.includeFullText ? 'full_text' : 'CAST(NULL AS VARCHAR)'} AS fullText,
+      ${params.includeFullText ? 'TO_JSON(full_text_assets)' : 'NULL'} AS fullTextAssets,
+      ${params.includeFullText ? 'full_text_canonical_version' : 'CAST(NULL AS VARCHAR)'} AS fullTextCanonicalVersion,
+      ${params.includeFullText ? 'full_text_figure_mode_built' : 'CAST(NULL AS VARCHAR)'} AS fullTextFigureModeBuilt,
       publication_status AS publicationStatus
     FROM app.article
     WHERE id = ${getSqlLiteral(params.articleId)}
@@ -220,6 +242,43 @@ const getScientificArticlePlaceholderRecord = (): ArticleRecord => {
   }
 }
 
+const getPromptPreviewFullTextPreparation = async (input: {
+  article: ArticleRecord
+  details: PromptPreviewArticleDetailsRow | null
+  fullText: string
+  fullTextStrategyId: string
+  modelContext: number
+  modelName: string
+}) => {
+  const blocks = await getFullTextJudgingBlocks({
+    database: getAppDatabaseService(),
+    rows: [
+      {
+        articleId: input.article.id,
+        articleSummary: input.article.articleSummary,
+        fullText: input.fullText,
+        fullTextAssets: getJsonValue(input.details?.fullTextAssets),
+        fullTextCanonicalVersion: input.details?.fullTextCanonicalVersion ?? null,
+        fullTextFigureModeBuilt: input.details?.fullTextFigureModeBuilt ?? null,
+        fullTextStrategyId: input.fullTextStrategyId,
+      },
+    ],
+    writable: false,
+  })
+
+  return prepareFullTextJudging({
+    abstract: input.article.articleSummary,
+    articleId: input.article.id,
+    block:
+      blocks.get(getFullTextChunkPlanKey({articleId: input.article.id, fullTextStrategyId: input.fullTextStrategyId}))
+      ?? null,
+    fullText: input.fullText,
+    fullTextStrategyId: input.fullTextStrategyId,
+    modelContext: input.modelContext,
+    modelName: input.modelName,
+  })
+}
+
 export const projectsRoutesGetPromptPreview = new Elysia().get(
   '/api/projects/:id/prompts/:promptId/preview',
   async ({params}) => {
@@ -227,6 +286,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
 
     const [project, prompt] = await Promise.all([
       getAppDatabaseService().queryJson<{
+        fullTextStrategyId: string | null
         modelId: string
         systemPromptVariant: string | null
         useAbstract: boolean
@@ -237,6 +297,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       }>(
         `
         SELECT
+          full_text_strategy_id AS fullTextStrategyId,
           model_id AS modelId,
           system_prompt_variant AS systemPromptVariant,
           use_abstract AS useAbstract,
@@ -315,7 +376,8 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       },
       reservedCompletionTokens: MAX_COMPLETION_TOKENS,
     }).promptTokenLimit
-    const needsFulltext = projectRow.useFulltext || projectRow.useFulltextNoImages
+    const fullTextStrategyId = getEffectiveFullTextStrategyId(projectRow.fullTextStrategyId)
+    const needsFulltext = isFullTextJudgingStrategy(fullTextStrategyId)
 
     if (needsFulltext && modelContext === null) {
       return getUnavailablePromptPreview({
@@ -341,25 +403,42 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
           })
         : null
     const previewFullText = previewArticleDetails?.fullText ?? null
-    const fullTextResult =
-      needsFulltext && previewFullText && modelContext !== null
-        ? processFulltextForLLM(previewFullText, {
-            promptTokenLimit: modelContext,
-            stripImages: projectRow.useFulltextNoImages,
-          }).processedText
-        : null
     const firstArticle = getPromptPreviewArticleRecord({
-      fullText: fullTextResult,
+      fullText: null,
       publicationStatus: previewArticleDetails?.publicationStatus ?? null,
       row: previewArticle,
     })
 
-    if (needsFulltext && !fullTextResult) {
+    if (needsFulltext && !previewFullText) {
       return getUnavailablePromptPreview({
         articleId: firstArticle.id,
         articleTitle: firstArticle.articleTitle,
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         reason: 'no_fulltext',
+        systemPrompt: getSinglePromptSystemPromptForArticle(firstArticle, provider, systemPromptVariant),
+        systemPromptVariant,
+      })
+    }
+
+    const fullTextPreparation =
+      needsFulltext && previewFullText && modelContext !== null
+        ? await getPromptPreviewFullTextPreparation({
+            article: firstArticle,
+            details: previewArticleDetails,
+            fullText: previewFullText,
+            fullTextStrategyId,
+            modelContext,
+            modelName: projectModel?.remoteModelId ?? projectRow.modelId,
+          })
+        : null
+
+    if (fullTextPreparation && fullTextPreparation.kind !== 'ready') {
+      return getUnavailablePromptPreview({
+        articleId: firstArticle.id,
+        articleTitle: firstArticle.articleTitle,
+        detail: fullTextPreparation.message,
+        diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
+        reason: 'full_text_not_ready',
         systemPrompt: getSinglePromptSystemPromptForArticle(firstArticle, provider, systemPromptVariant),
         systemPromptVariant,
       })
@@ -376,6 +455,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       },
       prompt: {...promptRow, order: null},
       provider,
+      renderedFullText: fullTextPreparation?.kind === 'ready' ? fullTextPreparation.fullTextJudging.renderedText : null,
       systemPromptVariant,
     })
 
@@ -383,6 +463,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
       data: {
         articleId: firstArticle.id,
         articleTitle: firstArticle.articleTitle,
+        detail: null,
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         previewText: getSinglePromptJudgmentPreviewText({systemPrompt, userPrompt}),
         reason: null,

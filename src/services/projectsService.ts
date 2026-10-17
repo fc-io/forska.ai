@@ -36,9 +36,11 @@ export type ProjectListItem = {
 export type ProjectPromptPreview = {
   articleId: string | null
   articleTitle: string | null
+  detail?: string | null
   previewText: string | null
   reason:
     | 'conversion_failed'
+    | 'full_text_not_ready'
     | 'indexing'
     | 'model_context_window_missing'
     | 'no_articles'

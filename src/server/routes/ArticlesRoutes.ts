@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto'
 
 import {Elysia, t} from 'elysia'
 
+import {getJudgmentFullTextExecution} from '../../agent/judge/judgmentFullTextExecution.ts'
 import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {getEffectiveFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
@@ -42,6 +43,9 @@ type ArticleJudgmentRow = {
   judgmentSystemPromptVariant: string | null
   judgmentFullTextStrategyId: string | null
   judgmentChunkingStrategy: string | null
+  judgmentFullTextMode: string | null
+  judgmentChunkCount: number | null
+  judgmentChunkPlanHash: string | null
   judgmentIsAnswered: boolean | null
   judgmentAnsweredOriginal: string | null
   judgmentAnsweredOriginalAsArray: unknown
@@ -109,6 +113,11 @@ const getArticleJudgmentValue = (row: ArticleJudgmentRow) => {
     systemPromptVariant: getSystemPromptVariant(row.judgmentSystemPromptVariant),
     fullTextStrategyId: getEffectiveFullTextStrategyId(row.judgmentFullTextStrategyId),
     chunkingStrategy: row.judgmentChunkingStrategy,
+    ...getJudgmentFullTextExecution({
+      chunkCount: row.judgmentChunkCount,
+      chunkPlanHash: row.judgmentChunkPlanHash,
+      fullTextMode: row.judgmentFullTextMode,
+    }),
     isAnswered: row.judgmentIsAnswered ?? false,
     answeredOriginal: row.judgmentAnsweredOriginal,
     answeredOriginalAsArray: Array.isArray(answeredOriginalAsArray)
@@ -604,6 +613,9 @@ export const articlesRoutes = new Elysia()
           j.full_text_strategy_id AS judgmentFullTextStrategyId,
       j.full_text_strategy_id AS judgmentFullTextStrategyId,
           j.chunking_strategy AS judgmentChunkingStrategy,
+          j.full_text_mode AS judgmentFullTextMode,
+          j.chunk_count AS judgmentChunkCount,
+          j.chunk_plan_hash AS judgmentChunkPlanHash,
           j.is_answered AS judgmentIsAnswered,
           j.answered_original AS judgmentAnsweredOriginal,
           TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,

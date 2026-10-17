@@ -7,6 +7,7 @@ import {
 import type {ProviderModelThinkingOption} from '../../../../../utils/providerModelOptions.ts'
 import {reviewArticleDetailsDispatchScrollToQuote} from './reviewArticleDetails/reviewArticleDetailsScrollEvents.ts'
 import {ReviewJudgmentAssessments} from './reviewJudgmentAssessments.tsx'
+import {getReviewJudgmentChunkingLabel} from './reviewJudgmentChunkingLabel.ts'
 
 type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
 
@@ -47,11 +48,6 @@ const toThinkingLevelLabel = ({
           : 'unknown'
 }
 
-const toChunkingLabel = (chunkingStrategy: string | null | undefined): string => {
-  const strategy = String(chunkingStrategy ?? '').trim()
-  return strategy.length > 0 ? `yes (${strategy})` : 'no'
-}
-
 type ReviewJudgmentItemProps = {
   judgment: {
     id: string
@@ -74,6 +70,9 @@ type ReviewJudgmentItemProps = {
     useFulltextNoImages?: boolean
     useMetadata?: boolean
     chunkingStrategy?: string | null
+    fullTextMode?: string | null
+    chunkCount?: number | null
+    chunkPlanHash?: string | null
   }
   setArticleViewToShow: SetArticleViewToShow
   humanAnswers?: HumanAnswer[]
@@ -122,7 +121,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   }
 
   const chunking = () => {
-    return toChunkingLabel(props.judgment.chunkingStrategy)
+    return getReviewJudgmentChunkingLabel(props.judgment)
   }
 
   const hasContentFlags = () => {

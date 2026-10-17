@@ -26,6 +26,9 @@ type Judgment = {
   useFulltextNoImages?: boolean
   useMetadata?: boolean
   chunkingStrategy?: string | null
+  fullTextMode?: string | null
+  chunkCount?: number | null
+  chunkPlanHash?: string | null
 }
 
 type ReviewJudgmentsProps = {
