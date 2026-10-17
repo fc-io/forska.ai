@@ -241,7 +241,10 @@ const insertProjectArticleFixture = async ({
   }
 
   await runDatabase(`
-    INSERT INTO app.article (id, article_title, article_summary, source_metadata, doi, pubmed_id, publication_status, full_text)
+    INSERT INTO app.article (
+      id, article_title, article_summary, source_metadata, doi, pubmed_id, publication_status, full_text,
+      full_text_canonical_version, full_text_figure_mode_built, full_text_assets
+    )
     VALUES (
       '${articleId}',
       ${getSqlLiteral(title)},
@@ -250,7 +253,10 @@ const insertProjectArticleFixture = async ({
       ${getSqlLiteral(doi)},
       ${getSqlLiteral(pubmedId)},
       ${getSqlLiteral(publicationStatus)},
-      ${getSqlLiteral(fullText)}
+      ${getSqlLiteral(fullText)},
+      ${fullText === null ? 'NULL' : `'canonical-v1'`},
+      ${fullText === null ? 'NULL' : `'markers'`},
+      ${fullText === null ? 'NULL' : `'[]'::JSON`}
     )
   `)
   await runDatabase(`
@@ -572,11 +578,28 @@ const insertReadyPromptPreviewFixture = async (input: {
     projectId,
     useMetadata: input.useMetadata,
   })
+  const previewFullTextStrategyId = 'fts-00000000000p24a1'
+
+  if (input.useFulltext) {
+    await runDatabase(`
+      INSERT INTO app.full_text_strategy (id, label, inputs)
+      VALUES ('${previewFullTextStrategyId}', 'preview single 24k', '${JSON.stringify({
+        canonicalTextVersion: 'canonical-v1',
+        chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
+        figureDescriptionModelId: null,
+        figureDescriptionPromptVersion: null,
+        figureMode: 'none',
+      })}'::JSON)
+      ON CONFLICT (id) DO NOTHING
+    `)
+  }
+
   await runDatabase(`
     UPDATE app.project
     SET
       system_prompt_variant = ${input.systemPromptVariant ? `'${input.systemPromptVariant}'` : 'NULL'},
-      use_fulltext = ${input.useFulltext ? 'TRUE' : 'FALSE'}
+      use_fulltext = ${input.useFulltext ? 'TRUE' : 'FALSE'},
+      full_text_strategy_id = ${input.useFulltext ? `'${previewFullTextStrategyId}'` : 'NULL'}
     WHERE id = '${projectId}'
   `)
   await insertProjectPromptFixture({

@@ -8,6 +8,8 @@ import {
 
 const unavailablePreviewMessages: Record<NonNullable<PromptPreview['reason']>, string> = {
   conversion_failed: 'Preview unavailable: full-text conversion failed for the first project article.',
+  full_text_not_ready:
+    "Preview unavailable: the first project article's full text cannot be prepared for this project's full-text strategy yet.",
   indexing: "Preview of the user prompt is unavailable: the project's review serving snapshot is still being built.",
   model_context_window_missing:
     'Preview unavailable: the project model has no verified context window. Add it on the Models page.',
@@ -53,6 +55,11 @@ export const ProjectPromptPreview = (props: {projectId: string; promptId: string
         <div class="space-y-2">
           <div class="bg-amber-50 rounded p-3 text-sm text-amber-900">
             <div>{unavailablePreviewMessages[previewQuery.data?.reason ?? 'transient_failure']}</div>
+            <Show when={previewQuery.data?.detail}>
+              {(detail) => {
+                return <div class="mt-1">{detail()}</div>
+              }}
+            </Show>
             <div class="mt-2 text-xs text-amber-800">
               Preview article: {previewQuery.data?.articleTitle ?? previewQuery.data?.articleId ?? 'Unavailable'}
             </div>
