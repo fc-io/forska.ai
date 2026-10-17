@@ -7,6 +7,7 @@ import {
   FULL_TEXT_STRATEGY_NONE,
   getEffectiveFullTextStrategyId,
   getFullTextStrategyDisplayLabel,
+  isReservedFullTextStrategyId,
 } from '../fullText/fullTextStrategy.ts'
 import {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 
@@ -235,23 +236,35 @@ const getCanonicalCriteria = (criteria: readonly ComparisonJudgmentContextCriter
 
 const getFullTextStrategyContextFields = (
   fullTextStrategyId: string | null | undefined,
-  fullTextStrategyLabel: string | null | undefined,
+  fullTextStrategyStoredLabel: string | null | undefined,
 ): Pick<ComparisonJudgmentContextLlmColumn, 'fullTextStrategyId' | 'fullTextStrategyLabel'> => {
   const effectiveFullTextStrategyId = getEffectiveFullTextStrategyId(fullTextStrategyId)
+  const fullTextStrategyLabel = getFullTextStrategyDisplayLabel(
+    effectiveFullTextStrategyId,
+    fullTextStrategyStoredLabel,
+  )
 
   return effectiveFullTextStrategyId === FULL_TEXT_STRATEGY_NONE
     ? {}
-    : {
-        fullTextStrategyId: effectiveFullTextStrategyId,
-        fullTextStrategyLabel: getFullTextStrategyDisplayLabel(effectiveFullTextStrategyId, fullTextStrategyLabel),
-      }
+    : isReservedFullTextStrategyId(effectiveFullTextStrategyId)
+      ? {fullTextStrategyLabel}
+      : {fullTextStrategyId: effectiveFullTextStrategyId, fullTextStrategyLabel}
+}
+
+const getCanonicalFullTextStrategyContextFields = (
+  column: ComparisonJudgmentContextLlmColumn,
+): Pick<ComparisonJudgmentContextLlmColumn, 'fullTextStrategyId' | 'fullTextStrategyLabel'> => {
+  return {
+    ...(column.fullTextStrategyId === undefined ? {} : {fullTextStrategyId: column.fullTextStrategyId}),
+    ...(column.fullTextStrategyLabel === undefined ? {} : {fullTextStrategyLabel: column.fullTextStrategyLabel}),
+  }
 }
 
 const getCanonicalLlmColumn = (column: ComparisonJudgmentContextLlmColumn): ComparisonJudgmentContextLlmColumn => {
   return {
     contentKey: column.contentKey,
     ...(column.criteria ? {criteria: getCanonicalCriteria(column.criteria)} : {}),
-    ...getFullTextStrategyContextFields(column.fullTextStrategyId, column.fullTextStrategyLabel),
+    ...getCanonicalFullTextStrategyContextFields(column),
     kind: 'llm',
     modelId: column.modelId,
     modelName: column.modelName,

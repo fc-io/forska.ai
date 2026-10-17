@@ -255,14 +255,13 @@ test('says other settings differ only when neither direction explains the differ
 })
 
 test('lists full-text strategy labels and marks a strategy that is no longer used', () => {
-  const getFullTextSummary = (id: string, fullTextStrategyId: string, fullTextStrategyLabel: string) => {
+  const getFullTextSummary = (id: string, strategy: {fullTextStrategyId?: string; fullTextStrategyLabel: string}) => {
     return getSummary(id, {
       context: {
         columns: [
           getLlmColumn({
-            contentKey: `0010~${fullTextStrategyId}`,
-            fullTextStrategyId,
-            fullTextStrategyLabel,
+            contentKey: strategy.fullTextStrategyId ? `0010~${strategy.fullTextStrategyId}` : '0010',
+            ...strategy,
             useAbstract: false,
             useFulltext: true,
             useTitle: false,
@@ -277,12 +276,13 @@ test('lists full-text strategy labels and marks a strategy that is no longer use
       models: [{id: 'model-a', name: 'gpt-5.5'}],
     })
   }
-  const legacySummary = getFullTextSummary(
-    'context-legacy',
-    'fts-legacy-v0',
-    'legacy full text (before strategy tracking)',
-  )
-  const currentSummary = getFullTextSummary('context-current', 'fts-aaaaaaaaaaaaaaaa', 'mineru 4.0 / none / single 96k')
+  const legacySummary = getFullTextSummary('context-legacy', {
+    fullTextStrategyLabel: 'legacy full text (before strategy tracking)',
+  })
+  const currentSummary = getFullTextSummary('context-current', {
+    fullTextStrategyId: 'fts-aaaaaaaaaaaaaaaa',
+    fullTextStrategyLabel: 'mineru 4.0 / none / single 96k',
+  })
 
   expect(getComparisonJudgmentContextSummaryLines(currentSummary)).toContain(
     'Full-text strategies: mineru 4.0 / none / single 96k',

@@ -22,6 +22,7 @@ export {
   getFullTextStrategyLabel,
   getLegacyFullTextStrategyId,
   isFullTextFigureMode,
+  isReservedFullTextStrategyId,
 } from '../../utils/fullTextStrategyOptions.ts'
 
 export const FULL_TEXT_TOKENIZER_ID = 'o200k_base'
