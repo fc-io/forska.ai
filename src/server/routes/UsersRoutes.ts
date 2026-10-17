@@ -22,6 +22,9 @@ export const usersRoutes = new Elysia()
   .get('/api/users', async () => {
     return {data: [await getLocalUserSettings()]}
   })
+  .get('/api/users/figure-description-models', async () => {
+    return {data: await getUserConfigQueryService().listFigureDescriptionModelOptions()}
+  })
   .patch(
     '/api/users',
     async ({body}) => {
@@ -33,6 +36,8 @@ export const usersRoutes = new Elysia()
       const userConfig = await getUserConfigQueryService().updateUserConfig({
         maintenanceWorkerDuckdbMemoryLimit: getNullableString(body.maintenanceWorkerDuckdbMemoryLimit),
         email: body.email,
+        figureDescriptionModelId:
+          body.figureDescriptionModelId === undefined ? undefined : getNullableString(body.figureDescriptionModelId),
         fullTextConversionModelId: getNullableString(body.fullTextConversionModelId),
         name: body.name,
         unpaywallEmail: getNullableString(body.unpaywallEmail),
@@ -46,6 +51,7 @@ export const usersRoutes = new Elysia()
         codexBin: t.Union([t.String(), t.Null()]),
         duckdbBin: t.Union([t.String(), t.Null()]),
         email: t.String(),
+        figureDescriptionModelId: t.Optional(t.Union([t.String(), t.Null()])),
         fullTextConversionModelId: t.Union([t.String(), t.Null()]),
         name: t.String(),
         unpaywallEmail: t.Union([t.String(), t.Null()]),

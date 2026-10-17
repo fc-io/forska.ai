@@ -6,6 +6,11 @@ import {normalizeDuckdbMemoryLimit} from '../utils/duckdbMemoryLimit.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {fullTextConversionProviderKinds} from './providerCatalog.ts'
+import {
+  getFigureDescriptionModelConfig as getStoredFigureDescriptionModelConfig,
+  getValidatedFigureDescriptionModelId,
+  listFigureDescriptionModelOptions,
+} from './userConfigQueryService/figureDescriptionModelConfig.ts'
 
 type UserConfigRow = {
   maintenanceWorkerDuckdbMemoryLimit: string | null
@@ -14,6 +19,7 @@ type UserConfigRow = {
   email: string
   role: string | null
   fullTextConversionModelId: string | null
+  figureDescriptionModelId: string | null
   unpaywallEmail: string | null
   createdAt: unknown
   updatedAt: unknown
@@ -40,6 +46,7 @@ const userConfigSelectClause = `
   role,
   maintenance_worker_duckdb_memory_limit AS maintenanceWorkerDuckdbMemoryLimit,
   full_text_conversion_model_id AS fullTextConversionModelId,
+  figure_description_model_id AS figureDescriptionModelId,
   unpaywall_email AS unpaywallEmail,
   created_at AS createdAt,
   updated_at AS updatedAt
@@ -79,6 +86,7 @@ const getDefaultUserRecord = (): UserRecord => {
     email: localUserDefaults.email,
     role: localUserDefaults.role,
     fullTextConversionModelId: localUserDefaults.fullTextConversionModelId,
+    figureDescriptionModelId: localUserDefaults.figureDescriptionModelId,
     unpaywallEmail: localUserDefaults.unpaywallEmail,
     createdAt: now,
     updatedAt: now,
@@ -97,6 +105,7 @@ const getUserConfigValue = (row: UserConfigRow): UserRecord => {
     email: row.email,
     role: row.role,
     fullTextConversionModelId: row.fullTextConversionModelId,
+    figureDescriptionModelId: row.figureDescriptionModelId,
     unpaywallEmail: row.unpaywallEmail,
     createdAt: getDateValue(row.createdAt) ?? new Date(0),
     updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
@@ -218,6 +227,7 @@ const updateUserConfigRow = async ({
   maintenanceWorkerDuckdbMemoryLimit,
   current,
   email,
+  figureDescriptionModelId,
   fullTextConversionModelId,
   name,
   unpaywallEmail,
@@ -225,11 +235,16 @@ const updateUserConfigRow = async ({
   maintenanceWorkerDuckdbMemoryLimit: string | null
   current: UserRecord
   email: string
+  figureDescriptionModelId?: string | null
   fullTextConversionModelId: string | null
   name: string
   unpaywallEmail: string | null
 }): Promise<UserRecord> => {
   const validatedFullTextConversionModelId = await getValidatedFullTextConversionModelId(fullTextConversionModelId)
+  const validatedFigureDescriptionModelId =
+    figureDescriptionModelId === undefined
+      ? current.figureDescriptionModelId
+      : await getValidatedFigureDescriptionModelId(figureDescriptionModelId)
 
   const [row] = await getAppDatabaseService().queryJson<UserConfigRow>(`
     UPDATE app.user_config
@@ -237,6 +252,7 @@ const updateUserConfigRow = async ({
         email = ${getSqlLiteral(getValueOrFallback(email, current.email))},
         maintenance_worker_duckdb_memory_limit = ${getSqlLiteral(normalizeDuckdbMemoryLimit(maintenanceWorkerDuckdbMemoryLimit))},
         full_text_conversion_model_id = ${getSqlLiteral(validatedFullTextConversionModelId)},
+        figure_description_model_id = ${getSqlLiteral(validatedFigureDescriptionModelId)},
         project_mart_large_rebuild_batch_size = NULL,
         project_mart_large_rebuild_max_cycles_per_wake = NULL,
         project_mart_large_rebuild_max_wake_ms = NULL,
@@ -254,12 +270,14 @@ const updateUserConfigRow = async ({
 const updateUserConfig = async ({
   maintenanceWorkerDuckdbMemoryLimit,
   email,
+  figureDescriptionModelId,
   fullTextConversionModelId,
   name,
   unpaywallEmail,
 }: {
   maintenanceWorkerDuckdbMemoryLimit: string | null
   email: string
+  figureDescriptionModelId?: string | null
   fullTextConversionModelId: string | null
   name: string
   unpaywallEmail: string | null
@@ -270,6 +288,7 @@ const updateUserConfig = async ({
     maintenanceWorkerDuckdbMemoryLimit,
     current,
     email,
+    figureDescriptionModelId,
     fullTextConversionModelId,
     name,
     unpaywallEmail,
@@ -325,8 +344,14 @@ const getFullTextConversionModelConfig = async (): Promise<{
     : null
 }
 
+const getFigureDescriptionModelConfig = async () => {
+  return getStoredFigureDescriptionModelConfig({userConfigWhereClause: localUserConfigAliasWhereClause})
+}
+
 export const userConfigQueryService = {
+  getFigureDescriptionModelConfig,
   getFullTextConversionModelConfig,
+  listFigureDescriptionModelOptions,
   getOrCreateUserConfig,
   getUnpaywallEmail,
   updateUserConfig,
