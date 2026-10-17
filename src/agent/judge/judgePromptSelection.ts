@@ -1,11 +1,5 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {isImportedFileRoute} from '../../utils/importRouteUtils.ts'
-import {
-  SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT,
-  SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_ANTHROPIC,
-} from './judgeSinglePromptEvidenceSystemPrompt.ts'
-import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptEvidenceSystemPromptPatient.ts'
-import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptEvidenceSystemPromptStructuredImport.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT, SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptSystemPromptPatient.ts'
 import {
@@ -55,17 +49,4 @@ export const getSinglePromptSystemPromptForArticle = (
     : isStructuredImportArticle(article)
       ? SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT
       : getScientificArticleSystemPrompt(provider, systemPromptVariant)
-}
-
-export const getSinglePromptEvidenceSystemPromptForArticle = (
-  article: ArticleRecord,
-  provider?: string | null,
-): string => {
-  return isFhirEhrPatientArticle(article)
-    ? SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT
-    : isStructuredImportArticle(article)
-      ? SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT
-      : isAnthropicProvider(provider)
-        ? SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_ANTHROPIC
-        : SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT
 }
