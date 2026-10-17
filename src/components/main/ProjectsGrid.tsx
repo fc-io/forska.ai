@@ -7,6 +7,7 @@ import {fetchProviderConnections} from '../../app/routes/+admin/+models/provider
 import {createJudgmentsJob} from '../../services/judgmentsJobsService'
 import type {fetchProjects} from '../../services/projectsService'
 import {cloneProject, unarchiveProject} from '../../services/projectsService'
+import {getProjectFullTextContentLabel} from '../../utils/fullTextStrategyOptions.ts'
 import {getSglangRuntimeModelNotice} from '../../utils/getSglangRuntimeModelNotice.ts'
 import {Button} from '../ui/button'
 import {RuntimeModelNotice} from './runtimeModelNotice.tsx'
@@ -27,7 +28,7 @@ const getProjectName = (project: Project) => {
 }
 
 const getProjectContentUsedLabel = (project: Project) => {
-  const fulltextLabel = project.useFulltextNoImages ? 'fulltext (no images)' : project.useFulltext ? 'fulltext' : null
+  const fulltextLabel = getProjectFullTextContentLabel(project)
   const parts = [
     project.useTitle ? 'title' : null,
     project.useAbstract ? 'abstract' : null,

@@ -150,3 +150,15 @@ export const getFullTextStrategyInputDifferences = (
     return JSON.stringify(getSortedJsonValue(left[key])) !== JSON.stringify(getSortedJsonValue(right[key]))
   })
 }
+
+export const getProjectFullTextContentLabel = (project: {
+  fullTextStrategyLabel?: string | null
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+}): string | null => {
+  const strategyLabel = project.fullTextStrategyLabel ?? null
+
+  return project.useFulltext || project.useFulltextNoImages
+    ? `fulltext (${strategyLabel ?? (project.useFulltextNoImages ? 'no images' : 'legacy')})`
+    : null
+}

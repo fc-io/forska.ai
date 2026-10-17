@@ -11,6 +11,7 @@ import {
   type fetchArchivedProjects,
   unarchiveProject,
 } from '../../../../services/projectsService'
+import {getProjectFullTextContentLabel} from '../../../../utils/fullTextStrategyOptions.ts'
 
 type ArchivedProject = Awaited<ReturnType<typeof fetchArchivedProjects>>[number]
 
@@ -101,7 +102,7 @@ const getProjectModelLabel = (project: ArchivedProject) => {
 }
 
 const getProjectContentUsedLabel = (project: ArchivedProject) => {
-  const fulltextLabel = project.useFulltextNoImages ? 'fulltext (no images)' : project.useFulltext ? 'fulltext' : null
+  const fulltextLabel = getProjectFullTextContentLabel(project)
   const parts = [
     project.useTitle ? 'title' : null,
     project.useAbstract ? 'abstract' : null,
