@@ -9,6 +9,7 @@ import {
 import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
+import {getFullTextCronGate, logFullTextCronGateBlocked} from './fullTextJobs/fullTextCronScope.ts'
 
 const FIGURE_DESCRIPTION_INTERVAL = '30 * * * * *'
 const DEFAULT_BATCH_SIZE = 8
@@ -72,14 +73,34 @@ export const runFigureDescriptionBatch = async ({cwd}: {cwd?: string} = {}) => {
   return {candidates: candidates.length, outcomes: outcomeCounts}
 }
 
+const figureDescriptionWorkloadContext = {
+  fallbackIntent: 'reject' as const,
+  routeOrJobKey: 'fullText.figureDescriptions.cron',
+  workloadClass: 'background.fullText.figureDescriptions',
+}
+
+const runGatedFigureDescriptionBatch = async () => {
+  const gate = await getFullTextCronGate({
+    enabled: env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON,
+    workloadContext: figureDescriptionWorkloadContext,
+  })
+
+  if (!gate.open) {
+    logFullTextCronGateBlocked({component: figureDescriptionJobsComponent, reason: gate.reason})
+    return
+  }
+
+  await runFigureDescriptionBatch()
+}
+
 const runScheduledFigureDescriptionBatch = async () => {
-  if (!env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON || !shouldCurrentServerRunMaintenanceLoops() || runningBatch.active) {
+  if (!shouldCurrentServerRunMaintenanceLoops() || runningBatch.active) {
     return
   }
 
   runningBatch.active = true
 
-  await runFigureDescriptionBatch()
+  await runGatedFigureDescriptionBatch()
     .catch((error: unknown) => {
       if (!isExpectedDuckdbOwnerRoleLossError(error)) {
         throw error

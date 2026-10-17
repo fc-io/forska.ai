@@ -179,13 +179,11 @@ export const loadEnv = ({
     const defaultTempDirectory = duckdbPath === ':memory:' ? undefined : resolve(dirname(duckdbPath), 'duckdb-temp')
     merged.DUCKDB_TEMP_DIRECTORY = defaultTempDirectory
   }
-  // Default to false when not provided (prevents accidental background fetching)
   if (merged.RUN_SERVER_FULL_TEXT_FETCHING == null || merged.RUN_SERVER_FULL_TEXT_FETCHING === '') {
-    ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_FETCHING = 'false'
+    ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_FETCHING = 'true'
   }
-  // Default to false when not provided (prevents accidental background conversion)
   if (merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON == null || merged.RUN_SERVER_FULL_TEXT_CONVERSION_CRON === '') {
-    ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_CONVERSION_CRON = 'false'
+    ;(merged as Record<string, string>).RUN_SERVER_FULL_TEXT_CONVERSION_CRON = 'true'
   }
   if (
     merged.RUN_SERVER_JUDGMENT_OPERATIONAL_CRON == null
