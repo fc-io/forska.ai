@@ -1,5 +1,5 @@
 import {getJsonSqlLiteral} from '../providers/providerDbUtils.ts'
-import {providerImageInputUnsupportedCode} from '../providers/providerImageInput.ts'
+import {providerImageInputUnsupportedCode, providerImageTooLargeCode} from '../providers/providerImageInput.ts'
 import {
   appendArticleReviewServingDeltas,
   getArticleReviewServingMutationValueHash,
@@ -25,6 +25,7 @@ import {
   FIGURE_DESCRIPTION_PROMPT_VERSION,
   figureDescriptionInputInvalidCode,
 } from './figureDescriptions.ts'
+import {figureImageEncodingInvalidCode} from './figureImageEncoding.ts'
 
 type DuckdbWorkloadContext = Parameters<ReturnType<typeof getAppDatabaseService>['transaction']>[1]
 
@@ -56,7 +57,9 @@ const permanentFailureCodes = new Set([
   'ENOENT',
   'EISDIR',
   figureDescriptionInputInvalidCode,
+  figureImageEncodingInvalidCode,
   providerImageInputUnsupportedCode,
+  providerImageTooLargeCode,
 ])
 const figureDescriptionsInFlight = new Map<string, Promise<FigureDescriptionOutcome>>()
 const articleAssetWriteChains = new Map<string, Promise<unknown>>()

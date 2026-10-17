@@ -1,6 +1,11 @@
 import {readFile} from 'node:fs/promises'
 
-import {getProviderImageMimeType} from '../providers/providerImageInput.ts'
+import {
+  getProviderImageBase64Length,
+  getProviderImageMimeType,
+  isProviderImageTooLarge,
+  PROVIDER_IMAGE_MAX_BASE64_BYTES,
+} from '../providers/providerImageInput.ts'
 import {type ProviderInvokeImage} from '../providers/providerTypes.ts'
 import {resolveRuntimeFilePath} from '../utils/runtimeWritablePath.ts'
 import {flattenFigureImage} from './figureImageEncoding.ts'
@@ -10,6 +15,7 @@ export const nativeFigureImageErrorCodes = {
   duplicateMarker: 'native_figure_marker_duplicate',
   fileMissing: 'native_figure_image_missing',
   fileUnsupported: 'native_figure_image_unsupported',
+  tooLarge: 'native_figure_image_too_large',
 } as const
 
 export type NativeFigureImageErrorCode = (typeof nativeFigureImageErrorCodes)[keyof typeof nativeFigureImageErrorCodes]
@@ -115,12 +121,25 @@ const readAssetBytes = async (asset: NativeFigureImageAsset, cwd: string | undef
   )
 }
 
+const getSizeCheckedImage = (asset: NativeFigureImageAsset, image: ProviderInvokeImage): ProviderInvokeImage => {
+  if (isProviderImageTooLarge(image)) {
+    throw getNativeFigureImageError({
+      code: nativeFigureImageErrorCodes.tooLarge,
+      figureIndex: asset.index,
+      imagePath: asset.imagePath,
+      message: `Figure ${asset.index} image ${asset.imagePath} is ${getProviderImageBase64Length(image)} bytes base64-encoded after flattening; the per-image limit is ${PROVIDER_IMAGE_MAX_BASE64_BYTES} bytes (5 MB)`,
+    })
+  }
+
+  return image
+}
+
 const getNativeFigureImageInput = async (
   asset: NativeFigureImageAsset,
   cwd: string | undefined,
 ): Promise<NativeFigureImageInput> => {
   const mimeType = getAssetMimeType(asset)
-  const image = flattenFigureImage({bytes: await readAssetBytes(asset, cwd), mimeType})
+  const image = getSizeCheckedImage(asset, flattenFigureImage({bytes: await readAssetBytes(asset, cwd), mimeType}))
 
   return {bytes: image.bytes, figureIndex: asset.index, mimeType: image.mimeType}
 }

@@ -1,7 +1,19 @@
+import {readFileSync} from 'node:fs'
+
 import {afterEach, expect, mock, test} from 'bun:test'
 
+import {flattenFigureImage} from '../../fullText/figureImageEncoding.ts'
+import {getProviderImageBase64} from '../providerImageInput.ts'
 import {ProviderInvocationError} from '../providerTypes.ts'
 import {invokeAnthropicMessagesModel, listAnthropicMessageModels} from './anthropicMessagesTransport.ts'
+
+const transparentPng = {
+  bytes: new Uint8Array(
+    readFileSync(new URL('../../fullText/fixtures/figureImages/transparent-3x2.png', import.meta.url)),
+  ),
+  mimeType: 'image/png' as const,
+}
+const flattenedPngBase64 = getProviderImageBase64(flattenFigureImage(transparentPng))
 
 const originalFetch = globalThis.fetch
 const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) => {
@@ -397,10 +409,7 @@ test('sends image prompts as a text block followed by base64 image blocks', asyn
     modelName: 'claude-sonnet-4-5',
     outputSchema: {type: 'object'},
     prompt: {
-      images: [
-        {bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/jpeg'},
-        {bytes: new Uint8Array([4, 5]), mimeType: 'image/png'},
-      ],
+      images: [{bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xe0), mimeType: 'image/jpeg'}, transparentPng],
       text: 'Describe the figure.',
     },
     systemPrompt: 'Return JSON',
@@ -414,8 +423,8 @@ test('sends image prompts as a text block followed by base64 image blocks', asyn
       {
         content: [
           {text: 'Describe the figure.', type: 'text'},
-          {source: {data: 'AQID', media_type: 'image/jpeg', type: 'base64'}, type: 'image'},
-          {source: {data: 'BAU=', media_type: 'image/png', type: 'base64'}, type: 'image'},
+          {source: {data: '/9j/4A==', media_type: 'image/jpeg', type: 'base64'}, type: 'image'},
+          {source: {data: flattenedPngBase64, media_type: 'image/png', type: 'base64'}, type: 'image'},
         ],
         role: 'user',
       },

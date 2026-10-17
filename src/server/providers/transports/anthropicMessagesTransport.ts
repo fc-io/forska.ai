@@ -1,5 +1,5 @@
 import {getAnthropicThinkingConfig} from '../../../utils/anthropicThinking.ts'
-import {getProviderImageBase64, getProviderPromptParts} from '../providerImageInput.ts'
+import {getProviderImageBase64, getProviderPromptParts, getProviderTransportImages} from '../providerImageInput.ts'
 import {
   ProviderInvocationError,
   type ProviderInvocationResult,
@@ -87,7 +87,7 @@ export const getAnthropicUserContent = (prompt: ProviderInvokePrompt): Anthropic
     ? parts.text
     : [
         {text: parts.text, type: 'text'},
-        ...parts.images.map((image): AnthropicContentBlock => {
+        ...getProviderTransportImages(parts.images).map((image): AnthropicContentBlock => {
           return {
             source: {data: getProviderImageBase64(image), media_type: image.mimeType, type: 'base64'},
             type: 'image',

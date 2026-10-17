@@ -1,13 +1,25 @@
+import {readFileSync} from 'node:fs'
+
 import {expect, test} from 'bun:test'
 
+import {flattenFigureImage} from '../../fullText/figureImageEncoding.ts'
+import {getProviderImageBase64} from '../providerImageInput.ts'
 import {getOpenAIResponsesRequest} from './openaiResponsesTransport.ts'
+
+const transparentPng = {
+  bytes: new Uint8Array(
+    readFileSync(new URL('../../fullText/fixtures/figureImages/transparent-3x2.png', import.meta.url)),
+  ),
+  mimeType: 'image/png' as const,
+}
+const flattenedPngBase64 = getProviderImageBase64(flattenFigureImage(transparentPng))
 
 test('maps image prompts to input_text followed by input_image data URIs', () => {
   const request = getOpenAIResponsesRequest({
     maxCompletionTokens: 128,
     modelName: 'gpt-5.5',
     outputSchema: {type: 'object'},
-    prompt: {images: [{bytes: new Uint8Array([4, 5]), mimeType: 'image/png'}], text: 'Describe.'},
+    prompt: {images: [transparentPng], text: 'Describe.'},
     systemPrompt: 'System',
     temperature: 0,
   })
@@ -17,7 +29,7 @@ test('maps image prompts to input_text followed by input_image data URIs', () =>
     {
       content: [
         {text: 'Describe.', type: 'input_text'},
-        {image_url: 'data:image/png;base64,BAU=', type: 'input_image'},
+        {image_url: `data:image/png;base64,${flattenedPngBase64}`, type: 'input_image'},
       ],
       role: 'user',
     },

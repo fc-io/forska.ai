@@ -1,4 +1,3 @@
-import {flattenFigureImages} from '../../fullText/figureImageEncoding.ts'
 import {
   type CodexDeviceLoginJob,
   getCodexCliLoginStatus,
@@ -11,7 +10,12 @@ import {
   getCodexAppServerClient,
   getCodexBinPath,
 } from '../../utils/getCodexAppServerClient.ts'
-import {getProviderImageDataUrl, getProviderPromptParts, isProviderMultipartPrompt} from '../providerImageInput.ts'
+import {
+  getProviderImageDataUrl,
+  getProviderPromptParts,
+  getProviderTransportImages,
+  isProviderMultipartPrompt,
+} from '../providerImageInput.ts'
 import {
   type ProviderHealthResult,
   ProviderInvocationError,
@@ -133,7 +137,7 @@ const getCodexTransientTurnError = (error: unknown): ProviderInvocationError => 
 }
 
 export const getCodexAppTurnImageUrls = (prompt: ProviderInvokePrompt): string[] => {
-  return flattenFigureImages(getProviderPromptParts(prompt).images).map(getProviderImageDataUrl)
+  return getProviderTransportImages(getProviderPromptParts(prompt).images).map(getProviderImageDataUrl)
 }
 
 const getCodexAppTurnImageParams = (prompt: ProviderInvokePrompt): {inputImageUrls?: string[]} => {

@@ -1,5 +1,6 @@
 import {extname} from 'node:path'
 
+import {flattenFigureImages} from '../fullText/figureImageEncoding.ts'
 import {resolveProviderModelCapabilities} from './providerModelCapabilities.ts'
 import {
   ProviderInvocationError,
@@ -13,6 +14,10 @@ import {
 export const providerImageInputUnsupportedCode = 'provider_image_input_unsupported'
 
 export const providerModelImageInputUnsupportedCode = 'provider_model_image_input_unsupported'
+
+export const providerImageTooLargeCode = 'provider_image_too_large'
+
+export const PROVIDER_IMAGE_MAX_BASE64_BYTES = 5 * 1024 * 1024
 
 const imageInputTransportFamilies: ReadonlySet<ProviderTransportFamily> = new Set([
   'anthropic-messages',
@@ -100,6 +105,34 @@ export const getProviderImageBase64 = (image: ProviderInvokeImage): string => {
 
 export const getProviderImageDataUrl = (image: ProviderInvokeImage): string => {
   return `data:${image.mimeType};base64,${getProviderImageBase64(image)}`
+}
+
+export const getProviderImageBase64Length = (image: ProviderInvokeImage): number => {
+  return Math.ceil(image.bytes.byteLength / 3) * 4
+}
+
+export const isProviderImageTooLarge = (image: ProviderInvokeImage): boolean => {
+  return getProviderImageBase64Length(image) > PROVIDER_IMAGE_MAX_BASE64_BYTES
+}
+
+const getSizeCheckedProviderImage = (image: ProviderInvokeImage, position: number): ProviderInvokeImage => {
+  if (isProviderImageTooLarge(image)) {
+    const base64Bytes = getProviderImageBase64Length(image)
+
+    throw new ProviderInvocationError(
+      `Image ${position + 1} is ${base64Bytes} bytes base64-encoded after flattening; the per-image limit is ${PROVIDER_IMAGE_MAX_BASE64_BYTES} bytes (5 MB)`,
+      {
+        code: providerImageTooLargeCode,
+        diagnostics: {base64Bytes, imagePosition: position + 1, limitBytes: PROVIDER_IMAGE_MAX_BASE64_BYTES},
+      },
+    )
+  }
+
+  return image
+}
+
+export const getProviderTransportImages = (images: ProviderInvokeImage[]): ProviderInvokeImage[] => {
+  return flattenFigureImages(images).map(getSizeCheckedProviderImage)
 }
 
 export const getProviderImageMimeType = (filePath: string): ProviderInvokeImage['mimeType'] | null => {

@@ -108,3 +108,25 @@ test('a missing crop, an unknown figure, a duplicate marker and a non-image file
     [nativeFigureImageErrorCodes.fileUnsupported, 5, `${assetDir}/fig-5.webp`],
   ])
 })
+
+test('a crop above the 5 MB base64 limit after flattening raises a typed error instead of being downscaled', async () => {
+  const oversizeBytes = Uint8Array.from({length: 3_932_161}, (_, index) => {
+    return jpegBytes[index] ?? 0
+  })
+
+  await writeFile(path.join(state.cwd, assetDir, 'fig-6.jpg'), oversizeBytes)
+
+  const error = await getRejection(
+    getNativeFigureImageInputs({
+      assets: [{imagePath: `${assetDir}/fig-6.jpg`, index: 6}],
+      cwd: state.cwd,
+      renderedText: '[figure:6]',
+    }),
+  )
+
+  expect(isNativeFigureImageError(error) ? [error.code, error.figureIndex, error.message] : null).toEqual([
+    nativeFigureImageErrorCodes.tooLarge,
+    6,
+    `Figure 6 image ${assetDir}/fig-6.jpg is 5242884 bytes base64-encoded after flattening; the per-image limit is 5242880 bytes (5 MB)`,
+  ])
+})
