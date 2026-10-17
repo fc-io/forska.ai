@@ -15,9 +15,12 @@ export {isQwen35Model} from '../../../utils/qwen35Thinking.ts'
 
 type OpenAIChatContentPart = {text: string; type: 'text'} | {image_url: {url: string}; type: 'image_url'}
 
+export type OpenAIChatCompletionTokenLimitField = 'max_completion_tokens' | 'max_tokens'
+
 type OpenAIChatCompletionRequest = {
   chat_template_kwargs?: {enable_thinking: boolean}
-  max_completion_tokens: number
+  max_completion_tokens?: number
+  max_tokens?: number
   messages: Array<{content: OpenAIChatContentPart[] | string; role: 'system' | 'user'}>
   model: string
   presence_penalty?: number
@@ -64,6 +67,7 @@ export const getOpenAIListedModels = ({
 }
 
 export const getOpenAIChatCompletionRequest = ({
+  completionTokenLimitField = 'max_completion_tokens',
   maxCompletionTokens,
   modelOptions,
   modelName,
@@ -72,6 +76,7 @@ export const getOpenAIChatCompletionRequest = ({
   systemPrompt,
   temperature,
 }: {
+  completionTokenLimitField?: OpenAIChatCompletionTokenLimitField
   maxCompletionTokens: number
   modelOptions?: ProviderModelOptions | null
   modelName: string
@@ -81,7 +86,7 @@ export const getOpenAIChatCompletionRequest = ({
   temperature: number
 }): OpenAIChatCompletionRequest => {
   const defaultRequest = {
-    max_completion_tokens: maxCompletionTokens,
+    [completionTokenLimitField]: maxCompletionTokens,
     messages: [
       {content: systemPrompt, role: 'system' as const},
       {content: getOpenAIChatUserContent(prompt), role: 'user' as const},
@@ -130,6 +135,7 @@ export const listOpenAIChatModels = async ({
 export const invokeOpenAIChatModel = async ({
   apiKey,
   baseURL,
+  completionTokenLimitField,
   maxCompletionTokens,
   modelOptions,
   modelName,
@@ -141,6 +147,7 @@ export const invokeOpenAIChatModel = async ({
 }: {
   apiKey: string | null
   baseURL: string | null
+  completionTokenLimitField?: OpenAIChatCompletionTokenLimitField
   maxCompletionTokens: number
   modelOptions?: ProviderModelOptions | null
   modelName: string
@@ -154,6 +161,7 @@ export const invokeOpenAIChatModel = async ({
   const client = getOpenAIClient({apiKey, baseURL: resolvedBaseURL})
   const response = await client.chat.completions.create(
     getOpenAIChatCompletionRequest({
+      completionTokenLimitField,
       maxCompletionTokens,
       modelOptions,
       modelName,
