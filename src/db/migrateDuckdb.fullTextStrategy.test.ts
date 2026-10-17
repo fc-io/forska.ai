@@ -121,7 +121,7 @@ test('the migrations contain no comment markers and the judgment rebuild puts th
   expect(judgmentMigrationSql).toContain("full_text_strategy_id VARCHAR NOT NULL DEFAULT 'fts-none'")
 })
 
-test('existing projects and judgments get the none or legacy strategy and assessments survive', async () => {
+test('existing projects, judgments, jobs, snapshots and deltas get the none or legacy strategy and assessments survive', async () => {
   await getDatabase().run(`
     INSERT INTO app.article (id, article_title) VALUES ('article-1', 'Article 1')
   `)
@@ -147,6 +147,29 @@ test('existing projects and judgments get the none or legacy strategy and assess
   await getDatabase().run(`
     INSERT INTO app.judgment_assessment (id, judgment_id, assessment_is_correct, assessment_comment)
     VALUES ('assessment-fulltext', 'judgment-fulltext', TRUE, 'checked')
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('job-plain', 'project-plain', 'completed'), ('job-fulltext', 'project-fulltext', 'running')
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.judgment_execution_snapshot (
+      id, job_id, project_id, queue_record_id, claim_id, article_id, prompt_id, model_id,
+      use_title, use_abstract, use_fulltext, use_fulltext_no_images, payload_hash, payload_json
+    ) VALUES
+      ('snapshot-plain', 'job-plain', 'project-plain', 'queue-1', 'claim-1', 'article-1', 'prompt-1', 'model-a',
+        TRUE, TRUE, FALSE, FALSE, 'hash-1', '{}'),
+      ('snapshot-fulltext', 'job-fulltext', 'project-fulltext', 'queue-2', 'claim-2', 'article-1', 'prompt-1', 'model-a',
+        FALSE, FALSE, TRUE, FALSE, 'hash-2', '{}')
+  `)
+  await getDatabase().run(`
+    INSERT INTO app.review_change_delta (
+      delta_id, change_kind, source_table, source_row_id, source_operation, source_partition,
+      source_high_water_mark, idempotency_key, payload_version, use_fulltext, use_fulltext_no_images
+    ) VALUES
+      ('delta-plain', 'llm_judgment', 'app.judgment', 'judgment-plain', 'upsert', 'p', 1, 'key-plain', 1, FALSE, FALSE),
+      ('delta-no-images', 'llm_judgment', 'app.judgment', 'judgment-no-images', 'upsert', 'p', 2, 'key-no-images', 1, FALSE, TRUE),
+      ('delta-config', 'project_config', 'app.project', 'project-plain', 'upsert', 'p', 3, 'key-config', 1, NULL, NULL)
   `)
 
   await getMigrateDuckdb()({throughFileName: lastMigrationFileName})
@@ -198,6 +221,31 @@ test('existing projects and judgments get the none or legacy strategy and assess
       FROM app.judgment_assessment
     `),
   ).toEqual([{id: 'assessment-fulltext', judgmentId: 'judgment-fulltext'}])
+  expect(
+    await getDatabase().queryJson<{fullTextStrategyId: string | null; id: string}>(`
+      SELECT id, full_text_strategy_id AS fullTextStrategyId FROM app.judgment_job ORDER BY id
+    `),
+  ).toEqual([
+    {fullTextStrategyId: 'fts-legacy-v0', id: 'job-fulltext'},
+    {fullTextStrategyId: null, id: 'job-plain'},
+  ])
+  expect(
+    await getDatabase().queryJson<{fullTextStrategyId: string; id: string}>(`
+      SELECT id, full_text_strategy_id AS fullTextStrategyId FROM app.judgment_execution_snapshot ORDER BY id
+    `),
+  ).toEqual([
+    {fullTextStrategyId: 'fts-legacy-v0', id: 'snapshot-fulltext'},
+    {fullTextStrategyId: 'fts-none', id: 'snapshot-plain'},
+  ])
+  expect(
+    await getDatabase().queryJson<{fullTextStrategyId: string; id: string}>(`
+      SELECT delta_id AS id, full_text_strategy_id AS fullTextStrategyId FROM app.review_change_delta ORDER BY delta_id
+    `),
+  ).toEqual([
+    {fullTextStrategyId: 'fts-none', id: 'delta-config'},
+    {fullTextStrategyId: 'fts-legacy-v0', id: 'delta-no-images'},
+    {fullTextStrategyId: 'fts-none', id: 'delta-plain'},
+  ])
 })
 
 test('the new columns have the expected types, nullability and defaults', async () => {
