@@ -59,8 +59,22 @@ const conversionReconvertBody = arktype({articleId: 'string > 0'})
 type ReconvertCandidate = {
   id: string
   fullTextPDF: string | null
+  fullTextConversionError: string | null
   fullTextConversionStatus: string | null
   hasConvertedText: boolean
+  hasFullText: boolean
+}
+
+/**
+ * An article with a PDF is reconvertible when it has no full text, its conversion failed, or a conversion error is
+ * recorded. The last case covers failures stored before failed was a status (status NULL, error set, no text).
+ */
+const isReconvertible = (article: ReconvertCandidate): boolean => {
+  return (
+    !article.hasFullText
+    || article.fullTextConversionStatus === 'failed'
+    || (article.fullTextConversionError ?? '').trim() !== ''
+  )
 }
 
 const assertReconvertCandidate = (articleId: string, article: ReconvertCandidate | undefined): ReconvertCandidate => {
@@ -72,10 +86,10 @@ const assertReconvertCandidate = (articleId: string, article: ReconvertCandidate
     throw new HttpError(409, `Article ${articleId} has no PDF; fetch or upload one before reconverting`)
   }
 
-  if (article.fullTextConversionStatus !== 'failed') {
+  if (!isReconvertible(article)) {
     throw new HttpError(
       409,
-      `Article ${articleId} conversion is ${article.fullTextConversionStatus ?? 'not started'}, not failed; only failed conversions can be reconverted`,
+      `Article ${articleId} has converted full text (conversion ${article.fullTextConversionStatus ?? 'not started'}) and no recorded conversion error; only articles without full text, with a failed conversion or with a recorded conversion error can be reconverted`,
     )
   }
 
@@ -381,8 +395,10 @@ export const articleAdminRoutes = new Elysia()
           SELECT
             id,
             full_text_pdf AS fullTextPDF,
+            full_text_conversion_error AS fullTextConversionError,
             full_text_conversion_status AS fullTextConversionStatus,
-            (full_text IS NOT NULL OR full_text_html IS NOT NULL) AS hasConvertedText
+            (full_text IS NOT NULL OR full_text_html IS NOT NULL) AS hasConvertedText,
+            (full_text IS NOT NULL) AS hasFullText
           FROM app.article
           WHERE id = '${escapeSqlString(body.articleId)}'
           LIMIT 1
