@@ -429,6 +429,73 @@ test('inconsistent inputs fail explicitly instead of degrading', () => {
   }).toThrow('no body text is left after the strip rules')
 })
 
+test('NUL characters from unmapped ligatures are stripped from body text, captions and tables; other C0 characters stay in canonical-v1', () => {
+  const result = buildMineru(
+    [
+      block('paragraph_title', 'Results', {level: 2}),
+      block('text', 'Gender di\u0000erences in psychotropic use were small.'),
+      block('text', 'Metabolic in\u001fuences were not measured.'),
+      block('image', '', {figureIndex: 1}),
+      block('table', '', {
+        parts: [
+          {text: 'TABLE 1 Di\u0000erences.', type: 'table_caption'},
+          {text: '<table><tr><td>Sex</td><td>E\u0000ect</td></tr></table>', type: 'table_body'},
+        ],
+      }),
+    ],
+    'native_images',
+    [{caption: 'FIGURE 1 Di\u0000erences by sex.', index: 1}],
+  )
+
+  expect(result.text).toBe(
+    [
+      '## Results',
+      '',
+      'Gender dierences in psychotropic use were small.',
+      '',
+      'Metabolic in\u001fuences were not measured.',
+      '',
+      'Figure 1: FIGURE 1 Dierences by sex.',
+      '[figure:1]',
+      '',
+      'TABLE 1 Dierences.',
+      '| Sex | Eect |',
+      '| --- | --- |',
+      '',
+    ].join('\n'),
+  )
+  expect(result.hash).toBe('fe5b5a49650df4fe28feebf7ea153e0f8a466fab9dce419970e6e4355913f649')
+  expect(result.version).toBe('canonical-v1')
+})
+
+test('an uncaptioned logo before the first body heading is dropped while uncaptioned body panels keep a figure block', () => {
+  const result = buildMineru(
+    [
+      block('image', '', {figureIndex: 1}),
+      block('doc_title', 'A trial'),
+      block('paragraph_title', '1 Introduction', {level: 2}),
+      block('text', 'Intro.'),
+      block('image', '', {figureIndex: 2, page: 3}),
+      block('image', '', {figureIndex: 3, page: 3}),
+    ],
+    'native_images',
+    [
+      {caption: null, index: 1},
+      {caption: null, index: 2},
+      {caption: 'FIGURE 2 Outcomes.', index: 3},
+    ],
+  )
+
+  expect(getBlocks(result.text)).toEqual([
+    '## 1 Introduction',
+    'Intro.',
+    'Figure 2\n[figure:2]',
+    'Figure 3: FIGURE 2 Outcomes.\n[figure:3]',
+  ])
+  expect(result.stats.droppedBlocks.front_matter).toBe(1)
+  expect(result.stats.figures).toBe(2)
+})
+
 test('a figure block without a crop keeps its caption as body text and gets no figure number', () => {
   const result = buildMineru([
     block('text', 'Body.'),

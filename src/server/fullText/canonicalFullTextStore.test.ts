@@ -225,3 +225,58 @@ test('a layout file without the layout-v2 envelope asks for a reconversion inste
   )
   expect((await getCanonicalArticle('rebuild-article-old-layout'))?.fullText).toBe('stale converter markdown')
 })
+
+test('converter output with NUL characters stores without them instead of breaking the SQL literal', async () => {
+  await getDatabase().run(`INSERT INTO app.article (id, article_title) VALUES ('nul-article', 'nul-article')`)
+
+  const canonical = await getStoreModule().storeConvertedFullText({
+    articleId: 'nul-article',
+    attempts: 1,
+    mutationSource: 'test',
+    result: {
+      converterKind: 'mineru',
+      converterMarkdownPath: 'assets/full-text-assets/nul-article/converter.md',
+      converterVersion: '4.0.12',
+      figures: [],
+      html: '<p>Gender di\u0000erences</p>',
+      layout: [{bbox: null, page: 1, text: 'Gender di\u0000erences in psychotropic use.', type: 'text'}],
+      layoutPath: 'assets/full-text-assets/nul-article/layout.json',
+      markdown: 'Gender di\u0000erences in psychotropic use.',
+      optionsHash: 'options-hash',
+    },
+    runtimeConfig: {
+      baseURL: 'http://127.0.0.1:8000',
+      modelId: 'mineru-model',
+      modelName: 'mineru-standard',
+      providerConnectionId: 'mineru-connection',
+      providerKind: 'mineru',
+    },
+  })
+  const [row] = await getDatabase().queryJson<{html: string | null; status: string | null; text: string | null}>(`
+    SELECT full_text AS text, full_text_html AS html, full_text_conversion_status AS status
+    FROM app.article
+    WHERE id = 'nul-article'
+  `)
+
+  expect(canonical.text).toBe('Gender dierences in psychotropic use.\n')
+  expect(row).toEqual({html: '<p>Gender dierences</p>', status: 'success', text: canonical.text})
+})
+
+test('DuckDB parser errors while storing converter output are permanent and name the cause; other errors pass through', async () => {
+  const {ConversionError} = await import('./converters/conversionError.ts')
+  const parserError = await getDatabase()
+    .run(`SELECT 'di\u0000erences'`)
+    .catch((caught: unknown) => {
+      return caught
+    })
+  const conflictError = new Error('TransactionContext Error: Catalog write-write conflict')
+  const storeError = getStoreModule().getConvertedFullTextStoreError(parserError)
+
+  expect(storeError).toBeInstanceOf(ConversionError)
+  expect((storeError as InstanceType<typeof ConversionError>).isPermanent).toBe(true)
+  expect((storeError as Error).message).toStartWith(
+    'Storing the converted full text failed with a DuckDB parser error, which repeats on every attempt: ',
+  )
+  expect((storeError as Error).message).toContain('unterminated string literal')
+  expect(getStoreModule().getConvertedFullTextStoreError(conflictError)).toBe(conflictError)
+})

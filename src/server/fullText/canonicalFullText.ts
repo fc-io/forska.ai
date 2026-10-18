@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto'
 
+import {stripAssetNulCharacters, stripLayoutNulCharacters} from './canonicalFullText/canonicalFullTextNulCharacters.ts'
 import {renderCanonicalUnits} from './canonicalFullText/canonicalFullTextRender.ts'
 import {getSectionedCanonicalUnits} from './canonicalFullText/canonicalFullTextSections.ts'
 import {type CanonicalDropReason, getCanonicalUnits} from './canonicalFullText/canonicalFullTextUnits.ts'
@@ -121,13 +122,15 @@ export const buildCanonicalFullText = ({
     throw canonicalError(`unknown figure mode ${String(figureMode)}`)
   }
 
-  const assetByIndex = getAssetByIndex(assets)
+  const cleanAssets = stripAssetNulCharacters(assets)
+  const cleanLayout = stripLayoutNulCharacters(layout)
+  const assetByIndex = getAssetByIndex(cleanAssets)
 
-  assertFigureReferences(layout, assetByIndex)
+  assertFigureReferences(cleanLayout, assetByIndex)
 
-  const classified = getCanonicalUnits({converterKind, layout})
+  const classified = getCanonicalUnits({converterKind, layout: cleanLayout})
   const captionedFigureIndices = new Set(
-    assets
+    cleanAssets
       .filter((asset) => {
         return (asset.caption ?? '').trim() !== ''
       })
