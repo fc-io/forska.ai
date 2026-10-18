@@ -1,3 +1,7 @@
+import {mkdtempSync, rmSync, writeFileSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
 import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 
 import {getFullTextJudgingBlockFromPayload} from '../../agent/judge/fullTextJudgingInput.ts'
@@ -130,4 +134,69 @@ test('a changed canonical text rebuilds and replaces the cached plan; blocks sur
   expect(block?.chunkPlan?.planHash).not.toBe('cached-plan-marker')
   expect(stored?.planHash).toBe(block?.chunkPlan?.planHash ?? '')
   expect(getFullTextJudgingBlockFromPayload(JSON.parse(JSON.stringify(block)))).toEqual(block)
+})
+
+const nativeStrategyId = 'fts-0000000000n24img'
+const oldNativeStrategyId = 'fts-0000000000n24old'
+
+const insertStrategy = async (id: string, inputs: Record<string, unknown>) => {
+  await getDependencies().database.run(`
+    INSERT INTO app.full_text_strategy (id, label, inputs)
+    VALUES ('${id}', 'native test', '${JSON.stringify(inputs)}'::JSON)
+  `)
+}
+
+const writeJpegHeader = (path: string, width: number, height: number) => {
+  const frame = [0xff, 0xc0, 0, 17, 8, height >> 8, height & 255, width >> 8, width & 255, 3, 1, 0x22, 0, 2, 0x11, 1, 3]
+
+  writeFileSync(path, Uint8Array.from([0xff, 0xd8, ...frame, 0xff, 0xd9]))
+}
+
+test('native-images plans budget each part with the img-tok estimates of the stored crops', async () => {
+  const {getFullTextJudgingBlocks} = getDependencies().blocks
+  const database = getDependencies().database
+  const cropDirectory = mkdtempSync(join(tmpdir(), 'full-text-judging-blocks-crops-'))
+  const cropPath = join(cropDirectory, 'fig-1.jpg')
+  const nativeInputs = {
+    canonicalTextVersion: 'canonical-v1',
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+    figureMode: 'native_images',
+    imageTransportVersion: 'img-v1',
+  }
+
+  writeJpegHeader(cropPath, 1383, 993)
+  await insertStrategy(nativeStrategyId, {...nativeInputs, imageTokenEstimateVersion: 'img-tok-v1'})
+  await insertStrategy(oldNativeStrategyId, nativeInputs)
+
+  const fullText = `${getLongText('Native')}\n\nFigure 1: Flow\n[figure:1]`
+  const getNativeRow = (fullTextStrategyId: string, imagePath: string) => {
+    return {...getRow(fullText), articleId: 'article-2', fullTextAssets: [{imagePath, index: 1}], fullTextStrategyId}
+  }
+
+  try {
+    const blocks = await getFullTextJudgingBlocks({
+      database,
+      rows: [
+        getNativeRow(nativeStrategyId, cropPath),
+        getNativeRow(oldNativeStrategyId, cropPath),
+        {...getNativeRow(nativeStrategyId, `${cropPath}.missing.jpg`), articleId: 'article-3'},
+      ],
+      writable: false,
+    })
+    const block = blocks.get(`article-2|${nativeStrategyId}`) ?? null
+
+    const imageTokenCounts = block?.chunkPlan?.chunks.map((chunk) => {
+      return chunk.imageTokenCount
+    })
+
+    expect(imageTokenCounts?.length).toBeGreaterThan(1)
+    expect(imageTokenCounts?.at(-1)).toBe(1696)
+    expect(new Set(imageTokenCounts?.slice(0, -1))).toEqual(new Set([0]))
+    expect(block?.strategy?.imageTokenEstimateVersion).toBe('img-tok-v1')
+    expect(getFullTextJudgingBlockFromPayload(JSON.parse(JSON.stringify(block)))).toEqual(block)
+    expect(blocks.get(`article-2|${oldNativeStrategyId}`)?.chunkPlan).toBeNull()
+    expect(blocks.get(`article-3|${nativeStrategyId}`)?.chunkPlan).toBeNull()
+  } finally {
+    rmSync(cropDirectory, {force: true, recursive: true})
+  }
 })

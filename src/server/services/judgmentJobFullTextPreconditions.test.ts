@@ -115,6 +115,12 @@ beforeAll(async () => {
   await seedStrategy('fts-00000000000img24', {
     chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
     figureMode: 'native_images',
+    imageTokenEstimateVersion: 'img-tok-v1',
+    imageTransportVersion: 'img-v1',
+  })
+  await seedStrategy('fts-0000000000img24old', {
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
+    figureMode: 'native_images',
     imageTransportVersion: 'img-v1',
   })
 })
@@ -148,4 +154,10 @@ test('a stored descriptions strategy from before the mode was removed is refused
 test('native-images strategies need a model that accepts images', async () => {
   expect(await getError('fts-00000000000img24')).toEqual(stringContaining('Model judge-32k cannot receive images'))
   expect(await getError('fts-00000000000img24', 'vlm-a')).toBeNull()
+})
+
+test('native-images strategies saved before image token budgeting hold back claims with a named message', async () => {
+  expect(await getError('fts-0000000000img24old', 'vlm-a')).toBe(
+    'Full-text strategy fts-0000000000img24old sends figures as images but was saved before image tokens were budgeted, so it has no image token estimate. Save the project on its edit page to record the current strategy (image token estimate img-tok-v1), then start the job again.',
+  )
 })

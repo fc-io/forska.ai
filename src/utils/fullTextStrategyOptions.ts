@@ -19,6 +19,8 @@ export const fullTextStrategyErrorMessages = {
   conversionModelMissing: 'Full text needs a PDF-to-text model. Set it in Settings → PDF conversion.',
   figureModeMissing:
     'Full text needs a figure mode: choose Text only (figures reduced to their captions) or Include figures as images.',
+  imageTokenEstimateMissing:
+    'Including figures as images needs an image token estimate, which this build does not include. Choose Text only (figures reduced to their captions).',
   imageTransportMissing:
     'Including figures as images needs image transports, which this build does not include yet. Choose Text only (figures reduced to their captions).',
 } as const
@@ -40,6 +42,11 @@ export type FullTextStrategyInputs = {
   converterOptionsHash: string
   converterVersion: string
   figureMode: FullTextFigureMode
+  /**
+   * Present only when figureMode is native_images (img-tok-v1 since 2026-10-18). Text-only strategies omit the key,
+   * so their ids, frozen before this input existed, keep their hash.
+   */
+  imageTokenEstimateVersion?: string
   imageTransportVersion: string | null
   promptLayoutVersion: string
   tokenizerId: string
@@ -157,7 +164,9 @@ export const getFullTextStrategyInputDifferences = (
   left: FullTextStrategyInputs,
   right: FullTextStrategyInputs,
 ): Array<keyof FullTextStrategyInputs> => {
-  return (Object.keys(left) as Array<keyof FullTextStrategyInputs>).sort().filter((key) => {
+  const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])] as Array<keyof FullTextStrategyInputs>
+
+  return keys.sort().filter((key) => {
     return JSON.stringify(getSortedJsonValue(left[key])) !== JSON.stringify(getSortedJsonValue(right[key]))
   })
 }

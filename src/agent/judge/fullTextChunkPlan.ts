@@ -10,10 +10,15 @@ export const FULL_TEXT_CHUNK_PROMPT_OVERHEAD_TOKENS = 10_000
 export type FullTextChunkPlanChunk = {
   endOffset: number
   headingPath: string | null
+  /** Estimated tokens of the part's figure images; present only on native-images plans. */
+  imageTokenCount?: number
   index: number
   startOffset: number
   tokenCount: number
 }
+
+/** Figure index → estimated image tokens; null for strategies that send no images. */
+export type FullTextFigureImageTokens = ReadonlyMap<number, number> | null
 
 export type FullTextChunkPlan = {
   chunkCount: number
@@ -22,15 +27,29 @@ export type FullTextChunkPlan = {
   textHash: string
 }
 
-type TextUnit = {end: number; headingPath: string | null; isHeading: boolean; start: number; tokens: number}
+type TextUnit = {
+  end: number
+  headingPath: string | null
+  imageTokens: number
+  isHeading: boolean
+  start: number
+  tokens: number
+}
 
 type ChunkDraft = {breadcrumbTokens: number; headingPath: string | null; tokens: number; units: TextUnit[]}
 
 type PlannerState = {chunks: ChunkDraft[]; current: ChunkDraft | null}
 
-type PlannerContext = {budget: number; countTokens: FullTextTokenCounter; text: string}
+type PlannerContext = {
+  budget: number
+  countTokens: FullTextTokenCounter
+  figureImageTokens: FullTextFigureImageTokens
+  text: string
+}
 
 const headingPrefix = '## '
+
+const figureMarkerPattern = /^\[figure:(\d+)\]$/gm
 
 const blockSeparatorTokens = 1
 
@@ -40,6 +59,32 @@ const getSha256 = (value: string): string => {
 
 export const getFullTextJudgingTextHash = (renderedText: string): string => {
   return getSha256(renderedText)
+}
+
+export const getFullTextFigureMarkerIndexes = (text: string): number[] => {
+  return Array.from(text.matchAll(figureMarkerPattern), (match) => {
+    return Number(match[1])
+  })
+}
+
+export const getFullTextFigureImageTokenCount = ({
+  figureImageTokens,
+  text,
+}: {
+  figureImageTokens: FullTextFigureImageTokens
+  text: string
+}): number => {
+  return figureImageTokens === null
+    ? 0
+    : getFullTextFigureMarkerIndexes(text).reduce((total, figureIndex) => {
+        const tokens = figureImageTokens.get(figureIndex)
+
+        if (tokens === undefined) {
+          throw new Error(`Figure ${figureIndex} is marked in the text but has no image token estimate`)
+        }
+
+        return total + tokens
+      }, 0)
 }
 
 const getBlockRanges = (text: string): Array<{end: number; start: number}> => {
@@ -81,20 +126,26 @@ const getHeadingPath = (block: string): string | null => {
   return block.startsWith(headingPrefix) && !block.includes('\n') ? block.slice(headingPrefix.length) : null
 }
 
-const getTextUnits = ({budget, countTokens, text}: PlannerContext): TextUnit[] => {
+const getTextUnits = ({budget, countTokens, figureImageTokens, text}: PlannerContext): TextUnit[] => {
   return getBlockRanges(text).reduce<{headingPath: string | null; units: TextUnit[]}>(
     (state, range) => {
       const block = text.slice(range.start, range.end)
       const ownHeadingPath = getHeadingPath(block)
       const headingPath = ownHeadingPath ?? state.headingPath
       const tokens = countTokens(block)
-      const ranges = tokens > budget && isSplittableParagraph(block) ? getSentenceRanges(text, range) : [range]
+      const imageTokens = getFullTextFigureImageTokenCount({figureImageTokens, text: block})
+      const ranges =
+        tokens + imageTokens > budget && isSplittableParagraph(block) ? getSentenceRanges(text, range) : [range]
       const units = ranges.map((unitRange): TextUnit => {
+        const unitText = text.slice(unitRange.start, unitRange.end)
+
         return {
           ...unitRange,
           headingPath,
+          imageTokens:
+            ranges.length === 1 ? imageTokens : getFullTextFigureImageTokenCount({figureImageTokens, text: unitText}),
           isHeading: ownHeadingPath !== null,
-          tokens: ranges.length === 1 ? tokens : countTokens(text.slice(unitRange.start, unitRange.end)),
+          tokens: ranges.length === 1 ? tokens : countTokens(unitText),
         }
       })
 
@@ -114,7 +165,7 @@ const getSections = (units: TextUnit[]): TextUnit[][] => {
 
 const getUnitsTokens = (units: TextUnit[]): number => {
   return units.reduce((total, unit, position) => {
-    return total + unit.tokens + (position === 0 ? 0 : blockSeparatorTokens)
+    return total + unit.tokens + unit.imageTokens + (position === 0 ? 0 : blockSeparatorTokens)
   }, 0)
 }
 
@@ -201,16 +252,26 @@ export const getFullTextChunkTextBudget = ({
   return chunkPolicy.maxPromptTokens - FULL_TEXT_CHUNK_PROMPT_OVERHEAD_TOKENS - abstractTokens
 }
 
+const getChunkImageTokenFields = (
+  figureImageTokens: FullTextFigureImageTokens,
+  chunkText: string,
+): Pick<FullTextChunkPlanChunk, 'imageTokenCount'> => {
+  return figureImageTokens === null
+    ? {}
+    : {imageTokenCount: getFullTextFigureImageTokenCount({figureImageTokens, text: chunkText})}
+}
+
 const toPlanChunk = (
   draft: ChunkDraft,
   index: number,
-  {countTokens, text}: Pick<PlannerContext, 'countTokens' | 'text'>,
+  {countTokens, figureImageTokens, text}: Pick<PlannerContext, 'countTokens' | 'figureImageTokens' | 'text'>,
 ): FullTextChunkPlanChunk => {
   const firstUnit = draft.units[0] as TextUnit
   const lastUnit = draft.units.at(-1) as TextUnit
   const chunk = {endOffset: lastUnit.end, headingPath: draft.headingPath, index, startOffset: firstUnit.start}
+  const chunkText = getFullTextChunkText({chunk, renderedText: text})
 
-  return {...chunk, tokenCount: countTokens(getFullTextChunkText({chunk, renderedText: text}))}
+  return {...chunk, ...getChunkImageTokenFields(figureImageTokens, chunkText), tokenCount: countTokens(chunkText)}
 }
 
 export const getFullTextChunkPlanHash = ({
@@ -225,22 +286,30 @@ export const getFullTextChunkPlanHash = ({
   return getSha256(JSON.stringify({chunks, fullTextStrategyId, textHash, version: FULL_TEXT_CHUNK_PLAN_VERSION}))
 }
 
+/**
+ * A part's budget covers its text and, on native-images strategies, the estimated tokens of the figures marked in
+ * it. A figure block (caption plus marker) is never split, so a figure that cannot fit on its own ends up as an
+ * oversized part; the judge skips such an article as `fulltext_figure_too_large`.
+ */
 export const buildFullTextChunkPlan = ({
   abstract,
   chunkPolicy,
   countTokens,
+  figureImageTokens,
   fullTextStrategyId,
   renderedText,
 }: {
   abstract: string | null
   chunkPolicy: FullTextChunkPolicy
   countTokens: FullTextTokenCounter
+  figureImageTokens: FullTextFigureImageTokens
   fullTextStrategyId: string
   renderedText: string
 }): FullTextChunkPlan => {
   const context = {
     budget: getFullTextChunkTextBudget({abstractTokens: countTokens(abstract ?? ''), chunkPolicy}),
     countTokens,
+    figureImageTokens,
     text: renderedText,
   }
   const drafted = getSections(getTextUnits(context)).reduce<{chunks: ChunkDraft[]; current: ChunkDraft | null}>(
@@ -274,6 +343,7 @@ const isPlanChunk = (value: unknown): value is FullTextChunkPlanChunk => {
     && Number.isInteger(value.startOffset)
     && Number.isInteger(value.endOffset)
     && Number.isInteger(value.tokenCount)
+    && (value.imageTokenCount === undefined || Number.isInteger(value.imageTokenCount))
     && (value.headingPath === null || typeof value.headingPath === 'string')
   )
 }
@@ -289,4 +359,25 @@ export const getFullTextChunkPlan = (value: unknown): FullTextChunkPlan | null =
     && parsed.chunkCount === parsed.chunks.length
     ? {chunkCount: parsed.chunks.length, chunks: parsed.chunks, planHash: parsed.planHash, textHash: parsed.textHash}
     : null
+}
+
+export const isFullTextChunkPlanCurrent = ({
+  figureImageTokens,
+  plan,
+  renderedText,
+  textHash,
+}: {
+  figureImageTokens: FullTextFigureImageTokens
+  plan: FullTextChunkPlan | null | undefined
+  renderedText: string
+  textHash: string
+}): boolean => {
+  return (
+    plan?.textHash === textHash
+    && plan.chunks.every((chunk) => {
+      const expected = getChunkImageTokenFields(figureImageTokens, getFullTextChunkText({chunk, renderedText}))
+
+      return chunk.imageTokenCount === expected.imageTokenCount
+    })
+  )
 }

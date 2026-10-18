@@ -43,11 +43,11 @@ test('the shipped constants produce twenty-four distinct strategies on canonical
 test('shipped strategies cover exactly figure modes none and native_images', () => {
   const figureModeTransports = new Set(
     getShippedFullTextStrategyInputs().map((inputs) => {
-      return `${inputs.figureMode}:${String(inputs.imageTransportVersion)}`
+      return `${inputs.figureMode}:${String(inputs.imageTransportVersion)}:${String(inputs.imageTokenEstimateVersion)}`
     }),
   )
 
-  expect(figureModeTransports).toEqual(new Set(['native_images:img-v1', 'none:null']))
+  expect(figureModeTransports).toEqual(new Set(['native_images:img-v1:img-tok-v1', 'none:null:undefined']))
 })
 
 test('registry entries are self-consistent, unique and dated', () => {
@@ -84,6 +84,18 @@ test('registry entries carry only none and native_images inputs and no figure-de
   ).toEqual([])
 })
 
+test('text-only shipped strategies carry no imageTokenEstimateVersion key, so their ids did not move', () => {
+  expect(
+    getShippedFullTextStrategyInputs()
+      .filter((inputs) => {
+        return inputs.figureMode === 'none'
+      })
+      .filter((inputs) => {
+        return Object.hasOwn(inputs, 'imageTokenEstimateVersion')
+      }),
+  ).toEqual([])
+})
+
 test('the shipped layout-v2 strategy ids are frozen', () => {
   const shippedIdsByLabel = Object.fromEntries(
     getShippedFullTextStrategyInputs()
@@ -94,7 +106,8 @@ test('the shipped layout-v2 strategy ids are frozen', () => {
   )
 
   expect(shippedIdsByLabel['mineru 4.0.12 / none / single 24k']).toBe('fts-66cd6ec607091a59')
-  expect(shippedIdsByLabel['mineru 4.0.12 / native images / chunked 48k']).toBe('fts-52ca06bca78ff561')
+  expect(shippedIdsByLabel['mineru 4.0.12 / native images / chunked 24k']).toBe('fts-074936d3b17dc424')
+  expect(shippedIdsByLabel['mineru 4.0.12 / native images / chunked 48k']).toBe('fts-fd40fe255df5a2c3')
   expect(shippedIdsByLabel['docling 1.37.0 / none / chunked 96k']).toBe('fts-92a3cf9c8e585a22')
-  expect(shippedIdsByLabel['docling 1.37.0 / native images / single 24k']).toBe('fts-2c0d47a11b801c33')
+  expect(shippedIdsByLabel['docling 1.37.0 / native images / single 24k']).toBe('fts-386400411638ed40')
 })

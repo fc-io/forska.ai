@@ -9,7 +9,9 @@ import {
   getFullTextChunkPlan,
   getFullTextChunkText,
   getFullTextChunkTextBudget,
+  getFullTextFigureImageTokenCount,
   getFullTextJudgingTextHash,
+  isFullTextChunkPlanCurrent,
 } from './fullTextChunkPlan.ts'
 
 const countWords = (text: string): number => {
@@ -33,6 +35,18 @@ const planWords = (renderedText: string, abstract: string | null = null): FullTe
     abstract,
     chunkPolicy: policy24k,
     countTokens: countWords,
+    figureImageTokens: null,
+    fullTextStrategyId: 'fts-test',
+    renderedText,
+  })
+}
+
+const planWordsWithImages = (renderedText: string, figureImageTokens: Map<number, number>): FullTextChunkPlan => {
+  return buildFullTextChunkPlan({
+    abstract: null,
+    chunkPolicy: policy24k,
+    countTokens: countWords,
+    figureImageTokens,
     fullTextStrategyId: 'fts-test',
     renderedText,
   })
@@ -165,6 +179,7 @@ test('plans are deterministic, hash the strategy and text, and parse back from J
     abstract: null,
     chunkPolicy: policy24k,
     countTokens: countWords,
+    figureImageTokens: null,
     fullTextStrategyId: 'fts-other',
     renderedText: text,
   })
@@ -190,6 +205,7 @@ test('o200k plans of real canonical text are frozen', async () => {
     abstract: 'We show that masked autoencoders are scalable self-supervised learners for computer vision.',
     chunkPolicy: policy24k,
     countTokens,
+    figureImageTokens: null,
     fullTextStrategyId: 'fts-frozen-test',
     renderedText,
   })
@@ -225,4 +241,81 @@ test('o200k plans of real canonical text are frozen', async () => {
       return chunk.tokenCount <= getFullTextChunkTextBudget({abstractTokens: 17, chunkPolicy: policy24k})
     }),
   ).toBe(true)
+})
+
+// Section A: heading (2) + separator + text; section B: heading (2) + separator + figure block (4) + separator + 10.
+const figureSectionText = `## A\n\n${words(budget24k - 1000)}\n\n## B\n\nFigure 1: Flow\n[figure:1]\n\n${words(10)}\n`
+
+test('figure image tokens count toward the part budget, up to the exact budget', () => {
+  expect(planWords(figureSectionText).chunkCount).toBe(1)
+  expect(planWordsWithImages(figureSectionText, new Map([[1, 978]])).chunkCount).toBe(1)
+
+  const split = planWordsWithImages(figureSectionText, new Map([[1, 979]]))
+
+  expect(
+    split.chunks.map((chunk) => {
+      return [chunk.headingPath, chunk.imageTokenCount, chunk.tokenCount]
+    }),
+  ).toEqual([
+    ['A', 0, budget24k - 998],
+    ['B', 979, 16],
+  ])
+})
+
+test('native-images plans record per-part image tokens and hash differently; text-only plans keep their shape', () => {
+  const textOnly = planWords(figureSectionText)
+  const withImages = planWordsWithImages(figureSectionText, new Map([[1, 0]]))
+
+  expect(
+    textOnly.chunks.every((chunk) => {
+      return !Object.hasOwn(chunk, 'imageTokenCount')
+    }),
+  ).toBe(true)
+  expect(
+    withImages.chunks.map((chunk) => {
+      return chunk.imageTokenCount
+    }),
+  ).toEqual([0])
+  expect(withImages.planHash).not.toBe(textOnly.planHash)
+  expect(getFullTextChunkPlan(JSON.parse(JSON.stringify(withImages)))).toEqual(withImages)
+})
+
+test('a figure that cannot fit on its own becomes one whole oversized part; it is never split or dropped', () => {
+  const text = `## A\n\n${words(100)}\n\nFigure 1: Flow\n[figure:1]\n\n${words(100, 'tail')}\n`
+  const plan = planWordsWithImages(text, new Map([[1, budget24k]]))
+
+  expect(getChunkTexts(plan, text)).toEqual([
+    `## A\n\n${words(100)}`,
+    '## A\n\nFigure 1: Flow\n[figure:1]',
+    `## A\n\n${words(100, 'tail')}`,
+  ])
+  expect(
+    plan.chunks.map((chunk) => {
+      return chunk.imageTokenCount
+    }),
+  ).toEqual([0, budget24k, 0])
+})
+
+test('a cached plan is current only for the same text hash and the same per-part image tokens', () => {
+  const textHash = getFullTextJudgingTextHash(figureSectionText)
+  const textOnly = planWords(figureSectionText)
+  const withImages = planWordsWithImages(figureSectionText, new Map([[1, 979]]))
+  const isCurrent = (plan: FullTextChunkPlan, figureImageTokens: Map<number, number> | null, hash = textHash) => {
+    return isFullTextChunkPlanCurrent({figureImageTokens, plan, renderedText: figureSectionText, textHash: hash})
+  }
+
+  expect(isCurrent(textOnly, null)).toBe(true)
+  expect(isCurrent(textOnly, null, getFullTextJudgingTextHash('other'))).toBe(false)
+  expect(isCurrent(withImages, new Map([[1, 979]]))).toBe(true)
+  expect(isCurrent(withImages, new Map([[1, 980]]))).toBe(false)
+  expect(isCurrent(textOnly, new Map([[1, 979]]))).toBe(false)
+  expect(isCurrent(withImages, null)).toBe(false)
+})
+
+test('a marked figure without an estimate is a named error', () => {
+  expect(getFullTextFigureImageTokenCount({figureImageTokens: null, text: '[figure:2]'})).toBe(0)
+  expect(getFullTextFigureImageTokenCount({figureImageTokens: new Map([[2, 40]]), text: 'a\n[figure:2]\nb'})).toBe(40)
+  expect(() => {
+    return getFullTextFigureImageTokenCount({figureImageTokens: new Map([[1, 40]]), text: 'x\n[figure:2]'})
+  }).toThrow('Figure 2 is marked in the text but has no image token estimate')
 })

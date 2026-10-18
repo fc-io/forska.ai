@@ -483,7 +483,12 @@ const judgmentCompletionBodySchema = t.Object({
   requestAttempts: t.Optional(t.Union([t.Array(t.Any()), t.Null()])),
   retryAfterMs: t.Optional(t.Union([t.Number(), t.Null()])),
   skipReason: t.Optional(
-    t.Union([t.Literal('conversion_failed'), t.Literal('fulltext_too_large'), t.Literal('no_fulltext')]),
+    t.Union([
+      t.Literal('conversion_failed'),
+      t.Literal('fulltext_figure_too_large'),
+      t.Literal('fulltext_too_large'),
+      t.Literal('no_fulltext'),
+    ]),
   ),
   status: t.Optional(
     t.Union([

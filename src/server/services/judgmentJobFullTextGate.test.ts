@@ -21,6 +21,7 @@ const conversionModel = {
 const environment: FullTextStrategyEnvironment = {
   canonicalTextVersion: 'canonical-v1',
   conversionModel,
+  imageTokenEstimateVersion: 'img-tok-v1',
   imageTransportVersion: 'img-v1',
 }
 

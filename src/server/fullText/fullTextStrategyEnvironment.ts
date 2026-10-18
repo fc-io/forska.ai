@@ -4,6 +4,7 @@ import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {CANONICAL_TEXT_VERSION} from './canonicalFullText.ts'
 import {getConverterOptionsHash} from './converters/converterOptionsHash.ts'
 import {getFullTextConverter} from './converters/fullTextConverter.ts'
+import {IMAGE_TOKEN_ESTIMATE_VERSION} from './figureImageTokenEstimate.ts'
 import {IMAGE_TRANSPORT_VERSION} from './fullTextStrategy.ts'
 import {
   type FullTextConversionModelStrategyInputs,
@@ -56,6 +57,7 @@ export const getFullTextStrategyEnvironment = async (
   return {
     canonicalTextVersion: CANONICAL_TEXT_VERSION,
     conversionModel: await getFullTextConversionModelStrategyInputs(runner),
+    imageTokenEstimateVersion: IMAGE_TOKEN_ESTIMATE_VERSION,
     imageTransportVersion: IMAGE_TRANSPORT_VERSION,
   }
 }

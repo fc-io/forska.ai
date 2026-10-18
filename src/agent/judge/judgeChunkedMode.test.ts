@@ -59,15 +59,44 @@ test('one call when prompt plus completion fits the smaller of policy and model 
   const fitting = 24_000 - MAX_COMPLETION_TOKENS
 
   expect(MAX_COMPLETION_TOKENS).toBe(4000)
-  expect(getFullTextCallMode({chunkPolicy: chunked, modelContext: 1_000_000, promptTokens: fitting})).toBe('single')
-  expect(getFullTextCallMode({chunkPolicy: chunked, modelContext: 1_000_000, promptTokens: fitting + 1})).toBe(
+  expect(
+    getFullTextCallMode({chunkPolicy: chunked, imageTokens: 0, modelContext: 1_000_000, promptTokens: fitting}),
+  ).toBe('single')
+  expect(
+    getFullTextCallMode({chunkPolicy: chunked, imageTokens: 0, modelContext: 1_000_000, promptTokens: fitting + 1}),
+  ).toBe('chunked')
+  expect(
+    getFullTextCallMode({chunkPolicy: singleOnly, imageTokens: 0, modelContext: 1_000_000, promptTokens: fitting + 1}),
+  ).toBe('too_large')
+  expect(
+    getFullTextCallMode({chunkPolicy: singleOnly, imageTokens: 0, modelContext: 20_000, promptTokens: 16_000}),
+  ).toBe('single')
+  expect(
+    getFullTextCallMode({chunkPolicy: singleOnly, imageTokens: 0, modelContext: 20_000, promptTokens: 16_001}),
+  ).toBe('too_large')
+})
+
+test('image tokens join the single-call budget: prompt plus images plus completion must fit, at the exact boundary', () => {
+  const chunked = {maxPromptTokens: 24_000, mode: 'chunked'} as const
+  const singleOnly = {maxPromptTokens: 24_000, mode: 'single_only'} as const
+  const promptTokens = 12_000
+  const fittingImages = 24_000 - MAX_COMPLETION_TOKENS - promptTokens
+
+  expect(
+    getFullTextCallMode({chunkPolicy: chunked, imageTokens: fittingImages, modelContext: 922_000, promptTokens}),
+  ).toBe('single')
+  expect(
+    getFullTextCallMode({chunkPolicy: chunked, imageTokens: fittingImages + 1, modelContext: 922_000, promptTokens}),
+  ).toBe('chunked')
+  expect(
+    getFullTextCallMode({chunkPolicy: singleOnly, imageTokens: fittingImages + 1, modelContext: 922_000, promptTokens}),
+  ).toBe('too_large')
+  expect(getFullTextCallMode({chunkPolicy: chunked, imageTokens: 3_000, modelContext: 19_000, promptTokens})).toBe(
+    'single',
+  )
+  expect(getFullTextCallMode({chunkPolicy: chunked, imageTokens: 3_001, modelContext: 19_000, promptTokens})).toBe(
     'chunked',
   )
-  expect(getFullTextCallMode({chunkPolicy: singleOnly, modelContext: 1_000_000, promptTokens: fitting + 1})).toBe(
-    'too_large',
-  )
-  expect(getFullTextCallMode({chunkPolicy: singleOnly, modelContext: 20_000, promptTokens: 16_000})).toBe('single')
-  expect(getFullTextCallMode({chunkPolicy: singleOnly, modelContext: 20_000, promptTokens: 16_001})).toBe('too_large')
 })
 
 const partArticle = {

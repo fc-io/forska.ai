@@ -2,12 +2,15 @@ import {zlibSync} from 'fflate'
 import {PNG} from 'pngjs'
 
 import {type ProviderInvokeImage} from '../providers/providerTypes.ts'
+import {getFigureImageEncodingError} from './figureImageEncodingError.ts'
 
-export const figureImageEncodingInvalidCode = 'figure_image_encoding_invalid'
+export {
+  type FigureImageEncodingError,
+  figureImageEncodingInvalidCode,
+  isFigureImageEncodingError,
+} from './figureImageEncodingError.ts'
 
 export const FIGURE_IMAGE_FLATTEN_BACKGROUND = [255, 255, 255] as const
-
-export type FigureImageEncodingError = Error & {code: typeof figureImageEncodingInvalidCode}
 
 const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10]
 const jpegSignature = [0xff, 0xd8, 0xff]
@@ -24,16 +27,6 @@ const crc32Table = Uint32Array.from({length: 256}, (_, value) => {
     return crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1
   }, value)
 })
-
-const getFigureImageEncodingError = (message: string): FigureImageEncodingError => {
-  const fields: Pick<FigureImageEncodingError, 'code'> = {code: figureImageEncodingInvalidCode}
-
-  return Object.assign(new Error(message), fields)
-}
-
-export const isFigureImageEncodingError = (error: unknown): error is FigureImageEncodingError => {
-  return error instanceof Error && (error as {code?: unknown}).code === figureImageEncodingInvalidCode
-}
 
 const hasSignature = (bytes: Uint8Array, signature: number[]): boolean => {
   return (

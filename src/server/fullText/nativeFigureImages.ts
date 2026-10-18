@@ -9,6 +9,7 @@ import {
 import {type ProviderInvokeImage} from '../providers/providerTypes.ts'
 import {resolveRuntimeFilePath} from '../utils/runtimeWritablePath.ts'
 import {flattenFigureImage} from './figureImageEncoding.ts'
+import {getFigureImageTokenEstimates} from './figureImageTokenEstimate.ts'
 
 export const nativeFigureImageErrorCodes = {
   assetMissing: 'native_figure_asset_missing',
@@ -144,6 +145,40 @@ const getNativeFigureImageInput = async (
   return {bytes: image.bytes, figureIndex: asset.index, mimeType: image.mimeType}
 }
 
+const getMarkedAssets = (assets: NativeFigureImageAsset[], renderedText: string): NativeFigureImageAsset[] => {
+  const figureIndexes = getNativeFigureMarkerIndexes(renderedText)
+
+  assertUniqueMarkers(figureIndexes)
+
+  return figureIndexes.map((figureIndex) => {
+    return getMarkedAsset(assets, figureIndex)
+  })
+}
+
+/**
+ * Image token estimates of the figures marked in the rendered text, from the stored crops' pixel dimensions.
+ * Flattening keeps the dimensions, so this matches the estimate of the images the judge sends.
+ */
+export const getNativeFigureImageTokenEstimates = async ({
+  assets,
+  cwd,
+  renderedText,
+  version,
+}: {
+  assets: NativeFigureImageAsset[]
+  cwd?: string
+  renderedText: string
+  version: string
+}): Promise<Map<number, number>> => {
+  const images = await Promise.all(
+    getMarkedAssets(assets, renderedText).map(async (asset) => {
+      return {bytes: await readAssetBytes(asset, cwd), figureIndex: asset.index}
+    }),
+  )
+
+  return getFigureImageTokenEstimates({images, version})
+}
+
 export const getNativeFigureImageInputs = async ({
   assets,
   cwd,
@@ -153,16 +188,8 @@ export const getNativeFigureImageInputs = async ({
   cwd?: string
   renderedText: string
 }): Promise<NativeFigureImageInput[]> => {
-  const figureIndexes = getNativeFigureMarkerIndexes(renderedText)
-
-  assertUniqueMarkers(figureIndexes)
-
-  const markedAssets = figureIndexes.map((figureIndex) => {
-    return getMarkedAsset(assets, figureIndex)
-  })
-
   return Promise.all(
-    markedAssets.map((asset) => {
+    getMarkedAssets(assets, renderedText).map((asset) => {
       return getNativeFigureImageInput(asset, cwd)
     }),
   )
