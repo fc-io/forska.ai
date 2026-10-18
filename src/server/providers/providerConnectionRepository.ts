@@ -803,6 +803,20 @@ export const setProviderConnectionCheckState = async ({
   )
 }
 
+export const clearProviderConnectionCheckError = async (id: string): Promise<void> => {
+  await getAppDatabaseService().run(
+    `
+    UPDATE app.provider_connection
+    SET last_checked_at = current_timestamp,
+        last_error = NULL,
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(id)}
+      AND last_error IS NOT NULL
+  `,
+    providerConnectionCheckStateWorkloadContext,
+  )
+}
+
 export const hasEnabledProviderConnectionKind = async (providerKind: ProviderKind): Promise<boolean> => {
   const [row] = await getAppDatabaseService().queryJson<{id: string}>(
     `

@@ -1,11 +1,13 @@
 import {ConversionError} from './conversionError.ts'
 import {
   type ConverterZipEntries,
+  getConnectionServerFailure,
   getConverterResponseError,
   getConverterRoute,
   getFileSizeMB,
   getZipFileExtension,
   getZipText,
+  isEmptyServerErrorResponse,
   parseConverterJson,
   readConverterBytes,
   readConverterZip,
@@ -482,11 +484,23 @@ export const fetchDoclingConverterVersion = async (baseURL: string): Promise<str
   }).catch((error: unknown) => {
     throw new ConversionError(
       `Docling /version request failed: ${error instanceof Error ? error.message : String(error)}`,
+      undefined,
+      false,
+      getConnectionServerFailure(error),
     )
   })
 
   if (!response.ok) {
-    throw new ConversionError(`Docling /version request failed: ${response.status} ${response.statusText}`)
+    const body = await response.text().catch(() => {
+      return ''
+    })
+
+    throw new ConversionError(
+      `Docling /version request failed: ${response.status} ${response.statusText}`,
+      response.status,
+      false,
+      isEmptyServerErrorResponse(response.status, body) ? 'died' : null,
+    )
   }
 
   return getDoclingConverterVersion(

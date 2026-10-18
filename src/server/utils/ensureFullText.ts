@@ -1,5 +1,10 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {storeConvertedFullText} from '../fullText/canonicalFullTextStore.ts'
+import {getConverterServerFailure} from '../fullText/converters/conversionError.ts'
+import {
+  clearConverterServerFailure,
+  recordConverterServerFailure,
+} from '../fullText/converters/converterServerHealth.ts'
 import {
   convertArticlePdf,
   type FullTextConversionRuntimeConfig,
@@ -163,6 +168,8 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       workloadContext: ensureFullTextWorkloadContext,
     })
 
+    await clearConverterServerFailure(runtimeConfig)
+
     ensureFullTextLogger.log('ensureFullText:conversionSucceeded', '[ensureFullText] On-demand conversion succeeded', {
       articleId,
       canonicalHash: canonical.hash,
@@ -172,6 +179,25 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
     })
     return {text: canonical.text, shouldSkip: false}
   } catch (error) {
+    const serverFailure = getConverterServerFailure(error)
+
+    if (serverFailure !== null && conversionTarget.runtimeConfig) {
+      await recordConverterServerFailure({articleId, error, runtimeConfig: conversionTarget.runtimeConfig})
+    }
+
+    if (serverFailure === 'refused') {
+      ensureFullTextWarningLogger.warn(
+        'fulltext:conversion:serverUnavailable',
+        '[ensureFullText] Converter server unavailable; article not charged an attempt',
+        {
+          articleId,
+          component: ensureFullTextComponent,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        },
+      )
+      return {text: null, shouldSkip: false, reason: 'transient_failure'}
+    }
+
     // Classify error
     const errorMessage = error instanceof Error ? error.message : String(error)
     const isPerm = isPermanentConversionFailure(error)

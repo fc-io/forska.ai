@@ -49,7 +49,13 @@ const startMineruServer = () => {
 }
 
 const runtimeConfig = (baseURL: string) => {
-  return {baseURL, modelId: 'model-mineru', modelName: 'mineru-standard', providerKind: 'mineru'}
+  return {
+    baseURL,
+    modelId: 'model-mineru',
+    modelName: 'mineru-standard',
+    providerConnectionId: 'connection-mineru',
+    providerKind: 'mineru',
+  }
 }
 
 afterEach(() => {
