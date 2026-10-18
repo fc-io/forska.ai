@@ -384,6 +384,7 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['POST', '/api/articles/:id/fetch-pdf'],
       ['POST', '/api/articles/:id/upload-pdf'],
       ['POST', '/api/articles/:id/convert-pdf'],
+      ['POST', '/api/articles/conversion-reconvert'],
       ['POST', '/api/articles/:id/figure-descriptions/rebuild'],
       ['POST', '/api/articles/:id/canonical-fulltext/rebuild'],
     ],

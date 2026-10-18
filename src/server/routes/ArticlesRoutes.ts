@@ -166,6 +166,12 @@ export const articlesRoutes = new Elysia()
         title: string
         error: string | null
         attempts: number | null
+        converterKind: string | null
+        converterVersion: string | null
+        optionsHash: string | null
+        providerKind: string | null
+        modelName: string | null
+        canonicalVersion: string | null
         updatedAt: unknown
       }>(`
         SELECT
@@ -174,6 +180,12 @@ export const articlesRoutes = new Elysia()
           article_title AS title,
           full_text_conversion_error AS error,
           full_text_conversion_attempts AS attempts,
+          full_text_conversion_metadata->>'converterKind' AS converterKind,
+          full_text_conversion_metadata->>'converterVersion' AS converterVersion,
+          full_text_conversion_metadata->>'optionsHash' AS optionsHash,
+          full_text_conversion_metadata->>'providerKind' AS providerKind,
+          full_text_conversion_metadata->>'modelName' AS modelName,
+          full_text_canonical_version AS canonicalVersion,
           updated_at AS updatedAt
         FROM app.article
         WHERE full_text_conversion_status = 'failed'

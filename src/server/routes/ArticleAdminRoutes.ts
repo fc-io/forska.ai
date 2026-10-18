@@ -1,3 +1,4 @@
+import {type as arktype} from 'arktype'
 import {Elysia, t} from 'elysia'
 import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
@@ -48,6 +49,34 @@ const storeUploadedPdf = async (articleId: string, pdfBuffer: Buffer): Promise<s
     console.error('Failed to store uploaded PDF:', error)
     return null
   }
+}
+
+const conversionReconvertBody = arktype({articleId: 'string > 0'})
+
+type ReconvertCandidate = {
+  id: string
+  fullTextPDF: string | null
+  fullTextConversionStatus: string | null
+  hasConvertedText: boolean
+}
+
+const assertReconvertCandidate = (articleId: string, article: ReconvertCandidate | undefined): ReconvertCandidate => {
+  if (!article) {
+    throw new HttpError(404, `Article ${articleId} not found`)
+  }
+
+  if (!article.fullTextPDF) {
+    throw new HttpError(409, `Article ${articleId} has no PDF; fetch or upload one before reconverting`)
+  }
+
+  if (article.fullTextConversionStatus !== 'failed') {
+    throw new HttpError(
+      409,
+      `Article ${articleId} conversion is ${article.fullTextConversionStatus ?? 'not started'}, not failed; only failed conversions can be reconverted`,
+    )
+  }
+
+  return article
 }
 
 export const articleAdminRoutes = new Elysia()
@@ -335,6 +364,53 @@ export const articleAdminRoutes = new Elysia()
       return {success: true, message: 'Conversion started', status: 'pending'}
     },
     {params: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/articles/conversion-reconvert',
+    async ({body}) => {
+      return getAppDatabaseService().transaction(async (tx) => {
+        const [found] = await tx.queryJson<ReconvertCandidate>(`
+          SELECT
+            id,
+            full_text_pdf AS fullTextPDF,
+            full_text_conversion_status AS fullTextConversionStatus,
+            (full_text IS NOT NULL OR full_text_html IS NOT NULL) AS hasConvertedText
+          FROM app.article
+          WHERE id = '${escapeSqlString(body.articleId)}'
+          LIMIT 1
+        `)
+        const article = assertReconvertCandidate(body.articleId, found)
+        const sourceUpdatedAt = new Date()
+
+        await tx.run(`
+          UPDATE app.article
+          SET full_text_conversion_status = NULL,
+              full_text_conversion_error = NULL,
+              full_text_conversion_attempts = 0,
+              full_text_conversion_model_id = NULL,
+              full_text_conversion_metadata = NULL,
+              full_text = NULL,
+              full_text_html = NULL,
+              full_text_assets = NULL,
+              full_text_canonical_hash = NULL,
+              full_text_canonical_version = NULL,
+              full_text_figure_mode_built = NULL,
+              full_text_char_count = NULL,
+              updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
+          WHERE id = '${escapeSqlString(article.id)}'
+        `)
+        await appendArticleReviewServingDeltas(tx, {
+          articleId: article.id,
+          changedFields: article.hasConvertedText ? ['fullText', 'fullTextHtml'] : [],
+          sourceMutationKey: `ArticleAdminRoutes.conversionReconvert|article|${article.id}|${sourceUpdatedAt.toISOString()}`,
+          sourceOperation: 'update',
+          sourceUpdatedAt,
+        })
+
+        return {articleId: article.id, clearedConvertedText: article.hasConvertedText, success: true}
+      })
+    },
+    {body: conversionReconvertBody},
   )
   .post(
     '/api/articles/:id/figure-descriptions/rebuild',
