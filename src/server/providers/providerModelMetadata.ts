@@ -406,6 +406,10 @@ export const getProviderModelMetadataReasoningEfforts = (value: unknown): string
   return reasoningEfforts.length > 0 ? reasoningEfforts : getReasoningEffortsFromMetadata(value)
 }
 
+export const getProviderModelMetadataConverter = (value: unknown): Record<string, unknown> | null => {
+  return getJsonRecord(getJsonRecord(value)?.converter)
+}
+
 export const getProviderModelMetadataSource = (value: unknown): string | null => {
   const metadataRecord = getJsonRecord(value)
   const discovery = getJsonRecord(metadataRecord?.discovery)
@@ -426,10 +430,12 @@ export const getPersistedProviderModelMetadata = ({
 }) => {
   const discovery = getNormalizedDiscoveryMetadata(metadataJson)
   const options = getProviderModelMetadataOptions(metadataJson)
-
-  return discovery
+  const converter = getProviderModelMetadataConverter(metadataJson)
+  const metadata = discovery
     ? {discovery, options}
     : getNormalizedProviderModelMetadata({listedModel, providerKind, rawMetadata: metadataJson, source})
+
+  return converter ? {...metadata, converter} : metadata
 }
 
 export const getNormalizedProviderModelMetadata = ({

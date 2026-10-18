@@ -4,6 +4,7 @@ import {
   type ProviderModelCapabilityTableRow,
 } from './providerModelCapabilityTable.ts'
 import {
+  getProviderModelMetadataConverter,
   getProviderModelMetadataDiscoveredContextWindow,
   getProviderModelMetadataDiscoveredInputSupport,
 } from './providerModelMetadata.ts'
@@ -171,8 +172,10 @@ export const refreshProviderModelDiscovery = ({
   previousMetadataJson: unknown
 }): unknown => {
   const discovery = getJsonRecord(nextMetadataJson)?.discovery
+  const converter = getProviderModelMetadataConverter(nextMetadataJson)
+  const refreshed = {...getJsonRecord(previousMetadataJson), discovery, ...(converter ? {converter} : {})}
 
-  return discovery === undefined ? previousMetadataJson : {...getJsonRecord(previousMetadataJson), discovery}
+  return discovery === undefined ? previousMetadataJson : refreshed
 }
 
 const getUserProvenance = (updatedAt: string | null): ProviderModelCapabilityProvenance => {
