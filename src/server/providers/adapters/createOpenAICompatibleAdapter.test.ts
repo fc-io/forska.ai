@@ -307,3 +307,60 @@ test('OpenAI-compatible adapter surfaces 404 misroutes from /v1/chat/completions
     }),
   ).toMatchObject({kind: 'endpoint_unavailable', shouldPauseConnection: true, statusCode: 404})
 })
+
+test('OpenAI-compatible adapter refuses an image prompt for a model whose discovery reports no vision', async () => {
+  transportState.invoke.mockClear()
+  const {createOpenAICompatibleAdapter} = await loadFactory()
+  const adapter = createOpenAICompatibleAdapter(
+    {
+      defaultBaseURL: 'http://127.0.0.1:11434/v1',
+      description: 'Local Ollama',
+      kind: 'ollama',
+      label: 'Ollama',
+      requiresApiKey: false,
+      supportsDiscovery: true,
+      supportsWorkerUrls: true,
+    },
+    {transportFamily: 'ollama-native-discovery', useNativeOllamaDiscovery: true},
+  )
+  const error = await adapter
+    .invoke({
+      connection: getOllamaConnectionInput().connection,
+      model: {
+        baseURL: null,
+        createdAt: null,
+        displayName: 'qwen2.5:1.5b',
+        enabled: true,
+        id: 'model-text',
+        metadataJson: {discovery: {capabilities: {supportsImageInput: false}}},
+        modelName: 'qwen2.5:1.5b',
+        name: 'qwen2.5:1.5b',
+        provider: 'ollama',
+        providerConnectionId: 'ollama-1',
+        remoteModelId: 'qwen2.5:1.5b',
+        source: 'discovered',
+        updatedAt: null,
+        variant: null,
+        version: null,
+      },
+      request: {
+        maxCompletionTokens: 32,
+        outputSchema: {type: 'object'},
+        prompt: {images: [{bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xe0), mimeType: 'image/jpeg'}], text: 'Figure'},
+        systemPrompt: 'Return JSON',
+        temperature: 0,
+      },
+      runtimeCredentials: getOllamaConnectionInput().runtimeCredentials,
+    })
+    .then(
+      () => {
+        return null
+      },
+      (rejection: unknown) => {
+        return rejection
+      },
+    )
+
+  expect((error as {code?: unknown} | null)?.code).toBe('provider_model_image_input_unsupported')
+  expect(transportState.invoke).toHaveBeenCalledTimes(0)
+})

@@ -1,4 +1,5 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
+import {assertProviderModelAcceptsPromptImages} from '../providerImageInput.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {type ProviderDefinition} from '../providerTypes.ts'
 import {invokeOpenAIResponsesModel, listOpenAIResponseModels} from '../transports/openaiResponsesTransport.ts'
@@ -53,6 +54,8 @@ export const createOpenAIAdapter = (catalog: ProviderCatalogEntry): ProviderDefi
       return getHealth(runtimeCredentials)
     },
     invoke: async ({model, request, runtimeCredentials}) => {
+      assertProviderModelAcceptsPromptImages({model, prompt: request.prompt, providerKind: catalog.kind})
+
       return invokeOpenAIResponsesModel({
         apiKey: runtimeCredentials.apiKey,
         baseURL: runtimeCredentials.baseURL,
