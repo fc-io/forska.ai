@@ -52,6 +52,17 @@ const stubFetch = (responses: Record<string, unknown>) => {
   return {fetchSpy, requestedUrls}
 }
 
+const getRejectionMessage = async (promise: Promise<unknown>): Promise<string | null> => {
+  return promise.then(
+    () => {
+      return null
+    },
+    (error: unknown) => {
+      return error instanceof Error ? error.message : String(error)
+    },
+  )
+}
+
 afterEach(() => {
   ;(globalThis.fetch as unknown as {mockRestore?: () => void}).mockRestore?.()
 })
@@ -121,21 +132,37 @@ test('Ollama reads <arch>.context_length and the vision capability from /api/sho
   expect(getDiscovery(model).capabilities.supportsImageInput).toBe(false)
 })
 
-test('unreachable servers and other providers leave the listed models unchanged', async () => {
-  const {requestedUrls} = stubFetch({})
+test('llama.cpp without a readable /props n_ctx fails instead of keeping the trained context length', async () => {
   const llamaModel = getListedModel({providerKind: 'llamacpp', remoteModelId: 'm'})
+  const {requestedUrls} = stubFetch({'http://127.0.0.1:8081/props': {default_generation_settings: {}}})
+  const getLimits = (baseURL: string) => {
+    return addLocalServerModelLimits({baseURL, models: [llamaModel], providerKind: 'llamacpp'})
+  }
+
+  expect(await getRejectionMessage(getLimits('http://127.0.0.1:8080'))).toStartWith(
+    'llama.cpp http://127.0.0.1:8080/props did not report default_generation_settings.n_ctx, so the per-slot context window is unknown and the models were not refreshed.',
+  )
+  expect(await getRejectionMessage(getLimits('http://127.0.0.1:8081/v1'))).toStartWith(
+    'llama.cpp http://127.0.0.1:8081/props did not report default_generation_settings.n_ctx',
+  )
+  expect(requestedUrls).toEqual(['http://127.0.0.1:8080/props', 'http://127.0.0.1:8081/props'])
+})
+
+test('unreachable LM Studio and Ollama servers and other providers leave the listed models unchanged', async () => {
+  const {requestedUrls} = stubFetch({})
+  const studioModel = getListedModel({providerKind: 'llmstudio', remoteModelId: 'm'})
   const [unreachable] = await addLocalServerModelLimits({
-    baseURL: 'http://127.0.0.1:8080',
-    models: [llamaModel],
-    providerKind: 'llamacpp',
+    baseURL: 'http://127.0.0.1:1234/v1',
+    models: [studioModel],
+    providerKind: 'llmstudio',
   })
   const [other] = await addLocalServerModelLimits({
     baseURL: 'http://x/v1',
-    models: [llamaModel],
+    models: [studioModel],
     providerKind: 'sglang',
   })
 
-  expect(unreachable).toEqual(llamaModel)
-  expect(other).toBe(llamaModel)
-  expect(requestedUrls).toEqual(['http://127.0.0.1:8080/props'])
+  expect(unreachable).toEqual(studioModel)
+  expect(other).toBe(studioModel)
+  expect(requestedUrls).toEqual(['http://127.0.0.1:1234/api/v0/models'])
 })

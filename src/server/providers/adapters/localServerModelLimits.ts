@@ -132,8 +132,16 @@ const getOllamaModelLimits = async ({
     : null
 }
 
+export const getLlamaCppPropsMissingContextMessage = (rootURL: string): string => {
+  return `llama.cpp ${rootURL}/props did not report default_generation_settings.n_ctx, so the per-slot context window is unknown and the models were not refreshed. Check that llama-server runs at this base URL, then refresh the models.`
+}
+
 const addLlamaCppServerLimits = async ({models, rootURL}: LocalServerModelLimitsInput) => {
   const limits = await getLlamaCppServerLimits(rootURL)
+
+  if (limits?.contextLength == null) {
+    throw new Error(getLlamaCppPropsMissingContextMessage(rootURL))
+  }
 
   return models.map((listedModel) => {
     return applyLocalServerModelLimits(listedModel, limits)
