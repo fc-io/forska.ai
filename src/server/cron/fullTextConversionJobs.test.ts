@@ -300,3 +300,39 @@ test('reconversion keeps cached chunk plans while the canonical hash is unchange
   expect(await countPlans()).toBe(0)
   expect((await getConvertedArticle('cron-article-1'))?.fullTextCanonicalHash).toBe(expectedCanonicalHash)
 })
+
+test('a failed conversion records the converter kind and options hash next to the provider and model', async () => {
+  if (!jobsModule || !database) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  await database.run(`
+    INSERT INTO app.article (id, article_title, full_text_pdf)
+    VALUES ('cron-missing-pdf', 'cron-missing-pdf', 'assets/article_pdfs/cron-missing-pdf.pdf')
+  `)
+  await jobsModule.convertArticle({
+    article: {
+      fullTextConversionAttempts: null,
+      fullTextPDF: 'assets/article_pdfs/cron-missing-pdf.pdf',
+      id: 'cron-missing-pdf',
+    },
+    runtimeConfig: {
+      baseURL: getMineruBaseURL(),
+      modelId: 'conversion-mineru-model',
+      modelName: 'mineru-standard',
+      providerKind: 'mineru',
+    },
+  })
+
+  const row = await getConvertedArticle('cron-missing-pdf')
+
+  expect(row?.fullTextConversionStatus).toBe('failed')
+  expect(JSON.parse(row?.fullTextConversionMetadata ?? 'null')).toEqual({
+    baseURL: getMineruBaseURL(),
+    converterKind: 'mineru',
+    modelId: 'conversion-mineru-model',
+    modelName: 'mineru-standard',
+    optionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
+    providerKind: 'mineru',
+  })
+})

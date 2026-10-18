@@ -107,9 +107,16 @@ export const getFullTextConversionMetadata = ({
   }
 }
 
+const getFailureConverterIdentity = (providerKind: string) => {
+  const converter = providerKind === 'mineru' ? mineruConverter : providerKind === 'docling' ? doclingConverter : null
+
+  return converter ? {converterKind: converter.kind, optionsHash: getConverterOptionsHash(converter.options)} : {}
+}
+
 export const getFullTextConversionFailureMetadata = (runtimeConfig: FullTextConversionRuntimeConfig) => {
   return {
     baseURL: runtimeConfig.baseURL,
+    ...getFailureConverterIdentity(runtimeConfig.providerKind),
     modelId: runtimeConfig.modelId,
     modelName: runtimeConfig.modelName,
     providerKind: runtimeConfig.providerKind,
