@@ -22,7 +22,7 @@ const state: {
     queryJson: <T>(statement: string) => Promise<T[]>
     run: (statement: string) => Promise<void>
   } | null
-  ollamaServer: {port: number; stop: (force?: boolean) => void} | null
+  ollamaServer: ReturnType<typeof globalThis.Bun.serve> | null
   sync: typeof import('./providerSyncService.ts') | null
 } = {database: null, ollamaServer: null, sync: null}
 
@@ -72,7 +72,9 @@ beforeAll(async () => {
 
   state.database = getAppDatabaseService()
   state.sync = await import('./providerSyncService.ts')
-  state.ollamaServer = globalThis.Bun.serve({fetch: getOllamaResponse, port: 0})
+  const ollamaServer = globalThis.Bun.serve({fetch: getOllamaResponse, port: 0})
+
+  state.ollamaServer = ollamaServer
 
   await state.database.run(`
     INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url, config_json)
@@ -82,7 +84,7 @@ beforeAll(async () => {
       'Ollama',
       TRUE,
       'none',
-      'http://127.0.0.1:${state.ollamaServer.port}/v1',
+      'http://127.0.0.1:${ollamaServer.port}/v1',
       CAST('{"archived":false,"disabledModelIds":[],"manualWorkerUrls":[],"workerUrlMode":"manual"}' AS JSON)
     );
 
@@ -104,7 +106,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  state.ollamaServer?.stop(true)
+  await state.ollamaServer?.stop(true)
   await state.database?.close()
   tempRuntimeRoot.cleanup()
 })
