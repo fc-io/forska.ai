@@ -149,7 +149,6 @@ test('patch updates comparison project while preserving conflict resolution chil
         promptSelections: [{promptId: 'comparison-fk-prompt-2', order: 0}],
         useAbstract: true,
         useFulltext: false,
-        useFulltextNoImages: false,
         useTitle: true,
       }),
       headers: {'content-type': 'application/json'},

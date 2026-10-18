@@ -2,6 +2,7 @@ import {afterAll, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:te
 import {Elysia} from 'elysia'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+import {legacyFullTextNoImagesBodyErrorMessage} from '../utils/rejectLegacyFullTextNoImagesBody.ts'
 
 setDefaultTimeout(120_000)
 
@@ -221,7 +222,7 @@ test('create with a conversion model that never reported a server version is a 4
   expect(response.text).toContain('MinerU manual has not reported a server version')
 })
 
-test('create rejects the retired no-images flag', async () => {
+test('create rejects the frozen no-images flag', async () => {
   const response = await requestJson('/api/projects', 'POST', {
     modelId: judgeModelId,
     name: 'Retired no images flag',
@@ -229,7 +230,7 @@ test('create rejects the retired no-images flag', async () => {
   })
 
   expect(response.status).toBe(400)
-  expect(response.text).toContain('useFulltextNoImages is replaced by fullTextFigureMode "none"')
+  expect(response.text).toContain(legacyFullTextNoImagesBodyErrorMessage)
 })
 
 test('create with explicit full-text choices stores the derived strategy and registers it', async () => {
@@ -341,6 +342,51 @@ test('full-text settings are protected once a judgment job exists', async () => 
   expect(response.status).toBe(409)
   expect(response.text).toContain('fullTextFigureMode')
   expect(response.text).toContain('fullTextChunkPolicy')
+})
+
+test('a locked legacy no-images project keeps its flag when the edit page resubmits full text on', async () => {
+  await insertProject({
+    fullTextStrategyId: 'fts-legacy-v0',
+    id: 'fts-legacy-locked-project',
+    useFulltext: false,
+    useFulltextNoImages: true,
+  })
+  await getDatabase().run(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('fts-legacy-locked-job', 'fts-legacy-locked-project', 'paused')
+  `)
+
+  const response = await requestJson('/api/projects/fts-legacy-locked-project/edit', 'PATCH', {
+    name: 'Renamed legacy no-images project',
+    useFulltext: true,
+  })
+
+  expect(response.status).toBe(200)
+  expect(await getStoredProject('fts-legacy-locked-project')).toMatchObject({
+    fullTextStrategyId: 'fts-legacy-v0',
+    useFulltext: false,
+    useFulltextNoImages: true,
+  })
+})
+
+test('a locked legacy no-images project still refuses turning full text off', async () => {
+  const response = await requestJson('/api/projects/fts-legacy-locked-project/edit', 'PATCH', {useFulltext: false})
+
+  expect(response.status).toBe(409)
+  expect(response.text).toContain('useFulltext')
+  expect(await getStoredProject('fts-legacy-locked-project')).toMatchObject({useFulltextNoImages: true})
+})
+
+test('cloning a legacy no-images project copies the stored flag and the legacy strategy', async () => {
+  const response = await requestJson('/api/projects/fts-legacy-locked-project/clone', 'POST', {})
+  const clonedProjectId = (response.json as {data: {id: string}}).data.id
+
+  expect(response.status).toBe(200)
+  expect(await getStoredProject(clonedProjectId)).toMatchObject({
+    fullTextStrategyId: 'fts-legacy-v0',
+    useFulltext: false,
+    useFulltextNoImages: true,
+  })
 })
 
 test('the preview derives the strategy and reports the existing judgments under the current one', async () => {

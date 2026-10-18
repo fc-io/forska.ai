@@ -11,6 +11,7 @@ import {
   getProviderModelThinkingBadgeValue,
 } from '../../utils/providerModelLabel.ts'
 import {
+  FULL_TEXT_STRATEGY_LEGACY,
   type FullTextChunkPolicy,
   type FullTextFigureMode,
   getProjectFullTextStrategyIdSql,
@@ -42,12 +43,12 @@ import {
   immutablePromptIdentityReviewServingFields,
 } from '../services/immutablePromptService.ts'
 import {HttpError} from '../utils/httpError.ts'
+import {rejectLegacyFullTextNoImagesBody} from '../utils/rejectLegacyFullTextNoImagesBody.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
 import {
   fullTextChunkPolicyBodySchema,
   fullTextFigureModeBodySchema,
-  fullTextNoImagesReplacedErrorMessage,
   fullTextStrategyRecordableJobStatuses,
   fullTextStrategyRecordJobRunningErrorMessage,
   fullTextStrategyRecordWithoutFullTextErrorMessage,
@@ -461,7 +462,6 @@ const getChangedProtectedProjectEditFields = ({
     systemPromptVariant?: SystemPromptVariant
     useAbstract?: boolean
     useFulltext?: boolean
-    useFulltextNoImages?: boolean
     useMetadata?: boolean
     useTitle?: boolean
     fullTextFigureMode?: FullTextFigureMode | null
@@ -479,9 +479,6 @@ const getChangedProtectedProjectEditFields = ({
     body.useAbstract !== undefined && body.useAbstract !== currentProject.useAbstract ? 'useAbstract' : null,
     body.useFulltext !== undefined && body.useFulltext !== getProjectUsesFullText(currentProject)
       ? 'useFulltext'
-      : null,
-    body.useFulltextNoImages !== undefined && body.useFulltextNoImages !== currentProject.useFulltextNoImages
-      ? 'useFulltextNoImages'
       : null,
     body.useMetadata !== undefined && body.useMetadata !== currentProject.useMetadata ? 'useMetadata' : null,
     body.fullTextFigureMode !== undefined
@@ -535,8 +532,8 @@ const getRecordedProjectFullTextResolution = async ({
   )
 }
 
-const getProjectUsesFullText = (project: Pick<ProjectEditCurrentProject, 'useFulltext' | 'useFulltextNoImages'>) => {
-  return project.useFulltext || project.useFulltextNoImages
+const getProjectUsesFullText = (project: Pick<ProjectEditCurrentProject, 'fullTextStrategyId' | 'useFulltext'>) => {
+  return project.useFulltext || project.fullTextStrategyId === FULL_TEXT_STRATEGY_LEGACY
 }
 
 const getFullTextReviewConfigFields = (params: {
@@ -760,7 +757,6 @@ const getChangedReviewConfigFields = (params: {
     systemPromptVariant?: SystemPromptVariant
     useAbstract?: boolean
     useFulltext?: boolean
-    useFulltextNoImages?: boolean
     useMetadata?: boolean
     useTitle?: boolean
   }
@@ -778,10 +774,6 @@ const getChangedReviewConfigFields = (params: {
       : null,
     params.body.useFulltext !== undefined && params.body.useFulltext !== params.currentProject.useFulltext
       ? 'useFulltext'
-      : null,
-    params.body.useFulltextNoImages !== undefined
-    && params.body.useFulltextNoImages !== params.currentProject.useFulltextNoImages
-      ? 'useFulltextNoImages'
       : null,
     params.body.useMetadata !== undefined && params.body.useMetadata !== params.currentProject.useMetadata
       ? 'useMetadata'
@@ -1677,10 +1669,6 @@ export const projectsRoutes = new Elysia()
 
       await assertSelectableProjectModelId(getAppDatabaseService(), body.modelId)
 
-      if (body.useFulltextNoImages) {
-        throw new HttpError(400, fullTextNoImagesReplacedErrorMessage)
-      }
-
       const fullTextResolution = await resolveProjectFullTextSettingsOrThrow(
         {
           fullTextChunkPolicy: body.fullTextChunkPolicy ?? null,
@@ -1901,6 +1889,7 @@ export const projectsRoutes = new Elysia()
       return {data: newProject}
     },
     {
+      transform: rejectLegacyFullTextNoImagesBody,
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.String()),
@@ -1910,7 +1899,6 @@ export const projectsRoutes = new Elysia()
         useTitle: t.Optional(t.Boolean()),
         useAbstract: t.Optional(t.Boolean()),
         useFulltext: t.Optional(t.Boolean()),
-        useFulltextNoImages: t.Optional(t.Boolean()),
         useMetadata: t.Optional(t.Boolean()),
         fullTextFigureMode: t.Optional(t.Union([fullTextFigureModeBodySchema, t.Null()])),
         fullTextChunkPolicy: t.Optional(t.Union([fullTextChunkPolicyBodySchema, t.Null()])),
@@ -1956,7 +1944,10 @@ export const projectsRoutes = new Elysia()
 
       return {data: getProjectValue(updatedProject)}
     },
-    {body: t.Object({name: t.Optional(t.String()), description: t.Optional(t.Union([t.String(), t.Null()]))})},
+    {
+      body: t.Object({name: t.Optional(t.String()), description: t.Optional(t.Union([t.String(), t.Null()]))}),
+      transform: rejectLegacyFullTextNoImagesBody,
+    },
   )
   .patch(
     '/api/projects/:id/edit',
@@ -2035,10 +2026,6 @@ export const projectsRoutes = new Elysia()
         )
       }
 
-      if (body.useFulltextNoImages) {
-        throw new HttpError(400, fullTextNoImagesReplacedErrorMessage)
-      }
-
       const currentFullTextSettings = getProjectFullTextValues(currentProject)
       const nextUseFulltext = body.useFulltext ?? getProjectUsesFullText(currentProject)
       const hasFullTextSelection =
@@ -2074,8 +2061,7 @@ export const projectsRoutes = new Elysia()
       const hasFullTextUpdate =
         fullTextResolution !== null
         && (hasProjectFullTextSettingsChanged(currentFullTextSettings, fullTextResolution)
-          || nextUseFulltext !== currentProject.useFulltext
-          || currentProject.useFulltextNoImages)
+          || nextUseFulltext !== currentProject.useFulltext)
 
       const hasPromptChanges = getHasProjectPromptEditChanges({
         existingPrompts: existingPromptComparisonRows,
@@ -2507,6 +2493,7 @@ export const projectsRoutes = new Elysia()
       return {data: result}
     },
     {
+      transform: rejectLegacyFullTextNoImagesBody,
       body: t.Object({
         name: t.Optional(t.String()),
         description: t.Optional(t.Union([t.String(), t.Null()])),
@@ -2518,7 +2505,6 @@ export const projectsRoutes = new Elysia()
         useTitle: t.Optional(t.Boolean()),
         useAbstract: t.Optional(t.Boolean()),
         useFulltext: t.Optional(t.Boolean()),
-        useFulltextNoImages: t.Optional(t.Boolean()),
         useMetadata: t.Optional(t.Boolean()),
         fullTextFigureMode: t.Optional(t.Union([fullTextFigureModeBodySchema, t.Null()])),
         fullTextChunkPolicy: t.Optional(t.Union([fullTextChunkPolicyBodySchema, t.Null()])),
@@ -2608,7 +2594,9 @@ export const projectsRoutes = new Elysia()
 
     return {success: true}
   })
-  .post('/api/projects/:id/clone', async ({params}) => {
+  .post('/api/projects/:id/clone', async ({body, params}) => {
+    rejectLegacyFullTextNoImagesBody({body})
+
     await assertProjectIsActive(params.id)
 
     const [sourceProject] = await getAppDatabaseService()

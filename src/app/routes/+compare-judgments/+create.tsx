@@ -38,12 +38,8 @@ const getPromptDateValue = (value: Date | string | null) => {
   return value ? new Date(value).getTime() : 0
 }
 
-const getSelectedContentOptionCount = (options: {
-  compareTitleAndAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-}) => {
-  return [options.compareTitleAndAbstract, options.useFulltext, options.useFulltextNoImages].filter(Boolean).length
+const getSelectedContentOptionCount = (options: {compareTitleAndAbstract: boolean; useFulltext: boolean}) => {
+  return [options.compareTitleAndAbstract, options.useFulltext].filter(Boolean).length
 }
 
 const promptHasSummaryCriteria = (prompt: ComparisonProjectSource['prompts'][number]) => {
@@ -121,7 +117,6 @@ const CreateCompareJudgmentsPage = () => {
   const [selectedPromptIds, setSelectedPromptIds] = createSignal<string[]>([])
   const [compareTitleAndAbstract, setCompareTitleAndAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
-  const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
   const [allowConflictResolution, setAllowConflictResolution] = createSignal(false)
   const [summaryModeEnabled, setSummaryModeEnabled] = createSignal(false)
@@ -138,7 +133,6 @@ const CreateCompareJudgmentsPage = () => {
     return getSelectedContentOptionCount({
       compareTitleAndAbstract: compareTitleAndAbstract(),
       useFulltext: useFulltext(),
-      useFulltextNoImages: useFulltextNoImages(),
     })
   })
   const hasSelectedContentOptions = createMemo(() => {
@@ -244,7 +238,6 @@ const CreateCompareJudgmentsPage = () => {
       useTitle: compareTitleAndAbstract(),
       useAbstract: compareTitleAndAbstract(),
       useFulltext: useFulltext(),
-      useFulltextNoImages: useFulltextNoImages(),
       importRoutes: selectedImportRoutes().length > 0 ? selectedImportRoutes() : undefined,
       promptSelections: promptSelections && promptSelections.length > 0 ? promptSelections : undefined,
     }
@@ -408,26 +401,8 @@ const CreateCompareJudgmentsPage = () => {
                   }}
                 />
                 <div class="flex-1">
-                  <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
-                  <p class="text-xs text-gray-500 mt-0.5">
-                    Compare judgments that use the complete article text including embedded images.
-                  </p>
-                </div>
-              </label>
-              <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  class="mt-1"
-                  checked={useFulltextNoImages()}
-                  onChange={(event) => {
-                    return setUseFulltextNoImages(event.currentTarget.checked)
-                  }}
-                />
-                <div class="flex-1">
-                  <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
-                  <p class="text-xs text-gray-500 mt-0.5">
-                    Compare judgments that use article text with embedded images stripped out.
-                  </p>
+                  <p class="text-sm font-medium text-gray-900">Use Full Text</p>
+                  <p class="text-xs text-gray-500 mt-0.5">Compare judgments that use the article full text.</p>
                 </div>
               </label>
             </div>

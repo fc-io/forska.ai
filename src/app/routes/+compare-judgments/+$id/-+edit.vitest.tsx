@@ -289,4 +289,41 @@ describe('compare judgments edit route full-text strategy check', () => {
       container.remove()
     }
   })
+
+  test('a legacy no-images comparison shows the frozen label, has no no-images control and never sends the flag', async () => {
+    mockState.editFormData = {
+      ...buildEditFormData([]),
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      summarySourceProject: null,
+      summarySourceProjectId: null,
+      useAbstract: false,
+      useFulltext: false,
+      useFulltextNoImages: true,
+      useTitle: false,
+    }
+
+    const {container, dispose} = await renderEditPage()
+
+    try {
+      expect(
+        container.querySelector('[data-testid="comparison-legacy-full-text-no-images"]')?.textContent,
+      ).toContain('full text (legacy, no images)')
+      expect(container.textContent).not.toContain('Use Full Text (without images)')
+      expect(container.textContent).not.toContain('Pick at least one content option.')
+
+      container.querySelector('form')?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await vi.waitFor(() => {
+        expect(mockState.updateComparisonProject).toHaveBeenCalledTimes(1)
+      })
+
+      const [, input] = mockState.updateComparisonProject.mock.calls[0] as [string, Record<string, unknown>]
+
+      expect(input).toMatchObject({useAbstract: false, useFulltext: false, useTitle: false})
+      expect(input).not.toHaveProperty('useFulltextNoImages')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
 })
