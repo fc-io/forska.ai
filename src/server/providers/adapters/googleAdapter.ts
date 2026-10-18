@@ -1,4 +1,5 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
+import {assertProviderModelAcceptsPromptImages} from '../providerImageInput.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {type ProviderDefinition} from '../providerTypes.ts'
 import {invokeGeminiGenerateContentModel, listGeminiModels} from '../transports/geminiGenerateContentTransport.ts'
@@ -53,6 +54,8 @@ export const createGoogleAdapter = (catalog: ProviderCatalogEntry): ProviderDefi
       return getHealth(runtimeCredentials)
     },
     invoke: async ({model, request, runtimeCredentials}) => {
+      assertProviderModelAcceptsPromptImages({model, prompt: request.prompt, providerKind: catalog.kind})
+
       return invokeGeminiGenerateContentModel({
         apiKey: runtimeCredentials.apiKey,
         baseURL: runtimeCredentials.baseURL,

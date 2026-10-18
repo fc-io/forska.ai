@@ -325,3 +325,75 @@ test('codex adapter begin auth starts device login when not connected', async ()
   expect(result?.status).toBe('pending')
   expect(codexState.startLogin).toHaveBeenCalledTimes(1)
 })
+
+test('HTTP adapters refuse image prompts for models without verified image input before calling the transport', async () => {
+  openAIResponsesState.invoke.mockClear()
+  anthropicState.invoke.mockClear()
+  googleState.invoke.mockClear()
+  const [{createOpenAIAdapter}, {createAnthropicAdapter}, {createGoogleAdapter}] = await Promise.all([
+    loadOpenAIAdapter(),
+    loadAnthropicAdapter(),
+    loadGoogleAdapter(),
+  ])
+  const adapters = [
+    createOpenAIAdapter(getCatalog('openai', 'OpenAI API')),
+    createAnthropicAdapter(getCatalog('anthropic', 'Anthropic')),
+    createGoogleAdapter(getCatalog('google', 'Google')),
+  ]
+  const request = {
+    maxCompletionTokens: 100,
+    outputSchema: {type: 'object'},
+    prompt: {images: [{bytes: Uint8Array.of(0xff, 0xd8, 0xff, 0xe0), mimeType: 'image/jpeg' as const}], text: 'Figure'},
+    systemPrompt: 'system',
+    temperature: 0,
+  }
+  const textOnlyModel = {id: 'text-only', metadataJson: null, modelName: 'local-text', name: 'local-text'}
+  const imageModel = {
+    ...textOnlyModel,
+    id: 'vision',
+    metadataJson: {capabilityOverrides: {supportsImageInput: true, updatedAt: '2026-10-18T00:00:00.000Z'}},
+  }
+  const refusals = await Promise.all(
+    adapters.map((adapter) => {
+      return adapter
+        .invoke({
+          connection: null as never,
+          model: textOnlyModel as never,
+          request,
+          runtimeCredentials: getRuntimeCredentials('https://example.test/v1'),
+        })
+        .then(
+          () => {
+            return null
+          },
+          (error: unknown) => {
+            return (error as {code?: unknown}).code
+          },
+        )
+    }),
+  )
+
+  expect(refusals).toEqual(
+    Array.from({length: 3}, () => {
+      return 'provider_model_image_input_unsupported'
+    }),
+  )
+  expect(openAIResponsesState.invoke).toHaveBeenCalledTimes(0)
+  expect(anthropicState.invoke).toHaveBeenCalledTimes(0)
+  expect(googleState.invoke).toHaveBeenCalledTimes(0)
+
+  await Promise.all(
+    adapters.map((adapter) => {
+      return adapter.invoke({
+        connection: null as never,
+        model: imageModel as never,
+        request,
+        runtimeCredentials: getRuntimeCredentials('https://example.test/v1'),
+      })
+    }),
+  )
+
+  expect(openAIResponsesState.invoke).toHaveBeenCalledTimes(1)
+  expect(anthropicState.invoke).toHaveBeenCalledTimes(1)
+  expect(googleState.invoke).toHaveBeenCalledTimes(1)
+})

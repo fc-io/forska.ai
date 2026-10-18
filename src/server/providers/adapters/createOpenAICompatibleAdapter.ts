@@ -1,6 +1,7 @@
 import {getProviderModelOptions} from '../../../utils/providerModelOptions.ts'
 import {classifyConnectionFailure} from '../../cron/judgmentsJobs/connectionHealth.ts'
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
+import {assertProviderModelAcceptsPromptImages} from '../providerImageInput.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {discoverProviderRuntimeModel} from '../providerRuntimeDetector.ts'
 import {
@@ -214,6 +215,8 @@ export const createOpenAICompatibleAdapter = (
       return getHealth(runtimeCredentials)
     },
     invoke: async ({model, request, runtimeCredentials}: ProviderInvokeInput): Promise<ProviderInvocationResult> => {
+      assertProviderModelAcceptsPromptImages({model, prompt: request.prompt, providerKind: catalog.kind})
+
       return invokeOpenAIChatModel({
         apiKey: runtimeCredentials.apiKey,
         baseURL: runtimeCredentials.baseURL,
