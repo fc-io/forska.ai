@@ -46,6 +46,7 @@ import {
   getNormalizedComparisonProjectRowFilters,
 } from '../../utils/comparisonProjectRowFilter.ts'
 import {getNormalizedComparisonProjectSearchText} from '../../utils/comparisonProjectSearchText.ts'
+import {legacyFullTextNoImagesLabel} from '../../utils/legacyFullTextNoImagesLabel.ts'
 import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
@@ -1039,9 +1040,9 @@ const getComparisonProjectContentLabel = (settings: ComparisonProjectContentFlag
           : 'Article Abstract'
       : null
   const fulltextLabel = settings.useFulltextNoImages
-    ? 'Use Full Text (without images)'
+    ? legacyFullTextNoImagesLabel
     : settings.useFulltext
-      ? 'Use Full Text (with images)'
+      ? 'Use Full Text'
       : null
   const parts = [textLabel, fulltextLabel].filter(Boolean) as string[]
   const contentLabel = parts.length > 0 ? parts.join(' + ') : 'No content selected'

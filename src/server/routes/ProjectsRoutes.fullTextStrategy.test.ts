@@ -362,6 +362,7 @@ test('a locked legacy no-images project keeps its flag when the edit page resubm
   })
 
   expect(response.status).toBe(200)
+  expect((response.json as EditResponse).data.project.fullTextStrategyLabel).toBe('full text (legacy, no images)')
   expect(await getStoredProject('fts-legacy-locked-project')).toMatchObject({
     fullTextStrategyId: 'fts-legacy-v0',
     useFulltext: false,

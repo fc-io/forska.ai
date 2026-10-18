@@ -4,6 +4,7 @@ import {Elysia, t} from 'elysia'
 
 import {getArticleUrl} from '../../app/utils/getArticleUrl.ts'
 import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
+import {getLegacyNoImagesAwareFullTextStrategyLabel} from '../../utils/legacyFullTextNoImagesLabel.ts'
 import {FULL_TEXT_STRATEGY_NONE, getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
 import {getFullTextStrategyLabelsById} from '../fullText/fullTextStrategyRepository.ts'
 import {
@@ -67,6 +68,7 @@ type ExportJudgmentRow = {
   fullTextStrategyId: string | null
   promptId: string
   quotes: unknown
+  useFulltextNoImages: boolean | null
 }
 type ExportServingSnapshotScope = ReviewServingExportSnapshotScope
 
@@ -411,6 +413,7 @@ const getExportJudgments = async (input: {
           judgment.explanation AS explanation,
           judgment.full_text_strategy_id AS fullTextStrategyId,
           judgment.quotes AS quotes,
+          judgment.use_fulltext_no_images AS useFulltextNoImages,
           export_scope.source_project_order AS sourceProjectOrder,
           ROW_NUMBER() OVER (
             PARTITION BY detail.article_id, detail.prompt_id
@@ -520,7 +523,12 @@ const getExportRowFullTextStrategyLabel = (input: {
     ...new Set(
       input.judgments.flatMap((judgment) => {
         return judgment?.fullTextStrategyId
-          ? [input.fullTextStrategyLabels.get(judgment.fullTextStrategyId) ?? judgment.fullTextStrategyId]
+          ? [
+              getLegacyNoImagesAwareFullTextStrategyLabel({
+                label: input.fullTextStrategyLabels.get(judgment.fullTextStrategyId) ?? judgment.fullTextStrategyId,
+                useFulltextNoImages: judgment.useFulltextNoImages,
+              }),
+            ]
           : []
       }),
     ),
