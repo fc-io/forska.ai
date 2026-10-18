@@ -24,7 +24,11 @@ const environment: FullTextStrategyEnvironment = {
   imageTransportVersion: 'img-v1',
 }
 
-const context: ProjectFullTextGateContext = {conversionModelStatus: null, environment}
+const context: ProjectFullTextGateContext = {
+  articleFetch: {unpaywallEmailSet: true},
+  conversionModelStatus: null,
+  environment,
+}
 
 const getDiscoveredModel = (inputTokens: number, extraMetadata: Record<string, unknown> = {}) => {
   return {
@@ -267,4 +271,39 @@ test('a legacy no-images project must choose explicit settings before judging', 
     fullTextStrategyErrorMessages.figureModeMissing,
     fullTextStrategyErrorMessages.chunkPolicyMissing,
   ])
+})
+
+test('a missing Unpaywall email is a warning naming the remaining fetch sources', () => {
+  const gate = evaluateProjectFullTextGate({
+    context: {...context, articleFetch: {unpaywallEmailSet: false}},
+    model: getDiscoveredModel(131_072),
+    selection,
+  })
+
+  expect(gate.errors).toEqual([])
+  expect(gate.warnings).toEqual([
+    'No Unpaywall email is set in Settings; PDFs are fetched only from publisher URLs and arXiv.',
+  ])
+})
+
+test('a failed health check of the judging model connection is a warning about its refreshed capabilities', () => {
+  const model = {
+    ...getDiscoveredModel(32_768),
+    connectionHealth: {
+      lastCheckedAt: '2026-10-18T05:00:00.000Z',
+      lastError: 'llama.cpp http://127.0.0.1:8080/props did not report default_generation_settings.n_ctx',
+      providerLabel: 'llama.cpp',
+    },
+  }
+  const failed = evaluateProjectFullTextGate({context, model, selection: {...selection, fullTextChunkPolicy: null}})
+  const healthy = evaluateProjectFullTextGate({
+    context,
+    model: {...model, connectionHealth: {...model.connectionHealth, lastError: null}},
+    selection: {...selection, fullTextChunkPolicy: null},
+  })
+
+  expect(failed.warnings).toEqual([
+    'Judging model Judge (sglang): The last health check of llama.cpp failed at 2026-10-18 05:00 UTC: llama.cpp http://127.0.0.1:8080/props did not report default_generation_settings.n_ctx. Its context window and image input come from the last successful model refresh.',
+  ])
+  expect(healthy.warnings).toEqual([])
 })

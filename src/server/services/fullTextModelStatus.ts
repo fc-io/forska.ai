@@ -73,7 +73,7 @@ const getHealthState = (row: FullTextModelStatusRow): FullTextModelHealthState =
         : 'unverified'
 }
 
-const getHealthDetail = ({
+export const getHealthDetail = ({
   lastCheckedAt,
   lastError,
   providerLabel,

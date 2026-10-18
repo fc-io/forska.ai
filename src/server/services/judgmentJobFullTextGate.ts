@@ -25,6 +25,13 @@ import {HttpError} from '../utils/httpError.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getJsonValue, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {type FullTextModelStatus, getConfiguredFullTextModelIds, getFullTextModelStatus} from './fullTextModelStatus.ts'
+import {
+  type FullTextGateArticleFetchSettings,
+  type FullTextGateModelConnectionHealth,
+  getArticleFetchSettings,
+  getArticleFetchWarnings,
+  getModelConnectionHealthWarnings,
+} from './judgmentJobFullTextGate/fullTextGateSourceWarnings.ts'
 
 type FullTextGateRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
@@ -38,11 +45,15 @@ export type ProjectFullTextGateSelection = {
   useFulltext: boolean
 }
 
-export type ProjectFullTextGateModel = ProviderModelCapabilityModel & {modelName: string}
+export type ProjectFullTextGateModel = ProviderModelCapabilityModel & {
+  connectionHealth?: FullTextGateModelConnectionHealth | null
+  modelName: string
+}
 
 export type ProjectFullTextGateStoredStrategy = {id: string; inputs: FullTextStrategyInputs | null; label: string}
 
 export type ProjectFullTextGateContext = {
+  articleFetch: FullTextGateArticleFetchSettings
   conversionModelStatus: FullTextModelStatus | null
   environment: FullTextStrategyEnvironment
 }
@@ -58,6 +69,9 @@ export type ProjectFullTextGateProjectRow = {
 }
 
 type ProjectFullTextGateModelRow = {
+  connectionLabel: string | null
+  connectionLastCheckedAt: unknown
+  connectionLastError: string | null
   displayName: string | null
   metadataJson: unknown
   providerKind: string | null
@@ -217,6 +231,18 @@ const getHealthWarnings = (context: ProjectFullTextGateContext): string[] => {
   ].filter(isPresent)
 }
 
+const getSourceWarnings = (context: ProjectFullTextGateContext, model: ProjectFullTextGateModel | null): string[] => {
+  return [
+    ...(model
+      ? getModelConnectionHealthWarnings({
+          connectionHealth: model.connectionHealth ?? null,
+          modelReference: getModelReference(model),
+        })
+      : []),
+    ...getArticleFetchWarnings(context.articleFetch),
+  ]
+}
+
 const getEnabledProjectFullTextGateEvaluation = ({
   context,
   model,
@@ -240,7 +266,7 @@ const getEnabledProjectFullTextGateEvaluation = ({
       ...getStoredStrategyErrors({storedStrategy, strategy: resolution.strategy}),
     ],
     strategy: resolution.strategy,
-    warnings: getHealthWarnings(context),
+    warnings: [...getHealthWarnings(context), ...getSourceWarnings(context, model)],
   }
 }
 
@@ -278,6 +304,7 @@ export const getProjectFullTextGateContext = async (
   const configuredModelIds = await getConfiguredFullTextModelIds(runner)
 
   return {
+    articleFetch: await getArticleFetchSettings(runner),
     conversionModelStatus: await getModelStatusOrNull({
       modelId: configuredModelIds.fullTextConversionModelId,
       role: 'pdf_conversion',
@@ -287,10 +314,21 @@ export const getProjectFullTextGateContext = async (
   }
 }
 
+const getConnectionHealthFromRow = (row: ProjectFullTextGateModelRow): FullTextGateModelConnectionHealth | null => {
+  return row.connectionLabel === null
+    ? null
+    : {
+        lastCheckedAt: row.connectionLastCheckedAt,
+        lastError: row.connectionLastError,
+        providerLabel: row.connectionLabel,
+      }
+}
+
 const getProjectFullTextGateModelFromRow = (row: ProjectFullTextGateModelRow): ProjectFullTextGateModel | null => {
   return row.displayName === null && row.remoteModelId === null
     ? null
     : {
+        connectionHealth: getConnectionHealthFromRow(row),
         metadataJson: getJsonValue(row.metadataJson),
         modelName: row.displayName ?? row.remoteModelId ?? 'unknown model',
         providerKind: row.providerKind,
@@ -304,6 +342,9 @@ export const getProjectFullTextGateModel = async (
 ): Promise<ProjectFullTextGateModel | null> => {
   const [row] = await runner.queryJson<ProjectFullTextGateModelRow>(`
     SELECT
+      pc.label AS connectionLabel,
+      pc.last_checked_at AS connectionLastCheckedAt,
+      pc.last_error AS connectionLastError,
       COALESCE(m.display_name, m.name) AS displayName,
       TO_JSON(m.metadata_json) AS metadataJson,
       pc.provider_kind AS providerKind,
@@ -398,6 +439,9 @@ const getProjectFullTextGateRows = async (projectIds: readonly string[], runner:
         SELECT
           p.id AS projectId,
           ${getProjectFullTextGateSelectSql('p')},
+          pc.label AS connectionLabel,
+          pc.last_checked_at AS connectionLastCheckedAt,
+          pc.last_error AS connectionLastError,
           COALESCE(m.display_name, m.name) AS displayName,
           TO_JSON(m.metadata_json) AS metadataJson,
           pc.provider_kind AS providerKind,

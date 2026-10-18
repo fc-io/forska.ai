@@ -308,3 +308,20 @@ test('conversion selection only takes PDFs of full-text project articles that st
     {fullTextConversionAttempts: null, fullTextPDF: 'assets/article_pdfs/ft-pdf.pdf', id: 'ft-pdf'},
   ])
 })
+
+test('a fetch wake with articles logs the missing Unpaywall email once, and not when an email is set or nothing is fetched', async () => {
+  if (!fetchJobs) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  await getDatabase().run(`UPDATE app.user_config SET unpaywall_email = NULL`)
+  const missing = await fetchJobs.logUnpaywallEmailMissing(3)
+  const nothingToFetch = await fetchJobs.logUnpaywallEmailMissing(0)
+
+  await getDatabase().run(`UPDATE app.user_config SET unpaywall_email = 'local@example.com'`)
+  const configured = await fetchJobs.logUnpaywallEmailMissing(3)
+
+  await getDatabase().run(`UPDATE app.user_config SET unpaywall_email = NULL`)
+
+  expect([missing, nothingToFetch, configured]).toEqual([true, false, false])
+})

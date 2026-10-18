@@ -11,6 +11,8 @@ export type PdfFetchAttemptResult = {
   details?: string // Additional info (e.g., API response status)
 }
 
+export const pdfSourceUnavailableReason = 'Not available from this source'
+
 /**
  * Legacy result format for backward compatibility with cron job.
  */
