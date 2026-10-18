@@ -186,6 +186,37 @@ a real Windows console that Ctrl+C on `bun run dev:start` ends with
 `[duckdb] shutdown checkpoint completed` and no `forska.duckdb.wal` before calling
 the Windows path verified.
 
+## Full-text judging
+
+Conversion, canonical text, strategy identity, figures, chunking, crons and
+image transports. Every DB-backed file migrates its own temp DuckDB and starts
+mock MinerU/Ollama/VLM servers on port 0; none touches the live DB or needs a
+real converter. Run them file by file:
+
+```sh
+for f in \
+  src/server/fullText/converters/*.test.ts \
+  src/server/fullText/*.test.ts \
+  src/agent/judge/fullTextChunkPlan.test.ts src/agent/judge/fullTextJudgingPrompt.test.ts \
+  src/server/cron/fullTextConversionJobs.test.ts src/server/cron/fullTextJobDuckdbAccess.test.ts \
+  src/server/cron/fullTextJobs/fullTextCronScope.test.ts \
+  src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/prepareFullTextJudging.test.ts \
+  src/server/providers/providerTransportImages.test.ts src/server/providers/providerSyncService.test.ts \
+  src/server/providers/providerModelCapabilities.test.ts \
+  src/db/migrateDuckdb.articleCanonicalFullText.test.ts src/db/migrateDuckdb.fullTextStrategy.test.ts \
+  src/db/migrateDuckdb.fullTextJudgingChunkPlan.test.ts \
+  src/server/services/projectTransfer/projectTransferExportAssets.test.ts \
+  src/server/services/projectTransfer/projectTransferLegacyFullTextSignature.test.ts
+do bun test "$f" --timeout 120000 || echo "FAILED: $f"; done
+```
+
+`canonicalFullText.test.ts` and `fullTextStrategyRegistry.test.ts` hold frozen
+golden values: a change that alters canonical text or a registered strategy id
+must bump `CANONICAL_TEXT_VERSION`, `FULL_TEXT_PROMPT_LAYOUT_VERSION`,
+`IMAGE_TRANSPORT_VERSION` or `FIGURE_DESCRIPTION_PROMPT_VERSION` instead of
+updating the expected values. `fullTextCronScope.test.ts` proves the crons never
+select articles outside non-archived full-text projects.
+
 ## Failure-regression and fixture-isolation checks
 
 ```sh

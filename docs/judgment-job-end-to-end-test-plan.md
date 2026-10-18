@@ -134,7 +134,11 @@ Acceptance criteria:
 - [x] Read and assert the canonical `app.judgment` row immediately after the
       DuckDB commit using the complete identity key:
       `(articleId, promptId, modelId, useTitle, useAbstract, useFulltext,
-useFulltextNoImages, useMetadata, systemPromptVariant)`.
+useFulltextNoImages, useMetadata, systemPromptVariant)`. The `app.judgment`
+      UNIQUE also holds `full_text_strategy_id` (`fts-none` for these
+      title/abstract judgments) and `delete_generation`. `useFulltextNoImages` is
+      a frozen legacy identity flag: always false for new jobs, rejected by every
+      API body, kept only so legacy rows stay distinct.
 - [x] Assert the project review-serving read remains stale before its target
       dirty token is completed and exposes the judgment only after projector
       completion. Assert the SQLite visibility acknowledgement token separately
