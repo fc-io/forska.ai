@@ -17,6 +17,11 @@ import {
   getLegacyFullTextStrategyId,
   isFullTextFigureMode,
 } from '../../fullText/fullTextStrategy.ts'
+import {
+  getProjectTransferCanonicalFullTextHash,
+  projectTransferCanonicalFullTextFields,
+  projectTransferConversionMetadataAssetPathKeys,
+} from './projectTransferCanonicalFullText.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 import {
   getProjectTransferNormalizedArticleIdentifiers,
@@ -151,7 +156,11 @@ export type ProjectTransferArticlePayloadRecord = ProjectTransferPayloadRecord
     sourceArticleId: string
   }
 
-export type ProjectTransferAssetReferenceKind = 'fullTextAssets' | 'fullTextHtml' | 'fullTextPdf'
+export type ProjectTransferAssetReferenceKind =
+  | 'fullTextAssets'
+  | 'fullTextConversionMetadata'
+  | 'fullTextHtml'
+  | 'fullTextPdf'
 
 export type ProjectTransferAssetReference = JsonRecord & {
   fieldPath?: string
@@ -850,10 +859,58 @@ const assertProjectImportRoutePayload = (record: JsonRecord, label: string) => {
   return assertNonEmptyString(record.sourceImportRouteId, `${label}.sourceImportRouteId`)
 }
 
+const getMissingConversionMetadataAssetPathKey = (metadata: unknown) => {
+  return projectTransferConversionMetadataAssetPathKeys.find((key) => {
+    const pathValue = isRecord(metadata) ? metadata[key] : null
+
+    return typeof pathValue !== 'string' || pathValue.trim() === ''
+  })
+}
+
+const assertArticleCanonicalFullTextMatches = ({
+  hash,
+  label,
+  record,
+}: {
+  hash: string
+  label: string
+  record: JsonRecord
+}) => {
+  const missingMetadataKey = getMissingConversionMetadataAssetPathKey(record.fullTextConversionMetadata)
+
+  assertSha256Checksum(hash, `${label}.fullTextCanonicalHash`)
+
+  if (typeof record.fullText !== 'string' || getProjectTransferCanonicalFullTextHash(record.fullText) !== hash) {
+    return failProjectTransferPayload(`${label}.fullTextCanonicalHash does not match the SHA-256 of ${label}.fullText`)
+  }
+
+  return missingMetadataKey === undefined
+    ? undefined
+    : failProjectTransferPayload(
+        `${label}.fullTextConversionMetadata.${missingMetadataKey} is required for a canonical full text`,
+      )
+}
+
+const assertArticleCanonicalFullText = (record: JsonRecord, label: string) => {
+  const [hash = null, ...otherValues] = projectTransferCanonicalFullTextFields.map((field) => {
+    return assertOptionalNullableNonEmptyString(record[field], `${label}.${field}`)
+  })
+  const setCount = [hash, ...otherValues].filter(isStringValue).length
+
+  if (setCount !== 0 && setCount !== projectTransferCanonicalFullTextFields.length) {
+    return failProjectTransferPayload(
+      `${label}.${projectTransferCanonicalFullTextFields.join(', ')} must be all set or all null`,
+    )
+  }
+
+  return hash === null ? undefined : assertArticleCanonicalFullTextMatches({hash, label, record})
+}
+
 const assertArticlePayload = (record: JsonRecord, label: string) => {
   assertNonEmptyString(record.sourceArticleId, `${label}.sourceArticleId`)
   assertNonEmptyString(record.articleTitle, `${label}.articleTitle`)
   assertArticleIdentifierInputs(record.identifierInputs, `${label}.identifierInputs`)
+  assertArticleCanonicalFullText(record, label)
 
   return assertIdentifierSignatureMatches(record, label)
 }
@@ -1194,6 +1251,7 @@ const assertProjectTransferRecordSetPayload = (
 
 const assetReferenceKindSet = new Set<ProjectTransferAssetReferenceKind>([
   'fullTextAssets',
+  'fullTextConversionMetadata',
   'fullTextHtml',
   'fullTextPdf',
 ])

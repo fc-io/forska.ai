@@ -5,9 +5,11 @@ import {dirname, join} from 'node:path'
 import {expect, test} from 'bun:test'
 
 import {
+  getProjectTransferExportAssetByteEstimateForArticles,
   getProjectTransferExportAssetCollectionForArticles,
   getProjectTransferExportAssetCollectionForReferences,
   getProjectTransferExportAssetReferenceCollectionForArticles,
+  isProjectTransferExportAssetError,
 } from './projectTransferExportAssets.ts'
 import {getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
 
@@ -128,6 +130,169 @@ test('project-transfer export preserves absolute runtime-asset lookalike URLs as
   expect(collection.articles[0]?.fullTextPdf).toBe(runtimeLookalikeUrl)
   expect(collection.articles[0]?.fullTextHtml).toContain(runtimeLookalikeUrl)
   expect(collection.articles[0]?.fullTextAssets).toEqual({remote: runtimeLookalikeUrl})
+})
+
+const getConvertedArticle = ({
+  cropPath,
+  metadata,
+  sourceArticleId,
+}: {
+  cropPath: string
+  metadata: unknown
+  sourceArticleId: string
+}) => {
+  return {
+    ...getArticle({
+      fullTextAssets: [{caption: null, imagePath: cropPath, index: 1}],
+      fullTextHtml: null,
+      fullTextPdf: null,
+      sourceArticleId,
+    }),
+    fullTextConversionMetadata: metadata,
+  }
+}
+
+const getCaughtError = async (operation: () => unknown) => {
+  try {
+    await operation()
+
+    return null
+  } catch (error) {
+    return error as Error & {code?: string}
+  }
+}
+
+test('project-transfer export collects layout.json and converter.md named by the conversion metadata', async () => {
+  const cwd = getRuntimeRoot()
+  const articleDirectory = 'assets/full-text-assets/article-converted'
+  const layoutPath = `${articleDirectory}/layout.json`
+  const converterMarkdownPath = `${articleDirectory}/converter.md`
+  const cropPath = `${articleDirectory}/fig-1.jpg`
+  const stagingRootPath = join(cwd, 'tmp/project-transfer/export-assets-stage')
+  const metadata = {
+    baseURL: 'http://127.0.0.1:8000',
+    converterKind: 'mineru',
+    converterMarkdownPath: ` ${converterMarkdownPath}`,
+    layoutPath,
+    layoutVersion: 'layout-v2',
+  }
+
+  try {
+    writeRuntimeAsset({cwd, path: layoutPath, value: '{"blocks":[],"version":"layout-v2"}'})
+    writeRuntimeAsset({cwd, path: converterMarkdownPath, value: '# Converter markdown'})
+    writeRuntimeAsset({cwd, path: cropPath, value: 'crop'})
+
+    const collection = await getProjectTransferExportAssetCollectionForArticles(
+      [getConvertedArticle({cropPath, metadata, sourceArticleId: 'article-converted'})],
+      {cwd, stagingRootPath},
+    )
+    const references = collection.assetManifest.entries.flatMap((entry) => {
+      return entry.references.map((reference) => {
+        return [entry.packagePath, reference.kind, reference.fieldPath, reference.jsonPointer].join(' ')
+      })
+    })
+
+    expect(
+      collection.assetEntries.map((entry) => {
+        return entry.path
+      }),
+    ).toEqual([converterMarkdownPath, cropPath, layoutPath])
+    expect(references).toEqual([
+      `${converterMarkdownPath} fullTextConversionMetadata articles[0].fullTextConversionMetadata.converterMarkdownPath /0/fullTextConversionMetadata/converterMarkdownPath`,
+      `${cropPath} fullTextAssets articles[0].fullTextAssets[0].imagePath /0/fullTextAssets/0/imagePath`,
+      `${layoutPath} fullTextConversionMetadata articles[0].fullTextConversionMetadata.layoutPath /0/fullTextConversionMetadata/layoutPath`,
+    ])
+    expect(collection.articles[0]?.fullTextConversionMetadata).toEqual({...metadata, converterMarkdownPath})
+    expect(readFileSync(join(stagingRootPath, layoutPath), 'utf8')).toBe('{"blocks":[],"version":"layout-v2"}')
+    expect(readFileSync(join(stagingRootPath, converterMarkdownPath), 'utf8')).toBe('# Converter markdown')
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
+})
+
+test('project-transfer export rejects conversion metadata paths outside the runtime assets', async () => {
+  const cropPath = 'assets/full-text-assets/article-converted/fig-1.jpg'
+  const getMetadataError = (layoutPath: unknown) => {
+    return getCaughtError(() => {
+      return getProjectTransferExportAssetReferenceCollectionForArticles([
+        getConvertedArticle({
+          cropPath,
+          metadata: {converterKind: 'mineru', layoutPath},
+          sourceArticleId: 'article-bad',
+        }),
+      ])
+    })
+  }
+  const errors = await Promise.all(
+    ['/Users/someone/forska/layout.json', 'tmp/layout.json', 'http://127.0.0.1:8000/layout.json', 'layout.json', 7].map(
+      getMetadataError,
+    ),
+  )
+  const failureMetadataReferences = getProjectTransferExportAssetReferenceCollectionForArticles([
+    getConvertedArticle({cropPath, metadata: {converterKind: 'mineru', error: 'timeout'}, sourceArticleId: 'a'}),
+  ]).references
+
+  expect(
+    errors.map((error) => {
+      return [error?.name, error?.code]
+    }),
+  ).toEqual(
+    errors.map(() => {
+      return ['ProjectTransferExportAssetError', 'invalid_asset_reference']
+    }),
+  )
+  expect(
+    errors.every((error) => {
+      return error?.message.includes('articles[0].fullTextConversionMetadata.layoutPath') === true
+    }),
+  ).toBe(true)
+  expect(
+    failureMetadataReferences.map((reference) => {
+      return reference.kind
+    }),
+  ).toEqual(['fullTextAssets'])
+})
+
+test('project-transfer export names a missing runtime asset and the fields that reference it', async () => {
+  const cwd = getRuntimeRoot()
+  const layoutPath = 'assets/full-text-assets/article-missing/layout.json'
+  const cropPath = 'assets/full-text-assets/article-missing/fig-1.jpg'
+  const article = getConvertedArticle({
+    cropPath,
+    metadata: {converterKind: 'mineru', layoutPath},
+    sourceArticleId: 'article-missing',
+  })
+
+  try {
+    writeRuntimeAsset({cwd, path: layoutPath, value: '{}'})
+
+    const copyError = await getCaughtError(() => {
+      return getProjectTransferExportAssetCollectionForArticles([article], {
+        cwd,
+        stagingRootPath: join(cwd, 'tmp/project-transfer/export-assets-stage'),
+      })
+    })
+
+    rmSync(join(cwd, layoutPath))
+    writeRuntimeAsset({cwd, path: cropPath, value: 'crop'})
+
+    const estimateError = await getCaughtError(() => {
+      return getProjectTransferExportAssetByteEstimateForArticles([article], {cwd})
+    })
+
+    expect(isProjectTransferExportAssetError(copyError)).toBe(true)
+    expect(copyError?.code).toBe('missing_runtime_asset')
+    expect(copyError?.message).toBe(
+      `Project transfer export asset: missing runtime asset ${cropPath} referenced by articles[0].fullTextAssets[0].imagePath`,
+    )
+    expect(isProjectTransferExportAssetError(estimateError)).toBe(true)
+    expect(estimateError?.code).toBe('missing_runtime_asset')
+    expect(estimateError?.message).toBe(
+      `Project transfer export asset: missing runtime asset ${layoutPath} referenced by articles[0].fullTextConversionMetadata.layoutPath`,
+    )
+  } finally {
+    rmSync(cwd, {force: true, recursive: true})
+  }
 })
 
 test('project-transfer export rejects symlinked runtime assets', async () => {

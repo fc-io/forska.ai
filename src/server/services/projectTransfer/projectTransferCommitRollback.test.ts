@@ -10,6 +10,7 @@ import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
 import {
   type ProjectTransferCommitPromotionManifest,
   promoteProjectTransferCommitAssets,
+  rollbackProjectTransferCommitPromotion,
   runProjectTransferCommitWithPromotionRollback,
 } from './projectTransferCommitRollback.ts'
 import {getProjectTransferCanonicalJson, getProjectTransferSha256Checksum} from './projectTransferFingerprint.ts'
@@ -384,6 +385,141 @@ test('project transfer commit promotion preserves bounded-concurrency pending st
         return entry.copiedByteLength === entry.byteLength && entry.copiedChecksumSha256 === entry.checksumSha256
       }),
   ).toBe(true)
+})
+
+test('project transfer commit promotion rewrites layout.json and converter.md paths in conversion metadata and rolls them back', async () => {
+  const sessionId = 'session-conversion-metadata'
+  const layoutPath = 'assets/full-text-assets/source-article-created/layout.json'
+  const converterMarkdownPath = 'assets/full-text-assets/source-article-created/converter.md'
+  const filledLayoutPath = 'assets/full-text-assets/source-article-reused/layout.json'
+  const layoutBytes = getBytes('{"blocks":[],"version":"layout-v2"}')
+  const markdownBytes = getBytes('# Converter markdown')
+  const filledLayoutBytes = getBytes('{"blocks":[{"text":"reused"}],"version":"layout-v2"}')
+  const metadata = {baseURL: 'http://127.0.0.1:8000', converterKind: 'mineru', converterMarkdownPath, layoutPath}
+  const filledMetadata = {converterKind: 'docling', layoutPath: filledLayoutPath}
+  const plan = getPlan({
+    articleMatches: [
+      {
+        action: 'create',
+        candidates: [],
+        conflicts: [],
+        identifierKeys: [],
+        packageArticleId: null,
+        selectedTargetArticleId: null,
+        sourceArticleId: 'source-article-created',
+      },
+    ],
+    articleUpdatePlan: [
+      {
+        activeDirtiedProjectIds: [],
+        archivedReferencingProjectCount: 0,
+        dateExpansionBlockers: [],
+        fieldFills: [
+          {
+            assetDriven: true,
+            assetPaths: [filledLayoutPath],
+            field: 'fullTextConversionMetadata',
+            value: filledMetadata,
+          },
+        ],
+        sourceArticleId: 'source-article-reused',
+        targetArticleId: 'target-article-reused',
+      },
+    ],
+    assetPromotionPlan: [
+      getAssetPromotionPlanEntry({bytes: layoutBytes, contentType: 'application/json', packagePath: layoutPath}),
+      getAssetPromotionPlanEntry({
+        bytes: markdownBytes,
+        contentType: 'text/markdown',
+        packagePath: converterMarkdownPath,
+      }),
+      getAssetPromotionPlanEntry({
+        bytes: filledLayoutBytes,
+        contentType: 'application/json',
+        packagePath: filledLayoutPath,
+        sourceArticleId: 'source-article-reused',
+        targetArticleId: 'target-article-reused',
+      }),
+    ],
+  })
+
+  await Promise.all([
+    writeExtractedAsset(sessionId, layoutPath, layoutBytes),
+    writeExtractedAsset(sessionId, converterMarkdownPath, markdownBytes),
+    writeExtractedAsset(sessionId, filledLayoutPath, filledLayoutBytes),
+    writeArticles(sessionId, [getArticle('source-article-created', {fullTextConversionMetadata: metadata})]),
+    writePlan(sessionId, plan),
+  ])
+
+  const result = await promoteProjectTransferCommitAssets({cwd: runtimeRoot, now, sessionId})
+  const promotedPaths = Object.values(result.promotionPathByPackagePath)
+  const existedBeforeRollback = await Promise.all(promotedPaths.map(fileExists))
+  const rollback = await rollbackProjectTransferCommitPromotion({
+    cwd: runtimeRoot,
+    manifest: result.manifest,
+    sessionId,
+  })
+
+  expect(result.articleCreates[0]?.article.fullTextConversionMetadata).toEqual({
+    ...metadata,
+    converterMarkdownPath: result.promotionPathByPackagePath[converterMarkdownPath],
+    layoutPath: result.promotionPathByPackagePath[layoutPath],
+  })
+  expect(result.articleFieldFills).toEqual([
+    {
+      field: 'fullTextConversionMetadata',
+      sourceArticleId: 'source-article-reused',
+      targetArticleId: 'target-article-reused',
+      value: {...filledMetadata, layoutPath: result.promotionPathByPackagePath[filledLayoutPath]},
+    },
+  ])
+  expect(
+    promotedPaths.every((pathValue) => {
+      return pathValue.startsWith(`assets/project-transfer/${sessionId}/`)
+    }),
+  ).toBe(true)
+  expect(existedBeforeRollback).toEqual([true, true, true])
+  expect(rollback).toEqual({deletedPromotedAssetCount: 3, skippedPromotedAssetCount: 0})
+  expect(await Promise.all(promotedPaths.map(fileExists))).toEqual([false, false, false])
+})
+
+test('project transfer commit promotion rejects conversion metadata paths the package does not declare', async () => {
+  const sessionId = 'session-conversion-metadata-undeclared'
+  const article = getArticle('source-article-undeclared', {
+    fullTextConversionMetadata: {
+      converterKind: 'mineru',
+      layoutPath: 'assets/full-text-assets/source-article-undeclared/layout.json',
+    },
+  })
+  const plan = getPlan({
+    articleMatches: [
+      {
+        action: 'create',
+        candidates: [],
+        conflicts: [],
+        identifierKeys: [],
+        packageArticleId: null,
+        selectedTargetArticleId: null,
+        sourceArticleId: 'source-article-undeclared',
+      },
+    ],
+    assetPromotionPlan: [],
+  })
+
+  await Promise.all([writeArticles(sessionId, [article]), writePlan(sessionId, plan)])
+
+  const error: unknown = await promoteProjectTransferCommitAssets({cwd: runtimeRoot, now, sessionId}).then(
+    () => {
+      return null
+    },
+    (caught: unknown) => {
+      return caught
+    },
+  )
+
+  expect(error instanceof Error ? error.message : '').toContain(
+    'articles[0].fullTextConversionMetadata.layoutPath references undeclared asset assets/full-text-assets/source-article-undeclared/layout.json',
+  )
 })
 
 test('project transfer commit promotion rejects source runtime asset URLs in committed article fields', async () => {

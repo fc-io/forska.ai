@@ -27,6 +27,10 @@ import {getProviderRegistryEntry} from '../../providers/providerRegistry.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from '../appQueryHelpers.ts'
 import type {AppQueryDatabaseService} from '../appQueryServiceCore.ts'
+import {
+  type ProjectTransferCanonicalFullTextField,
+  projectTransferCanonicalFullTextFields,
+} from './projectTransferCanonicalFullText.ts'
 import {type ProjectTransferRawArticleProvenanceMode} from './projectTransferContracts.ts'
 import {
   getEmptyProjectTransferAssetManifestPayload,
@@ -195,6 +199,8 @@ type ProjectTransferExportArticleRow = {
   doi: string | null
   fullText: string | null
   fullTextAssets: unknown
+  fullTextCanonicalHash: string | null
+  fullTextCanonicalVersion: string | null
   fullTextCharCount: number | null
   fullTextConversionAttempts: number | null
   fullTextConversionError: string | null
@@ -202,6 +208,7 @@ type ProjectTransferExportArticleRow = {
   fullTextConversionModelId: string | null
   fullTextConversionStatus: string | null
   fullTextFetchedAt: unknown
+  fullTextFigureModeBuilt: string | null
   fullTextHtml: string | null
   fullTextOriginalFormat: string | null
   fullTextPdf: string | null
@@ -1102,12 +1109,34 @@ const getProjectTransferExportArticleRawJsonSelectSql = (includeRawArticleJson: 
       }
 }
 
+const canonicalFullTextColumnByField = {
+  fullTextCanonicalHash: 'full_text_canonical_hash',
+  fullTextCanonicalVersion: 'full_text_canonical_version',
+  fullTextFigureModeBuilt: 'full_text_figure_mode_built',
+} as const satisfies Record<ProjectTransferCanonicalFullTextField, string>
+
+const getProjectTransferExportCanonicalFullTextSelectSql = (includeFullText: boolean) => {
+  return Object.fromEntries(
+    projectTransferCanonicalFullTextFields.map((field) => {
+      return [
+        field,
+        includeFullText
+          ? `CASE WHEN a.full_text IS NULL THEN NULL ELSE a.${canonicalFullTextColumnByField[field]} END`
+          : 'NULL',
+      ]
+    }),
+  ) as Record<ProjectTransferCanonicalFullTextField, string>
+}
+
 const getProjectTransferExportArticleRows = async (
   projectId: string,
   database: AppQueryDatabaseService,
   options: {includeFullText?: boolean; includeRawArticleJson?: boolean} = {},
 ) => {
   const fullTextSelectSql = options.includeFullText ? 'a.full_text' : 'NULL'
+  const canonicalFullTextSelectSql = getProjectTransferExportCanonicalFullTextSelectSql(
+    options.includeFullText ?? false,
+  )
   const rawJsonSelectSql = getProjectTransferExportArticleRawJsonSelectSql(options.includeRawArticleJson ?? true)
   const articleRows = await database.queryJson<ProjectTransferExportArticleRow>(`
     WITH
@@ -1169,6 +1198,9 @@ const getProjectTransferExportArticleRows = async (
       a.url,
       a.full_text_fetched_at AS fullTextFetchedAt,
       ${fullTextSelectSql} AS fullText,
+      ${canonicalFullTextSelectSql.fullTextCanonicalHash} AS fullTextCanonicalHash,
+      ${canonicalFullTextSelectSql.fullTextCanonicalVersion} AS fullTextCanonicalVersion,
+      ${canonicalFullTextSelectSql.fullTextFigureModeBuilt} AS fullTextFigureModeBuilt,
       a.full_text_html AS fullTextHtml,
       a.full_text_source AS fullTextSource,
       a.full_text_original_format AS fullTextOriginalFormat,
@@ -2446,6 +2478,8 @@ const getProjectTransferExportArticlePayloadRecord = (
     doi: row.doi,
     fullText: row.fullText,
     fullTextAssets: getJsonValue(row.fullTextAssets),
+    fullTextCanonicalHash: row.fullTextCanonicalHash,
+    fullTextCanonicalVersion: row.fullTextCanonicalVersion,
     fullTextCharCount: row.fullTextCharCount,
     fullTextConversionAttempts: row.fullTextConversionAttempts,
     fullTextConversionError: row.fullTextConversionError,
@@ -2453,6 +2487,7 @@ const getProjectTransferExportArticlePayloadRecord = (
     fullTextConversionModelId: row.fullTextConversionModelId,
     fullTextConversionStatus: row.fullTextConversionStatus,
     fullTextFetchedAt: getIsoDateValue(row.fullTextFetchedAt),
+    fullTextFigureModeBuilt: row.fullTextFigureModeBuilt,
     fullTextHtml: row.fullTextHtml,
     fullTextOriginalFormat: row.fullTextOriginalFormat,
     fullTextPdf: row.fullTextPdf,
@@ -3186,6 +3221,7 @@ type ProjectTransferExportPreflightEstimateRow = {
 
 type ProjectTransferExportPreflightAssetArticleRow = {
   fullTextAssets: unknown
+  fullTextConversionMetadata: unknown
   fullTextHtml: string | null
   fullTextPdf: string | null
   sourceArticleId: string
@@ -3269,6 +3305,9 @@ const getProjectTransferExportPreflightPackageEstimate = async (
           'article.full_text_conversion_error',
           'article.full_text_conversion_model_id',
           'article.full_text_conversion_metadata',
+          'article.full_text_canonical_hash',
+          'article.full_text_canonical_version',
+          'article.full_text_figure_mode_built',
           'article.content_hash',
           'article.import_route',
           ...(includeRawArticleProvenanceInEstimate ? ['article.original_data', 'article.source_metadata'] : []),
@@ -3502,11 +3541,13 @@ const getProjectTransferExportPreflightAssetArticles = async (
     SELECT
       article.id AS sourceArticleId,
       TO_JSON(article.full_text_assets) AS fullTextAssets,
+      TO_JSON(article.full_text_conversion_metadata) AS fullTextConversionMetadata,
       article.full_text_html AS fullTextHtml,
       article.full_text_pdf AS fullTextPdf
     FROM app.article article
     INNER JOIN project_transfer_scope_article scope ON scope.article_id = article.id
     WHERE article.full_text_assets IS NOT NULL
+      OR article.full_text_conversion_metadata IS NOT NULL
       OR article.full_text_html IS NOT NULL
       OR article.full_text_pdf IS NOT NULL
     ORDER BY article.id ASC
@@ -3515,6 +3556,7 @@ const getProjectTransferExportPreflightAssetArticles = async (
   return rows.map((row) => {
     return {
       fullTextAssets: getJsonValue(row.fullTextAssets),
+      fullTextConversionMetadata: getJsonValue(row.fullTextConversionMetadata),
       fullTextHtml: row.fullTextHtml,
       fullTextPdf: row.fullTextPdf,
       sourceArticleId: row.sourceArticleId,

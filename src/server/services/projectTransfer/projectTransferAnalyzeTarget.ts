@@ -2,6 +2,7 @@ import {computePromptContentHash} from '../../utils/computePromptContentHash.ts'
 import type {DuckdbWorkloadContext} from '../../utils/duckdbService.ts'
 import {getAppDatabaseService} from '../appDatabaseService.ts'
 import {getDateValue, getSqlLiteral} from '../appQueryHelpers.ts'
+import {getProjectTransferCanonicalFullTextHash} from './projectTransferCanonicalFullText.ts'
 import type {
   ProjectTransferConflictCounts,
   ProjectTransferOverlapCounts,
@@ -82,8 +83,16 @@ type TargetArticleRow = {
   doi: string | null
   fullText: string | null
   fullTextAssets: unknown
+  fullTextCanonicalHash: string | null
+  fullTextCanonicalVersion: string | null
   fullTextCharCount: number | null
+  fullTextConversionAttempts: number | null
+  fullTextConversionError: string | null
+  fullTextConversionMetadata: unknown
+  fullTextConversionModelId: string | null
+  fullTextConversionStatus: string | null
   fullTextFetchedAt: unknown
+  fullTextFigureModeBuilt: string | null
   fullTextHtml: string | null
   fullTextOriginalFormat: string | null
   fullTextPdf: string | null
@@ -96,6 +105,12 @@ type TargetArticleRow = {
   sourceMetadata: unknown
   targetArticleId: string
   url: string | null
+}
+
+type CanonicalFullTextFillDecision = {
+  blockers: ProjectTransferPlanBlocker[]
+  fields: readonly ArticleFillField[]
+  suppressedFields: readonly ArticleFillField[]
 }
 
 type TargetArticleMatchedIdentifier = {identifierType: string; key: string; value: string}
@@ -257,6 +272,28 @@ const articleFillFields = [
   'sourceMetadata',
   'url',
 ] as const
+const canonicalFullTextUnitFields = [
+  'fullTextCanonicalHash',
+  'fullTextCanonicalVersion',
+  'fullTextConversionAttempts',
+  'fullTextConversionError',
+  'fullTextConversionMetadata',
+  'fullTextConversionModelId',
+  'fullTextConversionStatus',
+  'fullTextFigureModeBuilt',
+] as const
+const targetConversionStateFields = [
+  'fullTextAssets',
+  'fullTextCanonicalHash',
+  'fullTextCanonicalVersion',
+  'fullTextConversionMetadata',
+  'fullTextConversionStatus',
+  'fullTextFigureModeBuilt',
+] as const
+const articleAssetScanFields = [...articleFillFields, ...canonicalFullTextUnitFields] as const
+
+type ArticleFillField = (typeof articleAssetScanFields)[number]
+
 const articleReferenceScanExcludedFields = new Set(['omissions', 'provenance', 'redactions', 'signature', 'warnings'])
 
 const getRunner = (runner?: ProjectTransferAnalyzeTargetRunner) => {
@@ -386,6 +423,14 @@ const getTargetArticleSelectSql = () => {
     a.full_text_fetched_at AS fullTextFetchedAt,
     TO_JSON(a.full_text_assets) AS fullTextAssets,
     a.full_text_char_count AS fullTextCharCount,
+    a.full_text_canonical_hash AS fullTextCanonicalHash,
+    a.full_text_canonical_version AS fullTextCanonicalVersion,
+    a.full_text_figure_mode_built AS fullTextFigureModeBuilt,
+    a.full_text_conversion_status AS fullTextConversionStatus,
+    a.full_text_conversion_error AS fullTextConversionError,
+    a.full_text_conversion_attempts AS fullTextConversionAttempts,
+    a.full_text_conversion_model_id AS fullTextConversionModelId,
+    TO_JSON(a.full_text_conversion_metadata) AS fullTextConversionMetadata,
     a.content_hash AS contentHash,
     a.import_route AS importRoute,
     TO_JSON(a.original_data) AS originalData,
@@ -1063,7 +1108,7 @@ const getRuntimeAssetPathsFromValue = (value: unknown): string[] => {
 
 const getArticleFieldAssetPaths = (article: ProjectTransferArticlePayloadRecord) => {
   return Object.fromEntries(
-    articleFillFields.map((field) => {
+    articleAssetScanFields.map((field) => {
       return [field, getRuntimeAssetPathsFromValue(getRecordField(article, field))]
     }),
   )
@@ -1083,16 +1128,77 @@ const isMissingTargetValue = (value: unknown) => {
   return typeof value === 'string' ? value.trim() === '' : value === null || value === undefined
 }
 
+const getCanonicalFullTextBlocker = ({
+  code,
+  message,
+  sourceArticleId,
+}: {
+  code: string
+  message: string
+  sourceArticleId: string
+}): CanonicalFullTextFillDecision => {
+  return {
+    blockers: [getPlanBlocker({code, message, scope: `articles.${sourceArticleId}.fullTextCanonicalHash`})],
+    fields: [],
+    suppressedFields: ['fullText', 'fullTextAssets'],
+  }
+}
+
+const getCanonicalFullTextFillDecision = ({
+  article,
+  sourceArticleId,
+  targetArticle,
+}: {
+  article: ProjectTransferArticlePayloadRecord
+  sourceArticleId: string
+  targetArticle: TargetArticleRow
+}): CanonicalFullTextFillDecision => {
+  const packageHash = getNonEmptyString(getRecordField(article, 'fullTextCanonicalHash'))
+  const targetText = getNonEmptyString(targetArticle.fullText)
+  const targetHasConversionState = targetConversionStateFields.some((field) => {
+    return !isMissingTargetValue(targetArticle[field])
+  })
+
+  if (packageHash === null) {
+    return {blockers: [], fields: [], suppressedFields: []}
+  }
+
+  if (targetText !== null && getProjectTransferCanonicalFullTextHash(targetText) !== packageHash) {
+    return getCanonicalFullTextBlocker({
+      code: 'article_full_text_canonical_hash_conflict',
+      message: `${sourceArticleId} canonical full text ${packageHash} differs from the full text of target article ${targetArticle.targetArticleId}`,
+      sourceArticleId,
+    })
+  }
+
+  if (targetText === null && targetHasConversionState) {
+    return getCanonicalFullTextBlocker({
+      code: 'article_full_text_canonical_state_conflict',
+      message: `${sourceArticleId} canonical full text cannot fill target article ${targetArticle.targetArticleId}, which has its own full-text conversion state without text`,
+      sourceArticleId,
+    })
+  }
+
+  return targetHasConversionState
+    ? {blockers: [], fields: [], suppressedFields: ['fullTextAssets']}
+    : {blockers: [], fields: canonicalFullTextUnitFields, suppressedFields: []}
+}
+
 const getArticleFieldFills = ({
   article,
   assetPathsByField,
+  canonicalDecision,
   targetArticle,
 }: {
   article: ProjectTransferArticlePayloadRecord
   assetPathsByField: Record<string, string[]>
+  canonicalDecision: CanonicalFullTextFillDecision
   targetArticle: TargetArticleRow
 }) => {
-  return articleFillFields
+  return [...articleFillFields, ...canonicalDecision.fields]
+    .filter((field) => {
+      return !canonicalDecision.suppressedFields.includes(field)
+    })
     .map((field): ArticleFieldFill | null => {
       const value = getRecordField(article, field)
       const targetValue = targetArticle[field]
@@ -1265,15 +1371,30 @@ const getArticleUpdatePlan = async ({
   )
   const importedDateFrom = getRecordField(importedProject ?? {}, 'dateFrom')
   const importedDateTo = getRecordField(importedProject ?? {}, 'dateTo')
+  const canonicalDecisionBySource = Object.fromEntries(
+    reusedMatches.map((match) => {
+      return [
+        match.sourceArticleId,
+        getCanonicalFullTextFillDecision({
+          article: articlesBySource[match.sourceArticleId] as ProjectTransferArticlePayloadRecord,
+          sourceArticleId: match.sourceArticleId,
+          targetArticle: targetArticleBySource[match.sourceArticleId] as TargetArticleRow,
+        }),
+      ]
+    }),
+  ) as Record<string, CanonicalFullTextFillDecision>
   const updatePlan = reusedMatches.map((match): ArticleUpdatePlan => {
     const targetArticle = targetArticleBySource[match.sourceArticleId] as TargetArticleRow
     const article = articlesBySource[match.sourceArticleId] as ProjectTransferArticlePayloadRecord
     const assetPathsByField = getArticleFieldAssetPaths(article)
-    const fieldFills = getArticleFieldFills({article, assetPathsByField, targetArticle}).filter((fill) => {
-      return fill.assetPaths.every((assetPath) => {
-        return assetManifestPaths.has(assetPath)
-      })
-    })
+    const canonicalDecision = canonicalDecisionBySource[match.sourceArticleId] as CanonicalFullTextFillDecision
+    const fieldFills = getArticleFieldFills({article, assetPathsByField, canonicalDecision, targetArticle}).filter(
+      (fill) => {
+        return fill.assetPaths.every((assetPath) => {
+          return assetManifestPaths.has(assetPath)
+        })
+      },
+    )
     const projectReferences = referencingProjects.filter((project) => {
       return project.targetArticleId === targetArticle.targetArticleId
     })
@@ -1327,6 +1448,9 @@ const getArticleUpdatePlan = async ({
     blockers: [
       ...updatePlan.flatMap((plan) => {
         return plan.dateExpansionBlockers
+      }),
+      ...Object.values(canonicalDecisionBySource).flatMap((decision) => {
+        return decision.blockers
       }),
       ...importedProjectDateBlockers,
     ],
