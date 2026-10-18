@@ -1,9 +1,11 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
 import {loadFullTextTokenCounter} from '../../server/fullText/fullTextTokenizer.ts'
+import {buildCanonicalFixture, getCanonicalFixtureAssets} from '../../server/test/canonicalFullTextFixtures.ts'
 import type {FullTextChunkPolicy} from '../../utils/fullTextStrategyOptions.ts'
 import {buildFullTextChunkPlan} from './fullTextChunkPlan.ts'
-import {type FullTextJudgingInput, FullTextTooLargeError} from './fullTextJudgingInput.ts'
+import {type FullTextJudgingInput, FullTextTooLargeError, prepareFullTextJudgingInput} from './fullTextJudgingInput.ts'
+import {getFullTextJudgingFigureAssets} from './renderFullTextForJudging.ts'
 import {JudgmentPersistenceError} from './storeSinglePromptJudgment.ts'
 
 type JudgeModule = typeof import('../judge.ts')
@@ -295,6 +297,75 @@ test('a failed part stops the article before the merge call', async () => {
     }),
   ).toBe(false)
   expect(storeSinglePromptJudgment).not.toHaveBeenCalled()
+})
+
+const getStoredMarkerTextJudgingInput = async (): Promise<FullTextJudgingInput> => {
+  const assets = getCanonicalFixtureAssets('frontiers-fmed-2023-1283512', 'mineru')
+  const markerText = buildCanonicalFixture({
+    assets,
+    converterKind: 'mineru',
+    figureMode: 'native_images',
+    name: 'frontiers-fmed-2023-1283512',
+  }).text
+
+  return prepareFullTextJudgingInput({
+    abstract: 'Preview summary',
+    articleId: 'article-full-text',
+    block: {
+      article: {
+        canonicalTextVersion: 'canonical-v1',
+        figureAssets: getFullTextJudgingFigureAssets(assets),
+        figureModeBuilt: 'markers',
+      },
+      chunkPlan: null,
+      strategy: {
+        canonicalTextVersion: 'canonical-v1',
+        chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
+        figureMode: 'none',
+        id: strategyId,
+      },
+    },
+    countTokens: await loadFullTextTokenCounter(),
+    fullText: markerText,
+    fullTextStrategyId: strategyId,
+  })
+}
+
+test('text only: a vision and a non-vision model receive byte-identical prompts with no images', async () => {
+  const prompts: InvokeInput[] = []
+  const invokeStoredProviderModel = mock(async (input: InvokeInput) => {
+    prompts.push(input)
+
+    return getResponse({answer: 'yes', explanation: 'Randomised.', quotes: []})
+  })
+  const storeSinglePromptJudgment = mock(async (_input: unknown) => {})
+  const {judgeSinglePrompt} = await loadJudgeModule({invokeStoredProviderModel, storeSinglePromptJudgment})
+  const fullTextJudging = await getStoredMarkerTextJudgingInput()
+  const baseInput = createInput(fullTextJudging)
+  const getModelInput = (modelName: string, modelContext: number) => {
+    return {
+      ...baseInput,
+      modelConfig: {...baseInput.modelConfig, modelId: `model-${modelName}`, modelName, provider: 'ollama'},
+      modelContext,
+    }
+  }
+
+  await judgeSinglePrompt(getModelInput('qwen3-vl:8b-instruct', 262_144))
+  await judgeSinglePrompt(getModelInput('qwen2.5:1.5b', 131_072))
+
+  const [visionRequest, textRequest] = prompts
+
+  expect(prompts).toHaveLength(2)
+  expect(typeof visionRequest?.prompt).toBe('string')
+  expect(textRequest?.prompt).toBe(visionRequest?.prompt ?? '')
+  expect(textRequest?.systemPrompt).toBe(visionRequest?.systemPrompt ?? '')
+  expect(visionRequest ? getPromptText(visionRequest) : '').toContain('\nFigure 1\n')
+  expect(visionRequest ? getPromptText(visionRequest) : '').not.toContain('[figure:')
+  expect(
+    storeSinglePromptJudgment.mock.calls.map((call) => {
+      return (call[0] as {fullTextStrategyId: string}).fullTextStrategyId
+    }),
+  ).toEqual([strategyId, strategyId])
 })
 
 const getImage = (figureIndex: number) => {

@@ -754,6 +754,48 @@ describe('project create route content flags', () => {
     }
   }, 15_000)
 
+  test('a vision model preselects no figure mode and keeps text only selectable', async () => {
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      setFormValue(container.querySelector<HTMLInputElement>('#project-name'), 'Vision Text Only Project')
+      getFullTextCheckbox(container)?.click()
+      await waitForUpdates()
+      await waitForUpdates()
+
+      const figureModeRadios = Array.from(
+        container.querySelectorAll<HTMLInputElement>('input[name="full-text-figure-mode"]'),
+      )
+
+      expect(
+        figureModeRadios.map((radio) => {
+          return [radio.value, radio.checked, radio.disabled]
+        }),
+      ).toEqual([
+        ['none', false, false],
+        ['native_images', false, false],
+      ])
+      expect(container.querySelector('[data-testid="full-text-figure-image-warning"]')).toBeNull()
+
+      await clickRadio(container, 'full-text-figure-mode', 'none')
+      await clickRadio(container, 'full-text-max-prompt-tokens', '48000')
+      await clickRadio(container, 'full-text-chunk-mode', 'chunked')
+      await waitForUpdates()
+
+      expect(container.querySelector('[data-testid="full-text-strategy-label"]')?.textContent).toBe(
+        'mineru 4.0.12 / none / chunked 48k',
+      )
+
+      await submitCreateForm(container)
+
+      expect(mockState.createPayloads[0]).toMatchObject({fullTextFigureMode: 'none', modelId: 'model-1'})
+    } finally {
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+
   test('a vision model shows no warning and both figure modes are selectable', async () => {
     const {container, dispose, queryClient} = await mountCreateRoute()
 

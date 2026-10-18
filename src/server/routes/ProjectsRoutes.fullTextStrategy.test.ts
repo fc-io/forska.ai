@@ -674,6 +674,36 @@ test('the validation endpoint reports whether the form model accepts images, fro
   expect(noModel).toMatchObject({modelAcceptsImages: false, modelLabel: null})
 })
 
+test('text only stores the same strategy id for a vision and a non-vision model', async () => {
+  await setConversionModel(mineruModelId)
+  await insertVisionJudgeModel()
+
+  const createTextOnlyProject = async (modelId: string, name: string) => {
+    const response = await requestJson('/api/projects', 'POST', {
+      fullTextChunkPolicy: chunkPolicy,
+      fullTextFigureMode: 'none',
+      modelId,
+      name,
+      useFulltext: true,
+    })
+
+    expect(response.status).toBe(200)
+
+    return (response.json as ProjectResponse).data
+  }
+  const textModelProject = await createTextOnlyProject(judgeModelId, 'Text only, text model')
+  const visionModelProject = await createTextOnlyProject(visionJudgeModelId, 'Text only, vision model')
+  const storedTextModelProject = await getStoredProject(textModelProject.id)
+  const storedVisionModelProject = await getStoredProject(visionModelProject.id)
+
+  expect(storedTextModelProject?.fullTextFigureMode).toBe('none')
+  expect(storedVisionModelProject?.fullTextFigureMode).toBe('none')
+  expect(storedTextModelProject?.fullTextStrategyId).toMatch(/^fts-[0-9a-f]{16}$/)
+  expect(storedVisionModelProject?.fullTextStrategyId).toBe(storedTextModelProject?.fullTextStrategyId ?? '')
+  expect(visionModelProject.fullTextStrategyLabel).toBe(textModelProject.fullTextStrategyLabel)
+  expect(textModelProject.fullTextStrategyLabel).toBe('mineru 4.0.12 / none / chunked 48k')
+})
+
 test('with a paused job the edit page records a drifted strategy on save', async () => {
   await setConversionModel(mineruModelId)
   await insertExplicitFullTextProject({id: 'fts-record-paused', jobStatus: 'paused'})
