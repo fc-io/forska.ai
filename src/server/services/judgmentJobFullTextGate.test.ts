@@ -172,6 +172,45 @@ test('text only passes for a model that cannot receive images', () => {
   expect(gate.strategy?.inputs.figureMode).toBe('none')
 })
 
+test('text only resolves the same strategy for vision, non-vision, unverified and text-transport models', () => {
+  const getImageModel = (supportsImageInput: boolean) => {
+    return getDiscoveredModel(131_072, {
+      capabilityOverrides: {supportsImageInput, updatedAt: '2026-10-17T10:00:00.000Z'},
+    })
+  }
+  const models = [
+    getImageModel(true),
+    getImageModel(false),
+    getDiscoveredModel(131_072),
+    {...getDiscoveredModel(131_072), providerKind: 'mineru'},
+  ]
+  const textOnlyGates = models.map((model) => {
+    return evaluateProjectFullTextGate({context, model, selection})
+  })
+  const imageGates = models.map((model) => {
+    return evaluateProjectFullTextGate({context, model, selection: {...selection, fullTextFigureMode: 'native_images'}})
+  })
+
+  expect(
+    textOnlyGates.map((gate) => {
+      return gate.errors
+    }),
+  ).toEqual([[], [], [], []])
+  expect(
+    new Set(
+      textOnlyGates.map((gate) => {
+        return JSON.stringify(gate.strategy)
+      }),
+    ).size,
+  ).toBe(1)
+  expect(textOnlyGates[0]?.strategy?.inputs).toMatchObject({figureMode: 'none', imageTransportVersion: null})
+  expect(
+    imageGates.map((gate) => {
+      return gate.errors.length
+    }),
+  ).toEqual([0, 1, 1, 1])
+})
+
 test('a stored descriptions figure mode reads as no figure mode and needs an explicit choice', () => {
   const gate = evaluateStoredProjectFullTextGate({
     context,

@@ -103,6 +103,20 @@ test('text only is ready at once: caption lines stay, figure markers go, no imag
   expect(ready.kind === 'ready' ? ready.fullTextJudging.figureImages : null).toEqual([])
 })
 
+test('text only prepares the same input for a vision and a non-vision model', async () => {
+  const {prepareFullTextJudging} = await loadPrepareModule()
+  const visionModel = await prepareFullTextJudging(
+    getPreparationInput(getBlock(), {modelContext: 262_144, modelName: 'qwen3-vl:8b-instruct'}),
+  )
+  const textModel = await prepareFullTextJudging(
+    getPreparationInput(getBlock(), {modelContext: 131_072, modelName: 'deepseek-v4.1-flash'}),
+  )
+
+  expect(visionModel.kind).toBe('ready')
+  expect(textModel).toEqual(visionModel)
+  expect(visionModel.kind === 'ready' ? visionModel.fullTextJudging.figureImages : null).toEqual([])
+})
+
 test('missing strategy inputs, legacy strategies and small model windows are config requeues; bad text closes', async () => {
   const {prepareFullTextJudging} = await loadPrepareModule()
   const block = getBlock()
