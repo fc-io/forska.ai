@@ -49,6 +49,12 @@ import {
   getJudgmentJobsRootDirectory,
 } from './judgmentJobPaths.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
+import {
+  completionAckCloseoutProofIndexSql,
+  getDurableTerminalCompletionAckProofSql,
+  getDurableTerminalOutboxProofSql,
+  getDurableTerminalQueuePromptProofSql,
+} from './judgmentJobSqliteService/terminalCloseoutProofSql.ts'
 import {recordJudgmentJobStorageTransfer} from './judgmentJobStorageTransferRuntime.ts'
 import {
   addLegacyEvidenceRepairResults,
@@ -1504,6 +1510,7 @@ const ensureCompletionAckSchema = (database: Database) => {
     CREATE INDEX IF NOT EXISTS idx_completion_ack_queue_prompt_id
       ON completion_ack(queue_prompt_id);
   `)
+  database.exec(completionAckCloseoutProofIndexSql)
 }
 
 const getStoredScanState = (database: Database, jobId: string) => {
@@ -1566,10 +1573,6 @@ type TerminalRequestAttemptCloseoutProofRow = {requestAttemptsJson: string | nul
 
 const terminalRequestAttemptCloseoutProofSourceCount = 3
 
-const getTerminalRequestAttemptCloseoutProofLimitSql = (normalizedMaxRows: number | null): string => {
-  return normalizedMaxRows === null ? '' : `LIMIT ${normalizedMaxRows}`
-}
-
 const getTerminalRequestAttemptCloseoutProofSourceMaxRows = (normalizedMaxRows: number | null): number | null => {
   return normalizedMaxRows === null
     ? null
@@ -1581,15 +1584,7 @@ const getDurableTerminalQueuePromptProofRowsFromDatabase = (
   normalizedMaxRows: number | null,
 ): TerminalRequestAttemptCloseoutProofRow[] => {
   return database
-    .query(
-      `
-        SELECT request_attempt_manifest_json AS requestAttemptsJson
-        FROM queue_prompt
-        WHERE request_attempt_manifest_json IS NOT NULL
-        ORDER BY ready_insert_seq ASC, id ASC
-        ${getTerminalRequestAttemptCloseoutProofLimitSql(normalizedMaxRows)}
-      `,
-    )
+    .query(getDurableTerminalQueuePromptProofSql(normalizedMaxRows))
     .all() as TerminalRequestAttemptCloseoutProofRow[]
 }
 
@@ -1598,15 +1593,7 @@ const getDurableTerminalOutboxProofRowsFromDatabase = (
   normalizedMaxRows: number | null,
 ): TerminalRequestAttemptCloseoutProofRow[] => {
   return database
-    .query(
-      `
-        SELECT request_attempts_json AS requestAttemptsJson
-        FROM judgment_outbox
-        WHERE request_attempts_json IS NOT NULL
-        ORDER BY outbox_seq ASC
-        ${getTerminalRequestAttemptCloseoutProofLimitSql(normalizedMaxRows)}
-      `,
-    )
+    .query(getDurableTerminalOutboxProofSql(normalizedMaxRows))
     .all() as TerminalRequestAttemptCloseoutProofRow[]
 }
 
@@ -1615,15 +1602,7 @@ const getDurableTerminalCompletionAckProofRowsFromDatabase = (
   normalizedMaxRows: number | null,
 ): TerminalRequestAttemptCloseoutProofRow[] => {
   return database
-    .query(
-      `
-        SELECT request_attempts_json AS requestAttemptsJson
-        FROM completion_ack
-        WHERE request_attempts_json IS NOT NULL
-        ORDER BY completed_at ASC, claim_id ASC
-        ${getTerminalRequestAttemptCloseoutProofLimitSql(normalizedMaxRows)}
-      `,
-    )
+    .query(getDurableTerminalCompletionAckProofSql(normalizedMaxRows))
     .all() as TerminalRequestAttemptCloseoutProofRow[]
 }
 
