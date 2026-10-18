@@ -306,9 +306,9 @@ describe('compare judgments edit route full-text strategy check', () => {
     const {container, dispose} = await renderEditPage()
 
     try {
-      expect(
-        container.querySelector('[data-testid="comparison-legacy-full-text-no-images"]')?.textContent,
-      ).toContain('full text (legacy, no images)')
+      expect(container.querySelector('[data-testid="comparison-legacy-full-text-no-images"]')?.textContent).toContain(
+        'full text (legacy, no images)',
+      )
       expect(container.textContent).not.toContain('Use Full Text (without images)')
       expect(container.textContent).not.toContain('Pick at least one content option.')
 
