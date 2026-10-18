@@ -89,8 +89,8 @@ const requestJson = async (path: string, method: 'PATCH' | 'POST', body: Record<
 const setConversionModel = async (modelId: string | null) => {
   await getDatabase().run('DELETE FROM app.user_config')
   await getDatabase().run(`
-    INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id)
-    VALUES ('local-user', 'Local user', 'local@example.com', NULL, ${modelId ? `'${modelId}'` : 'NULL'})
+    INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id, unpaywall_email)
+    VALUES ('local-user', 'Local user', 'local@example.com', NULL, ${modelId ? `'${modelId}'` : 'NULL'}, 'local@example.com')
   `)
 }
 

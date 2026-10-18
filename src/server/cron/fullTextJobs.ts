@@ -8,6 +8,7 @@ import {
 } from '../reviewServing/articleReviewServingDeltaService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../services/appQueryHelpers.ts'
+import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
@@ -125,6 +126,20 @@ const storeFullText = async (id: string, fullText: NonNullable<Awaited<ReturnTyp
   }, fullTextFetchWorkloadContext)
 }
 
+export const logUnpaywallEmailMissing = async (articleCount: number): Promise<boolean> => {
+  const isMissing = articleCount > 0 && !(await getUserConfigQueryService().getUnpaywallEmail())
+
+  if (isMissing) {
+    fullTextFetchLogger.log(
+      'fullTextJobs:unpaywallEmailMissing',
+      '[fullTextJobs] No Unpaywall email is set in Settings; PDFs are fetched only from publisher URLs and arXiv',
+      {articleCount, component: fullTextFetchComponent},
+    )
+  }
+
+  return isMissing
+}
+
 const fetchFullTextForArticles = async () => {
   if (!shouldCurrentServerRunMaintenanceLoops()) return
   try {
@@ -145,6 +160,7 @@ const fetchFullTextForArticles = async () => {
 
     if (!shouldCurrentServerRunMaintenanceLoops()) return
 
+    await logUnpaywallEmailMissing(articlesWithoutFullText.length)
     await Promise.all(
       articlesWithoutFullText.map(async (articleData) => {
         const fullTextData = await getFullTextForArticle(articleData)

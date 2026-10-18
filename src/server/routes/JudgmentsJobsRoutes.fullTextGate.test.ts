@@ -65,8 +65,8 @@ const getCurrentStrategy = () => {
 const setConversionModel = async (modelId: string | null) => {
   await getDatabase().run('DELETE FROM app.user_config')
   await getDatabase().run(`
-    INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id)
-    VALUES ('local-user', 'Local user', 'local@example.com', NULL, ${modelId ? `'${modelId}'` : 'NULL'})
+    INSERT INTO app.user_config (id, name, email, role, full_text_conversion_model_id, unpaywall_email)
+    VALUES ('local-user', 'Local user', 'local@example.com', NULL, ${modelId ? `'${modelId}'` : 'NULL'}, 'local@example.com')
   `)
 }
 
@@ -380,6 +380,28 @@ describe('full-text gate in job payloads', () => {
     expect(listGate?.warnings[0]).toContain('PDF-to-text model MinerU standard: The last health check of MinerU failed')
     expect(detailResponse.status).toBe(200)
     expect(detailBody.fullTextGate).toEqual(listGate as FullTextGatePayload)
+  })
+
+  test('the jobs payload warns about a missing Unpaywall email and a failed check of the judging model connection', async () => {
+    const {jobId, modelId} = await createFixture({prefix: 'list-source-warnings', withJob: true})
+
+    await getDatabase().run(`
+      UPDATE app.user_config SET unpaywall_email = NULL;
+      UPDATE app.provider_connection
+      SET last_error = 'SGLang /v1/models answered 502', last_checked_at = TIMESTAMPTZ '2026-10-18 05:00:00+00'
+      WHERE id = (SELECT provider_connection_id FROM app.model WHERE id = '${modelId}');
+    `)
+
+    const response = await getApp().handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+    const body = (await response.json()) as {fullTextGate: FullTextGatePayload}
+
+    await getDatabase().run(`UPDATE app.user_config SET unpaywall_email = 'local@example.com'`)
+
+    expect(body.fullTextGate.errors).toEqual([])
+    expect(body.fullTextGate.warnings).toEqual([
+      'Judging model Judge (sglang): The last health check of SGLang failed at 2026-10-18 05:00 UTC: SGLang /v1/models answered 502. Its context window and image input come from the last successful model refresh.',
+      'No Unpaywall email is set in Settings; PDFs are fetched only from publisher URLs and arXiv.',
+    ])
   })
 
   test('a project without full text carries an empty gate', async () => {

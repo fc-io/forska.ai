@@ -8,9 +8,39 @@ import {
   getArticleSourceMetadataValue,
 } from '../../../utils/articleSourceMetadata.ts'
 import {resolveRuntimeWritablePath} from '../../utils/runtimeWritablePath.ts'
-import type {PdfFetchAttemptResult} from './pdfFetchTypes.ts'
+import {type PdfFetchAttemptResult, pdfSourceUnavailableReason} from './pdfFetchTypes.ts'
 
 const SOURCE_NAME = 'OriginalUrls'
+const sourceUnavailableHosts = ['europepmc.org']
+const sourceUnavailableStatuses = [403, 429]
+
+const getUrlHost = (url: string): string => {
+  return URL.canParse(url) ? new URL(url).hostname.toLowerCase() : ''
+}
+
+const getUnavailableSourceHost = (url: string): string | null => {
+  const host = getUrlHost(url)
+
+  return (
+    sourceUnavailableHosts.find((unavailableHost) => {
+      return host === unavailableHost || host.endsWith(`.${unavailableHost}`)
+    }) ?? null
+  )
+}
+
+const isSourceUnavailableResponse = (url: string, response: Response): boolean => {
+  return getUnavailableSourceHost(url) !== null && sourceUnavailableStatuses.includes(response.status)
+}
+
+const getSourceUnavailableText = (url: string): string => {
+  return `${getUnavailableSourceHost(url) ?? getUrlHost(url)} is ${pdfSourceUnavailableReason.toLowerCase()}`
+}
+
+const getSourceUnavailableError = ({label, response, url}: {label: string; response: Response; url: string}) => {
+  const challenge = response.headers.get('cf-mitigated') === 'challenge' ? ' (Cloudflare challenge)' : ''
+
+  return `${label}: HTTP ${response.status}${challenge}; ${getSourceUnavailableText(url)}`
+}
 
 const toSafeFilename = (s: string) => {
   return s.replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -86,6 +116,8 @@ export const fullTextArticleFetchFromOriginalUrls = async ({
 
   // Try each URL in priority order
   const errors: string[] = []
+  const unavailableHosts = new Set<string>()
+  const failureCounts = {other: 0, unavailable: 0}
 
   for (const entry of pdfUrls) {
     const {url, site} = entry
@@ -94,6 +126,11 @@ export const fullTextArticleFetchFromOriginalUrls = async ({
     const hasOAOption = pdfUrls.some(isOpenAccess)
     if (hasOAOption && !isOpenAccess(entry)) {
       errors.push(`Skipped ${site ?? url}: subscription required`)
+      continue
+    }
+
+    if (unavailableHosts.has(getUnavailableSourceHost(url) ?? '')) {
+      errors.push(`Skipped ${site ?? url}: ${getSourceUnavailableText(url)}`)
       continue
     }
 
@@ -108,7 +145,15 @@ export const fullTextArticleFetchFromOriginalUrls = async ({
         },
       })
 
+      if (isSourceUnavailableResponse(url, response)) {
+        unavailableHosts.add(getUnavailableSourceHost(url) ?? '')
+        failureCounts.unavailable += 1
+        errors.push(getSourceUnavailableError({label: site ?? url, response, url}))
+        continue
+      }
+
       if (!response.ok) {
+        failureCounts.other += 1
         errors.push(`${site ?? url}: HTTP ${response.status}`)
         continue
       }
@@ -128,11 +173,20 @@ export const fullTextArticleFetchFromOriginalUrls = async ({
         }
       }
 
+      failureCounts.other += 1
       errors.push(`${site ?? url}: Response was not a valid PDF`)
     } catch (error) {
+      failureCounts.other += 1
       errors.push(`${site ?? url}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
-  return {source: SOURCE_NAME, tried: true, success: false, reason: 'All PDF URLs failed', details: errors.join('; ')}
+  return {
+    source: SOURCE_NAME,
+    tried: true,
+    success: false,
+    reason:
+      failureCounts.unavailable > 0 && failureCounts.other === 0 ? pdfSourceUnavailableReason : 'All PDF URLs failed',
+    details: errors.join('; '),
+  }
 }
