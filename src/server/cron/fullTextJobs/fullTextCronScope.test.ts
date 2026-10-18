@@ -284,6 +284,59 @@ test('fetch selection stops at the batch size inside the first project', async (
   ).toEqual(['running-2', 'running-1'])
 })
 
+test('fetch selection runs one DuckDB query per wake and ranks a shared article by the first project whose date window it passes', async () => {
+  const {getDuckdbWorkloadRuntimeMetricsSnapshot} = await import('../../utils/duckdbService.ts')
+
+  await seedProject({dateFrom: '2021-01-01T00:00:00Z', id: 'ft-a-running', runningJob: true, useFulltext: true})
+  await seedProject({id: 'ft-b', useFulltext: true})
+  await seedProject({id: 'ft-c', useFulltext: true})
+  await getDatabase().run(`UPDATE app.project SET date_to = TIMESTAMPTZ '2022-12-31T00:00:00Z' WHERE id = 'ft-c'`)
+  await seedArticles([
+    {createdAt: '2021-03-01T00:00:00Z', id: 'a-in-window'},
+    {createdAt: '2020-03-01T00:00:00Z', id: 'shared-before-a-window'},
+    {createdAt: '2019-03-01T00:00:00Z', id: 'b-old'},
+    {createdAt: '2022-06-01T00:00:00Z', id: 'c-in-window'},
+    {createdAt: '2023-06-01T00:00:00Z', id: 'c-after-date-to'},
+  ])
+  await linkProjectArticles('ft-a-running', ['a-in-window', 'shared-before-a-window'])
+  await linkImportRouteArticles('ft-b', ['shared-before-a-window', 'b-old'])
+  await linkProjectArticles('ft-c', ['c-in-window', 'c-after-date-to', 'a-in-window'])
+
+  const gate = await getScope().getFullTextCronGate({enabled: true, workloadContext})
+  const projects = gate.open ? gate.projects : []
+  const getFetchQueryCount = () => {
+    return getDuckdbWorkloadRuntimeMetricsSnapshot().filter((metric) => {
+      return metric.routeOrJobKey === 'fullText.fetch.cron'
+    }).length
+  }
+  const fetchQueriesBefore = getFetchQueryCount()
+  const articles = await getJobModules().fetchJobs.getArticlesWithoutFullText({numberOfArticlesToFetch: 10, projects})
+  const fetchQueriesAfterSelection = getFetchQueryCount()
+
+  await getDatabase().run(`UPDATE app.article SET full_text_fetched_at = current_timestamp`)
+  const emptyArticles = await getJobModules().fetchJobs.getArticlesWithoutFullText({
+    numberOfArticlesToFetch: 10,
+    projects,
+  })
+  const fetchQueriesAfterEmptyWake = getFetchQueryCount()
+
+  expect(
+    projects.map(({projectId}) => {
+      return projectId
+    }),
+  ).toEqual(['ft-a-running', 'ft-b', 'ft-c'])
+  expect(
+    articles.map(({id}) => {
+      return id
+    }),
+  ).toEqual(['a-in-window', 'shared-before-a-window', 'b-old', 'c-in-window'])
+  expect(emptyArticles).toEqual([])
+  expect([
+    fetchQueriesAfterSelection - fetchQueriesBefore,
+    fetchQueriesAfterEmptyWake - fetchQueriesAfterSelection,
+  ]).toEqual([1, 1])
+})
+
 test('conversion selection only takes PDFs of full-text project articles that still need conversion', async () => {
   await seedProject({id: 'ft-idle', useFulltext: true})
   await seedProject({id: 'plain', runningJob: true, useFulltext: false})

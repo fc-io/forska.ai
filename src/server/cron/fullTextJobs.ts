@@ -52,15 +52,6 @@ export const getArticlesWithoutFullText = async ({
   const rows = await selectFullTextCronArticles<ArticleRow>({
     articleConditions: ['a.full_text_fetched_at IS NULL'],
     limit: numberOfArticlesToFetch,
-    onProjectScanned: ({durationMs, project, resultCount}) => {
-      fullTextFetchLogger.log('fullTextJobs:projectScanned', '[fullTextJobs] Project full-text fetch scan', {
-        component: fullTextFetchComponent,
-        durationMs,
-        hasRunningJob: project.hasRunningJob,
-        projectId: project.projectId,
-        resultCount,
-      })
-    },
     projects,
     selectColumns: 'a.id AS id, a.arxiv_id AS arxivId, a.doi AS doi, TO_JSON(a.source_metadata) AS sourceMetadata',
     workloadContext: fullTextFetchWorkloadContext,

@@ -28,7 +28,7 @@ test('full-text cron scope reads projects and articles with bounded background s
   expect(source).not.toMatch(/getAppDatabaseService\(\)\.queryJson</)
   expect(source).not.toMatch(/getAppDatabaseService\(\)\.run\(/)
   expect(source).toContain('maxResultRows: MAX_FULL_TEXT_PROJECTS_PER_SCAN')
-  expect(source).toContain('maxResultRows: remaining')
+  expect(source).toContain('maxResultRows: limit')
   expect(source).toContain('COALESCE(p.use_fulltext, FALSE) = TRUE')
   expect(source).toContain('COALESCE(p.archived, FALSE) = FALSE')
   expect(source).not.toContain('fallbackLimit')

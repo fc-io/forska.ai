@@ -77,19 +77,6 @@ export const getArticlesNeedingConversion = async ({
   const articles = await selectFullTextCronArticles<ArticleForConversion>({
     articleConditions: fullTextConversionArticleConditions,
     limit: batchSize,
-    onProjectScanned: ({durationMs, project, resultCount}) => {
-      fullTextConversionLogger.log(
-        'fullTextConversion:projectScanned',
-        '[fullTextConversion] Project conversion scan',
-        {
-          component: fullTextConversionComponent,
-          durationMs,
-          hasRunningJob: project.hasRunningJob,
-          projectId: project.projectId,
-          resultCount,
-        },
-      )
-    },
     projects,
     selectColumns:
       'a.id AS id, a.full_text_pdf AS fullTextPDF, a.full_text_conversion_attempts AS fullTextConversionAttempts',
