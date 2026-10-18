@@ -611,3 +611,55 @@ test('a figure that does not fit in a part of its own is skipped by name before 
   expect(run.invokeStoredProviderModel).not.toHaveBeenCalled()
   expect(run.storeSinglePromptJudgment).not.toHaveBeenCalled()
 })
+
+test('zero marked figures: native images and text only send byte-identical prompts as a plain string', async () => {
+  const prompts: InvokeInput[] = []
+  const invokeStoredProviderModel = mock(async (input: InvokeInput) => {
+    prompts.push(input)
+
+    return getResponse({answer: 'no', explanation: 'Not reported.', quotes: []})
+  })
+  const storeSinglePromptJudgment = mock(async (_input: unknown) => {})
+  const {judgeSinglePrompt} = await loadJudgeModule({invokeStoredProviderModel, storeSinglePromptJudgment})
+  const countTokens = await loadFullTextTokenCounter()
+  const unmarkedText = `${shortFullText}\n\nFigure 1: Logo of the journal`
+  const getInput = (figureMode: 'native_images' | 'none') => {
+    return prepareFullTextJudgingInput({
+      abstract: 'Preview summary',
+      countTokens,
+      figureImages: [],
+      text: prepareFullTextJudgingText({
+        articleId: 'article-full-text',
+        block: {
+          article: {
+            canonicalTextVersion: 'canonical-v1',
+            figureAssets: [{imagePath: 'assets/full-text-assets/article-full-text/fig-1.jpg', index: 1}],
+            figureModeBuilt: 'markers',
+          },
+          chunkPlan: null,
+          strategy: {
+            canonicalTextVersion: 'canonical-v1',
+            chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+            figureMode,
+            id: strategyId,
+            imageTokenEstimateVersion: figureMode === 'native_images' ? 'img-tok-v1' : null,
+          },
+        },
+        fullText: unmarkedText,
+        fullTextStrategyId: strategyId,
+      }),
+    })
+  }
+
+  await judgeSinglePrompt(createInput(getInput('native_images')))
+  await judgeSinglePrompt(createInput(getInput('none')))
+
+  const [nativeRequest, textOnlyRequest] = prompts
+
+  expect(prompts).toHaveLength(2)
+  expect(typeof nativeRequest?.prompt).toBe('string')
+  expect(typeof textOnlyRequest?.prompt).toBe('string')
+  expect(nativeRequest?.prompt).toBe(textOnlyRequest?.prompt ?? '')
+  expect(nativeRequest?.systemPrompt).toBe(textOnlyRequest?.systemPrompt ?? '')
+  expect(nativeRequest ? getPromptText(nativeRequest) : '').toContain('Figure 1: Logo of the journal')
+})
