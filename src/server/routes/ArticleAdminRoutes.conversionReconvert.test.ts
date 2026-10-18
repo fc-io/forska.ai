@@ -102,7 +102,9 @@ const successMetadata = {
 }
 
 const seedArticle = async (input: {
+  attempts?: number
   canonicalVersion?: string | null
+  error?: string | null
   fullText?: string | null
   fullTextPDF?: string | null
   id: string
@@ -114,6 +116,9 @@ const seedArticle = async (input: {
   const canonicalVersionSql = input.canonicalVersion ? `'${input.canonicalVersion}'` : 'NULL'
   const pdfSql = input.fullTextPDF === undefined ? `'assets/article_pdfs/${input.id}.pdf'` : 'NULL'
   const hasText = input.fullText ? 'TRUE' : 'FALSE'
+  const error =
+    input.error === undefined ? (input.status === 'failed' ? 'MinerU returned HTTP 500' : null) : input.error
+  const errorSql = error === null ? 'NULL' : `'${error}'`
 
   await getDatabase().run(`
     INSERT INTO app.article (
@@ -145,8 +150,8 @@ const seedArticle = async (input: {
       CASE WHEN ${hasText} THEN 'native_images' ELSE NULL END,
       CASE WHEN ${hasText} THEN 42 ELSE NULL END,
       ${input.status ? `'${input.status}'` : 'NULL'},
-      ${input.status === 'failed' ? `'MinerU returned HTTP 500'` : 'NULL'},
-      ${input.status === 'failed' ? 3 : 0},
+      ${errorSql},
+      ${input.attempts ?? (input.status === 'failed' ? 3 : 0)},
       ${input.metadata ? `'conversion-model'` : 'NULL'},
       ${metadataSql},
       TIMESTAMPTZ '2026-10-17 10:00:00+00'
@@ -323,27 +328,75 @@ test('reconvert answers 409 for a failed row without a PDF and leaves it failed'
   })
 })
 
+test('reconvert recovers a conversion failure stored before failed was a status (NULL status, error, no text)', async () => {
+  await seedArticle({
+    attempts: 1,
+    error: 'Storing the converted full text failed',
+    id: 'reconvert-pre-status',
+    status: null,
+  })
+
+  expect(await postReconvert({articleId: 'reconvert-pre-status'})).toEqual({
+    body: {articleId: 'reconvert-pre-status', clearedConvertedText: false, success: true},
+    status: 200,
+  })
+  expect(await getArticleConversionRow('reconvert-pre-status')).toMatchObject({
+    fullText: null,
+    fullTextConversionAttempts: 0,
+    fullTextConversionError: null,
+    fullTextConversionStatus: null,
+    fullTextPDF: 'assets/article_pdfs/reconvert-pre-status.pdf',
+  })
+})
+
+test('reconvert accepts an article with a PDF and no full text, and one whose text carries a recorded error', async () => {
+  await seedArticle({id: 'reconvert-no-text', status: null})
+  await seedArticle({
+    canonicalVersion: 'canonical-v1',
+    error: 'Figure crop 3 could not be written',
+    fullText: 'converted text',
+    id: 'reconvert-text-with-error',
+    metadata: successMetadata,
+    status: 'success',
+  })
+
+  expect(await postReconvert({articleId: 'reconvert-no-text'})).toMatchObject({status: 200})
+  expect(await postReconvert({articleId: 'reconvert-text-with-error'})).toEqual({
+    body: {articleId: 'reconvert-text-with-error', clearedConvertedText: true, success: true},
+    status: 200,
+  })
+  expect(await getArticleConversionRow('reconvert-text-with-error')).toMatchObject({
+    fullText: null,
+    fullTextConversionError: null,
+    fullTextConversionStatus: null,
+  })
+})
+
 test.each([
   ['success', 'reconvert-success', 'success'],
-  [null, 'reconvert-not-started', 'not started'],
-])('reconvert answers 409 for a %p conversion and leaves the row untouched', async (status, id, label) => {
-  await seedArticle({
-    canonicalVersion: status ? 'canonical-v1' : null,
-    fullText: status ? 'converted text' : null,
-    id,
-    metadata: status ? successMetadata : null,
-    status,
-  })
-  const before = await getArticleConversionRow(id)
+  ['pending', 'reconvert-pending-with-text', 'pending'],
+  [null, 'reconvert-null-with-text', 'not started'],
+])(
+  'reconvert answers 409 for converted text with a %p conversion and no error, and leaves the row untouched',
+  async (status, id, label) => {
+    await seedArticle({
+      canonicalVersion: 'canonical-v1',
+      fullText: 'converted text',
+      id,
+      metadata: successMetadata,
+      status,
+    })
+    const before = await getArticleConversionRow(id)
 
-  const result = await postReconvert({articleId: id})
+    const result = await postReconvert({articleId: id})
 
-  expect(result).toEqual({
-    body: `Article ${id} conversion is ${label}, not failed; only failed conversions can be reconverted`,
-    status: 409,
-  })
-  expect(await getArticleConversionRow(id)).toEqual(before)
-})
+    expect(result).toEqual({
+      body: `Article ${id} has converted full text (conversion ${label}) and no recorded conversion error; only articles without full text, with a failed conversion or with a recorded conversion error can be reconverted`,
+      status: 409,
+    })
+    expect(await getArticleConversionRow(id)).toEqual(before)
+  },
+)
 
 test.each([
   [{}, 'must be a string (was missing)'],
