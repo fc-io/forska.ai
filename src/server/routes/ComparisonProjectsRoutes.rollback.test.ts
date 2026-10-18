@@ -9161,9 +9161,9 @@ const mockFullTextStrategyRows = {
     inputs: {
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
       converterKind: 'mineru',
-      figureMode: 'descriptions',
+      figureMode: 'native_images',
     },
-    label: 'mineru 4.0 / descriptions / single 48k',
+    label: 'mineru 4.0 / native images / single 48k',
   },
 }
 
@@ -9235,7 +9235,7 @@ test('comparison create-from-project refuses source projects with different full
 
   expect(status).toBe(400)
   expect(bodyText).toContain(
-    'Selected projects use different full-text strategies: Summary Source: mineru 4.0 / none / single 96k; Summary Peer: mineru 4.0 / descriptions / single 48k. Differing inputs: chunkPolicy, figureMode',
+    'Selected projects use different full-text strategies: Summary Source: mineru 4.0 / none / single 96k; Summary Peer: mineru 4.0 / native images / single 48k. Differing inputs: chunkPolicy, figureMode',
   )
   expect(getMockDatabaseState().transactionCalls).toBe(0)
   expect(getMockDatabaseState().createdComparisonProjectIds).toEqual([])
@@ -9279,7 +9279,7 @@ test('comparison create refuses summary source projects with different full-text
 
   expect(status).toBe(400)
   expect(bodyText).toContain(
-    'Selected projects use different full-text strategies: Summary Source: no full text; Summary Peer: mineru 4.0 / descriptions / single 48k. Differing inputs: full text',
+    'Selected projects use different full-text strategies: Summary Source: no full text; Summary Peer: mineru 4.0 / native images / single 48k. Differing inputs: full text',
   )
   expect(getMockDatabaseState().transactionCalls).toBe(0)
 })

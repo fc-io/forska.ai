@@ -1,4 +1,3 @@
-import type {FigureDescriptionTarget} from '../../server/fullText/figureDescriptionAssets.ts'
 import type {FullTextTokenCounter} from '../../server/fullText/fullTextTokenizer.ts'
 import {
   type FullTextChunkPolicy,
@@ -23,8 +22,6 @@ import {
 export type FullTextJudgingStrategy = {
   canonicalTextVersion: string
   chunkPolicy: FullTextChunkPolicy
-  figureDescriptionModelId: string | null
-  figureDescriptionPromptVersion: string | null
   figureMode: FullTextFigureMode
   id: string
 }
@@ -50,10 +47,6 @@ export type FullTextJudgingInput = {
   strategy: FullTextJudgingStrategy
   textHash: string
 }
-
-export type FullTextJudgingPreparation =
-  | {input: FullTextJudgingInput; kind: 'ready'}
-  | {figureIndexes: number[]; kind: 'figure_descriptions_failed' | 'figure_descriptions_pending'}
 
 export class FullTextJudgingConfigError extends Error {
   constructor(message: string) {
@@ -88,55 +81,21 @@ const getStringOrNull = (value: unknown): string | null => {
   return typeof value === 'string' ? value : null
 }
 
-const getNonEmptyStringOrNull = (value: unknown): string | null => {
-  return typeof value === 'string' && value.trim() !== '' ? value : null
-}
-
-const hasFigureDescriptionInputs = ({
-  figureDescriptionModelId,
-  figureDescriptionPromptVersion,
-  figureMode,
-}: Pick<FullTextJudgingStrategy, 'figureDescriptionModelId' | 'figureDescriptionPromptVersion' | 'figureMode'>) => {
-  return figureMode !== 'descriptions' || (figureDescriptionModelId !== null && figureDescriptionPromptVersion !== null)
-}
-
 export const getFullTextJudgingStrategyFromInputs = (id: string, inputs: unknown): FullTextJudgingStrategy | null => {
   const parsed = typeof inputs === 'string' ? (JSON.parse(inputs) as unknown) : inputs
   const record = isRecord(parsed) ? parsed : {}
   const chunkPolicy = getFullTextChunkPolicy(record.chunkPolicy)
   const figureMode = record.figureMode
   const canonicalTextVersion = getStringOrNull(record.canonicalTextVersion)
-  const figureDescription = {
-    figureDescriptionModelId:
-      figureMode === 'descriptions' ? getNonEmptyStringOrNull(record.figureDescriptionModelId) : null,
-    figureDescriptionPromptVersion:
-      figureMode === 'descriptions' ? getNonEmptyStringOrNull(record.figureDescriptionPromptVersion) : null,
-  }
 
-  return chunkPolicy
-    && isFullTextFigureMode(figureMode)
-    && canonicalTextVersion
-    && hasFigureDescriptionInputs({...figureDescription, figureMode})
-    ? {canonicalTextVersion, chunkPolicy, ...figureDescription, figureMode, id}
+  return chunkPolicy && isFullTextFigureMode(figureMode) && canonicalTextVersion
+    ? {canonicalTextVersion, chunkPolicy, figureMode, id}
     : null
 }
 
-export const getFullTextJudgingFigureDescriptionTarget = (
-  strategy: Pick<FullTextJudgingStrategy, 'figureDescriptionModelId' | 'figureDescriptionPromptVersion' | 'figureMode'>,
-): FigureDescriptionTarget | null => {
-  return strategy.figureMode === 'descriptions'
-    && strategy.figureDescriptionModelId !== null
-    && strategy.figureDescriptionPromptVersion !== null
-    ? {modelId: strategy.figureDescriptionModelId, promptVersion: strategy.figureDescriptionPromptVersion}
-    : null
-}
-
-const getFigureAssetsOrNull = (
-  value: unknown,
-  target: FigureDescriptionTarget | null,
-): FullTextJudgingFigureAsset[] | null => {
+const getFigureAssetsOrNull = (value: unknown): FullTextJudgingFigureAsset[] | null => {
   try {
-    return getFullTextJudgingFigureAssets(value, target)
+    return getFullTextJudgingFigureAssets(value)
   } catch {
     return null
   }
@@ -146,21 +105,12 @@ export const getFullTextJudgingArticleForm = ({
   canonicalTextVersion,
   figureModeBuilt,
   fullTextAssets,
-  strategy,
 }: {
   canonicalTextVersion: string | null
   figureModeBuilt: string | null
   fullTextAssets: unknown
-  strategy: FullTextJudgingStrategy | null
 }): FullTextJudgingArticleForm => {
-  return {
-    canonicalTextVersion,
-    figureAssets: getFigureAssetsOrNull(
-      fullTextAssets,
-      strategy ? getFullTextJudgingFigureDescriptionTarget(strategy) : null,
-    ),
-    figureModeBuilt,
-  }
+  return {canonicalTextVersion, figureAssets: getFigureAssetsOrNull(fullTextAssets), figureModeBuilt}
 }
 
 const getStrategyFromBlockValue = (value: unknown): FullTextJudgingStrategy | null => {
@@ -291,7 +241,7 @@ export const prepareFullTextJudgingInput = ({
   countTokens: FullTextTokenCounter
   fullText: string
   fullTextStrategyId: string
-}): FullTextJudgingPreparation => {
+}): FullTextJudgingInput => {
   const strategy = block?.strategy ?? null
 
   if (!block || !strategy) {
@@ -306,32 +256,18 @@ export const prepareFullTextJudgingInput = ({
     throw new FullTextArticleNotReadyError(formError)
   }
 
-  const rendered = renderOrThrow(articleId, {
+  const renderedText = renderOrThrow(articleId, {
     assets: block.article.figureAssets ?? [],
     figureMode: strategy.figureMode,
     text: fullText,
   })
-  const textHash = getFullTextJudgingTextHash(rendered.text)
+  const textHash = getFullTextJudgingTextHash(renderedText)
 
-  return rendered.failedDescriptionFigureIndexes.length > 0
-    ? {figureIndexes: rendered.failedDescriptionFigureIndexes, kind: 'figure_descriptions_failed'}
-    : rendered.missingDescriptionFigureIndexes.length > 0
-      ? {figureIndexes: rendered.missingDescriptionFigureIndexes, kind: 'figure_descriptions_pending'}
-      : {
-          input: {
-            chunkPlan: getChunkPlanForText({
-              abstract,
-              block,
-              countTokens,
-              renderedText: rendered.text,
-              strategy,
-              textHash,
-            }),
-            figureImages: [],
-            renderedText: rendered.text,
-            strategy,
-            textHash,
-          },
-          kind: 'ready',
-        }
+  return {
+    chunkPlan: getChunkPlanForText({abstract, block, countTokens, renderedText, strategy, textHash}),
+    figureImages: [],
+    renderedText,
+    strategy,
+    textHash,
+  }
 }

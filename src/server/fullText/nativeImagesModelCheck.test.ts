@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import {
+  getModelImageInputForModelId,
   getNativeImagesModelError,
   getNativeImagesModelErrorForModelId,
   getNativeImagesModelErrorMessage,
@@ -34,18 +35,18 @@ test('native images need a model whose resolved capabilities accept images on an
     getNativeImagesModelErrorMessage('GPT-5.5 text only'),
   ])
   expect(getNativeImagesModelErrorMessage('Spark')).toBe(
-    'Model Spark cannot receive images. Choose figure mode Descriptions or None, or another model.',
+    'Model Spark cannot receive images. Choose Text only (figures reduced to their captions), or another model.',
   )
 })
 
-test('figure modes other than native images never check the model', () => {
+test('text only and an unset figure mode never check the model', () => {
   const textOnly = getCandidate({label: 'Spark', remoteModelId: 'gpt-5.3-codex-spark'})
 
   expect(
-    (['none', 'descriptions', null] as const).map((figureMode) => {
+    (['none', null] as const).map((figureMode) => {
       return getNativeImagesModelError({figureMode, model: textOnly})
     }),
-  ).toEqual([null, null, null])
+  ).toEqual([null, null])
 })
 
 test('the model-id lookup reads the stored model and refuses an unknown id by name', async () => {
@@ -77,4 +78,15 @@ test('the model-id lookup reads the stored model and refuses an unknown id by na
   ])
   expect(await getNativeImagesModelErrorForModelId({figureMode: 'none', modelId: 'model-spark', runner})).toBeNull()
   expect(statements).toHaveLength(3)
+  expect(
+    await Promise.all(
+      ['model-codex', 'model-spark', 'model-gone'].map((modelId) => {
+        return getModelImageInputForModelId({modelId, runner})
+      }),
+    ),
+  ).toEqual([
+    {acceptsImages: true, label: 'GPT-5.5'},
+    {acceptsImages: false, label: 'Spark'},
+    {acceptsImages: false, label: 'model-gone'},
+  ])
 })

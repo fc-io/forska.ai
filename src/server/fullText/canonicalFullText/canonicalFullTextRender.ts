@@ -10,7 +10,7 @@ import {
   normalizeInlineText,
 } from './canonicalFullTextUnits.ts'
 
-type RenderedBlocks = {blocks: string[]; missingDescriptions: number; previousKind: CanonicalRenderUnit['kind'] | null}
+type RenderedBlocks = {blocks: string[]; previousKind: CanonicalRenderUnit['kind'] | null}
 
 const maxListDepth = 6
 const listMarkerPattern = /^(?:[-–•·▪◦‣∙*]|\(?\d{1,3}[.)]|\(?[a-zA-Z][.)]|\([ivxlcdm]+\))\s/
@@ -65,20 +65,11 @@ const getFigureLines = ({
 }: {
   asset: CanonicalFullTextAsset
   figureMode: FullTextFigureMode
-}): {lines: string[]; missingDescription: boolean} => {
+}): string[] => {
   const caption = normalizeInlineText(asset.caption ?? '')
   const heading = caption === '' ? `Figure ${asset.index}` : `Figure ${asset.index}: ${caption}`
-  const description = normalizeInlineText(asset.description ?? '')
-  const isDescriptionMode = figureMode === 'descriptions'
-  const modeLines = isDescriptionMode
-    ? description === ''
-      ? []
-      : [`Description: ${description}`]
-    : figureMode === 'native_images'
-      ? [`[figure:${asset.index}]`]
-      : []
 
-  return {lines: [heading, ...modeLines], missingDescription: isDescriptionMode && description === ''}
+  return figureMode === 'native_images' ? [heading, `[figure:${asset.index}]`] : [heading]
 }
 
 const appendBlock = (state: RenderedBlocks, kind: CanonicalRenderUnit['kind'], block: string): RenderedBlocks => {
@@ -109,12 +100,8 @@ type UnitRenderers = {
 
 const appendFigure = (unit: CanonicalFigureUnit, {assetByIndex, figureMode, state}: RenderContext): RenderedBlocks => {
   const asset = assetByIndex.get(unit.figureIndex) as CanonicalFullTextAsset
-  const figure = getFigureLines({asset, figureMode})
 
-  return {
-    ...appendBlock(state, unit.kind, figure.lines.join('\n')),
-    missingDescriptions: state.missingDescriptions + (figure.missingDescription ? 1 : 0),
-  }
+  return appendBlock(state, unit.kind, getFigureLines({asset, figureMode}).join('\n'))
 }
 
 const unitRenderers: UnitRenderers = {
@@ -166,16 +153,16 @@ export const renderCanonicalUnits = ({
   assetByIndex: Map<number, CanonicalFullTextAsset>
   figureMode: FullTextFigureMode
   units: CanonicalRenderUnit[]
-}): {missingDescriptions: number; text: string} => {
+}): {text: string} => {
   const rendered = units.reduce(
     (state, unit) => {
       return renderUnit(unit, {assetByIndex, figureMode, state})
     },
-    {blocks: [], missingDescriptions: 0, previousKind: null} as RenderedBlocks,
+    {blocks: [], previousKind: null} as RenderedBlocks,
   )
   const blocks = rendered.blocks.map(normalizeBlock).filter((block) => {
     return block !== ''
   })
 
-  return {missingDescriptions: rendered.missingDescriptions, text: blocks.length > 0 ? `${blocks.join('\n\n')}\n` : ''}
+  return {text: blocks.length > 0 ? `${blocks.join('\n\n')}\n` : ''}
 }

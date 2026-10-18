@@ -46,11 +46,7 @@ export type ProjectFullTextResolution = ProjectFullTextSettings & {
   warnings: string[]
 }
 
-export const fullTextFigureModeBodySchema = t.Union([
-  t.Literal('none'),
-  t.Literal('descriptions'),
-  t.Literal('native_images'),
-])
+export const fullTextFigureModeBodySchema = t.Union([t.Literal('none'), t.Literal('native_images')])
 
 export const fullTextChunkPolicyBodySchema = t.Object({
   maxPromptTokens: t.Union([t.Literal(24_000), t.Literal(48_000), t.Literal(96_000)]),

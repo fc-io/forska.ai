@@ -26,8 +26,6 @@ const frozenInputs: FullTextStrategyInputs = {
   converterKind: 'mineru',
   converterOptionsHash: 'a'.repeat(64),
   converterVersion: '4.0.12',
-  figureDescriptionModelId: null,
-  figureDescriptionPromptVersion: null,
   figureMode: 'none',
   imageTransportVersion: null,
   promptLayoutVersion: 'layout-v1',
@@ -39,7 +37,7 @@ const frozenStableJson =
   + '"converterKind":"mineru","converterOptionsHash":"'
   + 'a'.repeat(64)
   + '","converterVersion":"4.0.12",'
-  + '"figureDescriptionModelId":null,"figureDescriptionPromptVersion":null,"figureMode":"none",'
+  + '"figureMode":"none",'
   + '"imageTransportVersion":null,"promptLayoutVersion":"layout-v1","tokenizerId":"o200k_base"}'
 
 test('the shipped tokenizer and prompt layout constants are frozen', () => {
@@ -57,8 +55,6 @@ test('the stable JSON sorts keys at every level', () => {
       promptLayoutVersion: 'layout-v1',
       imageTransportVersion: null,
       figureMode: 'none',
-      figureDescriptionPromptVersion: null,
-      figureDescriptionModelId: null,
       converterVersion: '4.0.12',
       converterOptionsHash: 'a'.repeat(64),
       converterKind: 'mineru',
@@ -72,7 +68,7 @@ test('the strategy id is fts- plus the first 16 hex characters of the sha256 of 
   const expectedId = `fts-${createHash('sha256').update(frozenStableJson).digest('hex').slice(0, 16)}`
 
   expect(getFullTextStrategyId(frozenInputs)).toBe(expectedId)
-  expect(getFullTextStrategyId(frozenInputs)).toBe('fts-ba863d659ebc12e0')
+  expect(getFullTextStrategyId(frozenInputs)).toBe('fts-185e42d99033451b')
   expect(getFullTextStrategyId(frozenInputs)).toMatch(/^fts-[0-9a-f]{16}$/)
 })
 
@@ -84,9 +80,7 @@ test('every input changes the id', () => {
     {...frozenInputs, converterKind: 'docling'},
     {...frozenInputs, converterOptionsHash: 'b'.repeat(64)},
     {...frozenInputs, converterVersion: '4.0.13'},
-    {...frozenInputs, figureDescriptionModelId: 'model-vlm'},
-    {...frozenInputs, figureDescriptionPromptVersion: 'fig-desc-v1'},
-    {...frozenInputs, figureMode: 'descriptions'},
+    {...frozenInputs, figureMode: 'native_images'},
     {...frozenInputs, imageTransportVersion: 'image-transport-v1'},
     {...frozenInputs, promptLayoutVersion: 'layout-v2'},
     {...frozenInputs, tokenizerId: 'cl100k_base'},
@@ -108,7 +102,7 @@ test('the label names converter, figure mode and chunk policy', () => {
     }),
   ).toBe('docling 1.37.0 / native images / single 24k')
   expect(getFullTextStrategy(frozenInputs)).toEqual({
-    id: 'fts-ba863d659ebc12e0',
+    id: 'fts-185e42d99033451b',
     inputs: frozenInputs,
     label: 'mineru 4.0.12 / none / chunked 48k',
   })
@@ -133,17 +127,17 @@ test('legacy flags map to the legacy or none strategy and NULL means none', () =
   expect(getLegacyFullTextStrategyId({useFulltext: false, useFulltextNoImages: true})).toBe('fts-legacy-v0')
   expect(getLegacyFullTextStrategyId({useFulltext: false, useFulltextNoImages: false})).toBe('fts-none')
   expect(getEffectiveFullTextStrategyId(null)).toBe('fts-none')
-  expect(getEffectiveFullTextStrategyId('fts-ba863d659ebc12e0')).toBe('fts-ba863d659ebc12e0')
+  expect(getEffectiveFullTextStrategyId('fts-185e42d99033451b')).toBe('fts-185e42d99033451b')
   expect(getProjectFullTextStrategyIdSql('p')).toBe("COALESCE(p.full_text_strategy_id, 'fts-none')")
 })
 
 test('display labels cover the reserved ids and fall back to the stored label, then the id', () => {
   expect(getFullTextStrategyDisplayLabel('fts-none', null)).toBe('no full text')
   expect(getFullTextStrategyDisplayLabel('fts-legacy-v0', null)).toBe('legacy full text (before strategy tracking)')
-  expect(getFullTextStrategyDisplayLabel('fts-ba863d659ebc12e0', 'mineru 4.0.12 / none / chunked 48k')).toBe(
+  expect(getFullTextStrategyDisplayLabel('fts-185e42d99033451b', 'mineru 4.0.12 / none / chunked 48k')).toBe(
     'mineru 4.0.12 / none / chunked 48k',
   )
-  expect(getFullTextStrategyDisplayLabel('fts-ba863d659ebc12e0', null)).toBe('fts-ba863d659ebc12e0')
+  expect(getFullTextStrategyDisplayLabel('fts-185e42d99033451b', null)).toBe('fts-185e42d99033451b')
 })
 
 test('input differences list the changed fields in key order', () => {

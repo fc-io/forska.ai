@@ -5,29 +5,23 @@ import {
   FullTextJudgingConfigError,
   type FullTextJudgingFigureImage,
   type FullTextJudgingInput,
-  type FullTextJudgingPreparation,
   prepareFullTextJudgingInput,
 } from '../../../../agent/judge/fullTextJudgingInput.ts'
 import {isFigureImageEncodingError} from '../../../fullText/figureImageEncoding.ts'
 import {getFullTextChunkPlanKey} from '../../../fullText/fullTextChunkPlanStore.ts'
 import {getFullTextJudgingBlocks} from '../../../fullText/fullTextJudgingBlocks.ts'
-import {
-  ensureFullTextJudgingFigureDescriptions,
-  hasPendingFullTextJudgingFigureDescriptions,
-} from '../../../fullText/fullTextJudgingFigureDescriptions.ts'
 import {FULL_TEXT_STRATEGY_LEGACY, FULL_TEXT_STRATEGY_NONE} from '../../../fullText/fullTextStrategy.ts'
 import {loadFullTextTokenCounter} from '../../../fullText/fullTextTokenizer.ts'
 import {getNativeFigureImageInputs, isNativeFigureImageError} from '../../../fullText/nativeFigureImages.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 
-export type FullTextJudgingRequeueReason = 'figure_descriptions_pending' | 'full_text_config'
+export type FullTextJudgingRequeueReason = 'full_text_config'
 
 export type FullTextJudgingPreparedResult =
   | {fullTextJudging: FullTextJudgingInput; kind: 'ready'}
   | {kind: 'closed'; message: string}
   | {kind: 'requeue'; message: string; reason: FullTextJudgingRequeueReason}
-  | {kind: 'skipped'; message: string; skipReason: 'figure_description_failed'}
 
 export type FullTextJudgingSource = {
   abstract: string | null
@@ -63,25 +57,6 @@ export const getLegacyFullTextStrategyMessage = (): string => {
   return `This project uses full text without a full-text strategy (${FULL_TEXT_STRATEGY_LEGACY}). Choose a figure mode and a chunk policy on the project's edit page, then start the job again.`
 }
 
-const getPreparationResult = (
-  articleId: string,
-  preparation: Exclude<FullTextJudgingPreparation, {kind: 'ready'}>,
-): FullTextJudgingPreparedResult => {
-  const figures = preparation.figureIndexes.join(', ')
-
-  return preparation.kind === 'figure_descriptions_failed'
-    ? {
-        kind: 'skipped',
-        message: `Article ${articleId} figures ${figures} could not be described by the strategy's figure-description model`,
-        skipReason: 'figure_description_failed',
-      }
-    : {
-        kind: 'requeue',
-        message: `Article ${articleId} figures ${figures} have no description yet`,
-        reason: 'figure_descriptions_pending',
-      }
-}
-
 const getFigureImages = async ({
   block,
   fullTextJudging,
@@ -100,7 +75,7 @@ const getFigureImages = async ({
 }
 
 const getPreparedResult = async (input: FullTextJudgingPreparationInput): Promise<FullTextJudgingPreparedResult> => {
-  const preparation = prepareFullTextJudgingInput({
+  const fullTextJudging = prepareFullTextJudgingInput({
     abstract: input.abstract,
     articleId: input.articleId,
     block: input.block,
@@ -109,23 +84,16 @@ const getPreparedResult = async (input: FullTextJudgingPreparationInput): Promis
     fullTextStrategyId: input.fullTextStrategyId,
   })
 
-  if (preparation.kind === 'ready') {
-    assertModelContextFitsChunkPolicy({
-      modelContext: input.modelContext,
-      modelName: input.modelName,
-      strategy: preparation.input.strategy,
-    })
-  }
+  assertModelContextFitsChunkPolicy({
+    modelContext: input.modelContext,
+    modelName: input.modelName,
+    strategy: fullTextJudging.strategy,
+  })
 
-  return preparation.kind === 'ready'
-    ? {
-        fullTextJudging: {
-          ...preparation.input,
-          figureImages: await getFigureImages({block: input.block, fullTextJudging: preparation.input}),
-        },
-        kind: 'ready',
-      }
-    : getPreparationResult(input.articleId, preparation)
+  return {
+    fullTextJudging: {...fullTextJudging, figureImages: await getFigureImages({block: input.block, fullTextJudging})},
+    kind: 'ready',
+  }
 }
 
 const getErrorResult = (error: unknown): FullTextJudgingPreparedResult => {
@@ -182,26 +150,6 @@ export const getLocalFullTextJudgingSource = async ({
   }
 }
 
-const getSourceWithFigureDescriptions = async ({
-  articleId,
-  fullTextStrategyId,
-  source,
-}: {
-  articleId: string
-  fullTextStrategyId: string
-  source: FullTextJudgingSource
-}): Promise<FullTextJudgingSource> => {
-  const strategy = source.block?.strategy
-
-  if (!strategy || !hasPendingFullTextJudgingFigureDescriptions(source.block)) {
-    return source
-  }
-
-  await ensureFullTextJudgingFigureDescriptions({articleId, strategy})
-
-  return getLocalFullTextJudgingSource({articleId, fullTextStrategyId})
-}
-
 export const prepareLocalFullTextJudging = async ({
   articleId,
   fallbackFullText,
@@ -215,13 +163,9 @@ export const prepareLocalFullTextJudging = async ({
   modelContext: number
   modelName: string
 }): Promise<FullTextJudgingPreparedResult> => {
-  const source = await getLocalFullTextJudgingSource({articleId, fullTextStrategyId})
-    .then((initialSource) => {
-      return getSourceWithFigureDescriptions({articleId, fullTextStrategyId, source: initialSource})
-    })
-    .catch((error: unknown) => {
-      return error instanceof FullTextJudgingConfigError ? error : Promise.reject(error)
-    })
+  const source = await getLocalFullTextJudgingSource({articleId, fullTextStrategyId}).catch((error: unknown) => {
+    return error instanceof FullTextJudgingConfigError ? error : Promise.reject(error)
+  })
 
   return source instanceof FullTextJudgingConfigError
     ? {kind: 'requeue', message: source.message, reason: 'full_text_config'}

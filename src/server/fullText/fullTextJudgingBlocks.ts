@@ -88,7 +88,7 @@ const getRenderedTextForPlan = (
     && strategy.chunkPolicy.mode === 'chunked'
     && row.fullText !== null
     && getFullTextArticleFormError({article: block.article, articleId: row.articleId, strategy}) === null
-  const rendered = renderable
+  return renderable
     ? (() => {
         try {
           return renderFullTextForJudging({
@@ -100,12 +100,6 @@ const getRenderedTextForPlan = (
           return null
         }
       })()
-    : null
-
-  return rendered
-    && rendered.missingDescriptionFigureIndexes.length === 0
-    && rendered.failedDescriptionFigureIndexes.length === 0
-    ? rendered.text
     : null
 }
 
@@ -181,7 +175,6 @@ export const getFullTextJudgingBlocks = async ({
         canonicalTextVersion: row.fullTextCanonicalVersion,
         figureModeBuilt: row.fullTextFigureModeBuilt,
         fullTextAssets: row.fullTextAssets,
-        strategy,
       }),
       strategy,
     }

@@ -6,7 +6,7 @@ export const FULL_TEXT_STRATEGY_LEGACY = 'fts-legacy-v0'
 
 export const fullTextConverterKinds = ['mineru', 'docling'] as const
 
-export const fullTextFigureModes = ['none', 'descriptions', 'native_images'] as const
+export const fullTextFigureModes = ['none', 'native_images'] as const
 
 export const fullTextChunkMaxPromptTokens = [24_000, 48_000, 96_000] as const
 
@@ -17,11 +17,10 @@ export const fullTextStrategyErrorMessages = {
     'Full text needs the canonical judgment text builder, which this build does not include yet.',
   chunkPolicyMissing: 'Full text needs a chunk policy: choose 24k, 48k or 96k and single only or chunked.',
   conversionModelMissing: 'Full text needs a PDF-to-text model. Set it in Settings → PDF conversion.',
-  figureDescriptionModelMissing:
-    'Figure mode Descriptions needs a figure-description model. Set it in Settings, or choose figure mode None.',
-  figureModeMissing: 'Full text needs a figure mode: choose None, Descriptions or Native images.',
+  figureModeMissing:
+    'Full text needs a figure mode: choose Text only (figures reduced to their captions) or Include figures as images.',
   imageTransportMissing:
-    'Figure mode Native images needs image transports, which this build does not include yet. Choose figure mode None.',
+    'Including figures as images needs image transports, which this build does not include yet. Choose Text only (figures reduced to their captions).',
 } as const
 
 export type FullTextStrategyConverterKind = (typeof fullTextConverterKinds)[number]
@@ -40,8 +39,6 @@ export type FullTextStrategyInputs = {
   converterKind: FullTextStrategyConverterKind
   converterOptionsHash: string
   converterVersion: string
-  figureDescriptionModelId: string | null
-  figureDescriptionPromptVersion: string | null
   figureMode: FullTextFigureMode
   imageTransportVersion: string | null
   promptLayoutVersion: string
@@ -68,11 +65,7 @@ export const getSortedJsonValue = (value: unknown): unknown => {
       : value
 }
 
-const figureModeLabels: Record<FullTextFigureMode, string> = {
-  descriptions: 'descriptions',
-  native_images: 'native images',
-  none: 'none',
-}
+const figureModeLabels: Record<FullTextFigureMode, string> = {native_images: 'native images', none: 'none'}
 
 const chunkModeLabels: Record<FullTextChunkMode, string> = {chunked: 'chunked', single_only: 'single'}
 

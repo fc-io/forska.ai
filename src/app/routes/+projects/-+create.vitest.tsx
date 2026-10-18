@@ -33,6 +33,7 @@ const mockState = vi.hoisted(() => {
     fullTextPreviewPayloads: [] as unknown[],
     fullTextValidationErrorsByModelId: {} as Record<string, string[]>,
     fullTextValidationWarnings: [] as string[],
+    imageTransportsMissing: false,
     importRoutes: [] as MockImportRoute[],
     models: [] as MockModel[],
     prompts: [] as MockPrompt[],
@@ -85,6 +86,8 @@ const buildCreatedProject = (payload: unknown) => {
   }
 }
 
+const modelLabelsById: Record<string, string> = {'model-1': 'GPT Test', 'model-small': 'Small Test'}
+
 const getFullTextPreview = (payload: unknown) => {
   const body = payload as {
     fullTextChunkPolicy: {maxPromptTokens: number; mode: string} | null
@@ -92,14 +95,21 @@ const getFullTextPreview = (payload: unknown) => {
     modelId: string | null
     useFulltext: boolean
   }
+  const modelLabel = body.modelId ? (modelLabelsById[body.modelId] ?? body.modelId) : null
+  const modelAcceptsImages = body.modelId === 'model-1'
   const errors = [
     ...(mockState.fullTextValidationErrorsByModelId[body.modelId ?? ''] ?? []),
-    body.fullTextFigureMode ? null : 'Full text needs a figure mode: choose None, Descriptions or Native images.',
+    body.fullTextFigureMode
+      ? null
+      : 'Full text needs a figure mode: choose Text only (figures reduced to their captions) or Include figures as images.',
     body.fullTextChunkPolicy
       ? null
       : 'Full text needs a chunk policy: choose 24k, 48k or 96k and single only or chunked.',
-    body.fullTextFigureMode === 'native_images'
-      ? 'Figure mode Native images needs image transports, which this build does not include yet. Choose figure mode None.'
+    body.fullTextFigureMode === 'native_images' && mockState.imageTransportsMissing
+      ? 'Including figures as images needs image transports, which this build does not include yet. Choose Text only (figures reduced to their captions).'
+      : null,
+    body.fullTextFigureMode === 'native_images' && !modelAcceptsImages
+      ? `Model ${modelLabel} cannot receive images. Choose Text only (figures reduced to their captions), or another model.`
       : null,
   ].filter((error): error is string => {
     return error !== null
@@ -108,6 +118,8 @@ const getFullTextPreview = (payload: unknown) => {
   const validationBase = {
     current: null,
     errors,
+    modelAcceptsImages,
+    modelLabel,
     recordStrategyOnSave: false,
     warnings: mockState.fullTextValidationWarnings,
   }
@@ -117,7 +129,7 @@ const getFullTextPreview = (payload: unknown) => {
     : {
         ...validationBase,
         strategyId: 'fts-0123456789abcdef',
-        strategyLabel: `mineru 4.0.12 / none / ${body.fullTextChunkPolicy?.mode === 'chunked' ? 'chunked' : 'single'} ${(body.fullTextChunkPolicy?.maxPromptTokens ?? 0) / 1000}k`,
+        strategyLabel: `mineru 4.0.12 / ${body.fullTextFigureMode === 'native_images' ? 'native images' : 'none'} / ${body.fullTextChunkPolicy?.mode === 'chunked' ? 'chunked' : 'single'} ${(body.fullTextChunkPolicy?.maxPromptTokens ?? 0) / 1000}k`,
       }
 }
 
@@ -307,6 +319,7 @@ describe('project create route content flags', () => {
     mockState.fullTextPreviewPayloads = []
     mockState.fullTextValidationErrorsByModelId = {}
     mockState.fullTextValidationWarnings = []
+    mockState.imageTransportsMissing = false
     mockState.importRoutes = []
     mockState.models = buildModels()
     mockState.prompts = []
@@ -529,7 +542,6 @@ describe('project create route content flags', () => {
         }),
       ).toEqual([
         'full-text-figure-mode:none',
-        'full-text-figure-mode:descriptions',
         'full-text-figure-mode:native_images',
         'full-text-max-prompt-tokens:24000',
         'full-text-max-prompt-tokens:48000',
@@ -550,7 +562,7 @@ describe('project create route content flags', () => {
 
       expect(mockState.createPayloads).toHaveLength(0)
       expect(container.textContent).toContain(
-        'Full text needs a figure mode: choose None, Descriptions or Native images. Full text needs a chunk policy',
+        'Full text needs a figure mode: choose Text only (figures reduced to their captions) or Include figures as images. Full text needs a chunk policy',
       )
       browserFailures.assertNoFailures()
     } finally {
@@ -594,6 +606,8 @@ describe('project create route content flags', () => {
   }, 15_000)
 
   test('a figure mode this build cannot serve shows the server reason instead of a strategy', async () => {
+    mockState.imageTransportsMissing = true
+
     const {container, dispose, queryClient} = await mountCreateRoute()
 
     try {
@@ -605,7 +619,7 @@ describe('project create route content flags', () => {
       await waitForUpdates()
 
       expect(container.querySelector('[data-testid="full-text-strategy-errors"]')?.textContent).toContain(
-        'Native images needs image transports',
+        'Including figures as images needs image transports',
       )
       expect(container.querySelector('[data-testid="full-text-strategy-label"]')).toBeNull()
     } finally {
@@ -670,6 +684,149 @@ describe('project create route content flags', () => {
 
       expect(container.querySelector('[data-testid="full-text-strategy-errors"]')).toBeNull()
       expect(submitButton()?.disabled).toBe(false)
+    } finally {
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+
+  test('the figure modes are labelled text only and include figures as images', async () => {
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      getFullTextCheckbox(container)?.click()
+      await waitForUpdates()
+
+      const fieldset = container
+        .querySelector<HTMLInputElement>('input[name="full-text-figure-mode"]')
+        ?.closest('fieldset')
+
+      expect(fieldset?.textContent).toContain('Text only (figures reduced to their captions)')
+      expect(fieldset?.textContent).toContain('Include figures as images')
+      expect(fieldset?.textContent).not.toContain('Descriptions')
+    } finally {
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+
+  test('a model that cannot receive images shows the warning and keeps only text only selectable', async () => {
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      const modelSelect = container.querySelector<HTMLSelectElement>('#model')
+
+      setFormValue(container.querySelector<HTMLInputElement>('#project-name'), 'Text Only Project')
+      getFullTextCheckbox(container)?.click()
+      await waitForUpdates()
+      if (modelSelect) {
+        modelSelect.value = 'model-small'
+        modelSelect.dispatchEvent(new Event('change', {bubbles: true}))
+      }
+      await waitForUpdates()
+      await waitForUpdates()
+
+      const nativeImagesRadio = container.querySelector<HTMLInputElement>(
+        'input[name="full-text-figure-mode"][value="native_images"]',
+      )
+
+      expect(container.querySelector('[data-testid="full-text-figure-image-warning"]')?.textContent).toBe(
+        'Model Small Test cannot receive images. Figures will be reduced to their captions (text only).',
+      )
+      expect(nativeImagesRadio?.disabled).toBe(true)
+      expect(
+        container.querySelector<HTMLInputElement>('input[name="full-text-figure-mode"][value="none"]')?.disabled,
+      ).toBe(false)
+
+      await clickRadio(container, 'full-text-figure-mode', 'none')
+      await clickRadio(container, 'full-text-max-prompt-tokens', '48000')
+      await clickRadio(container, 'full-text-chunk-mode', 'chunked')
+      await waitForUpdates()
+      await submitCreateForm(container)
+
+      expect((mockState.createPayloads[0] as Record<string, unknown>).fullTextFigureMode).toBe('none')
+    } finally {
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+
+  test('a vision model shows no warning and both figure modes are selectable', async () => {
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      getFullTextCheckbox(container)?.click()
+      await waitForUpdates()
+      await clickRadio(container, 'full-text-figure-mode', 'native_images')
+      await clickRadio(container, 'full-text-max-prompt-tokens', '48000')
+      await clickRadio(container, 'full-text-chunk-mode', 'chunked')
+      await waitForUpdates()
+
+      expect(container.querySelector('[data-testid="full-text-figure-image-warning"]')).toBeNull()
+      expect(
+        container.querySelector<HTMLInputElement>('input[name="full-text-figure-mode"][value="native_images"]')
+          ?.disabled,
+      ).toBe(false)
+      expect(container.querySelector('[data-testid="full-text-strategy-label"]')?.textContent).toBe(
+        'mineru 4.0.12 / native images / chunked 48k',
+      )
+    } finally {
+      queryClient.clear()
+      dispose()
+      container.remove()
+    }
+  }, 15_000)
+
+  test('images chosen, then a model that cannot receive images: an error until text only is picked, no silent flip', async () => {
+    const {container, dispose, queryClient} = await mountCreateRoute()
+
+    try {
+      const modelSelect = container.querySelector<HTMLSelectElement>('#model')
+      const submitButton = () => {
+        return container.querySelector<HTMLButtonElement>('button[type="submit"]')
+      }
+      const nativeImagesRadio = () => {
+        return container.querySelector<HTMLInputElement>('input[name="full-text-figure-mode"][value="native_images"]')
+      }
+
+      setFormValue(container.querySelector<HTMLInputElement>('#project-name'), 'Switch Model Project')
+      getFullTextCheckbox(container)?.click()
+      await waitForUpdates()
+      await clickRadio(container, 'full-text-figure-mode', 'native_images')
+      await clickRadio(container, 'full-text-max-prompt-tokens', '48000')
+      await clickRadio(container, 'full-text-chunk-mode', 'chunked')
+      await waitForUpdates()
+
+      expect(submitButton()?.disabled).toBe(false)
+
+      if (modelSelect) {
+        modelSelect.value = 'model-small'
+        modelSelect.dispatchEvent(new Event('change', {bubbles: true}))
+      }
+      await waitForUpdates()
+      await waitForUpdates()
+
+      expect(nativeImagesRadio()?.checked).toBe(true)
+      expect(nativeImagesRadio()?.disabled).toBe(true)
+      expect(container.querySelector('[data-testid="full-text-figure-image-warning"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="full-text-strategy-errors"]')?.textContent).toContain(
+        'Model Small Test cannot receive images. Choose Text only (figures reduced to their captions), or another model.',
+      )
+      expect(submitButton()?.disabled).toBe(true)
+
+      await clickRadio(container, 'full-text-figure-mode', 'none')
+      await waitForUpdates()
+
+      expect(nativeImagesRadio()?.checked).toBe(false)
+      expect(container.querySelector('[data-testid="full-text-strategy-errors"]')).toBeNull()
+      expect(submitButton()?.disabled).toBe(false)
+
+      await submitCreateForm(container)
+
+      expect((mockState.createPayloads[0] as Record<string, unknown>).fullTextFigureMode).toBe('none')
     } finally {
       queryClient.clear()
       dispose()

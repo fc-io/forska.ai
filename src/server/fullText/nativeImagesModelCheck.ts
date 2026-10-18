@@ -15,7 +15,7 @@ export type NativeImagesModelCandidate = {
 }
 
 export const getNativeImagesModelErrorMessage = (modelLabel: string): string => {
-  return `Model ${modelLabel} cannot receive images. Choose figure mode Descriptions or None, or another model.`
+  return `Model ${modelLabel} cannot receive images. Choose Text only (figures reduced to their captions), or another model.`
 }
 
 export const nativeImagesModelAcceptsImages = (model: NativeImagesModelCandidate): boolean => {
@@ -59,6 +59,18 @@ const getNativeImagesModelCandidate = async (
   return row
     ? {...row, metadataJson: getJsonValue(row.metadataJson)}
     : {label: modelId, metadataJson: null, providerKind: null, remoteModelId: null}
+}
+
+export const getModelImageInputForModelId = async ({
+  modelId,
+  runner = getAppDatabaseService(),
+}: {
+  modelId: string
+  runner?: NativeImagesModelQueryRunner
+}): Promise<{acceptsImages: boolean; label: string}> => {
+  const model = await getNativeImagesModelCandidate(runner, modelId)
+
+  return {acceptsImages: nativeImagesModelAcceptsImages(model), label: model.label}
 }
 
 export const getNativeImagesModelErrorForModelId = async ({

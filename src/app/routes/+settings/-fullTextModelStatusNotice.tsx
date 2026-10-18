@@ -4,7 +4,7 @@ import {Match, Show, splitProps, Switch} from 'solid-js'
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
-export type FullTextModelRole = 'figure_description' | 'pdf_conversion'
+export type FullTextModelRole = 'pdf_conversion'
 
 type FullTextModelHealthState = 'disabled' | 'failed' | 'healthy' | 'unverified'
 

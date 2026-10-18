@@ -12,8 +12,6 @@ const baseInputs: FullTextStrategyInputs = {
   converterKind: 'mineru',
   converterOptionsHash: 'options-hash',
   converterVersion: '4.0.0',
-  figureDescriptionModelId: null,
-  figureDescriptionPromptVersion: null,
   figureMode: 'none',
   imageTransportVersion: null,
   promptLayoutVersion: 'layout-v1',
@@ -43,7 +41,7 @@ test('lists every project and the differing strategy inputs', () => {
   expect(
     getComparisonProjectFullTextStrategyMixError([
       getSource('A', 'fts-aaaaaaaaaaaaaaaa', baseInputs),
-      getSource('B', 'fts-bbbbbbbbbbbbbbbb', {...baseInputs, figureMode: 'descriptions'}),
+      getSource('B', 'fts-bbbbbbbbbbbbbbbb', {...baseInputs, figureMode: 'native_images'}),
       getSource('C', 'fts-cccccccccccccccc', {
         ...baseInputs,
         chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},

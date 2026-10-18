@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test'
 
-import {IMAGE_TRANSPORT_VERSION} from './fullTextStrategy.ts'
+import {IMAGE_TRANSPORT_VERSION, isFullTextFigureMode} from './fullTextStrategy.ts'
 import {
   type FullTextStrategyEnvironment,
   fullTextStrategyErrorMessages,
@@ -15,7 +15,6 @@ const environment: FullTextStrategyEnvironment = {
     converterVersion: '4.0.12',
     modelLabel: 'MinerU standard',
   },
-  figureDescription: null,
   imageTransportVersion: null,
 }
 
@@ -33,8 +32,6 @@ test('a complete selection resolves to the strategy built from the environment a
     converterKind: 'mineru',
     converterOptionsHash: 'c'.repeat(64),
     converterVersion: '4.0.12',
-    figureDescriptionModelId: null,
-    figureDescriptionPromptVersion: null,
     figureMode: 'none',
     imageTransportVersion: null,
     promptLayoutVersion: 'layout-v2',
@@ -79,27 +76,34 @@ test('a conversion model without a reported server version is an error naming th
   expect(resolution.errors[0]).toContain('MinerU standard has not reported a server version')
 })
 
-test('descriptions need a figure-description model and native images need image transports', () => {
+test('native images need image transports and the inputs hold no figure-description fields', () => {
   const chunkPolicy = {maxPromptTokens: 96_000, mode: 'chunked'} as const
+  const textOnly = resolveFullTextStrategy({chunkPolicy, figureMode: 'none'}, environment)
 
-  expect(resolveFullTextStrategy({chunkPolicy, figureMode: 'descriptions'}, environment).errors).toEqual([
-    fullTextStrategyErrorMessages.figureDescriptionModelMissing,
-  ])
   expect(resolveFullTextStrategy({chunkPolicy, figureMode: 'native_images'}, environment).errors).toEqual([
     fullTextStrategyErrorMessages.imageTransportMissing,
   ])
-  expect(
-    resolveFullTextStrategy(
-      {chunkPolicy, figureMode: 'descriptions'},
-      {...environment, figureDescription: {modelId: 'model-vlm', promptVersion: 'fig-desc-v1'}},
-    ).strategy?.inputs,
-  ).toMatchObject({figureDescriptionModelId: 'model-vlm', figureDescriptionPromptVersion: 'fig-desc-v1'})
-  expect(
-    resolveFullTextStrategy(
-      {chunkPolicy, figureMode: 'none'},
-      {...environment, figureDescription: {modelId: 'model-vlm', promptVersion: 'fig-desc-v1'}},
-    ).strategy?.inputs,
-  ).toMatchObject({figureDescriptionModelId: null, figureDescriptionPromptVersion: null})
+  expect(fullTextStrategyErrorMessages.imageTransportMissing).toContain('Choose Text only')
+  expect(fullTextStrategyErrorMessages.figureModeMissing).toBe(
+    'Full text needs a figure mode: choose Text only (figures reduced to their captions) or Include figures as images.',
+  )
+  expect(Object.keys(textOnly.strategy?.inputs ?? {}).sort()).toEqual([
+    'canonicalTextVersion',
+    'chunkPolicy',
+    'converterKind',
+    'converterOptionsHash',
+    'converterVersion',
+    'figureMode',
+    'imageTransportVersion',
+    'promptLayoutVersion',
+    'tokenizerId',
+  ])
+})
+
+test('the figure modes are none and native_images; a stored descriptions value is not a figure mode', () => {
+  expect(isFullTextFigureMode('none')).toBe(true)
+  expect(isFullTextFigureMode('native_images')).toBe(true)
+  expect(isFullTextFigureMode('descriptions')).toBe(false)
 })
 
 test('native images resolve with the shipped image transport version, which only enters native-image strategies', () => {
@@ -110,11 +114,7 @@ test('native images resolve with the shipped image transport version, which only
   expect(IMAGE_TRANSPORT_VERSION).toBe('img-v1')
   expect(nativeImages.errors).toEqual([])
   expect(nativeImages.strategy?.label).toBe('mineru 4.0.12 / native images / single 48k')
-  expect(nativeImages.strategy?.inputs).toMatchObject({
-    figureDescriptionModelId: null,
-    figureMode: 'native_images',
-    imageTransportVersion: 'img-v1',
-  })
+  expect(nativeImages.strategy?.inputs).toMatchObject({figureMode: 'native_images', imageTransportVersion: 'img-v1'})
   expect(resolveFullTextStrategy({chunkPolicy, figureMode: 'none'}, imageEnvironment)).toEqual(
     resolveFullTextStrategy({chunkPolicy, figureMode: 'none'}, environment),
   )

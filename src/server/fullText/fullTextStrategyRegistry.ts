@@ -25,15 +25,13 @@ export const fullTextStrategyReferenceConverterVersions = {
 export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   {
     firstSeen: '2026-10-17',
-    id: 'fts-559b78bebcf5845f',
+    id: 'fts-6e50e8b4154fbcaf',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -43,15 +41,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-fb6b539cb2072d9a',
+    id: 'fts-4a0fe39c0edf379d',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -61,15 +57,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-5460128812886ed3',
+    id: 'fts-10a5d7f411f03a2a',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -79,15 +73,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-6f53f27c2d9e3af7',
+    id: 'fts-278f14641feb29ad',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -97,15 +89,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-4ee6fa2f186c5678',
+    id: 'fts-eabedc487a1f2328',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -115,15 +105,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-13370bcf7a40e879',
+    id: 'fts-6406051a518cb649',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -133,7 +121,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-a9ce16f7880cdac4',
+    id: 'fts-60ff494ec22cbd41',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
@@ -141,8 +129,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -152,7 +138,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-dc139acb0d78e234',
+    id: 'fts-cdbc54c5c9a4db06',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
@@ -160,8 +146,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -171,7 +155,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-1d74c973a4180044',
+    id: 'fts-2bbd8c6f8fa22e68',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
@@ -179,8 +163,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -190,7 +172,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-4e0da9f1a5be8fb9',
+    id: 'fts-16b765821a0580d0',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
@@ -198,8 +180,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -209,7 +189,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-28ea5216579b1a3e',
+    id: 'fts-ca80f47958a4301e',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
@@ -217,8 +197,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -228,7 +206,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-56d24ad6c695cd46',
+    id: 'fts-0192a81d4aa2294d',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
@@ -236,8 +214,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',
@@ -247,15 +223,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-a10c5e86ce1545ba',
+    id: 'fts-5e0117b693eac217',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -265,15 +239,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-29c14ff427e13433',
+    id: 'fts-7bea755ecb44d9da',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -283,15 +255,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-a56a3c30d22f7d98',
+    id: 'fts-f98e395d6acab328',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -301,15 +271,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-37190230d0febaa8',
+    id: 'fts-32eb92034e34c57a',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -319,15 +287,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-52fa63e6e7fae02b',
+    id: 'fts-67f37eb598eb9d3c',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -337,15 +303,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-58cece96fa7499f1',
+    id: 'fts-aa759848180ba530',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -355,7 +319,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-f8747c14ccb303f2',
+    id: 'fts-0a32e008429ab49a',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
@@ -363,8 +327,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -374,7 +336,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-0d1ee23704c3f66a',
+    id: 'fts-41c29f958df1ed46',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
@@ -382,8 +344,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -393,7 +353,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-dc3ed6b2cab0c0c8',
+    id: 'fts-f192dce4e3d9d72d',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
@@ -401,8 +361,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -412,7 +370,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-2552023b18e75f25',
+    id: 'fts-75b69f09e2ad6870',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
@@ -420,8 +378,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -431,7 +387,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-940a367b5cb6168e',
+    id: 'fts-8213a8ee4ee91f75',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
@@ -439,8 +395,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -450,7 +404,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-e48bc4e997ee35d5',
+    id: 'fts-92d9c15baafa6968',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
@@ -458,8 +412,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v1',
@@ -469,15 +421,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-61a275313a65bcef',
+    id: 'fts-66cd6ec607091a59',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -487,15 +437,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-795a13f0763596c8',
+    id: 'fts-e51cc2802e1fb172',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -505,15 +453,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-1c390670723f7276',
+    id: 'fts-172117f36ab4e689',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -523,15 +469,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-9dd4c315a03563bc',
+    id: 'fts-d6cff873c1d30c0e',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -541,15 +485,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-e098742376ac9da8',
+    id: 'fts-e7279b171b5b3110',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -559,15 +501,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-397b3f6baceb62a6',
+    id: 'fts-72b87c54287b1523',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -577,7 +517,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-bca24fa5345a20e8',
+    id: 'fts-25198304f032fae8',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
@@ -585,8 +525,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -596,7 +534,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-e96dc5b42abca9e2',
+    id: 'fts-080f8c551e4dbb18',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
@@ -604,8 +542,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -615,7 +551,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-1986743ff8cd33bb',
+    id: 'fts-85b40e681fd8a381',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
@@ -623,8 +559,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -634,7 +568,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-f5c3ce456e5bbb9c',
+    id: 'fts-c2baf7e3fafc0c13',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
@@ -642,8 +576,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -653,7 +585,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-975cd16422aa1268',
+    id: 'fts-f2b7d5afc49cb686',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
@@ -661,8 +593,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -672,7 +602,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-c8452307b03083fc',
+    id: 'fts-92a3cf9c8e585a22',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
@@ -680,8 +610,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v2',
@@ -691,15 +619,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-35bc49df809e45d5',
+    id: 'fts-63f92d0a67fb2dec',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -709,15 +635,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-21f37704fb7302f8',
+    id: 'fts-698be0c41743fbaf',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -727,15 +651,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-bc88479f836a4d0e',
+    id: 'fts-0866985f997b1151',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -745,15 +667,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-cbbf90531a055ddf',
+    id: 'fts-52ca06bca78ff561',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -763,15 +683,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-035f8daf89fe1442',
+    id: 'fts-bbf34bab2ada5537',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -781,15 +699,13 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-453d1ba5fda95617',
+    id: 'fts-4918acc4645a16ea',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
       converterKind: 'mineru',
       converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
       converterVersion: '4.0.12',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -799,7 +715,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-bb8c920f8a6b3ec6',
+    id: 'fts-2c0d47a11b801c33',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
@@ -807,8 +723,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -818,7 +732,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-74a86b215e01e6e4',
+    id: 'fts-6045a1000a6d5254',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
@@ -826,8 +740,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -837,7 +749,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-e9c73a7c5c8ad60d',
+    id: 'fts-9832beeb2ec822b3',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
@@ -845,8 +757,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -856,7 +766,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-691cbd7abb8de559',
+    id: 'fts-dbf784048a6f4432',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
@@ -864,8 +774,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -875,7 +783,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-fac4f67eb42b098d',
+    id: 'fts-92569035e10b55ee',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
@@ -883,8 +791,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -894,7 +800,7 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
   },
   {
     firstSeen: '2026-10-17',
-    id: 'fts-5721669dbbb1a246',
+    id: 'fts-0e123c0675cfa93a',
     inputs: {
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
@@ -902,8 +808,6 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
       converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
       converterVersion:
         'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'native_images',
       imageTransportVersion: 'img-v1',
       promptLayoutVersion: 'layout-v2',
@@ -940,8 +844,6 @@ const getShippedConverterStrategyInputs = (
         converterKind,
         converterOptionsHash: getConverterOptionsHash(getFullTextConverter(converterKind).options),
         converterVersion: fullTextStrategyReferenceConverterVersions[converterKind],
-        figureDescriptionModelId: null,
-        figureDescriptionPromptVersion: null,
         figureMode,
         imageTransportVersion,
         promptLayoutVersion: FULL_TEXT_PROMPT_LAYOUT_VERSION,

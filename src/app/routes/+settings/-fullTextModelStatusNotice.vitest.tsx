@@ -125,12 +125,12 @@ describe('full-text model status notice', () => {
     })
     statusState.statusesByModelId['model-unverified'] = getStatus({
       capability: {
-        detail: 'No verified image input. Set it on the Models page.',
-        label: 'Image input',
+        detail: "MinerU standard has not reported a server version. Refresh its provider's models on the Models page.",
+        label: 'Converter server version',
         state: 'unverified',
       },
       health: {
-        detail: 'Ollama has not been health-checked yet. Test the connection on the Models page.',
+        detail: 'MinerU has not been health-checked yet. Test the connection on the Models page.',
         state: 'unverified',
       },
     })
@@ -142,14 +142,16 @@ describe('full-text model status notice', () => {
     })
 
     const failed = await renderNotice('model-failed', 'pdf_conversion')
-    const unverified = await renderNotice('model-unverified', 'figure_description')
+    const unverified = await renderNotice('model-unverified', 'pdf_conversion')
     const disabled = await renderNotice('model-disabled', 'pdf_conversion')
 
     try {
       expect(failed.container.textContent).toContain('Provider health: Health check failed.')
       expect(failed.container.textContent).toContain('connect ECONNREFUSED')
       expect(unverified.container.textContent).toContain('Provider health: Unverified.')
-      expect(unverified.container.textContent).toContain('Image input: Unverified. No verified image input.')
+      expect(unverified.container.textContent).toContain(
+        'Converter server version: Unverified. MinerU standard has not reported a server version.',
+      )
       expect(disabled.container.textContent).toContain('Provider health: Disabled.')
     } finally {
       failed.dispose()
@@ -159,7 +161,7 @@ describe('full-text model status notice', () => {
   })
 
   test('a model id the server no longer knows is called out', async () => {
-    const {container, dispose} = await renderNotice('model-gone', 'figure_description')
+    const {container, dispose} = await renderNotice('model-gone', 'pdf_conversion')
 
     try {
       expect(container.textContent).toBe('The selected model no longer exists.')

@@ -19,7 +19,6 @@ export type FullTextConversionModelStrategyInputs = {
 export type FullTextStrategyEnvironment = {
   canonicalTextVersion: string | null
   conversionModel: FullTextConversionModelStrategyInputs | null
-  figureDescription: {modelId: string; promptVersion: string} | null
   imageTransportVersion: string | null
 }
 
@@ -42,9 +41,6 @@ const getFullTextStrategyErrors = (selection: FullTextStrategySelection, environ
     environment.canonicalTextVersion ? null : fullTextStrategyErrorMessages.canonicalTextVersionMissing,
     selection.figureMode ? null : fullTextStrategyErrorMessages.figureModeMissing,
     selection.chunkPolicy ? null : fullTextStrategyErrorMessages.chunkPolicyMissing,
-    selection.figureMode === 'descriptions' && !environment.figureDescription
-      ? fullTextStrategyErrorMessages.figureDescriptionModelMissing
-      : null,
     selection.figureMode === 'native_images' && !environment.imageTransportVersion
       ? fullTextStrategyErrorMessages.imageTransportMissing
       : null,
@@ -70,9 +66,6 @@ const getFullTextStrategyInputs = ({
     converterKind: conversionModel.converterKind,
     converterOptionsHash: conversionModel.converterOptionsHash,
     converterVersion: conversionModel.converterVersion,
-    figureDescriptionModelId: figureMode === 'descriptions' ? (environment.figureDescription?.modelId ?? null) : null,
-    figureDescriptionPromptVersion:
-      figureMode === 'descriptions' ? (environment.figureDescription?.promptVersion ?? null) : null,
     figureMode,
     imageTransportVersion: figureMode === 'native_images' ? environment.imageTransportVersion : null,
     promptLayoutVersion: FULL_TEXT_PROMPT_LAYOUT_VERSION,

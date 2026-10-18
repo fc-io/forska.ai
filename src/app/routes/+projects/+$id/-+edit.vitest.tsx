@@ -56,6 +56,7 @@ const mockState = vi.hoisted(() => {
     editPatchResponse: null as {data?: unknown; error?: unknown; status?: number} | null,
     editPayloads: [] as unknown[],
     fullTextPreview: null as unknown,
+    fullTextPreviewForPayload: null as ((payload: unknown) => unknown) | null,
     fullTextPreviewPayloads: [] as unknown[],
     fetchGates: {
       importRoutes: null as Promise<void> | null,
@@ -159,6 +160,8 @@ const getDefaultFullTextPreview = () => {
   return {
     current: {judgmentCount: 0, strategyId: 'fts-none', strategyLabel: 'no full text'},
     errors: [],
+    modelAcceptsImages: true,
+    modelLabel: 'GPT Test',
     recordStrategyOnSave: false,
     strategyId: 'fts-none',
     strategyLabel: 'no full text',
@@ -404,7 +407,14 @@ vi.mock('../../../../services/apiClient.ts', () => {
             'full-text-validation': {
               post: async (payload: unknown) => {
                 mockState.fullTextPreviewPayloads.push(payload)
-                return {data: {data: mockState.fullTextPreview ?? getDefaultFullTextPreview()}}
+                return {
+                  data: {
+                    data:
+                      mockState.fullTextPreviewForPayload?.(payload)
+                      ?? mockState.fullTextPreview
+                      ?? getDefaultFullTextPreview(),
+                  },
+                }
               },
             },
           },
@@ -448,6 +458,7 @@ describe('project edit route regressions', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
     resetApiCallCounts()
+    mockState.fullTextPreviewForPayload = null
     mockState.fetchGates = {importRoutes: null, models: null, projectDetails: null, providerConnections: null}
     mockState.importRoutes = []
     mockState.models = [
@@ -1285,7 +1296,7 @@ describe('project edit route regressions', () => {
         'docling 1.37.0 / none / single 24k',
       )
       expect(container.querySelector('[data-testid="full-text-strategy-id"]')?.textContent).toBe('fts-cccccccccccccccc')
-      expect(radios.length).toBe(8)
+      expect(radios.length).toBe(7)
       expect(
         radios.every((radio) => {
           return radio.closest('fieldset')?.disabled === true
@@ -1384,6 +1395,74 @@ describe('project edit route regressions', () => {
       expect(payload.recordCurrentFullTextStrategy).toBe(true)
       expect(payload).not.toHaveProperty('fullTextFigureMode')
       expect(payload).not.toHaveProperty('modelId')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('a stored images project whose model cannot receive images warns and errors until text only is picked', async () => {
+    const projectId = 'project-images-text-model'
+    const details = buildProjectDetails(projectId)
+    const imageError =
+      'Model GPT Test cannot receive images. Choose Text only (figures reduced to their captions), or another model.'
+
+    mockState.projectDetailsById[projectId] = {
+      ...details,
+      project: {
+        ...details.project,
+        fullTextChunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+        fullTextFigureMode: 'native_images',
+        fullTextStrategyId: 'fts-aaaaaaaaaaaaaaaa',
+        fullTextStrategyLabel: 'mineru 4.0.12 / native images / chunked 48k',
+        useFulltext: true,
+      },
+    }
+    mockState.fullTextPreviewForPayload = (payload) => {
+      const isImages = (payload as {fullTextFigureMode?: string}).fullTextFigureMode === 'native_images'
+
+      return {
+        ...getDefaultFullTextPreview(),
+        errors: isImages ? [imageError] : [],
+        modelAcceptsImages: false,
+        strategyId: isImages ? null : 'fts-bbbbbbbbbbbbbbbb',
+        strategyLabel: isImages ? null : 'mineru 4.0.12 / none / chunked 48k',
+      }
+    }
+
+    const {cleanup, container} = await mountEditRoute(projectId)
+    const nativeImagesRadio = () => {
+      return container.querySelector<HTMLInputElement>('input[name="full-text-figure-mode"][value="native_images"]')
+    }
+    const submitButton = () => {
+      return container.querySelector<HTMLButtonElement>('button[type="submit"]')
+    }
+
+    try {
+      await waitForUpdates()
+      await waitForUpdates()
+
+      expect(getCheckedRadioValue(container, 'full-text-figure-mode')).toBe('native_images')
+      expect(nativeImagesRadio()?.disabled).toBe(true)
+      expect(container.querySelector('[data-testid="full-text-figure-image-warning"]')?.textContent).toBe(
+        'Model GPT Test cannot receive images. Figures will be reduced to their captions (text only).',
+      )
+      expect(container.querySelector('[data-testid="full-text-strategy-errors"]')?.textContent).toContain(imageError)
+      expect(submitButton()?.disabled).toBe(true)
+
+      container.querySelector<HTMLInputElement>('input[name="full-text-figure-mode"][value="none"]')?.click()
+      await waitForUpdates()
+      await waitForUpdates()
+
+      expect(getCheckedRadioValue(container, 'full-text-figure-mode')).toBe('none')
+      expect(container.querySelector('[data-testid="full-text-strategy-errors"]')).toBeNull()
+      expect(submitButton()?.disabled).toBe(false)
+
+      container
+        .querySelector<HTMLFormElement>('form')
+        ?.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}))
+      await waitForUpdates()
+
+      expect((mockState.editPayloads[0] as Record<string, unknown>).fullTextFigureMode).toBe('none')
     } finally {
       cleanup()
     }

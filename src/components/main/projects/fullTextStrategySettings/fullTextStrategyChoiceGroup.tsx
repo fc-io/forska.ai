@@ -1,6 +1,11 @@
 import {For, Show, splitProps} from 'solid-js'
 
-export type FullTextStrategyChoice<T extends number | string> = {description?: string; label: string; value: T}
+export type FullTextStrategyChoice<T extends number | string> = {
+  description?: string
+  disabled?: boolean
+  label: string
+  value: T
+}
 
 type FullTextStrategyChoiceGroupProps<T extends number | string> = {
   disabled?: boolean
@@ -21,13 +26,17 @@ export const FullTextStrategyChoiceGroup = <T extends number | string>(props: Fu
         <For each={local.options}>
           {(option) => {
             return (
-              <label class="flex items-start gap-2 border border-input rounded-md p-2 cursor-pointer">
+              <label
+                class="flex items-start gap-2 border border-input rounded-md p-2"
+                classList={{'cursor-not-allowed opacity-60': option.disabled, 'cursor-pointer': !option.disabled}}
+              >
                 <input
                   type="radio"
                   class="mt-1"
                   name={local.name}
                   value={String(option.value)}
                   checked={local.value === option.value}
+                  disabled={option.disabled}
                   onChange={() => {
                     local.onChange(option.value)
                   }}

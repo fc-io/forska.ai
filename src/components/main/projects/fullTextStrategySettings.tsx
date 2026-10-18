@@ -1,5 +1,5 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createEffect, Show, splitProps} from 'solid-js'
+import {createEffect, createSignal, Show, splitProps} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
@@ -11,6 +11,12 @@ import {
   type FullTextFigureMode,
   fullTextStrategyErrorMessages,
 } from '../../../utils/fullTextStrategyOptions.ts'
+import {
+  getCurrentModelImageInput,
+  getFigureModeChoices,
+  getModelImageInputWarning,
+  type ModelImageInput,
+} from './fullTextStrategySettings/fullTextFigureModeChoices.ts'
 import {
   type FullTextStrategyChoice,
   FullTextStrategyChoiceGroup,
@@ -41,26 +47,14 @@ type FullTextStrategySettingsProps = {
 
 type ProjectFullTextValidationInput = {modelId: string | null; projectId?: string; selection: FullTextStrategySelection}
 
+type ProjectFullTextValidationResult = ProjectFullTextValidation & {requestedModelId: string | null}
+
 type ProjectFullTextSettings = {
   fullTextChunkPolicy?: FullTextChunkPolicy | null
   fullTextFigureMode?: FullTextFigureMode | null
   fullTextStrategyId?: string | null
   useFulltext: boolean
 }
-
-const figureModeChoices: ReadonlyArray<FullTextStrategyChoice<FullTextFigureMode>> = [
-  {description: 'Captions only. Figures are not sent.', label: 'None', value: 'none'},
-  {
-    description: 'Each figure as a text description written by the figure-description model.',
-    label: 'Descriptions',
-    value: 'descriptions',
-  },
-  {
-    description: 'Figures as images, only for models that accept image input.',
-    label: 'Native images',
-    value: 'native_images',
-  },
-]
 
 const maxPromptTokenChoices: ReadonlyArray<FullTextStrategyChoice<FullTextChunkMaxPromptTokens>> = [
   {label: '24k tokens', value: 24_000},
@@ -128,15 +122,22 @@ export const getFullTextValidationBlocksSubmit = (
   return selection.useFulltext && (validation?.errors.length ?? 0) > 0
 }
 
-const fetchProjectFullTextValidation = async ({modelId, projectId, selection}: ProjectFullTextValidationInput) => {
+const fetchProjectFullTextValidation = async ({
+  modelId,
+  projectId,
+  selection,
+}: ProjectFullTextValidationInput): Promise<ProjectFullTextValidationResult> => {
   const response = await apiClient.api.projects['full-text-validation'].post({
     ...getFullTextStrategySelectionPayload(selection),
     modelId: modelId || null,
     ...(projectId ? {projectId} : {}),
   })
+  const validation = handleApiResponse<{data: ProjectFullTextValidation}>(
+    response,
+    'Failed to validate the full-text settings',
+  ).data
 
-  return handleApiResponse<{data: ProjectFullTextValidation}>(response, 'Failed to validate the full-text settings')
-    .data
+  return {...validation, requestedModelId: modelId || null}
 }
 
 const useProjectFullTextValidationQuery = (input: () => ProjectFullTextValidationInput) => {
@@ -176,9 +177,25 @@ export const FullTextStrategySettings = (props: FullTextStrategySettingsProps) =
   const validationQuery = useProjectFullTextValidationQuery(() => {
     return {modelId: local.modelId, projectId: local.projectId, selection: local.selection}
   })
+  const [storedModelImageInput, setStoredModelImageInput] = createSignal<ModelImageInput | null>(null)
+  const modelImageInput = () => {
+    return getCurrentModelImageInput(storedModelImageInput(), local.modelId)
+  }
 
   createEffect(() => {
     local.onValidationChange?.(validationQuery.data)
+  })
+
+  createEffect(() => {
+    const data = validationQuery.data
+
+    if (data?.requestedModelId) {
+      setStoredModelImageInput({
+        acceptsImages: data.modelAcceptsImages,
+        modelId: data.requestedModelId,
+        modelLabel: data.modelLabel ?? data.requestedModelId,
+      })
+    }
   })
 
   const update = (patch: Partial<FullTextStrategySelection>) => {
@@ -211,12 +228,24 @@ export const FullTextStrategySettings = (props: FullTextStrategySettingsProps) =
             disabled={local.disabled}
             legend="Figure mode"
             name="full-text-figure-mode"
-            options={figureModeChoices}
+            options={getFigureModeChoices(modelImageInput()?.acceptsImages === false)}
             value={local.selection.figureMode}
             onChange={(figureMode) => {
               update({figureMode})
             }}
           />
+          <Show when={getModelImageInputWarning(modelImageInput())}>
+            {(warning) => {
+              return (
+                <p
+                  class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-2"
+                  data-testid="full-text-figure-image-warning"
+                >
+                  {warning()}
+                </p>
+              )
+            }}
+          </Show>
           <FullTextStrategyChoiceGroup
             disabled={local.disabled}
             legend="Prompt size per call"

@@ -459,8 +459,8 @@ describe('compare judgments create-from-project route', () => {
       {
         ...primarySourceProject,
         fullTextStrategyId: 'fts-bbbbbbbbbbbbbbbb',
-        fullTextStrategyInputs: {figureMode: 'descriptions'},
-        fullTextStrategyLabel: 'mineru 4.0 / descriptions / single 96k',
+        fullTextStrategyInputs: {figureMode: 'native_images'},
+        fullTextStrategyLabel: 'mineru 4.0 / native images / single 96k',
         id: 'source-project-2',
         name: 'Peer Project',
         summarySourceProjectId: 'source-project-2',
@@ -484,7 +484,7 @@ describe('compare judgments create-from-project route', () => {
       const submitButton = container.querySelector('button[type="submit"]')
 
       expect(container.textContent).toContain(
-        'Selected projects use different full-text strategies: Primary Project: mineru 4.0 / none / single 96k; Peer Project: mineru 4.0 / descriptions / single 96k. Differing inputs: figureMode',
+        'Selected projects use different full-text strategies: Primary Project: mineru 4.0 / none / single 96k; Peer Project: mineru 4.0 / native images / single 96k. Differing inputs: figureMode',
       )
       expect(submitButton).toBeInstanceOf(HTMLButtonElement)
       expect((submitButton as HTMLButtonElement).disabled).toBe(true)
