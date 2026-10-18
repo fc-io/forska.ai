@@ -113,14 +113,18 @@ const buildEntry = ({
   baseURL = 'http://worker-a/v1',
   pendingQueueRetry = false,
   requestAttemptId = 'attempt-1',
+  ...imageEvidence
 }: {
   outcome: 'success' | 'failure'
   error: string | null
   baseURL?: string
+  imageBytes?: number
+  imageCount?: number
   pendingQueueRetry?: boolean
   requestAttemptId?: string
 }) => {
   return {
+    ...imageEvidence,
     articleId: 'article-1',
     promptIds: ['prompt-1'],
     modelId: 'model-1',
@@ -200,7 +204,13 @@ test('judgeStoreTokenUse journals low-memory judge-worker token use and clears p
 
     await judgeStoreTokenUseModule.judgeStoreTokenUse(
       [
-        buildEntry({outcome: 'success', error: null, requestAttemptId: 'attempt-success'}),
+        buildEntry({
+          outcome: 'success',
+          error: null,
+          imageBytes: 2048,
+          imageCount: 3,
+          requestAttemptId: 'attempt-success',
+        }),
         buildEntry({outcome: 'failure', error: 'Invalid JSON response', requestAttemptId: 'attempt-failure'}),
       ],
       null,
@@ -221,6 +231,17 @@ test('judgeStoreTokenUse journals low-memory judge-worker token use and clears p
         return entry.requestAttemptId
       }),
     ).toEqual(['attempt-success', 'attempt-failure'])
+    expect(
+      (attachCalls[0]?.[0].tokenUse.requestAttempts ?? []).map((entry) => {
+        return [
+          (entry as {imageBytes?: number}).imageBytes ?? 'absent',
+          (entry as {imageCount?: number}).imageCount ?? 'absent',
+        ]
+      }),
+    ).toEqual([
+      [2048, 3],
+      ['absent', 'absent'],
+    ])
     expect(markJudgmentRequestAttemptsClosed).toHaveBeenCalledWith('job-1', ['attempt-success', 'attempt-failure'])
   } finally {
     if (previousServerRole === undefined) {

@@ -66,6 +66,10 @@ export type JudgmentRequestAttemptJsonEntry = {
   error?: string | null
   errorCode?: string | null
   finishedAt?: string | null
+  /** Flattened image bytes the call attached (before base64); present only on calls that carried images. */
+  imageBytes?: number | null
+  /** Images the call attached; present only on calls that carried images. */
+  imageCount?: number | null
   jobId?: string | null
   lateEvidenceConflict?: JudgmentRequestAttemptLateEvidenceConflict | null
   lifecycleState?: JudgmentRequestAttemptLifecycleState

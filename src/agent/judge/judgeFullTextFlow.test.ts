@@ -145,9 +145,11 @@ const createInput = (fullTextJudging: FullTextJudgingInput): JudgeSinglePromptIn
 
 const loadJudgeModule = ({
   invokeStoredProviderModel,
+  judgeStoreTokenUse = mock(async (_entries: unknown) => {}),
   storeSinglePromptJudgment,
 }: {
   invokeStoredProviderModel: ReturnType<typeof mock>
+  judgeStoreTokenUse?: ReturnType<typeof mock>
   storeSinglePromptJudgment: ReturnType<typeof mock>
 }): Promise<JudgeModule> => {
   void mock.module(judgmentsRequestRuntimeModulePath, () => {
@@ -178,11 +180,7 @@ const loadJudgeModule = ({
     return {invokeStoredProviderModel}
   })
   void mock.module(judgeStoreTokenUseModulePath, () => {
-    return {
-      judgeStoreTokenUse: async () => {
-        return undefined
-      },
-    }
+    return {judgeStoreTokenUse}
   })
   void mock.module(storeSinglePromptJudgmentModulePath, () => {
     return {JudgmentPersistenceError, storeSinglePromptJudgment}
@@ -514,7 +512,12 @@ const getImageBudgetRun = async ({
     )
   })
   const storeSinglePromptJudgment = mock(async (_input: unknown) => {})
-  const {judgeSinglePrompt} = await loadJudgeModule({invokeStoredProviderModel, storeSinglePromptJudgment})
+  const judgeStoreTokenUse = mock(async (_entries: unknown) => {})
+  const {judgeSinglePrompt} = await loadJudgeModule({
+    invokeStoredProviderModel,
+    judgeStoreTokenUse,
+    storeSinglePromptJudgment,
+  })
   const fullTextJudging = await getFullTextJudgingInput({
     chunkPolicy,
     figureImages: [getImage(1)],
@@ -531,7 +534,9 @@ const getImageBudgetRun = async ({
     },
   )
 
-  return {error, fullTextJudging, imageCounts, invokeStoredProviderModel, storeSinglePromptJudgment}
+  const tokenUse = (judgeStoreTokenUse.mock.calls[0]?.[0] ?? []) as Array<{imageBytes?: number; imageCount?: number}>
+
+  return {error, fullTextJudging, imageCounts, invokeStoredProviderModel, storeSinglePromptJudgment, tokenUse}
 }
 
 const figureText = `${mediumFullText}\n\nFigure 1: Flow of participants\n[figure:1]`
@@ -559,6 +564,20 @@ test('native images: image tokens decide single vs chunked; text that fits alone
     }),
   ).toEqual([0, 9_000])
   expect(large.imageCounts).toEqual([0, 1, 0])
+  expect(
+    large.tokenUse.map((entry) => {
+      return [entry.imageCount ?? null, entry.imageBytes ?? null]
+    }),
+  ).toEqual([
+    [null, null],
+    [1, 1],
+    [null, null],
+  ])
+  expect(
+    small.tokenUse.map((entry) => {
+      return [entry.imageCount, entry.imageBytes]
+    }),
+  ).toEqual([[1, 1]])
   expect(large.storeSinglePromptJudgment.mock.calls[0]?.[0]).toMatchObject({
     fullTextExecution: {chunkCount: 2, fullTextMode: 'chunked'},
   })
