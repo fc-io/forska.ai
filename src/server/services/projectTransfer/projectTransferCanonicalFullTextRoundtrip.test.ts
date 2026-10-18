@@ -175,7 +175,13 @@ const getSourceExportScript = ({packagePath, removeFile}: {packagePath: string; 
         markdown,
         optionsHash: 'options-hash',
       },
-      runtimeConfig: {baseURL: 'http://127.0.0.1:8000', modelId: 'mineru-model', modelName: 'MinerU', providerKind: 'mineru'},
+      runtimeConfig: {
+        baseURL: 'http://127.0.0.1:8000',
+        modelId: 'mineru-model',
+        modelName: 'MinerU',
+        providerConnectionId: 'mineru-connection',
+        providerKind: 'mineru',
+      },
     })
 
     await database.run(\`

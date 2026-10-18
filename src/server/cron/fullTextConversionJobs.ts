@@ -2,6 +2,11 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import {storeConvertedFullText} from '../fullText/canonicalFullTextStore.ts'
+import {getConverterServerFailure} from '../fullText/converters/conversionError.ts'
+import {
+  clearConverterServerFailure,
+  recordConverterServerFailure,
+} from '../fullText/converters/converterServerHealth.ts'
 import {
   convertArticlePdf,
   type FullTextConversionRuntimeConfig,
@@ -106,20 +111,55 @@ export const getArticlesNeedingConversion = async ({
   return articles
 }
 
-const runConversionWorker = async ({
-  queue,
-  runtimeConfig,
-}: {
-  queue: ArticleForConversion[]
-  runtimeConfig: FullTextConversionRuntimeConfig
-}): Promise<void> => {
-  const article = queue.pop()
-  if (!article) return
-  await convertArticle({article, runtimeConfig})
-  return runConversionWorker({queue, runtimeConfig})
+type ConversionBatch = {queue: ArticleForConversion[]; stoppedBy: {articleId: string; errorMessage: string} | null}
+
+type ConvertArticleOutcome = {serverFailure: string | null}
+
+const getErrorMessage = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error)
 }
 
-const convertArticles = async ({
+const getBatchStop = (articleId: string, outcome: ConvertArticleOutcome): ConversionBatch['stoppedBy'] => {
+  return outcome.serverFailure === null ? null : {articleId, errorMessage: outcome.serverFailure}
+}
+
+const runConversionWorker = async ({
+  batch,
+  runtimeConfig,
+}: {
+  batch: ConversionBatch
+  runtimeConfig: FullTextConversionRuntimeConfig
+}): Promise<void> => {
+  const article = batch.stoppedBy ? undefined : batch.queue.pop()
+  if (!article) return
+  const outcome = await convertArticle({article, runtimeConfig})
+  batch.stoppedBy = batch.stoppedBy ?? getBatchStop(article.id, outcome)
+  return runConversionWorker({batch, runtimeConfig})
+}
+
+const logStoppedBatch = ({
+  runtimeConfig,
+  stoppedBy,
+  untouchedArticleCount,
+}: {
+  runtimeConfig: FullTextConversionRuntimeConfig
+  stoppedBy: NonNullable<ConversionBatch['stoppedBy']>
+  untouchedArticleCount: number
+}): void => {
+  fullTextConversionWarningLogger.warn(
+    'fullTextConversion:batchStopped',
+    '[fullTextConversion] Converter server unavailable; batch stopped until the next wake',
+    {
+      articleId: stoppedBy.articleId,
+      component: fullTextConversionComponent,
+      errorMessage: stoppedBy.errorMessage,
+      modelName: runtimeConfig.modelName,
+      untouchedArticleCount,
+    },
+  )
+}
+
+export const convertArticles = async ({
   articles,
   concurrency,
   runtimeConfig,
@@ -129,11 +169,11 @@ const convertArticles = async ({
   runtimeConfig: FullTextConversionRuntimeConfig
 }): Promise<void> => {
   const workerCount = Math.min(concurrency, articles.length)
-  const queue = articles.slice()
+  const batch: ConversionBatch = {queue: articles.slice(), stoppedBy: null}
 
   const results = await Promise.allSettled(
     Array.from({length: workerCount}, () => {
-      return runConversionWorker({queue, runtimeConfig})
+      return runConversionWorker({batch, runtimeConfig})
     }),
   )
 
@@ -148,6 +188,79 @@ const convertArticles = async ({
       total: results.length,
     })
   }
+
+  if (batch.stoppedBy) {
+    logStoppedBatch({runtimeConfig, stoppedBy: batch.stoppedBy, untouchedArticleCount: batch.queue.length})
+  }
+}
+
+const recordFailedConversionAttempt = async ({
+  article,
+  error,
+  runtimeConfig,
+  startTime,
+}: {
+  article: ArticleForConversion
+  error: unknown
+  runtimeConfig: FullTextConversionRuntimeConfig
+  startTime: number
+}): Promise<void> => {
+  const errorMessage = getErrorMessage(error)
+  const isPerm = isPermanentConversionFailure(error)
+  const attempts = (article.fullTextConversionAttempts ?? 0) + 1
+  const isFinalFailure = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS
+
+  await getAppDatabaseService().runBackground(
+    `
+    UPDATE app.article
+    SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
+        full_text_conversion_error = ${getSqlLiteral(errorMessage)},
+        full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
+        full_text_conversion_metadata = ${getJsonSqlLiteral(getFullTextConversionFailureMetadata(runtimeConfig))},
+        full_text_conversion_attempts = ${attempts},
+        updated_at = current_timestamp
+    WHERE id = '${escapeSqlString(article.id)}'
+  `,
+    fullTextConversionWorkloadContext,
+  )
+
+  fullTextConversionWarningLogger.warn(
+    `fullTextConversion:articleConversion:${isFinalFailure ? 'failed' : 'retry'}`,
+    `[fullTextConversion] Article conversion ${isFinalFailure ? 'failed' : 'will retry'}`,
+    {
+      articleId: article.id,
+      attempts,
+      component: fullTextConversionComponent,
+      durationMs: Date.now() - startTime,
+      errorMessage,
+      finalFailure: isFinalFailure,
+      modelName: runtimeConfig.modelName,
+    },
+  )
+}
+
+const handleConversionFailure = async ({
+  article,
+  error,
+  runtimeConfig,
+  startTime,
+}: {
+  article: ArticleForConversion
+  error: unknown
+  runtimeConfig: FullTextConversionRuntimeConfig
+  startTime: number
+}): Promise<ConvertArticleOutcome> => {
+  const serverFailure = getConverterServerFailure(error)
+
+  if (serverFailure !== null) {
+    await recordConverterServerFailure({articleId: article.id, error, runtimeConfig})
+  }
+
+  if (serverFailure !== 'refused') {
+    await recordFailedConversionAttempt({article, error, runtimeConfig, startTime})
+  }
+
+  return {serverFailure: serverFailure === null ? null : getErrorMessage(error)}
 }
 
 export const convertArticle = async ({
@@ -156,7 +269,7 @@ export const convertArticle = async ({
 }: {
   article: ArticleForConversion
   runtimeConfig: FullTextConversionRuntimeConfig
-}): Promise<void> => {
+}): Promise<ConvertArticleOutcome> => {
   const startTime = Date.now()
   fullTextConversionLogger.log(
     'fullTextConversion:articleConversionStarted',
@@ -180,6 +293,8 @@ export const convertArticle = async ({
       workloadContext: fullTextConversionWorkloadContext,
     })
 
+    await clearConverterServerFailure(runtimeConfig)
+
     fullTextConversionLogger.log(
       'fullTextConversion:articleConversionSucceeded',
       '[fullTextConversion] Article conversion succeeded',
@@ -195,39 +310,10 @@ export const convertArticle = async ({
         modelName: runtimeConfig.modelName,
       },
     )
+
+    return {serverFailure: null}
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    const isPerm = isPermanentConversionFailure(error)
-    const attempts = (article.fullTextConversionAttempts ?? 0) + 1
-    const isFinalFailure = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS
-
-    await getAppDatabaseService().runBackground(
-      `
-      UPDATE app.article
-      SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
-          full_text_conversion_error = ${getSqlLiteral(errorMessage)},
-          full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
-          full_text_conversion_metadata = ${getJsonSqlLiteral(getFullTextConversionFailureMetadata(runtimeConfig))},
-          full_text_conversion_attempts = ${attempts},
-          updated_at = current_timestamp
-      WHERE id = '${escapeSqlString(article.id)}'
-    `,
-      fullTextConversionWorkloadContext,
-    )
-
-    fullTextConversionWarningLogger.warn(
-      `fullTextConversion:articleConversion:${isFinalFailure ? 'failed' : 'retry'}`,
-      `[fullTextConversion] Article conversion ${isFinalFailure ? 'failed' : 'will retry'}`,
-      {
-        articleId: article.id,
-        attempts,
-        component: fullTextConversionComponent,
-        durationMs: Date.now() - startTime,
-        errorMessage,
-        finalFailure: isFinalFailure,
-        modelName: runtimeConfig.modelName,
-      },
-    )
+    return handleConversionFailure({article, error, runtimeConfig, startTime})
   }
 }
 

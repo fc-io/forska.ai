@@ -1,6 +1,6 @@
 import {unzipSync} from 'fflate'
 
-import {ConversionError} from './conversionError.ts'
+import {ConversionError, type ConverterServerFailure} from './conversionError.ts'
 
 export type ConverterZipEntries = Record<string, Uint8Array>
 
@@ -15,6 +15,7 @@ const connectionFailureMarkers = [
   'network',
   'socket',
 ]
+const connectionRefusedMarkers = ['econnrefused', 'connectionrefused', 'unable to connect', 'enotfound']
 const textDecoder = new TextDecoder()
 
 const getErrorCode = (error: unknown): string => {
@@ -25,12 +26,28 @@ const isTimeoutError = (error: unknown): boolean => {
   return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
 }
 
-const isConnectionFailure = (error: unknown): boolean => {
-  const searchable = `${error instanceof Error ? error.message : String(error)} ${getErrorCode(error)}`.toLowerCase()
+const getSearchableError = (error: unknown): string => {
+  return `${error instanceof Error ? error.message : String(error)} ${getErrorCode(error)}`.toLowerCase()
+}
 
-  return connectionFailureMarkers.some((marker) => {
+const hasErrorMarker = (error: unknown, markers: string[]): boolean => {
+  const searchable = getSearchableError(error)
+
+  return markers.some((marker) => {
     return searchable.includes(marker)
   })
+}
+
+export const getConnectionServerFailure = (error: unknown): ConverterServerFailure | null => {
+  return isTimeoutError(error) || !hasErrorMarker(error, connectionFailureMarkers)
+    ? null
+    : hasErrorMarker(error, connectionRefusedMarkers)
+      ? 'refused'
+      : 'died'
+}
+
+export const isEmptyServerErrorResponse = (status: number, body: string): boolean => {
+  return status >= 500 && body.trim() === ''
 }
 
 export const getFileSizeMB = (bytes: Uint8Array): string => {
@@ -52,12 +69,15 @@ const getConverterFetchError = ({
   label: string
   timeoutMs: number
 }): ConversionError => {
+  const serverFailure = getConnectionServerFailure(error)
+
   return isTimeoutError(error)
     ? new ConversionError(`${label} conversion timed out after ${timeoutMs}ms (file: ${fileSizeMB}MB)`)
     : new ConversionError(
         `${label} conversion failed: ${error instanceof Error ? error.message : String(error)} (file: ${fileSizeMB}MB)`,
         undefined,
-        !isConnectionFailure(error),
+        serverFailure === null,
+        serverFailure,
       )
 }
 
@@ -73,14 +93,17 @@ export const getConverterResponseError = async ({
   const body = await response.text().catch(() => {
     return ''
   })
-  const details = body ? ` - ${body.slice(0, 500)}` : ''
+  const serverDied = isEmptyServerErrorResponse(response.status, body)
+  const details = body ? ` - ${body.slice(0, 500)}` : serverDied ? ' with an empty body' : ''
   const isPermanent =
-    permanentConverterStatuses.includes(response.status) || body.toLowerCase().includes('taking too long')
+    !serverDied
+    && (permanentConverterStatuses.includes(response.status) || body.toLowerCase().includes('taking too long'))
 
   return new ConversionError(
     `${label} conversion failed: ${response.status} ${response.statusText}${details} (file: ${fileSizeMB}MB)`,
     response.status,
     isPermanent,
+    serverDied ? 'died' : null,
   )
 }
 

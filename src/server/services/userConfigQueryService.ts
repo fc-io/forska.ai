@@ -24,6 +24,7 @@ type FullTextConversionModelConfigRow = {
   displayName: string | null
   modelId: string
   providerConfigJson: unknown
+  providerConnectionId: string
   providerKind: string | null
   remoteModelId: string | null
 }
@@ -287,10 +288,17 @@ const getUnpaywallEmail = async (): Promise<string | null> => {
 
 const getFullTextConversionModelConfig = async (
   runner: UserConfigQueryRunner = getAppDatabaseService(),
-): Promise<{baseURL: string; modelId: string; modelName: string; providerKind: string} | null> => {
+): Promise<{
+  baseURL: string
+  modelId: string
+  modelName: string
+  providerConnectionId: string
+  providerKind: string
+} | null> => {
   const [row] = await runner.queryJson<FullTextConversionModelConfigRow>(`
     SELECT
       m.id AS modelId,
+      pc.id AS providerConnectionId,
       COALESCE(m.display_name, m.remote_model_id, m.name) AS displayName,
       pc.base_url AS baseURL,
       TO_JSON(pc.config_json) AS providerConfigJson,
@@ -320,7 +328,13 @@ const getFullTextConversionModelConfig = async (
   const modelName = getNullableTrimmedValue(row.remoteModelId ?? row.displayName)
 
   return baseURL && modelName && row.providerKind
-    ? {baseURL, modelId: row.modelId, modelName, providerKind: row.providerKind}
+    ? {
+        baseURL,
+        modelId: row.modelId,
+        modelName,
+        providerConnectionId: row.providerConnectionId,
+        providerKind: row.providerKind,
+      }
     : null
 }
 

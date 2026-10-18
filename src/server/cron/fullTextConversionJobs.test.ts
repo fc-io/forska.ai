@@ -1,5 +1,6 @@
 import {readFileSync} from 'node:fs'
 import {mkdir, readdir, writeFile} from 'node:fs/promises'
+import {type AddressInfo, createServer} from 'node:net'
 import {join} from 'node:path'
 
 import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
@@ -48,6 +49,16 @@ let mineruServer: {stop: (force?: boolean) => void; url: URL} | null = null
 
 const getMineruBaseURL = () => {
   return mineruServer?.url.toString().replace(/\/$/, '') ?? ''
+}
+
+const getRuntimeConfig = (baseURL: string) => {
+  return {
+    baseURL,
+    modelId: 'conversion-mineru-model',
+    modelName: 'mineru-standard',
+    providerConnectionId: 'conversion-mineru-connection',
+    providerKind: 'mineru',
+  }
 }
 
 beforeAll(async () => {
@@ -220,12 +231,7 @@ test('conversion cron stores canonical text, converter markdown file, figure ass
       fullTextPDF: 'assets/article_pdfs/cron-article-1.pdf',
       id: 'cron-article-1',
     },
-    runtimeConfig: {
-      baseURL: getMineruBaseURL(),
-      modelId: 'conversion-mineru-model',
-      modelName: 'mineru-standard',
-      providerKind: 'mineru',
-    },
+    runtimeConfig: getRuntimeConfig(getMineruBaseURL()),
   })
 
   await expectConvertedArticle('cron-article-1')
@@ -271,12 +277,7 @@ test('reconversion keeps cached chunk plans while the canonical hash is unchange
         fullTextPDF: 'assets/article_pdfs/cron-article-1.pdf',
         id: 'cron-article-1',
       },
-      runtimeConfig: {
-        baseURL: getMineruBaseURL(),
-        modelId: 'conversion-mineru-model',
-        modelName: 'mineru-standard',
-        providerKind: 'mineru',
-      },
+      runtimeConfig: getRuntimeConfig(getMineruBaseURL()),
     })
   }
   const countPlans = async () => {
@@ -316,12 +317,7 @@ test('a failed conversion records the converter kind and options hash next to th
       fullTextPDF: 'assets/article_pdfs/cron-missing-pdf.pdf',
       id: 'cron-missing-pdf',
     },
-    runtimeConfig: {
-      baseURL: getMineruBaseURL(),
-      modelId: 'conversion-mineru-model',
-      modelName: 'mineru-standard',
-      providerKind: 'mineru',
-    },
+    runtimeConfig: getRuntimeConfig(getMineruBaseURL()),
   })
 
   const row = await getConvertedArticle('cron-missing-pdf')
@@ -374,4 +370,110 @@ test('a failed on-demand conversion replaces the metadata of an earlier successf
     optionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
     providerKind: 'mineru',
   })
+})
+
+const getConversionStates = async (articleIds: string[]) => {
+  return database?.queryJson<{attempts: number | null; id: string; status: string | null}>(`
+    SELECT id, full_text_conversion_attempts AS attempts, full_text_conversion_status AS status
+    FROM app.article
+    WHERE id IN (${articleIds
+      .map((articleId) => {
+        return `'${articleId}'`
+      })
+      .join(', ')})
+    ORDER BY id
+  `)
+}
+
+const getConnectionLastError = async () => {
+  const [row] =
+    (await database?.queryJson<{lastError: string | null}>(
+      `SELECT last_error AS lastError FROM app.provider_connection WHERE id = 'conversion-mineru-connection'`,
+    )) ?? []
+
+  return row?.lastError ?? null
+}
+
+test('a converter server that dies mid-batch stops the batch, charges only in-flight articles and shows on the connection', async () => {
+  if (!jobsModule) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  const articleIds = ['dying-1', 'dying-2', 'dying-3']
+  const articles = articleIds.map((id) => {
+    return {fullTextConversionAttempts: null, fullTextPDF: `assets/article_pdfs/${id}.pdf`, id}
+  })
+  const resettingServer = createServer((socket) => {
+    socket.on('data', () => {
+      socket.destroy()
+    })
+  })
+
+  await seedArticleWithPdf('dying-1')
+  await seedArticleWithPdf('dying-2')
+  await seedArticleWithPdf('dying-3')
+  await new Promise<void>((resolve) => {
+    resettingServer.listen(0, '127.0.0.1', resolve)
+  })
+
+  const deadRuntimeConfig = getRuntimeConfig(`http://127.0.0.1:${(resettingServer.address() as AddressInfo).port}`)
+
+  await jobsModule.convertArticles({articles, concurrency: 2, runtimeConfig: deadRuntimeConfig})
+
+  expect(await getConversionStates(articleIds)).toEqual([
+    {attempts: null, id: 'dying-1', status: null},
+    {attempts: 1, id: 'dying-2', status: null},
+    {attempts: 1, id: 'dying-3', status: null},
+  ])
+  expect(await getConnectionLastError()).toMatch(
+    /^MinerU conversion failed: The socket connection was closed unexpectedly.* \(while converting article dying-[23]\)$/,
+  )
+
+  resettingServer.close()
+  await jobsModule.convertArticles({articles, concurrency: 2, runtimeConfig: deadRuntimeConfig})
+
+  expect(await getConversionStates(articleIds)).toEqual([
+    {attempts: null, id: 'dying-1', status: null},
+    {attempts: 1, id: 'dying-2', status: null},
+    {attempts: 1, id: 'dying-3', status: null},
+  ])
+  expect(await getConnectionLastError()).toContain('MinerU conversion failed: Unable to connect.')
+
+  await jobsModule.convertArticles({
+    articles: articles.slice(0, 1),
+    concurrency: 2,
+    runtimeConfig: getRuntimeConfig(getMineruBaseURL()),
+  })
+
+  expect((await getConversionStates(['dying-1']))?.[0]).toEqual({attempts: 1, id: 'dying-1', status: 'success'})
+  expect(await getConnectionLastError()).toBeNull()
+})
+
+test('on-demand conversion against a refused converter returns a transient failure without charging the article', async () => {
+  if (!ensureFullTextModule || !database) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  await seedArticleWithPdf('ensure-refused')
+  await database.run(
+    `UPDATE app.provider_connection SET base_url = 'http://127.0.0.1:1' WHERE id = 'conversion-mineru-connection'`,
+  )
+
+  const result = await ensureFullTextModule.ensureFullText(
+    {
+      fullText: null,
+      fullTextConversionStatus: null,
+      fullTextPDF: 'assets/article_pdfs/ensure-refused.pdf',
+    } as Parameters<typeof ensureFullTextModule.ensureFullText>[0],
+    'ensure-refused',
+  )
+  const lastError = await getConnectionLastError()
+
+  await database.run(
+    `UPDATE app.provider_connection SET base_url = '${getMineruBaseURL()}', last_error = NULL WHERE id = 'conversion-mineru-connection'`,
+  )
+
+  expect(result).toEqual({reason: 'transient_failure', shouldSkip: false, text: null})
+  expect(await getConversionStates(['ensure-refused'])).toEqual([{attempts: null, id: 'ensure-refused', status: null}])
+  expect(lastError).toEndWith('(while converting article ensure-refused)')
 })

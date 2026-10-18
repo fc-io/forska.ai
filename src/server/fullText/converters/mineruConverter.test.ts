@@ -1,4 +1,5 @@
 import {readFileSync} from 'node:fs'
+import {type AddressInfo, createServer} from 'node:net'
 
 import {afterEach, expect, test} from 'bun:test'
 import {strToU8, zipSync} from 'fflate'
@@ -240,8 +241,49 @@ test('MinerU converter keeps server errors transient unless the status is a clie
 
   expect(serverError.status).toBe(500)
   expect(serverError.isPermanent).toBe(false)
+  expect(serverError.serverFailure).toBeNull()
   expect(clientError.status).toBe(422)
   expect(clientError.isPermanent).toBe(true)
+  expect(clientError.serverFailure).toBeNull()
+})
+
+test('MinerU converter marks the server as died on a reset connection or a 5xx with an empty body', async () => {
+  const resettingServer = createServer((socket) => {
+    socket.on('data', () => {
+      socket.destroy()
+    })
+  })
+  await new Promise<void>((resolve) => {
+    resettingServer.listen(0, '127.0.0.1', resolve)
+  })
+  const emptyBadGatewayURL = startMineruServer(() => {
+    return new Response(null, {status: 502, statusText: 'Bad Gateway'})
+  })
+  const emptyGatewayTimeoutURL = startMineruServer(() => {
+    return new Response(null, {status: 504, statusText: 'Gateway Timeout'})
+  })
+  const getError = async (baseURL: string) => {
+    return (await mineruConverter.convert(getPdfRequest(baseURL)).catch((caught: unknown) => {
+      return caught
+    })) as ConversionError
+  }
+
+  const reset = await getError(`http://127.0.0.1:${(resettingServer.address() as AddressInfo).port}`)
+  const badGateway = await getError(emptyBadGatewayURL)
+  const gatewayTimeout = await getError(emptyGatewayTimeoutURL)
+  resettingServer.close()
+
+  expect(
+    [reset, badGateway, gatewayTimeout].map(({isPermanent, serverFailure}) => {
+      return [isPermanent, serverFailure]
+    }),
+  ).toEqual([
+    [false, 'died'],
+    [false, 'died'],
+    [false, 'died'],
+  ])
+  expect(reset.message).toContain('The socket connection was closed unexpectedly')
+  expect(badGateway.message).toContain('MinerU conversion failed: 502 Bad Gateway with an empty body')
 })
 
 test('MinerU converter treats an unreachable server as a transient failure', async () => {
@@ -260,4 +302,5 @@ test('MinerU converter treats an unreachable server as a transient failure', asy
 
   expect(error).toBeInstanceOf(ConversionError)
   expect(error.isPermanent).toBe(false)
+  expect(error.serverFailure).toBe('refused')
 })

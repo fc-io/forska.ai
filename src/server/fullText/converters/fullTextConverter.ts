@@ -17,6 +17,7 @@ export type FullTextConversionRuntimeConfig = {
   baseURL: string
   modelId: string
   modelName: string
+  providerConnectionId: string
   providerKind: string
 }
 
