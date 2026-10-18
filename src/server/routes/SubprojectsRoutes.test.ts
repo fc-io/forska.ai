@@ -3,6 +3,7 @@ import {Elysia} from 'elysia'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
+import {legacyFullTextNoImagesBodyErrorMessage} from '../utils/rejectLegacyFullTextNoImagesBody.ts'
 
 setDefaultTimeout(120_000)
 
@@ -430,4 +431,37 @@ test('subproject route rejects an unparseable date with 400', async () => {
 
   expect(response.status).toBe(400)
   expect(await response.text()).toContain('Invalid date value provided')
+})
+
+test('subproject route rejects the frozen no-images flag with 400 and creates no project', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'subproject-frozen-flag-connection'
+  const modelId = 'subproject-frozen-flag-model'
+  const sourceProjectId = 'subproject-frozen-flag-source-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId: sourceProjectId})
+
+  const response = await app.handle(
+    new Request('http://localhost/api/subprojects', {
+      body: JSON.stringify({
+        name: 'Frozen flag subproject',
+        modelId,
+        promptSelections: [],
+        sourceProjectIds: [sourceProjectId],
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const [projectCount] = await queryDatabase<{total: number | bigint}>(`
+    SELECT COUNT(*) AS total FROM app.project WHERE name = 'Frozen flag subproject'
+  `)
+
+  expect(response.status).toBe(400)
+  expect(await response.text()).toContain(legacyFullTextNoImagesBodyErrorMessage)
+  expect(Number(projectCount?.total ?? 0)).toBe(0)
 })

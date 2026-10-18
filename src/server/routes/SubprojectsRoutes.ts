@@ -16,6 +16,7 @@ import {
 } from '../services/immutablePromptService.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
+import {rejectLegacyFullTextNoImagesBody} from '../utils/rejectLegacyFullTextNoImagesBody.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
 const appDatabaseService = getAppDatabaseService()
@@ -680,6 +681,7 @@ export const subprojectsRoutes = new Elysia()
       }
     },
     {
+      transform: rejectLegacyFullTextNoImagesBody,
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.String()),

@@ -30,7 +30,6 @@ export type CreateComparisonProjectInput = {
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
-  useFulltextNoImages: boolean
   importRoutes?: string[]
   sourceProjectIds?: string[]
   promptSelections?: Array<{promptId: string; order: number}>
@@ -205,7 +204,6 @@ export type UpdateComparisonProjectInput = {
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
-  useFulltextNoImages: boolean
   importRoutes?: string[]
   sourceProjectIds?: string[]
   promptSelections: Array<{promptId: string; order: number}>

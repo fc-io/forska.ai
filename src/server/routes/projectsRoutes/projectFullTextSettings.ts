@@ -68,9 +68,6 @@ export const fullTextStrategyRecordJobRunningErrorMessage =
 export const fullTextStrategyRecordWithoutFullTextErrorMessage =
   'Only a project with explicit full-text settings can record a new full-text strategy.'
 
-export const fullTextNoImagesReplacedErrorMessage =
-  'useFulltextNoImages is replaced by fullTextFigureMode "none". Send useFulltext with a figure mode and a chunk policy.'
-
 export const getProjectFullTextSelectSql = (projectAlias: string) => {
   return `
     ${projectAlias}.full_text_figure_mode AS fullTextFigureMode,

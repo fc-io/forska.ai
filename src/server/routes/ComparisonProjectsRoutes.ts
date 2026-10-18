@@ -93,6 +93,7 @@ import {
   hasAnyJudgmentAnswer,
   normalizeSummaryAnswerValue,
 } from '../utils/judgmentAnswers.ts'
+import {rejectLegacyFullTextNoImagesBody} from '../utils/rejectLegacyFullTextNoImagesBody.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {getRuntimeBuildInfo} from '../utils/runtimeBuildInfo.ts'
 import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
@@ -6800,6 +6801,7 @@ export const comparisonProjectsRoutes = new Elysia()
         : {data: createdComparisonProject}
     },
     {
+      transform: rejectLegacyFullTextNoImagesBody,
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.Union([t.String(), t.Null()])),
@@ -7175,6 +7177,7 @@ export const comparisonProjectsRoutes = new Elysia()
       return {data: createdComparisonProject}
     },
     {
+      transform: rejectLegacyFullTextNoImagesBody,
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.Union([t.String(), t.Null()])),
@@ -7186,7 +7189,6 @@ export const comparisonProjectsRoutes = new Elysia()
         useTitle: t.Boolean(),
         useAbstract: t.Boolean(),
         useFulltext: t.Boolean(),
-        useFulltextNoImages: t.Boolean(),
         importRoutes: t.Optional(t.Array(t.String())),
         sourceProjectIds: t.Optional(t.Array(t.String())),
         promptSelections: t.Optional(t.Array(t.Object({promptId: t.String(), order: t.Number()}))),
@@ -7207,7 +7209,7 @@ export const comparisonProjectsRoutes = new Elysia()
       const useTitle = body.useTitle
       const useAbstract = body.useAbstract
       const useFulltext = body.useFulltext
-      const useFulltextNoImages = body.useFulltextNoImages
+      const useFulltextNoImages = existingComparisonProject.useFulltextNoImages
 
       if (!useTitle && !useAbstract && !useFulltext && !useFulltextNoImages) {
         throw new Error('Select at least one article content option to compare')
@@ -7294,6 +7296,7 @@ export const comparisonProjectsRoutes = new Elysia()
       return {data: getComparisonProjectRecordValue(updatedComparisonProjectRow)}
     },
     {
+      transform: rejectLegacyFullTextNoImagesBody,
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.Union([t.String(), t.Null()])),
@@ -7305,7 +7308,6 @@ export const comparisonProjectsRoutes = new Elysia()
         useTitle: t.Boolean(),
         useAbstract: t.Boolean(),
         useFulltext: t.Boolean(),
-        useFulltextNoImages: t.Boolean(),
         importRoutes: t.Optional(t.Array(t.String())),
         sourceProjectIds: t.Optional(t.Array(t.String())),
         promptSelections: t.Array(t.Object({promptId: t.String(), order: t.Number()})),

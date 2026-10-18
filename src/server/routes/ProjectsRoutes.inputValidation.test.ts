@@ -2,6 +2,7 @@ import {afterAll, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:te
 import {Elysia} from 'elysia'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+import {legacyFullTextNoImagesBodyErrorMessage} from '../utils/rejectLegacyFullTextNoImagesBody.ts'
 
 setDefaultTimeout(120_000)
 
@@ -147,17 +148,13 @@ test('create route returns 400 for an unparseable date', async () => {
   expect(response.text).toContain('Invalid date value provided')
 })
 
-test('create route returns 400 for the retired no-images flag', async () => {
-  const response = await requestJson('/api/projects', 'POST', {
-    modelId,
-    name: 'Both full text modes project',
-    useFulltext: true,
-    useFulltextNoImages: true,
-  })
+test.each([true, false, null])('create route returns 400 for the frozen no-images flag sent as %p', async (value) => {
+  const name = `Frozen no-images flag project ${String(value)}`
+  const response = await requestJson('/api/projects', 'POST', {modelId, name, useFulltextNoImages: value})
 
   expect(response.status).toBe(400)
-  expect(response.text).toContain('useFulltextNoImages is replaced by fullTextFigureMode')
-  expect(await countProjectsNamed('Both full text modes project')).toBe(0)
+  expect(response.text).toContain(legacyFullTextNoImagesBodyErrorMessage)
+  expect(await countProjectsNamed(name)).toBe(0)
 })
 
 test('create route returns 400 for a model that does not exist', async () => {
@@ -208,14 +205,34 @@ test('edit route returns 400 for a model that does not exist', async () => {
   expect(response.text).toContain('Selected model does not exist or is disabled')
 })
 
-test('edit route returns 400 for the retired no-images flag', async () => {
+test.each([true, false])('edit route returns 400 for the frozen no-images flag sent as %p', async (value) => {
   const response = await requestJson(`/api/projects/${existingProjectId}/edit`, 'PATCH', {
-    useFulltext: true,
-    useFulltextNoImages: true,
+    name: 'Renamed by a frozen flag request',
+    useFulltextNoImages: value,
   })
 
   expect(response.status).toBe(400)
-  expect(response.text).toContain('useFulltextNoImages is replaced by fullTextFigureMode')
+  expect(response.text).toContain(legacyFullTextNoImagesBodyErrorMessage)
+  expect(await countProjectsNamed('Renamed by a frozen flag request')).toBe(0)
+})
+
+test('name and description patch returns 400 for the frozen no-images flag', async () => {
+  const response = await requestJson(`/api/projects/${existingProjectId}`, 'PATCH', {
+    name: 'Renamed by a frozen flag patch',
+    useFulltextNoImages: false,
+  })
+
+  expect(response.status).toBe(400)
+  expect(response.text).toContain(legacyFullTextNoImagesBodyErrorMessage)
+  expect(await countProjectsNamed('Renamed by a frozen flag patch')).toBe(0)
+})
+
+test('clone returns 400 for the frozen no-images flag and creates no copy', async () => {
+  const response = await requestJson(`/api/projects/${existingProjectId}/clone`, 'POST', {useFulltextNoImages: false})
+
+  expect(response.status).toBe(400)
+  expect(response.text).toContain(legacyFullTextNoImagesBodyErrorMessage)
+  expect(await countProjectsNamed('Input validation existing project - Copy')).toBe(0)
 })
 
 test('edit route returns 400 for a prompt original id that does not exist', async () => {

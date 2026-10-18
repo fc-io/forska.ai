@@ -60,6 +60,10 @@ const getJson = async (response: Response, label: string) => {
   return body
 }
 
+const getProjectCreateContentFlags = ({useFulltextNoImages: _useFulltextNoImages, ...flags}: RealCodexContentFlags) => {
+  return flags
+}
+
 const requestJson = async (baseUrl: string, method: 'GET' | 'PATCH' | 'POST', path: string, body?: unknown) => {
   return getJson(
     await fetch(`${baseUrl}${path}`, {
@@ -253,7 +257,7 @@ export const createRealCodexTopologyAdapter = (): RealCodexTopologyAdapter => {
       )
       const project = getDataRecord(
         await requestJson(baseUrl, 'POST', '/api/projects', {
-          ...contentFlags,
+          ...getProjectCreateContentFlags(contentFlags),
           importRoutes: [importRoute],
           modelId,
           name: `Real Codex smoke ${crypto.randomUUID()}`,

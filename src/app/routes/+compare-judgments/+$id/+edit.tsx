@@ -17,6 +17,7 @@ import {
 import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 import {getComparisonProjectFullTextStrategyMixError} from '../../../../utils/comparisonProjectFullTextStrategyMix.ts'
+import {legacyFullTextNoImagesLabel} from '../../../../utils/legacyFullTextNoImagesLabel.ts'
 
 type ModelOption = {
   id: string
@@ -44,7 +45,7 @@ const formatContentSettings = (sourceProject: ComparisonProjectSource) => {
   const parts = [
     sourceProject.useTitle ? 'title' : null,
     sourceProject.useAbstract ? 'abstract' : null,
-    sourceProject.useFulltextNoImages ? 'fulltext (no images)' : sourceProject.useFulltext ? 'fulltext' : null,
+    sourceProject.useFulltextNoImages ? legacyFullTextNoImagesLabel : sourceProject.useFulltext ? 'fulltext' : null,
   ].filter(Boolean) as string[]
 
   return parts.length > 0 ? parts.join(' + ') : 'none'
@@ -92,10 +93,11 @@ const getUniqueSourceProjectValues = (
 
 const getSelectedContentOptionCount = (options: {
   compareTitleAndAbstract: boolean
+  hasLegacyFullTextNoImages: boolean
   useFulltext: boolean
-  useFulltextNoImages: boolean
 }) => {
-  return [options.compareTitleAndAbstract, options.useFulltext, options.useFulltextNoImages].filter(Boolean).length
+  return [options.compareTitleAndAbstract, options.useFulltext, options.hasLegacyFullTextNoImages].filter(Boolean)
+    .length
 }
 
 const getSelectedPromptIds = (comparisonProject: ComparisonProjectEditFormData) => {
@@ -183,7 +185,6 @@ export const EditComparisonProjectPage = () => {
   const [selectedModelIds, setSelectedModelIds] = createSignal<string[]>([])
   const [compareTitleAndAbstract, setCompareTitleAndAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
-  const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
   const [selectedPromptIds, setSelectedPromptIds] = createSignal<string[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
@@ -195,11 +196,14 @@ export const EditComparisonProjectPage = () => {
       return {value: model.id, label: model.label}
     })
   })
+  const hasLegacyFullTextNoImages = createMemo(() => {
+    return comparisonProjectQuery.data?.useFulltextNoImages === true
+  })
   const selectedContentOptionCount = createMemo(() => {
     return getSelectedContentOptionCount({
       compareTitleAndAbstract: compareTitleAndAbstract(),
+      hasLegacyFullTextNoImages: hasLegacyFullTextNoImages(),
       useFulltext: useFulltext(),
-      useFulltextNoImages: useFulltextNoImages(),
     })
   })
   const hasSelectedContentOptions = createMemo(() => {
@@ -224,7 +228,7 @@ export const EditComparisonProjectPage = () => {
           sourceProject?.useTitle
           || sourceProject?.useAbstract
           || sourceProject?.useFulltext
-          || sourceProject?.useFulltextNoImages,
+          || hasLegacyFullTextNoImages(),
         )
       : hasSelectedContentOptions()
   })
@@ -368,7 +372,6 @@ export const EditComparisonProjectPage = () => {
     setSelectedModelIds(getSelectedModelIds(comparisonProject))
     setCompareTitleAndAbstract(comparisonProject.useTitle || comparisonProject.useAbstract)
     setUseFulltext(comparisonProject.useFulltext)
-    setUseFulltextNoImages(comparisonProject.useFulltextNoImages)
     setSelectedPromptIds(getSelectedPromptIds(comparisonProject))
 
     const [fallbackSourceProjectId] = comparisonProject.sourceProjectIds
@@ -438,7 +441,6 @@ export const EditComparisonProjectPage = () => {
             useTitle: sourceProject?.useTitle ?? compareTitleAndAbstract(),
             useAbstract: sourceProject?.useAbstract ?? compareTitleAndAbstract(),
             useFulltext: sourceProject?.useFulltext ?? useFulltext(),
-            useFulltextNoImages: sourceProject?.useFulltextNoImages ?? useFulltextNoImages(),
             importRoutes: getUniqueSourceProjectValues(selectedSourceProjects, (selectedProject) => {
               return selectedProject.importRoutes.map((importRoute) => {
                 return importRoute.route
@@ -461,7 +463,6 @@ export const EditComparisonProjectPage = () => {
             useTitle: compareTitleAndAbstract(),
             useAbstract: compareTitleAndAbstract(),
             useFulltext: useFulltext(),
-            useFulltextNoImages: useFulltextNoImages(),
             promptSelections: selectedPromptIds().map((promptId, index) => {
               return {promptId, order: index}
             }),
@@ -968,28 +969,22 @@ export const EditComparisonProjectPage = () => {
                       }}
                     />
                     <div class="flex-1">
-                      <p class="text-sm font-medium text-gray-900">Use Full Text (with images)</p>
-                      <p class="text-xs text-gray-500 mt-0.5">
-                        Compare judgments that use the complete article text including embedded images.
-                      </p>
+                      <p class="text-sm font-medium text-gray-900">Use Full Text</p>
+                      <p class="text-xs text-gray-500 mt-0.5">Compare judgments that use the article full text.</p>
                     </div>
                   </label>
-                  <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      class="mt-1"
-                      checked={useFulltextNoImages()}
-                      onChange={(event) => {
-                        return setUseFulltextNoImages(event.currentTarget.checked)
-                      }}
-                    />
-                    <div class="flex-1">
-                      <p class="text-sm font-medium text-gray-900">Use Full Text (without images)</p>
+                  <Show when={hasLegacyFullTextNoImages()}>
+                    <div
+                      class="border border-input rounded-md p-3 bg-gray-50"
+                      data-testid="comparison-legacy-full-text-no-images"
+                    >
+                      <p class="text-sm font-medium text-gray-900">{legacyFullTextNoImagesLabel}</p>
                       <p class="text-xs text-gray-500 mt-0.5">
-                        Compare judgments that use article text with embedded images stripped out.
+                        Kept from before full-text strategies. This comparison keeps its legacy no-images judgments; it
+                        cannot be turned off or set on other comparisons.
                       </p>
                     </div>
-                  </label>
+                  </Show>
                 </div>
                 <Show when={!hasSelectedContentOptions()}>
                   <p class="mt-2 text-sm text-red-600">Pick at least one content option.</p>
