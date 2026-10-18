@@ -17,6 +17,8 @@ import {
   type CanonicalFullTextStats,
   type FullTextFigureMode,
 } from './canonicalFullText.ts'
+import {stripNulCharacters} from './canonicalFullText/canonicalFullTextNulCharacters.ts'
+import {ConversionError} from './converters/conversionError.ts'
 import {type FullTextConversionRuntimeConfig, getFullTextConversionMetadata} from './converters/fullTextConverter.ts'
 import {
   FULL_TEXT_LAYOUT_VERSION,
@@ -70,6 +72,27 @@ const getCanonicalFullTextSetSql = (canonical: CanonicalFullText): string => {
   ].join(',\n')
 }
 
+const deterministicStoreErrorKinds = [
+  {label: 'parser error', prefix: 'Parser Error:'},
+  {label: 'conversion error', prefix: 'Conversion Error:'},
+  {label: 'invalid input error', prefix: 'Invalid Input Error:'},
+] as const
+
+export const getConvertedFullTextStoreError = (error: unknown): unknown => {
+  const message = error instanceof Error ? error.message : String(error)
+  const kind = deterministicStoreErrorKinds.find((entry) => {
+    return message.includes(entry.prefix)
+  })
+
+  return kind
+    ? new ConversionError(
+        `Storing the converted full text failed with a DuckDB ${kind.label}, which repeats on every attempt: ${message.slice(0, 500)}`,
+        undefined,
+        true,
+      )
+    : error
+}
+
 export const storeConvertedFullText = async ({
   articleId,
   attempts,
@@ -86,32 +109,37 @@ export const storeConvertedFullText = async ({
   workloadContext?: DuckdbWorkloadContext
 }): Promise<CanonicalFullText> => {
   const canonical = buildCanonicalFullTextFromConversion({figureMode: storedFormFigureMode, result})
+  const html = result.html === null ? null : stripNulCharacters(result.html)
   const sourceUpdatedAt = new Date()
-  const valueHash = getArticleReviewServingMutationValueHash({html: result.html, md: canonical.text})
+  const valueHash = getArticleReviewServingMutationValueHash({html, md: canonical.text})
 
-  await getAppDatabaseService().transaction(async (tx) => {
-    await tx.run(getDeleteChunkPlansForChangedCanonicalHashSql({articleId, canonicalHash: canonical.hash}))
-    await tx.run(`
-      UPDATE app.article
-      SET ${getCanonicalFullTextSetSql(canonical)},
-          full_text_html = ${getSqlLiteral(result.html)},
-          full_text_assets = ${getJsonSqlLiteral(result.figures)},
-          full_text_conversion_status = 'success',
-          full_text_conversion_error = NULL,
-          full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
-          full_text_conversion_metadata = ${getJsonSqlLiteral(getFullTextConversionMetadata({result, runtimeConfig}))},
-          full_text_conversion_attempts = ${attempts},
-          updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
-      WHERE id = '${escapeSqlString(articleId)}'
-    `)
-    await appendArticleReviewServingDeltas(tx, {
-      articleId,
-      changedFields: ['fullText', 'fullTextHtml'],
-      sourceMutationKey: `${mutationSource}|article|${articleId}|success|${sourceUpdatedAt.toISOString()}|${valueHash}`,
-      sourceOperation: 'update',
-      sourceUpdatedAt,
+  await getAppDatabaseService()
+    .transaction(async (tx) => {
+      await tx.run(getDeleteChunkPlansForChangedCanonicalHashSql({articleId, canonicalHash: canonical.hash}))
+      await tx.run(`
+        UPDATE app.article
+        SET ${getCanonicalFullTextSetSql(canonical)},
+            full_text_html = ${getSqlLiteral(html)},
+            full_text_assets = ${getJsonSqlLiteral(result.figures)},
+            full_text_conversion_status = 'success',
+            full_text_conversion_error = NULL,
+            full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig.modelId)},
+            full_text_conversion_metadata = ${getJsonSqlLiteral(getFullTextConversionMetadata({result, runtimeConfig}))},
+            full_text_conversion_attempts = ${attempts},
+            updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
+        WHERE id = '${escapeSqlString(articleId)}'
+      `)
+      await appendArticleReviewServingDeltas(tx, {
+        articleId,
+        changedFields: ['fullText', 'fullTextHtml'],
+        sourceMutationKey: `${mutationSource}|article|${articleId}|success|${sourceUpdatedAt.toISOString()}|${valueHash}`,
+        sourceOperation: 'update',
+        sourceUpdatedAt,
+      })
+    }, workloadContext)
+    .catch((error: unknown) => {
+      throw getConvertedFullTextStoreError(error)
     })
-  }, workloadContext)
 
   return canonical
 }
