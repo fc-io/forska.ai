@@ -39,7 +39,8 @@ description: Use ONLY when touching DuckDB, duckdbMigrations, schema work, db:* 
 ## Judgment Queries
 
 - When querying judgments in a project context, always filter by model, content settings and system prompt variant.
-- The unique constraint on `app.judgment` is `(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant, delete_generation)`.
+- The unique constraint on `app.judgment` is `(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant, full_text_strategy_id, delete_generation)`.
+- `use_fulltext_no_images` is a frozen legacy identity dimension, like `delete_generation`. Keep it in identity matches, but never accept it from API input and never branch on it for behaviour. See `docs/system-prompt-variants.md`.
 - `app.judgment.use_metadata` is `BOOLEAN NOT NULL DEFAULT FALSE`. `app.project.use_metadata` and `app.judgment_execution_snapshot.use_metadata` are `BOOLEAN DEFAULT FALSE` but nullable (DuckDB drops `NOT NULL` on `ADD COLUMN` for a populated table), so read them with `COALESCE(project.use_metadata, FALSE)`.
 - `app.judgment.system_prompt_variant` is `NOT NULL DEFAULT 'legacy'`. `app.project.system_prompt_variant` is nullable, and `NULL` means `legacy`, so match with `judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')`. In SQL, use `getProjectVisibleJudgmentNaturalKeySql` from `src/server/services/projectVisibleJudgmentRule.ts`.
 
@@ -52,6 +53,7 @@ const judgmentConfigCondition = and(
   eq(judgments.useFulltextNoImages, project.useFulltextNoImages),
   eq(judgments.useMetadata, project.useMetadata ?? false),
   eq(judgments.systemPromptVariant, project.systemPromptVariant ?? 'legacy'),
+  eq(judgments.fullTextStrategyId, project.fullTextStrategyId ?? 'fts-none'),
 )
 ```
 
