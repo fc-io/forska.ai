@@ -238,7 +238,12 @@ test('the Ollama adapter posts image prompts with max_tokens', async () => {
   await requireProviderRegistryEntry('ollama')
     .invoke({
       connection: {providerKind: 'ollama'} as never,
-      model: {metadataJson: null, modelName: 'qwen3-vl:2b-instruct', name: 'qwen3-vl', remoteModelId: null} as never,
+      model: {
+        metadataJson: {discovery: {capabilities: {supportsImageInput: true}}},
+        modelName: 'qwen3-vl:2b-instruct',
+        name: 'qwen3-vl',
+        remoteModelId: null,
+      } as never,
       request: {
         maxCompletionTokens: 1024,
         outputSchema: {type: 'object'},
