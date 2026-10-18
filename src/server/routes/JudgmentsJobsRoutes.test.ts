@@ -5579,6 +5579,47 @@ const patchJudgmentJobStatus = (jobId: string, status: string) => {
   )
 }
 
+test('job list and detail label a legacy no-images job as full text (legacy, no images)', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const suffix = Date.now()
+  const projectId = `legacy-no-images-job-project-${suffix}`
+  const jobId = `legacy-no-images-job-${suffix}`
+
+  await insertProjectFixture({
+    connectionId: `legacy-no-images-job-connection-${suffix}`,
+    modelId: `legacy-no-images-job-model-${suffix}`,
+    projectId,
+  })
+  await runDatabase(`
+    UPDATE app.project
+    SET use_fulltext_no_images = TRUE, full_text_figure_mode = 'none', full_text_strategy_id = 'fts-legacy-v0'
+    WHERE id = '${projectId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, full_text_strategy_id)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'fts-legacy-v0')
+  `)
+  await getJudgmentJobSqliteService().initializeJob(jobId)
+
+  const detailsResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const detailsBody = (await detailsResponse.json()) as {fullTextStrategyLabel: string}
+  const listResponse = await app.handle(new Request('http://localhost/api/judgmentsjobs'))
+  const listBody = (await listResponse.json()) as {data: Array<{fullTextStrategyLabel: string; id: string}>}
+
+  expect(detailsResponse.status).toBe(200)
+  expect(detailsBody.fullTextStrategyLabel).toBe('full text (legacy, no images)')
+  expect(listResponse.status).toBe(200)
+  expect(
+    listBody.data.find((job) => {
+      return job.id === jobId
+    })?.fullTextStrategyLabel,
+  ).toBe('full text (legacy, no images)')
+})
+
 test('job create, resume and start-clean write the project full-text strategy before the job runs', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

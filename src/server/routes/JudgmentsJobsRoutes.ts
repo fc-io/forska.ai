@@ -12,6 +12,7 @@ import {
   getJudgmentJobStopConditions,
   isJudgmentJobStopReason,
 } from '../../utils/judgmentJobStopConditions.ts'
+import {getLegacyNoImagesAwareFullTextStrategyLabel} from '../../utils/legacyFullTextNoImagesLabel.ts'
 import {
   type CronRuntimeClassState,
   cronRuntimeTickNames,
@@ -118,13 +119,13 @@ import {
   markJudgmentJobSqliteDeletePendingTx,
   retryPendingJudgmentJobSqliteDeletes,
 } from '../services/judgmentJobDeleteService.ts'
-import {getJudgmentJobFullTextClaimError} from '../services/judgmentJobFullTextPreconditions.ts'
 import {
   assertProjectFullTextJudgable,
   getProjectFullTextGate,
   getProjectFullTextGatesByProjectId,
   type ProjectFullTextGate,
 } from '../services/judgmentJobFullTextGate.ts'
+import {getJudgmentJobFullTextClaimError} from '../services/judgmentJobFullTextPreconditions.ts'
 import {assertProjectFullTextArticlesMatchStrategy} from '../services/judgmentJobFullTextReconversion.ts'
 import {
   assertModelContextWindowResolvable,
@@ -1144,6 +1145,16 @@ const getCompletionRequestAttemptsJson = (
       requestAttempts,
     }),
   )
+}
+
+const getJobFullTextStrategyLabel = (
+  job: {fullTextStrategyId: string; useFulltextNoImages?: boolean | null},
+  fullTextStrategyLabelsById: Map<string, string>,
+) => {
+  return getLegacyNoImagesAwareFullTextStrategyLabel({
+    label: fullTextStrategyLabelsById.get(job.fullTextStrategyId) ?? job.fullTextStrategyId,
+    useFulltextNoImages: job.useFulltextNoImages,
+  })
 }
 
 const getCompletionIdentity = (jobId: string, body: JudgmentCompletionBody): JudgmentCompletionIdentity => {
@@ -3550,7 +3561,7 @@ export const judgmentsJobsRoutes = new Elysia()
             ...job,
             admittedArticleCount,
             fullTextGate: getProjectFullTextGateApi(fullTextGate),
-            fullTextStrategyLabel: fullTextStrategyLabelsById.get(job.fullTextStrategyId) ?? job.fullTextStrategyId,
+            fullTextStrategyLabel: getJobFullTextStrategyLabel(job, fullTextStrategyLabelsById),
             leaseMetadata,
             promptStats,
             providerHealth: getProviderHealthApi(providerHealth),
@@ -3718,6 +3729,7 @@ export const judgmentsJobsRoutes = new Elysia()
           stopReason: string | null
           stopReasonAt: unknown
           stopWhenHumanAnsweredDone: boolean | null
+          useFulltextNoImages: boolean | null
         }>(`
         SELECT
           jj.id AS id,
@@ -3744,6 +3756,7 @@ export const judgmentsJobsRoutes = new Elysia()
           jj.stop_reason_at AS stopReasonAt,
           p.name AS projectName,
           COALESCE(jj.full_text_strategy_id, ${getProjectFullTextStrategyIdSql('p')}) AS fullTextStrategyId,
+          p.use_fulltext_no_images AS useFulltextNoImages,
           COALESCE(m.display_name, m.name) AS modelDisplayName,
           TO_JSON(m.metadata_json) AS modelMetadataJson,
           m.provider_connection_id AS modelProviderConnectionId,
@@ -3808,7 +3821,7 @@ export const judgmentsJobsRoutes = new Elysia()
           const normalizedJob = {
             ...job,
             ...(stopProgressByJobId.get(job.id) ?? {admittedArticleCount: null, totalTokens: null}),
-            fullTextStrategyLabel: fullTextStrategyLabelsById.get(job.fullTextStrategyId) ?? job.fullTextStrategyId,
+            fullTextStrategyLabel: getJobFullTextStrategyLabel(job, fullTextStrategyLabelsById),
             createdAt: getDateValue(job.createdAt),
             updatedAt: getDateValue(job.updatedAt),
             error: getJsonValue(job.error) as string[] | null,

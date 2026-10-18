@@ -1,5 +1,6 @@
 import {t} from 'elysia'
 
+import {getLegacyNoImagesAwareFullTextStrategyLabel} from '../../../utils/legacyFullTextNoImagesLabel.ts'
 import {
   FULL_TEXT_STRATEGY_NONE,
   type FullTextChunkPolicy,
@@ -24,6 +25,7 @@ export type ProjectFullTextRow = {
   fullTextFigureMode: string | null
   fullTextStrategyId: string | null
   fullTextStrategyStoredLabel: string | null
+  useFulltextNoImages?: boolean | null
 }
 
 export type ProjectFullTextSettings = {
@@ -89,10 +91,13 @@ export const getProjectFullTextValues = <T extends ProjectFullTextRow>(row: T) =
     fullTextChunkPolicy: getFullTextChunkPolicy(row.fullTextChunkPolicy),
     fullTextFigureMode: isFullTextFigureMode(row.fullTextFigureMode) ? row.fullTextFigureMode : null,
     fullTextStrategyId: row.fullTextStrategyId,
-    fullTextStrategyLabel: getFullTextStrategyDisplayLabel(
-      getEffectiveFullTextStrategyId(row.fullTextStrategyId),
-      fullTextStrategyStoredLabel,
-    ),
+    fullTextStrategyLabel: getLegacyNoImagesAwareFullTextStrategyLabel({
+      label: getFullTextStrategyDisplayLabel(
+        getEffectiveFullTextStrategyId(row.fullTextStrategyId),
+        fullTextStrategyStoredLabel,
+      ),
+      useFulltextNoImages: row.useFulltextNoImages,
+    }),
   }
 }
 

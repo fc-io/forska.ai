@@ -9214,10 +9214,7 @@ test('comparison metadata splits full-text LLM columns by strategy and labels no
     }),
   ).toEqual([
     ['llm:model-1:1100:prompt-1', 'Article Title and Abstract'],
-    [
-      `llm:model-1:0010~${mockFullTextStrategyA}:prompt-1`,
-      'Use Full Text (with images) · Full text: mineru 4.0 / none / single 96k',
-    ],
+    [`llm:model-1:0010~${mockFullTextStrategyA}:prompt-1`, 'Use Full Text · Full text: mineru 4.0 / none / single 96k'],
   ])
 })
 
@@ -9306,7 +9303,5 @@ test('comparison CSV export headers carry the full-text strategy label of each c
 
   expect(response.status).toBe(200)
   expect(headerLine).toContain('Prompt 1 - LLM - Model 1 - Article Title and Abstract')
-  expect(headerLine).toContain(
-    'Prompt 1 - LLM - Model 1 - Use Full Text (with images) · Full text: mineru 4.0 / none / single 96k',
-  )
+  expect(headerLine).toContain('Prompt 1 - LLM - Model 1 - Use Full Text · Full text: mineru 4.0 / none / single 96k')
 })
