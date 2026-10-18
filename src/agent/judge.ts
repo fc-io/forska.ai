@@ -394,6 +394,7 @@ const storeTokenUseAndThrowConnectionError = async ({
   claimId,
   queueRecordId,
   requestAttempt,
+  imageEvidence = {},
   appendFailureEntry = true,
 }: {
   tokenUse: JudgeTokenUsageEntry[]
@@ -412,6 +413,7 @@ const storeTokenUseAndThrowConnectionError = async ({
   claimId?: string | null
   queueRecordId?: string | null
   requestAttempt?: RequestAttemptTokenFields | null
+  imageEvidence?: JudgeCallImageEvidence
   appendFailureEntry?: boolean
 }): Promise<void> => {
   const duration = performance.now() - startDuration
@@ -438,6 +440,7 @@ const storeTokenUseAndThrowConnectionError = async ({
           lastResponse: null,
           systemPrompt,
           userPrompt,
+          ...imageEvidence,
           ...(requestAttempt ?? {}),
         },
       ]
@@ -480,6 +483,20 @@ type RequestAttemptTokenFields = {
   requestAttemptId: string
   requestFinishedAt: string
   requestStartedAt: string
+}
+
+type JudgeCallImageEvidence = Pick<JudgeTokenUsageEntry, 'imageBytes' | 'imageCount'>
+
+/** Images attached to one provider call: their count and the bytes sent (flattened, before base64). */
+export const getJudgeCallImageEvidence = (images: ProviderInvokeImage[]): JudgeCallImageEvidence => {
+  return images.length === 0
+    ? {}
+    : {
+        imageBytes: images.reduce((total, image) => {
+          return total + image.bytes.byteLength
+        }, 0),
+        imageCount: images.length,
+      }
 }
 
 const requestAttemptFieldsByError = new WeakMap<object, RequestAttemptTokenFields>()
@@ -1162,6 +1179,7 @@ type JudgeCallValidation<T> =
 type JudgeCallConnectionError = {
   baseURL: string
   failure: ConnectionFailure
+  imageEvidence: JudgeCallImageEvidence
   kind: 'connection_error'
   requestAttempt: RequestAttemptTokenFields | null
   systemPrompt: string
@@ -1213,6 +1231,7 @@ const recordJudgeCallConnectionSuccess = (context: JudgeCallContext, response: G
 const pushResponseTokenUse = ({
   context,
   error,
+  images,
   pendingQueueRetry,
   response,
   systemPrompt,
@@ -1220,6 +1239,7 @@ const pushResponseTokenUse = ({
 }: {
   context: JudgeCallContext
   error: string | null
+  images: ProviderInvokeImage[]
   pendingQueueRetry?: boolean
   response: GeneratedPromptResponse
   systemPrompt: string
@@ -1239,6 +1259,7 @@ const pushResponseTokenUse = ({
     lastResponse: error === null ? null : response.text,
     systemPrompt: error === null ? null : systemPrompt,
     userPrompt: error === null ? null : userPrompt,
+    ...getJudgeCallImageEvidence(images),
     ...getResponseRequestAttemptFields(response),
     ...(pendingQueueRetry ? {pendingQueueRetry} : {}),
   })
@@ -1260,6 +1281,7 @@ const getJudgeCallConnectionError = ({
   context,
   currentResponse,
   error,
+  images,
   requestBaseURL,
   systemPrompt,
   userPrompt,
@@ -1267,6 +1289,7 @@ const getJudgeCallConnectionError = ({
   context: JudgeCallContext
   currentResponse: GeneratedPromptResponse | null
   error: unknown
+  images: ProviderInvokeImage[]
   requestBaseURL: string
   systemPrompt: string
   userPrompt: string
@@ -1302,6 +1325,7 @@ const getJudgeCallConnectionError = ({
   return {
     baseURL: requestBaseURL,
     failure,
+    imageEvidence: getJudgeCallImageEvidence(images),
     kind: 'connection_error',
     requestAttempt: currentResponse
       ? getResponseRequestAttemptFields(currentResponse)
@@ -1353,6 +1377,7 @@ const getNextJudgeCallStateAfterError = <T>({
     failureCode,
     pendingQueueRetry: state.attempt >= MAX_RETRIES && recoverableJudgeError !== null,
     providerDiagnostics: getProviderInvocationDiagnostics(error),
+    ...getJudgeCallImageEvidence(input.images),
     ...(requestAttemptFields ?? {}),
   })
   errorCount += 1
@@ -1407,6 +1432,7 @@ const getJudgeCallResultAfterValidation = async <T>({
     pushResponseTokenUse({
       context: input.context,
       error: null,
+      images: input.images,
       response,
       systemPrompt: input.systemPrompt,
       userPrompt: state.userPrompt,
@@ -1419,6 +1445,7 @@ const getJudgeCallResultAfterValidation = async <T>({
   pushResponseTokenUse({
     context: input.context,
     error: validation.error,
+    images: input.images,
     pendingQueueRetry: validation.kind === 'retry',
     response,
     systemPrompt: input.systemPrompt,
@@ -1494,6 +1521,7 @@ const runJudgeCallAttempt = async <T>(
         context: input.context,
         currentResponse,
         error,
+        images: input.images,
         requestBaseURL,
         systemPrompt: input.systemPrompt,
         userPrompt: state.userPrompt,
@@ -1585,6 +1613,7 @@ const getJudgeOutcome = async <T>(result: JudgeCallResult<T>, run: JudgeRunInput
       systemPrompt: result.systemPrompt,
       userPrompt: result.userPrompt,
       failure: result.failure,
+      imageEvidence: result.imageEvidence,
       requestAttempt: result.requestAttempt,
     })
   }

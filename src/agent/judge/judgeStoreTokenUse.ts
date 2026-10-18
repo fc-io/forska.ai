@@ -39,6 +39,10 @@ export type JudgeTokenUsageEntry = {
   systemPrompt: string | null
   userPrompt: string | null
   failureCode?: string | null
+  /** Flattened image bytes attached to this call (before base64); absent when the call carried no images. */
+  imageBytes?: number
+  /** Images attached to this call; absent when the call carried no images. */
+  imageCount?: number
   pendingQueueRetry?: boolean
   providerDiagnostics?: unknown
 }
@@ -177,6 +181,7 @@ const getRequestAttemptEntries = ({
       error: entry.error,
       errorCode: entry.failureCode ?? null,
       finishedAt: entry.requestFinishedAt ?? finishedAt,
+      ...(entry.imageCount === undefined ? {} : {imageBytes: entry.imageBytes ?? 0, imageCount: entry.imageCount}),
       jobId: judgmentsJobId,
       outcome: entry.outcome,
       promptId,

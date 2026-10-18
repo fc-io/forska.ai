@@ -584,6 +584,23 @@ const markAsSkipped = async (
   await getJudgmentJobSqliteService().markPromptAsSkipped(jobId, recordId, skipReason)
 }
 
+/**
+ * Figure images prepared for a full-text prompt: one count and one byte total (flattened, before base64), never one
+ * line per image. Each provider call records the images it actually carried on its token_use request attempt.
+ */
+export const getFullTextImageLogAttrs = (
+  fullTextJudging: FullTextJudgingInput | null,
+): {imageBytes: number; imageCount: number} | Record<string, never> => {
+  return fullTextJudging
+    ? {
+        imageBytes: fullTextJudging.figureImages.reduce((total, image) => {
+          return total + image.bytes.byteLength
+        }, 0),
+        imageCount: fullTextJudging.figureImages.length,
+      }
+    : {}
+}
+
 const logFullTextSkip = (
   promptToProcess: PromptToProcess,
   skipReason: JudgmentsJobsPromptsSkipReason,
@@ -1030,6 +1047,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
               articleIdPrefix: promptToProcess.articleId.slice(0, 8),
               component: processPromptComponent,
               event: 'llmCall',
+              ...getFullTextImageLogAttrs(prepared.fullTextJudging),
               jobId: promptToProcess.jobId,
               modelBaseUrl: promptToProcess.modelBaseUrl,
               modelId: promptToProcess.modelId,
