@@ -22,6 +22,8 @@ cd forska.ai
 bun install
 ```
 
+Run `bun install` again after every `git pull` (or branch switch) that changes `package.json` or `bun.lock`. The dev watcher restarts the server on code changes but does not install packages. On startup the server checks that every dependency in `package.json` is installed in a matching version and that the lazily loaded full-text modules (`fflate`, `pngjs`, `gpt-tokenizer`) resolve; if not, it exits with one line naming the packages and `bun install`. After installing, start the server again (a running `bun run dev:server` watcher restarts it on the next file change).
+
 ## Start The App
 
 The easiest local development flow starts the API/server stack and Vite app together:
@@ -109,20 +111,13 @@ http://127.0.0.1:8080/v1
 
 Then click `Test`, sync or manually add models, and enable the models you want.
 
-## Optional PDF Conversion (MinerU or Docling)
+## Full-text judging
 
-PDF-to-text conversion uses exactly one model, chosen in `/settings` as the PDF conversion model. It can come from a MinerU provider or a Docling provider. Forska never switches between them on its own: if the chosen server is down, conversion fails and retries later.
+Full-text judging needs, in order: a PDF for the article (fetched or uploaded), a PDF-to-text conversion into canonical judgment text, figure descriptions or figure images when the project's figure mode asks for them, and a judge model whose context window fits the project's chunk policy. Every choice is explicit. Nothing falls back to another converter, another figure mode or a default context window: a missing piece is refused with a named error, never worked around.
 
-Every conversion stores:
+### Install and start a converter
 
-- `full_text`: the converter's markdown.
-- `full_text_html`: Docling's HTML. MinerU produces no HTML, so this stays empty for MinerU.
-- `full_text_assets`: the figure list `[{index, page, bbox, caption, imagePath}]`. `bbox` is in page fractions with the origin at the top left.
-- `full_text_conversion_metadata`: `converterKind`, `converterVersion`, `optionsHash` (sha256 of the exact request options), `baseURL`, `modelId` and `layoutPath`.
-
-Figure crops and the layout blocks are written to `assets/full-text-assets/<articleId>/` (`fig-N.<ext>`, `layout.json`) under the runtime root, next to `assets/article_pdfs/`. That directory is replaced on every reconversion.
-
-### MinerU 4 (local parsing API)
+#### MinerU 4 (local parsing API)
 
 Install MinerU into its own virtualenv, not the system Python. Tested with MinerU 4.0.12 on an M4 Pro. On macOS arm64 the install pulls in PyTorch (MPS).
 
@@ -148,12 +143,11 @@ Start the parsing API. Forska's default MinerU base URL is `http://127.0.0.1:800
 
 Then:
 
-1. In `/providers`, add a **MinerU** provider, click `Test`, then sync models. This creates one model, `mineru-standard`, which carries the server version.
-2. Select that model in `/settings`.
+In `/providers`, add a **MinerU** provider, click `Test`, then sync models. This creates one model, `mineru-standard`, which carries the server version.
 
 Request forska sends: `POST /v1/file_parse` with `tier=standard`, `ocr_mode=auto`, `page_range=` (all pages), `output_formats=markdown,middle_json,zip` and `response_format=zip`. It reads `markdown.md`, `middle_json.json` and the `images/` crops from the zip. A request that does not finish within the 10-minute conversion timeout is canceled on the server and retried later.
 
-### Docling Serve
+#### Docling Serve
 
 ```bash
 mkdir -p ~/Developer/forska-tools/docling && cd ~/Developer/forska-tools/docling
@@ -162,7 +156,7 @@ uv pip install --python .venv/bin/python docling-serve
 .venv/bin/docling-serve run --host 127.0.0.1 --port 5001
 ```
 
-Then add a **Docling Serve** provider in `/providers`, add the model, and select it in `/settings`.
+Then add a **Docling Serve** provider in `/providers` and add the model.
 
 Forska sends `POST /v1/convert/source` with a zip target. It does not rely on any server default for these options:
 
@@ -176,29 +170,88 @@ Forska sends `POST /v1/convert/source` with a zip target. It does not rely on an
 
 `converterVersion` is the list of `docling*` package versions reported by `GET /version`.
 
-### Conversion worker knobs
+### Settings (`/settings`)
 
-Optional conversion worker knobs can be passed inline when starting the server. The default concurrency is 2:
+- **PDF conversion model**: exactly one model from a MinerU or Docling provider. If its server is down, conversion fails and retries later; forska never switches converters. The model must report a server version (sync the provider's models), because the version is part of the strategy id.
+- **Figure-description model**: needed only for figure mode Descriptions. The selector lists enabled models whose capability record accepts image input and whose transport can send images (OpenAI-compatible chat, OpenAI Responses, Anthropic Messages, Gemini, Codex app-server, Claude Code CLI). None is an explicit choice that makes Descriptions unavailable. A local vision model through Ollama works, for example `ollama pull qwen3-vl:2b-instruct`, then sync the Ollama provider's models so the model shows image input (a re-sync refreshes the discovered capabilities of models that projects already use; user overrides on the Models page stay).
+
+### Project settings (create and edit pages)
+
+With full text on, a project must choose:
+
+- **Figure mode**: `None` (figure markers only), `Descriptions` (each `[figure:N]` marker is followed by the figure-description model's text) or `Native images` (the judge receives one image per `[figure:N]` marker, in marker order; only models that accept image input on an image-capable transport can be selected).
+- **Chunk policy**: `maxPromptTokens` 24k, 48k or 96k, and `single only` or `chunked`. An article is judged in one call when `tokens(system + user prompt) + 4000 ≤ min(maxPromptTokens, context window)` with the `o200k_base` tokenizer. Otherwise `single only` skips the prompt as `fulltext_too_large`, and `chunked` judges the cached chunk plan part by part (heading-aligned, tables kept whole, abstract and heading path repeated) and merges the parts in one more call. A judge model whose context window is below `maxPromptTokens` cannot be selected.
+
+The old "Full Text (without images)" option (`use_fulltext_no_images`) is frozen: figure mode None replaces it. Project create, edit, clone, subproject and comparison create/create-from-project/edit requests answer 400 if they still send `useFulltextNoImages`, even as `false`, so update scripts that post the old field. The column stays as an identity dimension of `app.judgment` (and of projects, jobs, snapshots, deltas and transfer) because other installations may hold legacy rows that differ only in that flag. Such projects and judgments map to strategy `fts-legacy-v0` and show as "full text (legacy, no images)"; a legacy project cannot start new judgment jobs until a figure mode and chunk policy are chosen on its edit page. See `DB_TERMS.md`.
+
+### Full-text strategy id
+
+Every full-text project, job and judgment records `full_text_strategy_id = 'fts-' + sha256(inputs).slice(0, 16)`, where the inputs are: converter kind, converter version, converter options hash, canonical text version (`canonical-v1`), figure mode, figure-description model and prompt version (`fig-desc-v1`, Descriptions only), image transport version (`img-v1`, Native images only), tokenizer (`o200k_base`), chunk policy and prompt layout version (`layout-v2`). The id is in the judgment UNIQUE key, so judgments made under different strategies never overwrite each other, and compare pages refuse to mix strategies. Labels read like `mineru 4.0.12 / Descriptions / Chunked 48k`.
+
+The id changes when the converter server version or options change, when forska bumps one of the version constants (any change to the canonical text builder, figure description prompt, image mapping, chunk planning or prompt layout), or when the project's figure mode, figure-description model or chunk policy changes. Projects record the id when they are saved on the edit page with the job stopped. Starting or resuming a job whose recorded id no longer matches the current settings is refused with a 409 that names the differing inputs; save the project's edit page to record the current strategy, then start again. At job start, articles whose stored conversion was made with another converter version, options hash or canonical version are cleared for reconversion (the PDF stays) and the start is refused with a 409 until the conversion cron has converted them. `fts-none` marks title/abstract judgments, `fts-legacy-v0` full-text judgments made before strategy tracking.
+
+### What each conversion stores
+
+- `full_text`: the canonical judgment text (`canonical-v1`, figure markers form), with `full_text_canonical_hash`, `full_text_canonical_version` and `full_text_figure_mode_built`.
+- `full_text_html`: Docling's HTML. MinerU produces no HTML, so this stays empty for MinerU.
+- `full_text_assets`: the figure list `[{index, page, bbox, caption, imagePath}]` plus description fields once described. `bbox` is in page fractions with the origin at the top left.
+- `full_text_conversion_metadata`: `converterKind`, `converterVersion`, `optionsHash` (sha256 of the exact request options), `baseURL`, `modelId`, `layoutPath` and `converterMarkdownPath`.
+
+Figure crops, `layout.json` (layout-v2 blocks) and `converter.md` (the converter's raw markdown) are written to `assets/full-text-assets/<articleId>/` under the runtime root, next to `assets/article_pdfs/`. That directory is replaced on every reconversion. `POST /api/articles/:id/canonical-fulltext/rebuild` rebuilds the canonical text from `layout.json` without reconverting. Chunk plans are cached per article and strategy in `app.article_full_text_chunk_plan`; a conversion or rebuild that changes the canonical hash drops the article's plans, and the cleanup run deletes plans whose strategy no project or job uses.
+
+### Background crons and kill switches
+
+The maintenance server runs three full-text crons. They run when their dependencies are configured; the environment flags only switch them off:
+
+| Cron | Runs when | Kill switch |
+| --- | --- | --- |
+| `full-text-jobs-fetch-articles` (every minute, up to 69 articles: Unpaywall's 100k/day) | a PDF conversion model is set and at least one non-archived project has full text on | `RUN_SERVER_FULL_TEXT_FETCHING=false` |
+| `full-text-jobs-convert-pdfs` (every 2 minutes, batch 5, concurrency 2) | same | `RUN_SERVER_FULL_TEXT_CONVERSION_CRON=false` |
+| `full-text-jobs-describe-figures` (every minute, 8 figures, concurrency 2) | same, plus a figure-description model | `RUN_SERVER_FULL_TEXT_CONVERSION_CRON=false` |
+
+Fetch and conversion only pick articles of non-archived full-text projects (import routes and directly added articles, within the project's date range): projects with a running job first, then the others. Articles outside full-text projects are never fetched or converted by the crons. When a gate blocks, each cron logs one rate-limited line per wake, for example `[fullTextConversionJobs] Skipped: no PDF-to-text model is configured (Settings)`. Unpaywall requests carry the email set in Settings.
+
+Figure descriptions cover converted articles in at least one project with figure mode Descriptions: one model call per figure with prompt `fig-desc-v1`, written into the article's `full_text_assets` entry (`description`, `descriptionModelId`, `descriptionPromptVersion`, `describedAt`). Changing the model or prompt version re-describes. A failed figure records `descriptionError` and `descriptionAttempts` and is given up after 3 attempts, or at once when the crop is missing, not JPEG/PNG, undecodable or too large. `POST /api/articles/:id/figure-descriptions/rebuild` clears one article's descriptions and describes it again.
+
+Optional knobs, passed inline:
 
 ```bash
-RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true FULL_TEXT_CONVERSION_BATCH_SIZE=5 FULL_TEXT_CONVERSION_CONCURRENCY=2 bun run dev:server
+FULL_TEXT_CONVERSION_BATCH_SIZE=5 FULL_TEXT_CONVERSION_CONCURRENCY=2 FIGURE_DESCRIPTION_BATCH_SIZE=8 FIGURE_DESCRIPTION_CONCURRENCY=2 bun run dev:server
 ```
 
-### Figure descriptions
+Judging does not wait for the crons: a prompt whose article has a PDF but no text converts it on demand with the same converter and canonical builder, and pending figure descriptions requeue the prompt every 60 s.
 
-Projects with figure mode Descriptions need an installation-wide figure-description model (Settings → Figure-description model). The selector lists only enabled models whose capability record accepts image input and whose transport can send images (OpenAI-compatible chat, OpenAI Responses, Anthropic Messages, Gemini, Codex app-server, Claude Code CLI). None is an explicit choice and makes figure mode Descriptions unavailable.
+### Images sent to judges
 
-The cron `full-text-jobs-describe-figures` runs every minute when `RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true` and a figure-description model is set. It describes figures of converted articles that belong to at least one project with figure mode Descriptions, one model call per figure with prompt `fig-desc-v1`, and writes `description`, `descriptionModelId`, `descriptionPromptVersion` and `describedAt` into the article's `full_text_assets` entry. Changing the model or the prompt version re-describes. A failed figure records `descriptionError` and `descriptionAttempts` and is given up after 3 attempts, or at once when the crop is missing or not JPEG/PNG. `POST /api/articles/:id/figure-descriptions/rebuild` clears one article's descriptions and describes it again.
+Figure mode Native images sends the canonical text plus one image per `[figure:N]` marker, in marker order. Every transport (OpenAI-compatible chat, OpenAI Responses, Anthropic, Gemini, Codex app-server, Claude Code) sends the same bytes: transparent PNG crops are flattened onto white first (Codex renders transparency black), JPEG and opaque PNG crops are sent unchanged. An image whose base64 encoding exceeds 5 MiB after flattening is refused (`provider_image_too_large`, the judge closes the prompt as `native_figure_image_too_large`); nothing is downscaled. Codex app-server gets `{type: 'image', url: 'data:…', detail: 'high'}` input items after the text; Claude Code switches to `--input-format stream-json --output-format stream-json --verbose` with one user message holding the text block and base64 image blocks. Both CLI adapters refuse an image prompt when the model's capability record does not accept image input.
 
-```bash
-RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true FIGURE_DESCRIPTION_BATCH_SIZE=8 FIGURE_DESCRIPTION_CONCURRENCY=2 bun run dev:server
-```
+### Admin pages
 
-A local vision model through Ollama works, for example `ollama pull qwen3-vl:2b-instruct`, then refresh the Ollama provider's models so the model shows image input.
+- `/admin/pdf-conversions` (Failed PDF conversions): failed rows with converter kind, options hash, converter version (only when the server answered) and canonical text version, and a Reconvert button (`POST /api/articles/conversion-reconvert {articleId}`). Reconvert clears the conversion status, error, attempts and metadata and any text or canonical columns left from an earlier success, keeps the PDF, and lets the conversion cron pick the article up again; it answers 404 for an unknown article and 409 when the article has no PDF or its conversion has not failed. The cron only takes articles that belong to a non-archived full-text project.
+- `/admin/pdf-reset`: clears fetched PDFs so the fetch cron tries again.
+- Article admin info (`GET /api/articles/:id/admin-info`) shows an article's PDF, conversion state and assets; `POST /api/articles/:id/convert-pdf` converts one article now.
 
-### Native images
+### Project transfer
 
-Figure mode Native images sends the canonical text plus one image per `[figure:N]` marker, in marker order, with image transport version `img-v1` in the strategy. Transparent PNG crops are flattened onto white first (Codex renders transparency black); JPEG and opaque PNG crops are sent unchanged. Codex app-server gets `{type: 'image', url: 'data:…', detail: 'high'}` input items after the text; Claude Code switches to `--input-format stream-json --output-format stream-json --verbose` with one user message holding the text block and base64 image blocks. Text-only prompts keep the plain stdin and `--output-format json` path. Both CLI adapters refuse an image prompt when the model's capability record does not accept image input.
+Project export carries the canonical text state (`full_text_canonical_hash`, `full_text_canonical_version`, `full_text_figure_mode_built`, as one unit) and the `layout.json` and `converter.md` files named in the conversion metadata, through the same runtime-asset collection as the figure crops; export fails with a named asset error if one of them is missing. Import analysis rebuilds each canonical article from the packaged `layout.json` and blocks the import when the rebuilt hash differs from the exported one; commit rewrites both paths to the target article. An imported article can therefore be rebuilt and judged without reconversion.
+
+### Troubleshooting
+
+| Message | Meaning and fix |
+| --- | --- |
+| `Full text needs a PDF-to-text model. Set it in Settings → PDF conversion.` | No conversion model is set, or its provider or model is disabled. |
+| `PDF-to-text model … has not reported a server version …` | Sync the MinerU or Docling provider's models and select the discovered model in Settings. |
+| `Full text needs a figure mode …` / `… a chunk policy …` | Choose them on the project's edit page. |
+| `Figure mode Descriptions needs a figure-description model …` | Set the figure-description model in Settings, or choose figure mode None. |
+| Context window missing (409 on job start or resume, link to the provider) | The judge model has no known context window. Set it on the Models page (capability override) or sync a provider that reports it. |
+| `Model … accepts N prompt tokens, fewer than the chunk policy's N-token prompt size …` | Choose a smaller chunk policy or another model, or correct the model's context window on the Models page. |
+| `Model … has no verified image input …` | Figure mode Native images needs a model whose capability record accepts images. Set it on the Models page or choose another figure mode or model. |
+| `Full-text settings changed since the project was saved: it records … current settings resolve to …; differing inputs: …` | A converter version, forska version constant or setting changed. Save the project's edit page with the job stopped to record the new strategy, then start. |
+| `N articles are being reconverted for strategy …; start again when conversion has finished.` | The conversion cron reconverts them (check that it is not switched off and the converter server runs), then start again. |
+| `This project uses full text without a full-text strategy (fts-legacy-v0) …` | A legacy full-text project. Choose a figure mode and a chunk policy on the edit page. |
+| Prompt skipped `fulltext_too_large` | Chunk policy `single only` and the article does not fit `maxPromptTokens`. Use `chunked` or a larger policy (a new strategy). |
+| Prompt skipped `figure_description_failed` | A figure's description failed 3 times. Check `/admin/pdf-conversions` and the figure-description model, then rebuild the article's descriptions. |
+| `provider_image_too_large` / `native_figure_image_too_large` | A figure crop is above the 5 MB base64 image limit after flattening. |
 
 ## Build
 
