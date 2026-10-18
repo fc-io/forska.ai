@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto'
+
 import {expect, test} from 'bun:test'
 
 import {type FullTextStrategyInputs, getFullTextStrategy} from '../../fullText/fullTextStrategy.ts'
@@ -395,6 +397,99 @@ test('rejects provider/model edge cases while normalizing empty model variants t
   expect(getValidationError(mismatchedVariantResult)).toContain(
     'signature.variant must normalize null and empty variants',
   )
+})
+
+test('round-trips an article canonical full-text state and rejects partial, mismatched or unanchored state', () => {
+  const article = getOnlyRecord(getProjectTransferPayloadFixture('articles'))
+  const fullText = '## 1 Introduction\n\nCanonical body.\n\nFigure 1: Caption\n[figure:1]\n'
+  const canonicalArticle = {
+    ...article,
+    fullText,
+    fullTextCanonicalHash: createHash('sha256').update(fullText, 'utf8').digest('hex'),
+    fullTextCanonicalVersion: 'canonical-v1',
+    fullTextConversionMetadata: {
+      converterKind: 'mineru',
+      converterMarkdownPath: 'assets/full-text-assets/article-1/converter.md',
+      layoutPath: 'assets/full-text-assets/article-1/layout.json',
+      layoutVersion: 'layout-v2',
+    },
+    fullTextFigureModeBuilt: 'markers',
+  }
+  const getArticleError = (overrides: Record<string, unknown>) => {
+    return getValidationError(validateProjectTransferPayload('articles', [{...canonicalArticle, ...overrides}]))
+  }
+  const parsedArticles = parseProjectTransferPayload(
+    'articles',
+    serializeProjectTransferPayload('articles', [canonicalArticle]),
+  )
+
+  expect(Object.hasOwn(article, 'fullTextCanonicalHash')).toBe(false)
+  expect(getValidationError(validateProjectTransferPayload('articles', [article]))).toBeNull()
+  expect(getArticleError({})).toBeNull()
+  expect(parsedArticles[0]).toMatchObject({
+    fullTextCanonicalHash: canonicalArticle.fullTextCanonicalHash,
+    fullTextCanonicalVersion: 'canonical-v1',
+    fullTextFigureModeBuilt: 'markers',
+  })
+  expect(
+    getArticleError({fullTextCanonicalHash: null, fullTextCanonicalVersion: null, fullTextFigureModeBuilt: null}),
+  ).toBeNull()
+  expect(getArticleError({fullTextFigureModeBuilt: null})).toContain('must be all set or all null')
+  expect(getArticleError({fullTextCanonicalVersion: undefined})).toContain('must be all set or all null')
+  expect(getArticleError({fullTextCanonicalVersion: ''})).toContain('fullTextCanonicalVersion must not be empty')
+  expect(getArticleError({fullTextCanonicalHash: 'ABC'})).toContain('must be lowercase SHA-256 hex')
+  expect(getArticleError({fullText: `${fullText}edited\n`})).toContain(
+    'articles[0].fullTextCanonicalHash does not match the SHA-256 of articles[0].fullText',
+  )
+  expect(getArticleError({fullText: null})).toContain('does not match the SHA-256')
+  expect(
+    getArticleError({
+      fullTextConversionMetadata: {
+        converterKind: 'mineru',
+        layoutPath: canonicalArticle.fullTextConversionMetadata.layoutPath,
+      },
+    }),
+  ).toContain('fullTextConversionMetadata.converterMarkdownPath is required for a canonical full text')
+  expect(getArticleError({fullTextConversionMetadata: null})).toContain('is required for a canonical full text')
+})
+
+test('accepts conversion-metadata asset references and rejects unknown asset reference kinds', () => {
+  const assetManifest = getProjectTransferPayloadFixture('assetManifest')
+  const asset = getOnlyRecord(assetManifest.entries)
+  const reference = getOnlyRecord(asset.references)
+  const getManifestError = (kind: string) => {
+    return getValidationError(
+      validateProjectTransferPayload('assetManifest', {
+        ...assetManifest,
+        entries: [
+          {...asset, references: [{...reference, jsonPointer: '/0/fullTextConversionMetadata/layoutPath', kind}]},
+        ],
+      }),
+    )
+  }
+  const schemaVNextReference = getSchemaVNextAssetReferenceFixture()
+  const metadataFingerprint = {
+    ...schemaVNextReference.fingerprint,
+    jsonPointer: '/0/fullTextConversionMetadata/layoutPath',
+    kind: 'fullTextConversionMetadata' as const,
+  }
+  const schemaVNextResult = validateProjectTransferPayloadForSchemaVersion(
+    projectTransferSchemaVNextManifestSchemaVersion,
+    'assetReferences',
+    [
+      {
+        ...schemaVNextReference,
+        fingerprint: metadataFingerprint,
+        jsonPointer: metadataFingerprint.jsonPointer,
+        kind: metadataFingerprint.kind,
+        sortKey: getProjectTransferSchemaVNextFingerprintSortKey(metadataFingerprint),
+      },
+    ],
+  )
+
+  expect(getManifestError('fullTextConversionMetadata')).toBeNull()
+  expect(schemaVNextResult.ok).toBe(true)
+  expect(getManifestError('fullTextLayout')).not.toBeNull()
 })
 
 test('rejects invalid asset package paths and checksum signatures', () => {

@@ -4,6 +4,7 @@ import {createReadStream, createWriteStream, type WriteStream} from 'node:fs'
 import {lstat, mkdir, rm} from 'node:fs/promises'
 import {dirname, join, posix, win32} from 'node:path'
 
+import {projectTransferConversionMetadataAssetPathKeys} from './projectTransferCanonicalFullText.ts'
 import {
   resolveProjectTransferPersistedRuntimeAssetPath,
   validateProjectTransferArchiveMemberPath,
@@ -28,8 +29,20 @@ type RuntimePathOptions = {cwd?: string; envValues?: Record<string, string | und
 
 export type ProjectTransferExportAssetArticle = ProjectTransferArticlePayloadRecord & {
   fullTextAssets?: unknown
+  fullTextConversionMetadata?: unknown
   fullTextHtml?: unknown
   fullTextPdf?: unknown
+}
+
+export type ProjectTransferExportAssetErrorCode =
+  | 'invalid_asset_reference'
+  | 'missing_runtime_asset'
+  | 'unsafe_runtime_asset'
+  | 'unstable_runtime_asset'
+
+export type ProjectTransferExportAssetError = Error & {
+  code: ProjectTransferExportAssetErrorCode
+  name: 'ProjectTransferExportAssetError'
 }
 
 export type ProjectTransferExportAssetEntry = {
@@ -106,6 +119,12 @@ const assetUrlPolicyByField = {
     preserveNonLocalUrl: true,
     rejectUnsafeLocalPath: true,
   },
+  fullTextConversionMetadata: {
+    collectRuntimeAssetPath: true,
+    collectRuntimeAssetUrl: false,
+    preserveNonLocalUrl: false,
+    rejectUnsafeLocalPath: true,
+  },
   fullTextHtml: {
     collectRuntimeAssetPath: true,
     collectRuntimeAssetUrl: true,
@@ -140,8 +159,24 @@ const childFieldPath = (parent: string, segment: string | number) => {
   return typeof segment === 'number' ? `${parent}[${segment}]` : `${parent}.${segment}`
 }
 
-const getProjectTransferExportAssetError = (message: string): never => {
-  throw new Error(`Project transfer export asset: ${message}`)
+const getProjectTransferExportAssetError = (
+  message: string,
+  code: ProjectTransferExportAssetErrorCode = 'invalid_asset_reference',
+): never => {
+  const error: ProjectTransferExportAssetError = Object.assign(new Error(`Project transfer export asset: ${message}`), {
+    code,
+    name: 'ProjectTransferExportAssetError' as const,
+  })
+
+  throw error
+}
+
+export const isProjectTransferExportAssetError = (error: unknown): error is ProjectTransferExportAssetError => {
+  return error instanceof Error && error.name === 'ProjectTransferExportAssetError'
+}
+
+const getReferencedByMessage = (fieldPaths: readonly string[]) => {
+  return fieldPaths.length === 0 ? '' : ` referenced by ${[...new Set(fieldPaths)].join(', ')}`
 }
 
 const getUrlValue = (value: string) => {
@@ -394,6 +429,77 @@ const rewriteFullTextAssetsValue = ({
   return {references: [], value: value ?? null}
 }
 
+const rewriteConversionMetadataAssetPath = ({
+  articleIndex,
+  key,
+  sourceArticleId,
+  value,
+}: {
+  articleIndex: number
+  key: string
+  sourceArticleId: string
+  value: unknown
+}): {reference: AssetReferenceInput; value: string} => {
+  const fieldPath = `articles[${articleIndex}].fullTextConversionMetadata.${key}`
+  const assetPath: AssetPathResult =
+    typeof value === 'string'
+      ? getCanonicalAssetPath(value, assetUrlPolicyByField.fullTextConversionMetadata)
+      : {kind: 'none'}
+
+  return assetPath.kind === 'asset'
+    ? {
+        reference: {
+          assetPath: assetPath.path,
+          fieldPath,
+          jsonPointer: childPointer(`/${articleIndex}/fullTextConversionMetadata`, key),
+          kind: 'fullTextConversionMetadata',
+          sourceArticleId,
+        },
+        value: assetPath.path,
+      }
+    : getProjectTransferExportAssetError(
+        assetPath.kind === 'unsafe'
+          ? `${fieldPath} ${assetPath.message}`
+          : `${fieldPath} must reference a runtime-relative assets path`,
+      )
+}
+
+const rewriteFullTextConversionMetadata = (
+  value: unknown,
+  sourceArticleId: string,
+  articleIndex: number,
+): FullTextAssetRewriteResult => {
+  const metadata = isRecord(value) ? value : null
+  const rewrites =
+    metadata === null
+      ? []
+      : projectTransferConversionMetadataAssetPathKeys
+          .filter((key) => {
+            return metadata[key] !== undefined && metadata[key] !== null
+          })
+          .map((key) => {
+            return {
+              key,
+              ...rewriteConversionMetadataAssetPath({articleIndex, key, sourceArticleId, value: metadata[key]}),
+            }
+          })
+
+  return {
+    references: rewrites.map((rewrite) => {
+      return rewrite.reference
+    }),
+    value:
+      metadata === null
+        ? (value ?? null)
+        : rewrites.reduce<JsonRecord>(
+            (record, rewrite) => {
+              return {...record, [rewrite.key]: rewrite.value}
+            },
+            {...metadata},
+          ),
+  }
+}
+
 const rewriteHtmlAttributeValue = ({
   articleIndex,
   fieldPath,
@@ -486,13 +592,26 @@ const getArticleAssetReferences = (article: ProjectTransferExportAssetArticle, a
     sourceArticleId: article.sourceArticleId,
     value: article.fullTextAssets,
   })
+  const fullTextConversionMetadata = rewriteFullTextConversionMetadata(
+    article.fullTextConversionMetadata,
+    article.sourceArticleId,
+    articleIndex,
+  )
   const fullTextHtml = rewriteFullTextHtml(article.fullTextHtml, article.sourceArticleId, articleIndex)
-  const references = [...fullTextPdf.references, ...fullTextAssets.references, ...fullTextHtml.references]
+  const references = [
+    ...fullTextPdf.references,
+    ...fullTextAssets.references,
+    ...fullTextConversionMetadata.references,
+    ...fullTextHtml.references,
+  ]
 
   return {
     article: {
       ...article,
       fullTextAssets: fullTextAssets.value,
+      ...(article.fullTextConversionMetadata === undefined
+        ? {}
+        : {fullTextConversionMetadata: fullTextConversionMetadata.value}),
       fullTextHtml: article.fullTextHtml === null || article.fullTextHtml === undefined ? null : fullTextHtml.value,
       fullTextPdf: fullTextPdf.value,
     },
@@ -507,23 +626,22 @@ export const getProjectTransferExportAssetByteEstimateForArticles = async (
   const articleReferences = articles.map((article, articleIndex) => {
     return getArticleAssetReferences(article, articleIndex)
   })
-  const packagePaths = [
-    ...new Set(
-      articleReferences.flatMap((entry) => {
-        return entry.references.map((reference) => {
-          return reference.assetPath
-        })
-      }),
-    ),
-  ].sort()
+  const referencesByAssetPath = getReferencesByAssetPath(
+    articleReferences.flatMap((entry) => {
+      return entry.references
+    }),
+  )
+  const packagePaths = [...referencesByAssetPath.keys()].sort()
   const sizes = await Promise.all(
     packagePaths.map(async (packagePath) => {
       const absolutePath = resolveProjectTransferPersistedRuntimeAssetPath({...runtimeOptions, pathValue: packagePath})
-      const stats = await lstat(absolutePath)
+      const stats = await lstat(absolutePath).catch(() => {
+        return getMissingRuntimeAssetError(packagePath, referencesByAssetPath.get(packagePath) ?? [])
+      })
 
       return stats.isFile()
         ? stats.size
-        : getProjectTransferExportAssetError(`runtime asset is not a file ${packagePath}`)
+        : getProjectTransferExportAssetError(`runtime asset is not a file ${packagePath}`, 'unsafe_runtime_asset')
     }),
   )
 
@@ -536,23 +654,41 @@ const getRuntimeAssetFileSnapshot = (stats: Awaited<ReturnType<typeof lstat>>): 
   return {ctimeMs: stats.ctimeMs, dev: stats.dev, ino: stats.ino, mtimeMs: stats.mtimeMs, size: stats.size}
 }
 
-const getValidatedRuntimeAssetFile = async (pathValue: string, runtimeOptions: RuntimePathOptions) => {
+const getMissingRuntimeAssetError = (pathValue: string, references: readonly {fieldPath?: string}[]) => {
+  return getProjectTransferExportAssetError(
+    `missing runtime asset ${pathValue}${getReferencedByMessage(
+      references.flatMap((reference) => {
+        return reference.fieldPath === undefined ? [] : [reference.fieldPath]
+      }),
+    )}`,
+    'missing_runtime_asset',
+  )
+}
+
+const getValidatedRuntimeAssetFile = async (
+  pathValue: string,
+  runtimeOptions: RuntimePathOptions,
+  references: readonly ProjectTransferAssetReference[],
+) => {
   const absolutePath = resolveProjectTransferPersistedRuntimeAssetPath({...runtimeOptions, pathValue})
   const assetFile = globalThis.Bun.file(absolutePath)
   const exists = await assetFile.exists()
 
   if (!exists) {
-    return getProjectTransferExportAssetError(`missing runtime asset ${pathValue}`)
+    return getMissingRuntimeAssetError(pathValue, references)
   }
 
   const before = await lstat(absolutePath)
 
   if (before.isSymbolicLink()) {
-    return getProjectTransferExportAssetError(`runtime asset is a symlink ${pathValue}`)
+    return getProjectTransferExportAssetError(`runtime asset is a symlink ${pathValue}`, 'unsafe_runtime_asset')
   }
 
   if (!before.isFile()) {
-    return getProjectTransferExportAssetError(`runtime asset is not a regular file ${pathValue}`)
+    return getProjectTransferExportAssetError(
+      `runtime asset is not a regular file ${pathValue}`,
+      'unsafe_runtime_asset',
+    )
   }
 
   return {absolutePath, contentType: assetFile.type || null, snapshot: getRuntimeAssetFileSnapshot(before)}
@@ -643,7 +779,10 @@ const assertRuntimeAssetFileStayedStable = ({
   pathValue: string
 }) => {
   if (before.size !== byteLength || !isRuntimeAssetFileSnapshotStable(before, after)) {
-    return getProjectTransferExportAssetError(`runtime asset changed while being copied ${pathValue}`)
+    return getProjectTransferExportAssetError(
+      `runtime asset changed while being copied ${pathValue}`,
+      'unstable_runtime_asset',
+    )
   }
 
   return undefined
@@ -651,14 +790,16 @@ const assertRuntimeAssetFileStayedStable = ({
 
 const getCopiedAssetFile = async ({
   pathValue,
+  references,
   runtimeOptions,
   stagingRootPath,
 }: {
   pathValue: string
+  references: readonly ProjectTransferAssetReference[]
   runtimeOptions: RuntimePathOptions
   stagingRootPath?: string
 }) => {
-  const sourceFile = await getValidatedRuntimeAssetFile(pathValue, runtimeOptions)
+  const sourceFile = await getValidatedRuntimeAssetFile(pathValue, runtimeOptions, references)
   const targetPath = stagingRootPath ? getStagedAssetFilePath(stagingRootPath, pathValue) : sourceFile.absolutePath
 
   await (stagingRootPath ? mkdir(dirname(targetPath), {recursive: true}) : Promise.resolve())
@@ -671,11 +812,14 @@ const getCopiedAssetFile = async ({
   const afterSnapshot = getRuntimeAssetFileSnapshot(afterStats)
 
   if (afterStats.isSymbolicLink()) {
-    return getProjectTransferExportAssetError(`runtime asset is a symlink ${pathValue}`)
+    return getProjectTransferExportAssetError(`runtime asset is a symlink ${pathValue}`, 'unsafe_runtime_asset')
   }
 
   if (!afterStats.isFile()) {
-    return getProjectTransferExportAssetError(`runtime asset is not a regular file ${pathValue}`)
+    return getProjectTransferExportAssetError(
+      `runtime asset is not a regular file ${pathValue}`,
+      'unsafe_runtime_asset',
+    )
   }
 
   assertRuntimeAssetFileStayedStable({
@@ -712,6 +856,7 @@ const getAssetManifestEntry = async (
 ): Promise<{assetEntry: ProjectTransferExportAssetEntry; manifestEntry: ProjectTransferAssetManifestEntry}> => {
   const file = await getCopiedAssetFile({
     pathValue: packagePath,
+    references,
     runtimeOptions: {cwd: options.cwd, envValues: options.envValues},
     stagingRootPath: options.stagingRootPath,
   })

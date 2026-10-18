@@ -7,6 +7,7 @@ import {pipeline} from 'node:stream/promises'
 
 import type {ProjectTransferImportPlanArtifact} from './projectTransferAnalyze.ts'
 import type {ProjectTransferTargetPlan} from './projectTransferAnalyzeTarget.ts'
+import {projectTransferConversionMetadataAssetPathKeys} from './projectTransferCanonicalFullText.ts'
 import {getProjectTransferCanonicalJson} from './projectTransferFingerprint.ts'
 import {
   resolveProjectTransferArchiveMemberWritablePath,
@@ -27,6 +28,12 @@ type JsonRecord = Record<string, unknown>
 type ProjectTransferCommitAssetPromotionPlanEntry = ProjectTransferTargetPlan['assetPromotionPlan'][number]
 
 type ProjectTransferCommitPromotionPlanRecord = {entry: ProjectTransferCommitAssetPromotionPlanEntry; planIndex: number}
+
+type ArticleAssetFieldRewriteInput = {
+  fieldPath: string
+  promotionPathByPackagePath: Record<string, string>
+  value: unknown
+}
 
 export type ProjectTransferCommitPromotionManifestEntry = {
   byteLength: number
@@ -1020,24 +1027,47 @@ const rewriteFullTextHtml = ({
   )
 }
 
-const rewriteArticleFullTextAssetField = ({
-  field,
+const rewriteFullTextConversionMetadata = ({
   fieldPath,
   promotionPathByPackagePath,
   value,
-}: {
-  field: string
-  fieldPath: string
-  promotionPathByPackagePath: Record<string, string>
-  value: unknown
-}) => {
-  return field === 'fullTextPdf'
-    ? rewriteRequiredAssetPath({fieldPath, promotionPathByPackagePath, value})
-    : field === 'fullTextAssets'
-      ? rewriteFullTextAssetsValue({fieldPath, jsonPointer: '', promotionPathByPackagePath, value})
-      : field === 'fullTextHtml'
-        ? rewriteFullTextHtml({fieldPath, promotionPathByPackagePath, value})
-        : value
+}: ArticleAssetFieldRewriteInput) => {
+  return isRecord(value)
+    ? projectTransferConversionMetadataAssetPathKeys.reduce<JsonRecord>(
+        (metadata, key) => {
+          return value[key] === undefined
+            ? metadata
+            : {
+                ...metadata,
+                [key]: rewriteRequiredAssetPath({
+                  fieldPath: `${fieldPath}.${key}`,
+                  promotionPathByPackagePath,
+                  value: value[key],
+                }),
+              }
+        },
+        {...value},
+      )
+    : (value ?? null)
+}
+
+const articleAssetFieldRewriters: Record<string, (input: ArticleAssetFieldRewriteInput) => unknown> = {
+  fullTextAssets: (input) => {
+    return rewriteFullTextAssetsValue({...input, jsonPointer: ''})
+  },
+  fullTextConversionMetadata: rewriteFullTextConversionMetadata,
+  fullTextHtml: rewriteFullTextHtml,
+  fullTextPdf: rewriteRequiredAssetPath,
+}
+
+const isArticleAssetField = (field: string) => {
+  return Object.prototype.hasOwnProperty.call(articleAssetFieldRewriters, field)
+}
+
+const rewriteArticleFullTextAssetField = ({field, ...input}: ArticleAssetFieldRewriteInput & {field: string}) => {
+  const rewrite = isArticleAssetField(field) ? articleAssetFieldRewriters[field] : undefined
+
+  return rewrite === undefined ? input.value : rewrite(input)
 }
 
 const rewriteArticleAssetFields = ({
@@ -1056,6 +1086,12 @@ const rewriteArticleAssetFields = ({
       fieldPath: `articles[${articleIndex}].fullTextAssets`,
       promotionPathByPackagePath,
       value: article.fullTextAssets,
+    }),
+    fullTextConversionMetadata: rewriteArticleFullTextAssetField({
+      field: 'fullTextConversionMetadata',
+      fieldPath: `articles[${articleIndex}].fullTextConversionMetadata`,
+      promotionPathByPackagePath,
+      value: article.fullTextConversionMetadata,
     }),
     fullTextHtml: rewriteArticleFullTextAssetField({
       field: 'fullTextHtml',
@@ -1092,13 +1128,14 @@ const shouldRewriteArticleAssetFields = ({
   return (
     rewriteAssets
     || hasAssetFieldValue(article.fullTextAssets)
+    || hasAssetFieldValue(article.fullTextConversionMetadata)
     || hasAssetFieldValue(article.fullTextHtml)
     || hasAssetFieldValue(article.fullTextPdf)
   )
 }
 
 const shouldRewriteArticleFieldFillAssetValue = ({field, rewriteAssets}: {field: string; rewriteAssets: boolean}) => {
-  return rewriteAssets || field === 'fullTextAssets' || field === 'fullTextHtml' || field === 'fullTextPdf'
+  return rewriteAssets || isArticleAssetField(field)
 }
 
 const getArticlesBySource = (articles: readonly ProjectTransferArticlePayloadRecord[]) => {

@@ -11,6 +11,7 @@ import {
   type ProjectTransferAnalyzeTargetRunner,
   type ProjectTransferTargetPlan,
 } from './projectTransferAnalyzeTarget.ts'
+import {getProjectTransferCanonicalFullTextRebuildBlockers} from './projectTransferCanonicalFullTextRebuild.ts'
 import {writeProjectTransferCanonicalJsonArtifact} from './projectTransferCanonicalJsonArtifact.ts'
 import type {ProjectTransferCommitIdMaps} from './projectTransferCommitIdMaps.ts'
 import {
@@ -3030,7 +3031,20 @@ const analyzeProjectTransferImportPackageCore = async (
     packagePayloads: parsed.packagePayloads,
     payloads: parsed.payloads,
   })
-  const packageContractBlockers = [...parsed.blockers, ...semanticBlockers]
+  const canonicalFullTextBlockers = await getProjectTransferCanonicalFullTextRebuildBlockers({
+    articles: parsed.payloads.articles ?? [],
+    readPackageFile: async (packagePath) => {
+      return readFile(
+        resolveProjectTransferArchiveMemberWritablePath({
+          ...runtimeOptions,
+          archiveMemberPath: packagePath,
+          extractionRootPath: stagingLayout.extractedPath,
+        }),
+        'utf8',
+      )
+    },
+  })
+  const packageContractBlockers = [...parsed.blockers, ...semanticBlockers, ...canonicalFullTextBlockers]
   await publishImportAnalyzeProgress({
     context,
     message: 'Package fingerprint validation completed',

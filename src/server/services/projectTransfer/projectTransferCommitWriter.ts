@@ -385,6 +385,8 @@ const articleColumnByPayloadField = {
   doi: 'doi',
   fullText: 'full_text',
   fullTextAssets: 'full_text_assets',
+  fullTextCanonicalHash: 'full_text_canonical_hash',
+  fullTextCanonicalVersion: 'full_text_canonical_version',
   fullTextCharCount: 'full_text_char_count',
   fullTextConversionAttempts: 'full_text_conversion_attempts',
   fullTextConversionError: 'full_text_conversion_error',
@@ -392,6 +394,7 @@ const articleColumnByPayloadField = {
   fullTextConversionModelId: 'full_text_conversion_model_id',
   fullTextConversionStatus: 'full_text_conversion_status',
   fullTextFetchedAt: 'full_text_fetched_at',
+  fullTextFigureModeBuilt: 'full_text_figure_mode_built',
   fullTextHtml: 'full_text_html',
   fullTextOriginalFormat: 'full_text_original_format',
   fullTextPdf: 'full_text_pdf',
@@ -411,6 +414,12 @@ const articleJsonFields = new Set<ArticleField>([
   'originalData',
   'sourceMetadata',
 ])
+const articlePromotedAssetFields = [
+  'fullTextAssets',
+  'fullTextConversionMetadata',
+  'fullTextHtml',
+  'fullTextPdf',
+] as const satisfies readonly ArticleField[]
 const articleArrayFields = new Set<ArticleField>(['articleAuthors'])
 const articleDateFields = new Set<ArticleField>(['articleCreatedAt', 'articleUpdatedAt', 'fullTextFetchedAt'])
 const articleNumberFields = new Set<ArticleField>(['articleVersion', 'fullTextCharCount', 'fullTextConversionAttempts'])
@@ -593,6 +602,18 @@ const getArticleJsonFieldSql = (jsonExpression: string, field: ArticleField) => 
           : articleNumberFields.has(field)
             ? `TRY_CAST(${getJsonStringFieldSql(jsonExpression, field)} AS ${articleNumberSqlTypeByField[field] ?? 'DOUBLE'})`
             : getNullableJsonStringFieldSql(jsonExpression, field)
+}
+
+const isArticlePromotedAssetField = (field: ArticleField) => {
+  return (articlePromotedAssetFields as readonly ArticleField[]).includes(field)
+}
+
+const getCreatedArticleFieldSql = (field: ArticleField) => {
+  const stagedFieldSql = getArticleJsonFieldSql('staged_article.payload_json', field)
+
+  return isArticlePromotedAssetField(field)
+    ? `CASE WHEN json_exists(create_row.asset_fields_json, '$.${field}') THEN ${getArticleJsonFieldSql('create_row.asset_fields_json', field)} ELSE ${stagedFieldSql} END`
+    : stagedFieldSql
 }
 
 const getArticleFillValueSql = (field: ArticleField) => {
@@ -2193,7 +2214,7 @@ const insertCreatedArticlesSetBased = async ({
       article_map.target_id,
       ${Object.keys(articleColumnByPayloadField)
         .map((field) => {
-          return getArticleJsonFieldSql('staged_article.payload_json', field as ArticleField)
+          return getCreatedArticleFieldSql(field as ArticleField)
         })
         .join(',\n')},
       ${getTimestampLiteral(now)},
@@ -2432,8 +2453,21 @@ const updateReusedArticleFieldSetBased = async ({
     return undefined
   }
 
+  const invalid = await getInvalidArticleFieldFillRow({context, field, tx})
+
+  if (invalid !== null) {
+    return failCommitWriter(`target article ${invalid.targetArticleId} field ${field} is no longer missing`)
+  }
+
   const column = articleColumnByPayloadField[field]
-  const updatedRows = await tx.queryJson<{id: string}>(`
+  const fillRows = await tx.queryJson<{id: string}>(`
+    SELECT target_article_id AS id
+    FROM ${context.tempTables.articleFieldFills}
+    WHERE field = ${getSqlLiteral(field)}
+    ORDER BY target_article_id ASC
+  `)
+
+  await tx.run(`
     UPDATE app.article AS article
     SET
       ${column} = ${getArticleFillValueSql(field)},
@@ -2442,21 +2476,12 @@ const updateReusedArticleFieldSetBased = async ({
     WHERE fill.field = ${getSqlLiteral(field)}
       AND article.id = fill.target_article_id
       AND ${getMissingTargetArticleValueSql({alias: 'article', field})}
-    RETURNING article.id
   `)
 
-  if (updatedRows.length === expectedCount) {
-    return updatedRows.reduce<Promise<void>>(async (previousRun, row) => {
-      await previousRun
-      await appendProjectTransferArticleFieldFillDeltas({articleId: row.id, fields: [field], now, tx})
-    }, Promise.resolve())
-  }
-
-  const invalid = await getInvalidArticleFieldFillRow({context, field, tx})
-
-  return invalid === null
-    ? failCommitWriter(`article field ${field} update wrote ${updatedRows.length} of ${expectedCount} staged rows`)
-    : failCommitWriter(`target article ${invalid.targetArticleId} field ${field} is no longer missing`)
+  return fillRows.reduce<Promise<void>>(async (previousRun, row) => {
+    await previousRun
+    await appendProjectTransferArticleFieldFillDeltas({articleId: row.id, fields: [field], now, tx})
+  }, Promise.resolve())
 }
 
 const updateReusedArticlesSetBased = async ({
@@ -2627,9 +2652,46 @@ const getArticleIdentifierStageRows = ({
   })
 }
 
-const getArticleCreateStageRows = (promotion: ProjectTransferCommitPromotionResult) => {
+const getArticleCreatePromotedAssetFields = ({
+  article,
+  stagedArticle,
+}: {
+  article: ProjectTransferArticlePayloadRecord
+  stagedArticle: ProjectTransferArticlePayloadRecord | undefined
+}) => {
+  const changedFields = articlePromotedAssetFields.filter((field) => {
+    return !valuesEquivalent(
+      getRecordField(article, field),
+      stagedArticle ? getRecordField(stagedArticle, field) : null,
+    )
+  })
+
+  return changedFields.length === 0
+    ? null
+    : Object.fromEntries(
+        changedFields.map((field) => {
+          return [field, getRecordField(article, field)]
+        }),
+      )
+}
+
+const getArticleCreateStageRows = ({
+  articles,
+  promotion,
+}: {
+  articles: readonly ProjectTransferArticlePayloadRecord[]
+  promotion: ProjectTransferCommitPromotionResult
+}) => {
+  const stagedArticleBySourceId = getArticleBySourceId(articles)
+
   return promotion.articleCreates.map((entry) => {
-    return {sourceArticleId: entry.sourceArticleId}
+    return {
+      assetFields: getArticleCreatePromotedAssetFields({
+        article: entry.article,
+        stagedArticle: stagedArticleBySourceId[entry.sourceArticleId],
+      }),
+      sourceArticleId: entry.sourceArticleId,
+    }
   })
 }
 
@@ -2645,7 +2707,10 @@ const getArticleFieldFillStageRows = (promotion: ProjectTransferCommitPromotionR
 }
 
 const commitWriterFileTempTableColumns = {
-  articleCreates: [{field: 'sourceArticleId', kind: 'string', name: 'source_article_id'}],
+  articleCreates: [
+    {field: 'sourceArticleId', kind: 'string', name: 'source_article_id'},
+    {field: 'assetFields', kind: 'json', name: 'asset_fields_json'},
+  ],
   articleFieldFills: [
     {field: 'sourceArticleId', kind: 'string', name: 'source_article_id'},
     {field: 'targetArticleId', kind: 'string', name: 'target_article_id'},
@@ -2743,7 +2808,10 @@ export const getCommitWriterTempTableFiles = ({
   promotion: ProjectTransferCommitPromotionResult
 }): Record<CommitWriterFileTempTable, ProjectTransferCommitTempTableFile> => {
   return {
-    articleCreates: getCommitWriterTempTableFile({rows: getArticleCreateStageRows(promotion), table: 'articleCreates'}),
+    articleCreates: getCommitWriterTempTableFile({
+      rows: getArticleCreateStageRows({articles, promotion}),
+      table: 'articleCreates',
+    }),
     articleFieldFills: getCommitWriterTempTableFile({
       rows: getArticleFieldFillStageRows(promotion),
       table: 'articleFieldFills',
