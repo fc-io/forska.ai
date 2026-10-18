@@ -4,6 +4,7 @@ import {createEffect, Show, splitProps} from 'solid-js'
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 import {
+  FULL_TEXT_STRATEGY_LEGACY,
   type FullTextChunkMaxPromptTokens,
   type FullTextChunkMode,
   type FullTextChunkPolicy,
@@ -43,8 +44,8 @@ type ProjectFullTextValidationInput = {modelId: string | null; projectId?: strin
 type ProjectFullTextSettings = {
   fullTextChunkPolicy?: FullTextChunkPolicy | null
   fullTextFigureMode?: FullTextFigureMode | null
+  fullTextStrategyId?: string | null
   useFulltext: boolean
-  useFulltextNoImages: boolean
 }
 
 const figureModeChoices: ReadonlyArray<FullTextStrategyChoice<FullTextFigureMode>> = [
@@ -82,11 +83,11 @@ export const emptyFullTextStrategySelection: FullTextStrategySelection = {
 export const getFullTextStrategySelectionFromProject = (
   project: ProjectFullTextSettings,
 ): FullTextStrategySelection => {
-  const useFulltext = project.useFulltext || project.useFulltextNoImages
+  const useFulltext = project.useFulltext || project.fullTextStrategyId === FULL_TEXT_STRATEGY_LEGACY
 
   return {
     chunkMode: useFulltext ? (project.fullTextChunkPolicy?.mode ?? null) : null,
-    figureMode: useFulltext ? (project.fullTextFigureMode ?? (project.useFulltextNoImages ? 'none' : null)) : null,
+    figureMode: useFulltext ? (project.fullTextFigureMode ?? null) : null,
     maxPromptTokens: useFulltext ? (project.fullTextChunkPolicy?.maxPromptTokens ?? null) : null,
     useFulltext,
   }

@@ -1,3 +1,5 @@
+import {legacyFullTextNoImagesLabel} from './legacyFullTextNoImagesLabel.ts'
+
 export const FULL_TEXT_STRATEGY_NONE = 'fts-none'
 
 export const FULL_TEXT_STRATEGY_LEGACY = 'fts-legacy-v0'
@@ -168,7 +170,7 @@ export const getFullTextStrategyInputDifferences = (
 }
 
 const getLegacyFullTextContentLabel = (useFulltextNoImages: boolean) => {
-  return useFulltextNoImages ? 'fulltext (legacy, no images)' : 'fulltext (legacy)'
+  return useFulltextNoImages ? legacyFullTextNoImagesLabel : 'fulltext (legacy)'
 }
 
 const isDerivedFullTextStrategyId = (id: string | null | undefined): id is string => {
