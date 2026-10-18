@@ -1,6 +1,12 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {storeConvertedFullText} from '../fullText/canonicalFullTextStore.ts'
-import {convertArticlePdf, isPermanentConversionFailure} from '../fullText/converters/fullTextConverter.ts'
+import {
+  convertArticlePdf,
+  type FullTextConversionRuntimeConfig,
+  getFullTextConversionFailureMetadata,
+  isPermanentConversionFailure,
+} from '../fullText/converters/fullTextConverter.ts'
+import {getJsonSqlLiteral} from '../providers/providerDbUtils.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
@@ -23,6 +29,15 @@ export type EnsureFullTextResult =
   | {text: string; shouldSkip: false} // Success
   | {text: null; shouldSkip: true; reason: 'no_fulltext' | 'conversion_failed'} // Permanently failed or no PDF
   | {text: null; shouldSkip: false; reason: 'transient_failure'} // Transient failure, should requeue
+
+export const getFailedConversionTargetSetSql = (runtimeConfig: FullTextConversionRuntimeConfig | null): string => {
+  return [
+    `full_text_conversion_model_id = ${getSqlLiteral(runtimeConfig?.modelId ?? null)}`,
+    `full_text_conversion_metadata = ${
+      runtimeConfig ? getJsonSqlLiteral(getFullTextConversionFailureMetadata(runtimeConfig)) : 'NULL'
+    }`,
+  ].join(',\n')
+}
 
 /**
  * Ensure an article has fullText available.
@@ -86,6 +101,7 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
   })
   conversionLocks.set(articleId, lock)
   const conversionStartedAt = Date.now()
+  const conversionTarget: {runtimeConfig: FullTextConversionRuntimeConfig | null} = {runtimeConfig: null}
 
   try {
     // Double-check after acquiring lock (another process may have finished)
@@ -125,6 +141,8 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       component: ensureFullTextComponent,
     })
     const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
+
+    conversionTarget.runtimeConfig = runtimeConfig
 
     if (!runtimeConfig) {
       throw new Error('No PDF conversion model configured')
@@ -179,6 +197,7 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       UPDATE app.article
       SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
           full_text_conversion_error = ${getSqlLiteral(errorMessage)},
+          ${getFailedConversionTargetSetSql(conversionTarget.runtimeConfig)},
           full_text_conversion_attempts = ${attempts},
           updated_at = current_timestamp
       WHERE id = '${escapeSqlString(articleId)}'

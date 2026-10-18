@@ -11,7 +11,11 @@ import {
   rebuildCanonicalFullText,
   storeConvertedFullText,
 } from '../fullText/canonicalFullTextStore.ts'
-import {convertArticlePdf, isPermanentConversionFailure} from '../fullText/converters/fullTextConverter.ts'
+import {
+  convertArticlePdf,
+  type FullTextConversionRuntimeConfig,
+  isPermanentConversionFailure,
+} from '../fullText/converters/fullTextConverter.ts'
 import {ensureFigureDescriptions, resetFigureDescriptions} from '../fullText/figureDescriptionStore.ts'
 import {
   appendArticleReviewServingDeltas,
@@ -26,6 +30,7 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
+import {getFailedConversionTargetSetSql} from '../utils/ensureFullText.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {resolveRuntimeWritablePath} from '../utils/runtimeWritablePath.ts'
@@ -316,8 +321,12 @@ export const articleAdminRoutes = new Elysia()
         const startTime = Date.now()
         console.log(`[convertPdf] Converting article ${article.id}`)
 
+        const conversionTarget: {runtimeConfig: FullTextConversionRuntimeConfig | null} = {runtimeConfig: null}
+
         try {
           const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
+
+          conversionTarget.runtimeConfig = runtimeConfig
 
           if (!runtimeConfig) {
             throw new Error('No PDF conversion model configured')
@@ -350,6 +359,7 @@ export const articleAdminRoutes = new Elysia()
             UPDATE app.article
             SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
                 full_text_conversion_error = ${getSqlLiteral(errorMessage)},
+                ${getFailedConversionTargetSetSql(conversionTarget.runtimeConfig)},
                 full_text_conversion_attempts = ${attempts},
                 updated_at = current_timestamp
             WHERE id = '${escapeSqlString(article.id)}'

@@ -336,3 +336,42 @@ test('a failed conversion records the converter kind and options hash next to th
     providerKind: 'mineru',
   })
 })
+
+test('a failed on-demand conversion replaces the metadata of an earlier successful run', async () => {
+  if (!ensureFullTextModule || !database) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  await database.run(`
+    INSERT INTO app.article (id, article_title, full_text_pdf, full_text_conversion_model_id, full_text_conversion_metadata)
+    VALUES (
+      'ensure-missing-pdf',
+      'ensure-missing-pdf',
+      'assets/article_pdfs/ensure-missing-pdf.pdf',
+      'older-model',
+      '{"converterKind":"docling","converterVersion":"docling 1.0.0","optionsHash":"older"}'::JSON
+    )
+  `)
+
+  const result = await ensureFullTextModule.ensureFullText(
+    {
+      fullText: null,
+      fullTextConversionStatus: null,
+      fullTextPDF: 'assets/article_pdfs/ensure-missing-pdf.pdf',
+    } as Parameters<typeof ensureFullTextModule.ensureFullText>[0],
+    'ensure-missing-pdf',
+  )
+  const row = await getConvertedArticle('ensure-missing-pdf')
+
+  expect(result.shouldSkip).toBe(true)
+  expect(row?.fullTextConversionStatus).toBe('failed')
+  expect(row?.fullTextConversionModelId).toBe('conversion-mineru-model')
+  expect(JSON.parse(row?.fullTextConversionMetadata ?? 'null')).toEqual({
+    baseURL: getMineruBaseURL(),
+    converterKind: 'mineru',
+    modelId: 'conversion-mineru-model',
+    modelName: 'mineru-standard',
+    optionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
+    providerKind: 'mineru',
+  })
+})
