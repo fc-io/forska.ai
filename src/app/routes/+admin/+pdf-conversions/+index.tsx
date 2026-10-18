@@ -1,17 +1,25 @@
-import {useQuery} from '@tanstack/solid-query'
-import {createFileRoute, Link} from '@tanstack/solid-router'
+import {createMutation, useQuery, useQueryClient} from '@tanstack/solid-query'
+import {createFileRoute} from '@tanstack/solid-router'
 import {For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
 import {PdfConversionControls} from './pdfConversionControls.tsx'
+import {PdfConversionFailedRow} from './pdfConversionFailedRow.tsx'
+import {PdfConversionReconvertStatus} from './pdfConversionReconvertStatus.tsx'
 
 const fetchConversionStats = async () => {
   const response = await apiClient.api.articles['conversion-stats'].get()
   return handleApiResponse(response, 'Failed to load conversion stats')
 }
 
+const reconvertFailedConversion = async (articleId: string) => {
+  const response = await apiClient.api.articles['conversion-reconvert'].post({articleId})
+  return handleApiResponse(response, 'Failed to reconvert article')
+}
+
 const AdminPdfConversions = () => {
+  const queryClient = useQueryClient()
   const statsQuery = useQuery(() => {
     return {
       queryKey: ['articles', 'conversion-stats'],
@@ -21,10 +29,25 @@ const AdminPdfConversions = () => {
       suspense: false,
     }
   })
+  const reconvertMutation = createMutation(() => {
+    return {
+      mutationFn: reconvertFailedConversion,
+      onSuccess: () => {
+        return queryClient.invalidateQueries({queryKey: ['articles', 'conversion-stats']})
+      },
+    }
+  })
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <PdfConversionControls totalFailed={statsQuery.data?.totalFailed} />
+
+      <PdfConversionReconvertStatus
+        clearedConvertedText={reconvertMutation.data?.clearedConvertedText}
+        errorMessage={reconvertMutation.error?.message}
+        isError={reconvertMutation.isError}
+        isSuccess={reconvertMutation.isSuccess}
+      />
 
       <Show when={statsQuery.isLoading}>
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
@@ -52,28 +75,12 @@ const AdminPdfConversions = () => {
             <For each={statsQuery.data?.lastFailed ?? []}>
               {(article) => {
                 return (
-                  <li class="px-4 py-4 sm:px-6">
-                    <div class="flex items-center justify-between">
-                      <div class="truncate text-sm font-medium text-blue-600">
-                        <Link to="/articles/$id" params={{id: article.id}} class="hover:underline">
-                          {article.title}
-                        </Link>
-                      </div>
-                      <div class="ml-2 flex-shrink-0 flex">
-                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
-                          {article.attempts} attempts
-                        </span>
-                      </div>
-                    </div>
-                    <div class="mt-2 text-sm text-gray-500">
-                      <p class="truncate font-mono bg-gray-50 p-1 rounded text-xs">
-                        {article.error || 'Unknown error'}
-                      </p>
-                    </div>
-                    <div class="mt-2 text-xs text-gray-400">
-                      Last updated: {article.updatedAt ? new Date(article.updatedAt).toLocaleString() : 'Unknown'}
-                    </div>
-                  </li>
+                  <PdfConversionFailedRow
+                    article={article}
+                    isReconvertDisabled={reconvertMutation.isPending}
+                    isReconverting={reconvertMutation.isPending && reconvertMutation.variables === article.id}
+                    onReconvert={reconvertMutation.mutate}
+                  />
                 )
               }}
             </For>
