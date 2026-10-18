@@ -1,7 +1,4 @@
 import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
-import {providerTransportSupportsImageInput} from '../providers/providerImageInput.ts'
-import {resolveProviderModelCapabilities} from '../providers/providerModelCapabilities.ts'
-import {getProviderRegistryEntry} from '../providers/providerRegistry.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getJsonValue, getSqlLiteral} from './appQueryHelpers.ts'
 import {fullTextConversionProviderKinds} from './providerCatalog.ts'
@@ -9,7 +6,7 @@ import {getLocalUserConfigWhereClauseSql} from './userConfigQueryService.ts'
 
 type FullTextModelStatusRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
-export type FullTextModelRole = 'figure_description' | 'pdf_conversion'
+export type FullTextModelRole = 'pdf_conversion'
 
 export type FullTextModelHealthState = 'disabled' | 'failed' | 'healthy' | 'unverified'
 
@@ -41,12 +38,9 @@ export type FullTextModelStatusRow = {
   remoteModelId: string | null
 }
 
-type ConfiguredFullTextModelIdsRow = {figureDescriptionModelId: string | null; fullTextConversionModelId: string | null}
+type ConfiguredFullTextModelIdsRow = {fullTextConversionModelId: string | null}
 
-const capabilityLabels: Record<FullTextModelRole, string> = {
-  figure_description: 'Image input',
-  pdf_conversion: 'Converter server version',
-}
+const capabilityLabels: Record<FullTextModelRole, string> = {pdf_conversion: 'Converter server version'}
 
 const getCheckedAtLabel = (date: Date): string => {
   return `${date.toISOString().slice(0, 16).replace('T', ' ')} UTC`
@@ -130,44 +124,6 @@ const getPdfConversionCapability = (row: FullTextModelStatusRow): FullTextModelS
         }
 }
 
-const getImageInputProvenance = (source: string, verifiedAt: string | null): string => {
-  return verifiedAt ? `${source}, verified ${verifiedAt}` : source
-}
-
-const getFigureDescriptionCapability = (row: FullTextModelStatusRow): FullTextModelStatus['capability'] => {
-  const imageInput = resolveProviderModelCapabilities({
-    metadataJson: getJsonValue(row.metadataJson),
-    providerKind: row.providerKind,
-    remoteModelId: row.remoteModelId,
-  }).supportsImageInput
-  const transportFamily = getProviderRegistryEntry(row.providerKind)?.transportFamily ?? null
-  const transportSendsImages = transportFamily !== null && providerTransportSupportsImageInput(transportFamily)
-
-  return !transportSendsImages
-    ? {
-        detail: `The ${row.providerKind ?? 'unknown'} transport cannot send images.`,
-        label: capabilityLabels.figure_description,
-        state: 'missing',
-      }
-    : imageInput === null
-      ? {
-          detail: 'No verified image input. Set it on the Models page.',
-          label: capabilityLabels.figure_description,
-          state: 'unverified',
-        }
-      : imageInput.value
-        ? {
-            detail: `Accepts image input (${getImageInputProvenance(imageInput.source, imageInput.verifiedAt)}).`,
-            label: capabilityLabels.figure_description,
-            state: 'verified',
-          }
-        : {
-            detail: `Does not accept image input (${getImageInputProvenance(imageInput.source, imageInput.verifiedAt)}).`,
-            label: capabilityLabels.figure_description,
-            state: 'missing',
-          }
-}
-
 export const getFullTextModelStatusFromRow = (
   row: FullTextModelStatusRow,
   role: FullTextModelRole,
@@ -178,7 +134,7 @@ export const getFullTextModelStatusFromRow = (
   const state = getHealthState(row)
 
   return {
-    capability: role === 'pdf_conversion' ? getPdfConversionCapability(row) : getFigureDescriptionCapability(row),
+    capability: getPdfConversionCapability(row),
     health: {
       detail: getHealthDetail({lastCheckedAt, lastError, providerLabel, state}),
       lastCheckedAt: lastCheckedAt?.toISOString() ?? null,
@@ -231,12 +187,11 @@ export const getConfiguredFullTextModelIds = async (
 ): Promise<ConfiguredFullTextModelIdsRow> => {
   const [row] = await runner.queryJson<ConfiguredFullTextModelIdsRow>(`
     SELECT
-      uc.figure_description_model_id AS figureDescriptionModelId,
       uc.full_text_conversion_model_id AS fullTextConversionModelId
     FROM app.user_config uc
     WHERE ${getLocalUserConfigWhereClauseSql('uc.id')}
     LIMIT 1
   `)
 
-  return row ?? {figureDescriptionModelId: null, fullTextConversionModelId: null}
+  return row ?? {fullTextConversionModelId: null}
 }

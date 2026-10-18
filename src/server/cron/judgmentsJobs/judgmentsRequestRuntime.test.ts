@@ -1959,8 +1959,6 @@ test('judge-worker prompt execution uses owner-backed snapshots instead of live 
           strategy: {
             canonicalTextVersion: 'canonical-v1',
             chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
-            figureDescriptionModelId: null,
-            figureDescriptionPromptVersion: null,
             figureMode: 'none',
             id: 'fts-0123456789abcdef',
           },

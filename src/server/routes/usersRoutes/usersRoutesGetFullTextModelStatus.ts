@@ -7,10 +7,5 @@ export const usersRoutesGetFullTextModelStatus = new Elysia().get(
   async ({query}) => {
     return {data: await getFullTextModelStatus({modelId: query.modelId, role: query.role})}
   },
-  {
-    query: t.Object({
-      modelId: t.String({minLength: 1}),
-      role: t.Union([t.Literal('figure_description'), t.Literal('pdf_conversion')]),
-    }),
-  },
+  {query: t.Object({modelId: t.String({minLength: 1}), role: t.Literal('pdf_conversion')})},
 )

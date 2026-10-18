@@ -42,9 +42,3 @@ export const buildCanonicalFixture = ({
     layout: layoutFile.blocks,
   })
 }
-
-export const withFixtureDescriptions = (assets: CanonicalFullTextAsset[]): CanonicalFullTextAsset[] => {
-  return assets.map((asset) => {
-    return {...asset, description: `Panel  ${asset.index} shows\nthe measured outcome by group.`}
-  })
-}

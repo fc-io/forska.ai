@@ -12,11 +12,11 @@ import {
 
 export const CANONICAL_TEXT_VERSION = 'canonical-v1'
 
-export const fullTextFigureModes = ['none', 'descriptions', 'native_images'] as const
+export const fullTextFigureModes = ['none', 'native_images'] as const
 
 export type FullTextFigureMode = (typeof fullTextFigureModes)[number]
 
-export type CanonicalFullTextAsset = {caption: string | null; description?: string | null; index: number}
+export type CanonicalFullTextAsset = {caption: string | null; index: number}
 
 export type CanonicalFullTextInput = {
   assets: CanonicalFullTextAsset[]
@@ -33,7 +33,6 @@ export type CanonicalFullTextStats = {
   figures: number
   headings: number
   listItems: number
-  missingDescriptions: number
   paragraphs: number
   tables: number
   unknownBlockTypes: string[]
@@ -154,7 +153,6 @@ export const buildCanonicalFullText = ({
       figures: countUnits(sectioned.units, 'figure'),
       headings: countUnits(sectioned.units, 'heading'),
       listItems: countUnits(sectioned.units, 'list_item'),
-      missingDescriptions: rendered.missingDescriptions,
       paragraphs: countUnits(sectioned.units, 'paragraph'),
       tables: countUnits(sectioned.units, 'table'),
       unknownBlockTypes: classified.unknownTypes,

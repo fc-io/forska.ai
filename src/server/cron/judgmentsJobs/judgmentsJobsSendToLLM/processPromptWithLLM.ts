@@ -638,17 +638,11 @@ const getFullTextPreparedPrompt = ({
     })
   }
 
-  if (result.kind === 'skipped') {
-    logFullTextSkip(promptToProcess, result.skipReason, result.message)
-  }
-
   return result.kind === 'ready'
     ? {articleForJudging: article, fullTextJudging: result.fullTextJudging, kind: 'run', prompt}
     : result.kind === 'requeue'
       ? {kind: 'ready', retryAfterMs: fullTextJudgingRequeueDelayMs}
-      : result.kind === 'skipped'
-        ? {kind: 'skipped', skipReason: result.skipReason}
-        : {closeoutReason: 'requestFailure', kind: 'closed'}
+      : {closeoutReason: 'requestFailure', kind: 'closed'}
 }
 
 const prepareLocalFullTextPrompt = async ({

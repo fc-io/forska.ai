@@ -67,14 +67,7 @@ const getFullTextJudgingInput = async ({
     chunkPlan: chunkPolicy.mode === 'chunked' ? plan : null,
     figureImages,
     renderedText,
-    strategy: {
-      canonicalTextVersion: 'canonical-v1',
-      chunkPolicy,
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
-      figureMode,
-      id: strategyId,
-    },
+    strategy: {canonicalTextVersion: 'canonical-v1', chunkPolicy, figureMode, id: strategyId},
     textHash: plan.textHash,
   }
 }

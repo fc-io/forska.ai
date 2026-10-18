@@ -20,17 +20,6 @@ const getRow = (overrides: Partial<FullTextModelStatusRow> = {}): FullTextModelS
   }
 }
 
-const vlmRow = (metadataJson: unknown, overrides: Partial<FullTextModelStatusRow> = {}) => {
-  return getRow({
-    metadataJson,
-    modelLabel: 'qwen3-vl',
-    providerKind: 'ollama',
-    providerLabel: 'Ollama',
-    remoteModelId: 'qwen3-vl:2b-instruct',
-    ...overrides,
-  })
-}
-
 test('a checked connection without an error is healthy with the check time', () => {
   expect(getFullTextModelStatusFromRow(getRow(), 'pdf_conversion').health).toEqual({
     detail: 'The last health check of MinerU passed at 2026-10-17 20:15 UTC.',
@@ -79,36 +68,5 @@ test('the PDF-to-text capability is the reported converter server version', () =
     detail: "MinerU standard has not reported a server version. Refresh its provider's models on the Models page.",
     label: 'Converter server version',
     state: 'unverified',
-  })
-})
-
-test('the figure-description capability is resolved image input on an image transport', () => {
-  const verified = getFullTextModelStatusFromRow(
-    vlmRow({capabilityOverrides: {supportsImageInput: true, updatedAt: '2026-10-17T10:00:00.000Z'}}),
-    'figure_description',
-  )
-  const unsupported = getFullTextModelStatusFromRow(
-    vlmRow({capabilityOverrides: {supportsImageInput: false, updatedAt: '2026-10-17T10:00:00.000Z'}}),
-    'figure_description',
-  )
-  const unverified = getFullTextModelStatusFromRow(vlmRow(null), 'figure_description')
-  const textOnlyTransport = getFullTextModelStatusFromRow(
-    vlmRow(null, {providerKind: 'mineru', providerLabel: 'MinerU'}),
-    'figure_description',
-  )
-
-  expect(verified.capability).toEqual({
-    detail: 'Accepts image input (user, verified 2026-10-17).',
-    label: 'Image input',
-    state: 'verified',
-  })
-  expect(unsupported.capability.state).toBe('missing')
-  expect(unverified.capability).toMatchObject({
-    detail: 'No verified image input. Set it on the Models page.',
-    state: 'unverified',
-  })
-  expect(textOnlyTransport.capability).toMatchObject({
-    detail: 'The mineru transport cannot send images.',
-    state: 'missing',
   })
 })

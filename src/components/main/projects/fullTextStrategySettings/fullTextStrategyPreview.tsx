@@ -3,6 +3,8 @@ import {For, Match, Show, splitProps, Switch} from 'solid-js'
 export type ProjectFullTextValidation = {
   current: {judgmentCount: number; strategyId: string; strategyLabel: string} | null
   errors: string[]
+  modelAcceptsImages: boolean
+  modelLabel: string | null
   recordStrategyOnSave: boolean
   strategyId: string | null
   strategyLabel: string | null

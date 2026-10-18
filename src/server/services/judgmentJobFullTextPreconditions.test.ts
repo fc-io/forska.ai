@@ -15,8 +15,6 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 type Dependencies = {
   database: {close: () => Promise<void>; run: (statement: string) => Promise<void>}
   preconditions: typeof import('./judgmentJobFullTextPreconditions.ts')
-  service: typeof import('./userConfigQueryService.ts').userConfigQueryService
-  usersRoutes: {handle: (request: Request) => Promise<Response>}
 }
 
 const dependencies: {current: Dependencies | null} = {current: null}
@@ -69,28 +67,6 @@ const seedModel = async (id: string, metadataJson: unknown) => {
   `)
 }
 
-const setFigureDescriptionModel = async (figureDescriptionModelId: string | null) => {
-  const user = await getDependencies().service.getOrCreateUserConfig()
-  const response = await getDependencies().usersRoutes.handle(
-    new Request('http://localhost/api/users', {
-      body: JSON.stringify({
-        codexBin: null,
-        duckdbBin: null,
-        email: user.email,
-        figureDescriptionModelId,
-        fullTextConversionModelId: null,
-        maintenanceWorkerDuckdbMemoryLimit: null,
-        name: user.name,
-        unpaywallEmail: null,
-      }),
-      headers: {'content-type': 'application/json'},
-      method: 'PATCH',
-    }),
-  )
-
-  expect(response.status).toBe(200)
-}
-
 const stringContaining = (text: string): string => {
   return expect.stringContaining(text) as unknown as string
 }
@@ -118,8 +94,6 @@ beforeAll(async () => {
   dependencies.current = {
     database: getAppDatabaseService(),
     preconditions: await import('./judgmentJobFullTextPreconditions.ts'),
-    service: (await import('./userConfigQueryService.ts')).userConfigQueryService,
-    usersRoutes: (await import('../routes/UsersRoutes.ts')).usersRoutes,
   }
 
   await getDependencies().database.run(`
@@ -127,11 +101,8 @@ beforeAll(async () => {
     VALUES ('llama', 'llamacpp', 'llama', TRUE, 'none', 'http://127.0.0.1:9/v1')
   `)
   await seedModel('vlm-a', visionModelMetadata)
-  await seedModel('vlm-b', visionModelMetadata)
   await seedStrategy('fts-000000000000048a', {
     chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
-    figureDescriptionModelId: null,
-    figureDescriptionPromptVersion: null,
     figureMode: 'none',
   })
   await seedStrategy('fts-000000000000024a', {
@@ -143,8 +114,6 @@ beforeAll(async () => {
   await seedStrategy('fts-0000000000000bad', {figureMode: 'none'})
   await seedStrategy('fts-00000000000img24', {
     chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
-    figureDescriptionModelId: null,
-    figureDescriptionPromptVersion: null,
     figureMode: 'native_images',
     imageTransportVersion: 'img-v1',
   })
@@ -170,17 +139,10 @@ test('a model window smaller than the chunk policy is refused with both numbers'
   )
 })
 
-test('descriptions strategies need the installation figure-description model they were resolved with', async () => {
-  await setFigureDescriptionModel(null)
-  expect(await getError('fts-000000000000024a')).toEqual(stringContaining('no figure-description model is configured'))
-
-  await setFigureDescriptionModel('vlm-b')
-  expect(await getError('fts-000000000000024a')).toEqual(
-    stringContaining("the installation's figure-description model is model vlm-b (fig-desc-v1)"),
+test('a stored descriptions strategy from before the mode was removed is refused like an incomplete one', async () => {
+  expect(await getError('fts-000000000000024a', 'vlm-a')).toEqual(
+    stringContaining('fts-000000000000024a has no stored chunk policy and figure mode'),
   )
-
-  await setFigureDescriptionModel('vlm-a')
-  expect(await getError('fts-000000000000024a')).toBeNull()
 })
 
 test('native-images strategies need a model that accepts images', async () => {

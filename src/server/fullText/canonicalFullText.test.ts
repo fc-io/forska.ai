@@ -225,28 +225,22 @@ const figureLayout = [
   block('chart', '', {figureIndex: 2}),
 ]
 const figureAssets: CanonicalFullTextAsset[] = [
-  {caption: 'FIGURE 1 Flow   diagram.', description: 'Boxes from 611 records down to 6 trials.', index: 1},
+  {caption: 'FIGURE 1 Flow   diagram.', index: 1},
   {caption: null, index: 2},
 ]
 
 test('figure blocks follow the figure mode and asset numbering', () => {
   const none = buildMineru(figureLayout, 'none', figureAssets)
-  const descriptions = buildMineru(figureLayout, 'descriptions', figureAssets)
   const nativeImages = buildMineru(figureLayout, 'native_images', figureAssets)
 
   expect(getBlocks(none.text).slice(2)).toEqual(['Figure 1: FIGURE 1 Flow diagram.', 'Figure 2'])
-  expect(none.stats.missingDescriptions).toBe(0)
-  expect(getBlocks(descriptions.text).slice(2)).toEqual([
-    'Figure 1: FIGURE 1 Flow diagram.\nDescription: Boxes from 611 records down to 6 trials.',
-    'Figure 2',
-  ])
-  expect(descriptions.stats.missingDescriptions).toBe(1)
-  expect(descriptions.text).not.toContain('not yet available')
   expect(getBlocks(nativeImages.text).slice(2)).toEqual([
     'Figure 1: FIGURE 1 Flow diagram.\n[figure:1]',
     'Figure 2\n[figure:2]',
   ])
-  expect(new Set([none.hash, descriptions.hash, nativeImages.hash]).size).toBe(3)
+  expect(none.text).not.toContain('Description:')
+  expect(nativeImages.text).not.toContain('Description:')
+  expect(new Set([none.hash, nativeImages.hash]).size).toBe(2)
 })
 
 test('the native-images golden carries one ordered marker per figure', () => {

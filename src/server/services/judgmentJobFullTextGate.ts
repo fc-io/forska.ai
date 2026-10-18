@@ -45,7 +45,6 @@ export type ProjectFullTextGateStoredStrategy = {id: string; inputs: FullTextStr
 export type ProjectFullTextGateContext = {
   conversionModelStatus: FullTextModelStatus | null
   environment: FullTextStrategyEnvironment
-  figureDescriptionModelStatus: FullTextModelStatus | null
 }
 
 export type ProjectFullTextGateProjectRow = {
@@ -94,7 +93,7 @@ export const getModelImageInputUnsupportedMessage = (model: ProjectFullTextGateM
 }
 
 export const getModelImageInputUnverifiedMessage = (model: ProjectFullTextGateModel): string => {
-  return `Model ${getModelReference(model)} has no verified image input. Set it on the Models page, or choose figure mode Descriptions or None, or another model.`
+  return `Model ${getModelReference(model)} has no verified image input. Set it on the Models page, or choose Text only (figures reduced to their captions), or another model.`
 }
 
 const getStrategyReference = (strategy: {id: string; label: string}): string => {
@@ -206,20 +205,13 @@ const getStoredStrategyErrors = ({
     : []
 }
 
-const getHealthWarnings = (context: ProjectFullTextGateContext, selection: ProjectFullTextGateSelection): string[] => {
+const getHealthWarnings = (context: ProjectFullTextGateContext): string[] => {
   return [
     context.environment.conversionModel
       ? getHealthWarning({
           consequence: 'Conversion will not run until the server is reachable.',
           roleLabel: 'PDF-to-text model',
           status: context.conversionModelStatus,
-        })
-      : null,
-    selection.fullTextFigureMode === 'descriptions' && context.environment.figureDescription
-      ? getHealthWarning({
-          consequence: 'Figure descriptions will not be written until the server is reachable.',
-          roleLabel: 'Figure-description model',
-          status: context.figureDescriptionModelStatus,
         })
       : null,
   ].filter(isPresent)
@@ -248,7 +240,7 @@ const getEnabledProjectFullTextGateEvaluation = ({
       ...getStoredStrategyErrors({storedStrategy, strategy: resolution.strategy}),
     ],
     strategy: resolution.strategy,
-    warnings: getHealthWarnings(context, selection),
+    warnings: getHealthWarnings(context),
   }
 }
 
@@ -292,11 +284,6 @@ export const getProjectFullTextGateContext = async (
       runner,
     }),
     environment: await getFullTextStrategyEnvironment(runner),
-    figureDescriptionModelStatus: await getModelStatusOrNull({
-      modelId: configuredModelIds.figureDescriptionModelId,
-      role: 'figure_description',
-      runner,
-    }),
   }
 }
 

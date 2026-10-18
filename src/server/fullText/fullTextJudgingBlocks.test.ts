@@ -82,8 +82,6 @@ beforeAll(async () => {
     VALUES ('${strategyId}', 'v1 test', '${JSON.stringify({
       canonicalTextVersion: 'canonical-v1',
       chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
     })}'::JSON)
   `)

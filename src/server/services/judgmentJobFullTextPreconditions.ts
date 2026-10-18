@@ -3,7 +3,6 @@ import {MAX_COMPLETION_TOKENS} from '../../agent/judge/judgeCompletionTokens.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getLegacyFullTextStrategyMessage} from '../cron/judgmentsJobs/judgmentsJobsSendToLLM/prepareFullTextJudging.ts'
 import {getFullTextJudgingStrategy} from '../fullText/fullTextJudgingBlocks.ts'
-import {getFullTextJudgingFigureDescriptionConfigError} from '../fullText/fullTextJudgingFigureDescriptions.ts'
 import {FULL_TEXT_STRATEGY_LEGACY, isReservedFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import {
   getModelContext,
@@ -71,11 +70,7 @@ export const getFullTextJudgingPreconditionError = async ({
     return `Full-text strategy ${fullTextStrategyId} has no stored chunk policy and figure mode. Set them on the project's edit page and start the job again.`
   }
 
-  return (
-    getChunkPolicyModelError(model, strategy)
-    ?? (await getNativeImagesModelPreconditionError(model, strategy))
-    ?? (await getFullTextJudgingFigureDescriptionConfigError(strategy))
-  )
+  return getChunkPolicyModelError(model, strategy) ?? (await getNativeImagesModelPreconditionError(model, strategy))
 }
 
 const getFullTextClaimErrorFromJobInfo = async (jobId: string): Promise<string | null> => {

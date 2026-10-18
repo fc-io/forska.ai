@@ -18,8 +18,6 @@ const strategyInputs = {
   converterKind: 'mineru',
   converterOptionsHash: 'options-hash',
   converterVersion: '4.0.12',
-  figureDescriptionModelId: null,
-  figureDescriptionPromptVersion: null,
   figureMode: 'none',
   imageTransportVersion: null,
   promptLayoutVersion: 'layout-v1',
@@ -32,7 +30,7 @@ const buildSource = ({
   name,
   strategyId,
 }: {
-  figureMode: 'descriptions' | 'none'
+  figureMode: 'native_images' | 'none'
   id: string
   name: string
   strategyId: string
@@ -42,11 +40,10 @@ const buildSource = ({
     fullTextStrategyId: strategyId,
     fullTextStrategyInputs: {
       ...strategyInputs,
-      figureDescriptionModelId: figureMode === 'descriptions' ? 'vlm' : null,
-      figureDescriptionPromptVersion: figureMode === 'descriptions' ? 'fig-desc-v1' : null,
       figureMode,
+      imageTransportVersion: figureMode === 'native_images' ? 'img-v1' : null,
     },
-    fullTextStrategyLabel: `mineru 4.0.12 / ${figureMode} / chunked 48k`,
+    fullTextStrategyLabel: `mineru 4.0.12 / ${figureMode === 'native_images' ? 'native images' : 'none'} / chunked 48k`,
     humanJudgmentMode: 'summary',
     id,
     importRoutes: [{name: 'Route', route: `route-${id}`}],
@@ -161,7 +158,7 @@ const sourceA = buildSource({
   strategyId: 'fts-aaaaaaaaaaaaaaaa',
 })
 const sourceB = buildSource({
-  figureMode: 'descriptions',
+  figureMode: 'native_images',
   id: 'source-b',
   name: 'Beta Project',
   strategyId: 'fts-bbbbbbbbbbbbbbbb',
@@ -252,7 +249,7 @@ describe('compare judgments edit route full-text strategy check', () => {
     try {
       expect(getStrategyError(container)).toBeNull()
       expect(getSubmitButton(container)?.disabled).toBe(false)
-      expect(container.textContent).toContain('Full text: mineru 4.0.12 / descriptions / chunked 48k')
+      expect(container.textContent).toContain('Full text: mineru 4.0.12 / native images / chunked 48k')
 
       getAdditionalProjectCheckbox(container, 'Beta Project').click()
       await Promise.resolve()
@@ -260,7 +257,7 @@ describe('compare judgments edit route full-text strategy check', () => {
       expect(getStrategyError(container)).toBe(
         getComparisonProjectFullTextStrategyMixError([sourceA, sourceB] as never),
       )
-      expect(getStrategyError(container)).toContain('Differing inputs: figureDescriptionModelId')
+      expect(getStrategyError(container)).toContain('Differing inputs: figureMode, imageTransportVersion')
       expect(getSubmitButton(container)?.disabled).toBe(true)
 
       getAdditionalProjectCheckbox(container, 'Beta Project').click()

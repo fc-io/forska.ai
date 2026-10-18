@@ -22,14 +22,11 @@ export const localUserUnpaywallEmail = null
 
 export const localUserFullTextConversionModelId = null
 
-export const localUserFigureDescriptionModelId = null
-
 export const localUserDefaults = {
   id: localUserId,
   name: localUserName,
   email: localUserEmail,
   role: localUserRole,
   fullTextConversionModelId: localUserFullTextConversionModelId,
-  figureDescriptionModelId: localUserFigureDescriptionModelId,
   unpaywallEmail: localUserUnpaywallEmail,
 }

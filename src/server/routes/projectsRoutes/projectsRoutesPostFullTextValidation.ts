@@ -5,6 +5,7 @@ import {
   type FullTextStrategy,
   getFullTextStrategyDisplayLabel,
 } from '../../fullText/fullTextStrategy.ts'
+import {getModelImageInputForModelId} from '../../fullText/nativeImagesModelCheck.ts'
 import {
   fullTextStrategyChangedRemedies,
   getFullTextStrategyChangedSinceSaveMessage,
@@ -91,11 +92,16 @@ export const projectsRoutesPostFullTextValidation = new Elysia().post(
     )
     const current = body.projectId ? await getProjectFullTextCurrentStrategy(body.projectId, reader) : null
     const strategyChangeWithJob = getStrategyChangeWithJob(current, resolution)
+    const modelImageInput = body.modelId
+      ? await getModelImageInputForModelId({modelId: body.modelId, runner: reader})
+      : null
 
     return {
       data: {
         current: getCurrentProjectStrategyPayload(current),
         errors: resolution.errors,
+        modelAcceptsImages: modelImageInput?.acceptsImages ?? false,
+        modelLabel: modelImageInput?.label ?? null,
         recordStrategyOnSave: strategyChangeWithJob.recordStrategyOnSave,
         warnings: [...resolution.warnings, ...strategyChangeWithJob.warnings],
         ...getValidationStrategy(body.useFulltext, resolution),

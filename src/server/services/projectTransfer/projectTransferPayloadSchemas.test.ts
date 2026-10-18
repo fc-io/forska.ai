@@ -628,8 +628,6 @@ const fullTextStrategyInputs: FullTextStrategyInputs = {
   converterKind: 'mineru',
   converterOptionsHash: 'mineru-options-hash',
   converterVersion: '4.0.0',
-  figureDescriptionModelId: null,
-  figureDescriptionPromptVersion: null,
   figureMode: 'none',
   imageTransportVersion: null,
   promptLayoutVersion: 'layout-v1',
@@ -710,7 +708,10 @@ test('rejects undefined, tampered, reserved and partial full-text strategy data'
     'must carry fullTextStrategyId, fullTextFigureMode and fullTextChunkPolicy together',
   )
   expect(getProjectError({settings: {...strategySettings, fullTextFigureMode: 'pictures'}})).toContain(
-    'fullTextFigureMode must be null or one of none, descriptions, native_images',
+    'fullTextFigureMode must be null or one of none, native_images',
+  )
+  expect(getProjectError({settings: {...strategySettings, fullTextFigureMode: 'descriptions'}})).toContain(
+    'fullTextFigureMode must be null or one of none, native_images',
   )
   expect(getProjectError({settings: {...strategySettings, fullTextChunkPolicy: {mode: 'chunked'}}})).toContain(
     'fullTextChunkPolicy must be null or a full-text chunk policy',

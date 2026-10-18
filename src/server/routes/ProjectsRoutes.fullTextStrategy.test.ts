@@ -336,7 +336,7 @@ test('full-text settings are protected once a judgment job exists', async () => 
 
   const response = await requestJson('/api/projects/fts-job-project/edit', 'PATCH', {
     fullTextChunkPolicy: chunkPolicy,
-    fullTextFigureMode: 'descriptions',
+    fullTextFigureMode: 'native_images',
   })
 
   expect(response.status).toBe(409)
@@ -503,7 +503,14 @@ test('a full-text strategy change marks comparisons linking the project stale', 
   ])
 })
 
-type ValidationResponse = {data: PreviewResponse['data'] & {recordStrategyOnSave: boolean; warnings: string[]}}
+type ValidationResponse = {
+  data: PreviewResponse['data'] & {
+    modelAcceptsImages: boolean
+    modelLabel: string | null
+    recordStrategyOnSave: boolean
+    warnings: string[]
+  }
+}
 
 const smallJudgeModelId = 'fts-small-judge-model'
 
@@ -590,6 +597,81 @@ test('the validation endpoint returns gate errors for the form model and the PDF
     'connect ECONNREFUSED. Conversion will not run until the server is reachable.',
   )
   expect(validation.recordStrategyOnSave).toBe(false)
+})
+
+test('the body schemas refuse figure mode descriptions like any other invalid body value', async () => {
+  await setConversionModel(mineruModelId)
+  await insertProject({
+    fullTextStrategyId: null,
+    id: 'fts-descriptions-edit',
+    useFulltext: false,
+    useFulltextNoImages: false,
+  })
+
+  const create = await requestJson('/api/projects', 'POST', {
+    fullTextChunkPolicy: chunkPolicy,
+    fullTextFigureMode: 'descriptions',
+    modelId: judgeModelId,
+    name: 'Descriptions',
+    useFulltext: true,
+  })
+  const validation = await requestJson('/api/projects/full-text-validation', 'POST', {
+    fullTextChunkPolicy: chunkPolicy,
+    fullTextFigureMode: 'descriptions',
+    modelId: judgeModelId,
+    useFulltext: true,
+  })
+  const edit = await requestJson('/api/projects/fts-descriptions-edit/edit', 'PATCH', {
+    fullTextChunkPolicy: chunkPolicy,
+    fullTextFigureMode: 'descriptions',
+    useFulltext: true,
+  })
+
+  expect([create.status, validation.status, edit.status]).toEqual([422, 422, 422])
+  expect(create.text).toContain('fullTextFigureMode')
+  expect(await getStoredProject('fts-descriptions-edit')).toMatchObject({fullTextFigureMode: null, useFulltext: false})
+})
+
+const visionJudgeModelId = 'fts-vision-judge-model'
+
+const insertVisionJudgeModel = async () => {
+  await getDatabase().run(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled, metadata_json)
+    VALUES ('${visionJudgeModelId}', '${judgeConnectionId}', 'vision-judge', 'vision-judge', 'Vision judge', 'manual', TRUE,
+      '{"discovery":{"contextWindow":{"inputTokens":131072,"outputTokens":null,"totalTokens":131072}},"capabilityOverrides":{"supportsImageInput":true,"updatedAt":"2026-10-17T10:00:00.000Z"}}')
+    ON CONFLICT (id) DO NOTHING
+  `)
+}
+
+test('the validation endpoint reports whether the form model accepts images, from the same capability source', async () => {
+  await setConversionModel(mineruModelId)
+  await insertVisionJudgeModel()
+
+  const validate = async (modelId: string | null, fullTextFigureMode: 'native_images' | 'none') => {
+    const response = await requestJson('/api/projects/full-text-validation', 'POST', {
+      fullTextChunkPolicy: chunkPolicy,
+      fullTextFigureMode,
+      modelId,
+      useFulltext: true,
+    })
+
+    expect(response.status).toBe(200)
+
+    return (response.json as ValidationResponse).data
+  }
+  const textJudgeTextOnly = await validate(judgeModelId, 'none')
+  const textJudgeImages = await validate(judgeModelId, 'native_images')
+  const visionJudgeImages = await validate(visionJudgeModelId, 'native_images')
+  const noModel = await validate(null, 'none')
+
+  expect(textJudgeTextOnly).toMatchObject({errors: [], modelAcceptsImages: false, modelLabel: 'Judge'})
+  expect(textJudgeImages.modelAcceptsImages).toBe(false)
+  expect(textJudgeImages.errors).toEqual([
+    'Model Judge (sglang) has no verified image input. Set it on the Models page, or choose Text only (figures reduced to their captions), or another model.',
+  ])
+  expect(visionJudgeImages).toMatchObject({errors: [], modelAcceptsImages: true, modelLabel: 'Vision judge'})
+  expect(visionJudgeImages.strategyLabel).toBe('mineru 4.0.12 / native images / chunked 48k')
+  expect(noModel).toMatchObject({modelAcceptsImages: false, modelLabel: null})
 })
 
 test('with a paused job the edit page records a drifted strategy on save', async () => {

@@ -40,7 +40,7 @@ test('the shipped constants produce twenty-four distinct strategies on canonical
   ).toEqual(new Set(['canonical-v1']))
 })
 
-test('shipped strategies cover figure modes none and native_images; descriptions depends on the installation model', () => {
+test('shipped strategies cover exactly figure modes none and native_images', () => {
   const figureModeTransports = new Set(
     getShippedFullTextStrategyInputs().map((inputs) => {
       return `${inputs.figureMode}:${String(inputs.imageTransportVersion)}`
@@ -65,4 +65,36 @@ test('registry entries are self-consistent, unique and dated', () => {
       )
     }),
   ).toEqual([])
+})
+
+test('registry entries carry only none and native_images inputs and no figure-description inputs', () => {
+  expect(
+    new Set(
+      fullTextStrategyRegistry.map((entry) => {
+        return entry.inputs.figureMode
+      }),
+    ),
+  ).toEqual(new Set(['native_images', 'none']))
+  expect(
+    fullTextStrategyRegistry.filter((entry) => {
+      return Object.keys(entry.inputs).some((key) => {
+        return key.startsWith('figureDescription')
+      })
+    }),
+  ).toEqual([])
+})
+
+test('the shipped layout-v2 strategy ids are frozen', () => {
+  const shippedIdsByLabel = Object.fromEntries(
+    getShippedFullTextStrategyInputs()
+      .map(getFullTextStrategy)
+      .map((strategy) => {
+        return [strategy.label, strategy.id]
+      }),
+  )
+
+  expect(shippedIdsByLabel['mineru 4.0.12 / none / single 24k']).toBe('fts-66cd6ec607091a59')
+  expect(shippedIdsByLabel['mineru 4.0.12 / native images / chunked 48k']).toBe('fts-52ca06bca78ff561')
+  expect(shippedIdsByLabel['docling 1.37.0 / none / chunked 96k']).toBe('fts-92a3cf9c8e585a22')
+  expect(shippedIdsByLabel['docling 1.37.0 / native images / single 24k']).toBe('fts-2c0d47a11b801c33')
 })

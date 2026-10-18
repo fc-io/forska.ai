@@ -385,7 +385,6 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
       ['POST', '/api/articles/:id/upload-pdf'],
       ['POST', '/api/articles/:id/convert-pdf'],
       ['POST', '/api/articles/conversion-reconvert'],
-      ['POST', '/api/articles/:id/figure-descriptions/rebuild'],
       ['POST', '/api/articles/:id/canonical-fulltext/rebuild'],
     ],
   ),
@@ -593,7 +592,6 @@ export const routeSurfaceRoutes: RouteSurfaceRoute[] = [
     'Single-user settings can include local paths and contact email configuration.',
     [
       ['GET', '/api/users'],
-      ['GET', '/api/users/figure-description-models'],
       ['GET', '/api/users/full-text-model-status'],
       ['PATCH', '/api/users'],
     ],

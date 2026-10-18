@@ -21,15 +21,10 @@ const conversionModel = {
 const environment: FullTextStrategyEnvironment = {
   canonicalTextVersion: 'canonical-v1',
   conversionModel,
-  figureDescription: null,
   imageTransportVersion: 'img-v1',
 }
 
-const context: ProjectFullTextGateContext = {
-  conversionModelStatus: null,
-  environment,
-  figureDescriptionModelStatus: null,
-}
+const context: ProjectFullTextGateContext = {conversionModelStatus: null, environment}
 
 const getDiscoveredModel = (inputTokens: number, extraMetadata: Record<string, unknown> = {}) => {
   return {
@@ -141,14 +136,14 @@ test('native images needs a model whose image input is verified true', () => {
   })
 
   expect(unsupported.errors).toEqual([
-    'Model Judge (sglang) cannot receive images. Choose figure mode Descriptions or None, or another model.',
+    'Model Judge (sglang) cannot receive images. Choose Text only (figures reduced to their captions), or another model.',
   ])
   expect(unverified.errors).toEqual([
-    'Model Judge (sglang) has no verified image input. Set it on the Models page, or choose figure mode Descriptions or None, or another model.',
+    'Model Judge (sglang) has no verified image input. Set it on the Models page, or choose Text only (figures reduced to their captions), or another model.',
   ])
   expect(supported.errors).toEqual([])
   expect(textOnlyTransport.errors).toEqual([
-    'Model Judge (mineru) cannot receive images. Choose figure mode Descriptions or None, or another model.',
+    'Model Judge (mineru) cannot receive images. Choose Text only (figures reduced to their captions), or another model.',
   ])
 })
 
@@ -164,14 +159,36 @@ test('native images without image transports in this build is the resolver error
   expect(gate.errors).toEqual([fullTextStrategyErrorMessages.imageTransportMissing])
 })
 
-test('descriptions without a figure-description model is the resolver error pointing at Settings', () => {
+test('text only passes for a model that cannot receive images', () => {
   const gate = evaluateProjectFullTextGate({
     context,
-    model: getDiscoveredModel(131_072),
-    selection: {...selection, fullTextFigureMode: 'descriptions'},
+    model: getDiscoveredModel(131_072, {
+      capabilityOverrides: {supportsImageInput: false, updatedAt: '2026-10-17T10:00:00.000Z'},
+    }),
+    selection,
   })
 
-  expect(gate.errors).toEqual([fullTextStrategyErrorMessages.figureDescriptionModelMissing])
+  expect(gate.errors).toEqual([])
+  expect(gate.strategy?.inputs.figureMode).toBe('none')
+})
+
+test('a stored descriptions figure mode reads as no figure mode and needs an explicit choice', () => {
+  const gate = evaluateStoredProjectFullTextGate({
+    context,
+    model: getDiscoveredModel(131_072),
+    project: {
+      fullTextChunkPolicy: selection.fullTextChunkPolicy,
+      fullTextFigureMode: 'descriptions',
+      fullTextStrategyId: null,
+      fullTextStrategyInputs: null,
+      fullTextStrategyStoredLabel: null,
+      useFulltext: true,
+      useFulltextNoImages: false,
+    },
+  })
+
+  expect(gate.errors).toEqual([fullTextStrategyErrorMessages.figureModeMissing])
+  expect(gate.strategy).toBeNull()
 })
 
 test('a failed PDF-to-text health check is a warning, not an error', () => {
@@ -191,29 +208,6 @@ test('a failed PDF-to-text health check is a warning, not an error', () => {
   expect(gate.warnings).toEqual([
     'PDF-to-text model MinerU standard: The last health check of MinerU failed at 2026-10-17 20:15 UTC: connect ECONNREFUSED 127.0.0.1:8000. Conversion will not run until the server is reachable.',
   ])
-})
-
-test('a failed figure-description health check warns only for figure mode Descriptions', () => {
-  const figureContext: ProjectFullTextGateContext = {
-    ...context,
-    environment: {...environment, figureDescription: {modelId: 'vlm', promptVersion: 'fig-desc-v1'}},
-    figureDescriptionModelStatus: getFullTextModelStatusFromRow(
-      getStatusRow({lastError: 'timeout', modelLabel: 'qwen3-vl', providerKind: 'ollama', providerLabel: 'Ollama'}),
-      'figure_description',
-    ),
-  }
-  const descriptions = evaluateProjectFullTextGate({
-    context: figureContext,
-    model: getDiscoveredModel(131_072),
-    selection: {...selection, fullTextFigureMode: 'descriptions'},
-  })
-  const none = evaluateProjectFullTextGate({context: figureContext, model: getDiscoveredModel(131_072), selection})
-
-  expect(descriptions.errors).toEqual([])
-  expect(descriptions.warnings).toEqual([
-    'Figure-description model qwen3-vl: The last health check of Ollama failed at 2026-10-17 20:15 UTC: timeout. Figure descriptions will not be written until the server is reachable.',
-  ])
-  expect(none.warnings).toEqual([])
 })
 
 test('a stored strategy that differs from the resolved one names both labels, ids and the differing inputs', () => {

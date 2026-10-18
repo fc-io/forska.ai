@@ -712,8 +712,6 @@ const fidelityFullTextStrategy = getFullTextStrategy({
   converterKind: 'mineru',
   converterOptionsHash: 'mineru-options-hash',
   converterVersion: '4.0.0',
-  figureDescriptionModelId: null,
-  figureDescriptionPromptVersion: null,
   figureMode: 'none',
   imageTransportVersion: null,
   promptLayoutVersion: 'layout-v1',

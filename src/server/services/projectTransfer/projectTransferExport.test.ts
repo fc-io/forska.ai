@@ -537,8 +537,6 @@ test('project-transfer export reads archived app-table scope and serializes lock
       converterKind: 'mineru',
       converterOptionsHash: 'mineru-options-hash',
       converterVersion: '4.0.0',
-      figureDescriptionModelId: null,
-      figureDescriptionPromptVersion: null,
       figureMode: 'none',
       imageTransportVersion: null,
       promptLayoutVersion: 'layout-v1',

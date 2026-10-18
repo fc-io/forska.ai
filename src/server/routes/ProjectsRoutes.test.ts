@@ -49,7 +49,6 @@ const registerModuleMocks = () => {
             converterVersion: '4.0.12',
             modelLabel: 'MinerU standard',
           },
-          figureDescription: null,
           imageTransportVersion: null,
         }
       },
@@ -586,8 +585,6 @@ const insertReadyPromptPreviewFixture = async (input: {
       VALUES ('${previewFullTextStrategyId}', 'preview single 24k', '${JSON.stringify({
         canonicalTextVersion: 'canonical-v1',
         chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
-        figureDescriptionModelId: null,
-        figureDescriptionPromptVersion: null,
         figureMode: 'none',
       })}'::JSON)
       ON CONFLICT (id) DO NOTHING
