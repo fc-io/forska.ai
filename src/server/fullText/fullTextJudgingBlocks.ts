@@ -1,7 +1,9 @@
 import {
   buildFullTextChunkPlan,
   type FullTextChunkPlan,
+  type FullTextFigureImageTokens,
   getFullTextJudgingTextHash,
+  isFullTextChunkPlanCurrent,
 } from '../../agent/judge/fullTextChunkPlan.ts'
 import {
   type FullTextJudgingBlock,
@@ -12,6 +14,7 @@ import {
 } from '../../agent/judge/fullTextJudgingInput.ts'
 import {renderFullTextForJudging} from '../../agent/judge/renderFullTextForJudging.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {isKnownImageTokenEstimateVersion} from './figureImageTokenEstimate.ts'
 import {
   type FullTextChunkPlanQueryService,
   getCachedFullTextChunkPlans,
@@ -103,26 +106,77 @@ const getRenderedTextForPlan = (
     : null
 }
 
+/**
+ * Native-images plans budget each part with the img-tok estimates of its figures, read from the stored crops. A crop
+ * that cannot be read, or a strategy without a known estimate version, leaves the article without a plan; the judge
+ * then names the problem when it loads the images or the strategy.
+ */
+const getPlanFigureImageTokens = async ({
+  block,
+  renderedText,
+}: {
+  block: Omit<FullTextJudgingBlock, 'chunkPlan'>
+  renderedText: string
+}): Promise<{figureImageTokens: FullTextFigureImageTokens} | null> => {
+  const strategy = block.strategy
+
+  if (!strategy || strategy.figureMode !== 'native_images') {
+    return {figureImageTokens: null}
+  }
+
+  const version = strategy.imageTokenEstimateVersion
+
+  if (!isKnownImageTokenEstimateVersion(version)) {
+    return null
+  }
+
+  const {getNativeFigureImageTokenEstimates} = await import('./nativeFigureImages.ts')
+
+  return getNativeFigureImageTokenEstimates({
+    assets: (block.article.figureAssets ?? []).flatMap((asset) => {
+      return asset.imagePath === null ? [] : [{imagePath: asset.imagePath, index: asset.index}]
+    }),
+    renderedText,
+    version,
+  }).then(
+    (figureImageTokens) => {
+      return {figureImageTokens}
+    },
+    () => {
+      return null
+    },
+  )
+}
+
 const getChunkPlan = ({
   cachedPlan,
   countTokens,
+  figureImageTokens,
   renderedText,
   row,
   strategy,
 }: {
   cachedPlan: FullTextChunkPlan | undefined
   countTokens: FullTextTokenCounter
+  figureImageTokens: FullTextFigureImageTokens
   renderedText: string
   row: FullTextJudgingArticleRow
   strategy: FullTextJudgingStrategy
 }): {plan: FullTextChunkPlan; stored: boolean} => {
-  return cachedPlan?.textHash === getFullTextJudgingTextHash(renderedText)
+  return cachedPlan
+    && isFullTextChunkPlanCurrent({
+      figureImageTokens,
+      plan: cachedPlan,
+      renderedText,
+      textHash: getFullTextJudgingTextHash(renderedText),
+    })
     ? {plan: cachedPlan, stored: true}
     : {
         plan: buildFullTextChunkPlan({
           abstract: row.articleSummary,
           chunkPolicy: strategy.chunkPolicy,
           countTokens,
+          figureImageTokens,
           fullTextStrategyId: strategy.id,
           renderedText,
         }),
@@ -168,30 +222,34 @@ export const getFullTextJudgingBlocks = async ({
   ])
   const cachedPlans = await getCachedFullTextChunkPlans(database, uniqueRows)
   const countTokens = await loadFullTextTokenCounter()
-  const entries = uniqueRows.map((row) => {
-    const strategy = strategies.get(row.fullTextStrategyId) ?? null
-    const block = {
-      article: getFullTextJudgingArticleForm({
-        canonicalTextVersion: row.fullTextCanonicalVersion,
-        figureModeBuilt: row.fullTextFigureModeBuilt,
-        fullTextAssets: row.fullTextAssets,
-      }),
-      strategy,
-    }
-    const renderedText = getRenderedTextForPlan(row, block)
-    const chunkPlan =
-      renderedText !== null && block.strategy
-        ? getChunkPlan({
-            cachedPlan: cachedPlans.get(getFullTextChunkPlanKey(row)),
-            countTokens,
-            renderedText,
-            row,
-            strategy: block.strategy,
-          })
-        : null
+  const entries = await Promise.all(
+    uniqueRows.map(async (row) => {
+      const strategy = strategies.get(row.fullTextStrategyId) ?? null
+      const block = {
+        article: getFullTextJudgingArticleForm({
+          canonicalTextVersion: row.fullTextCanonicalVersion,
+          figureModeBuilt: row.fullTextFigureModeBuilt,
+          fullTextAssets: row.fullTextAssets,
+        }),
+        strategy,
+      }
+      const renderedText = getRenderedTextForPlan(row, block)
+      const imageTokens = renderedText === null ? null : await getPlanFigureImageTokens({block, renderedText})
+      const chunkPlan =
+        renderedText !== null && imageTokens !== null && block.strategy
+          ? getChunkPlan({
+              cachedPlan: cachedPlans.get(getFullTextChunkPlanKey(row)),
+              countTokens,
+              figureImageTokens: imageTokens.figureImageTokens,
+              renderedText,
+              row,
+              strategy: block.strategy,
+            })
+          : null
 
-    return {block: {...block, chunkPlan: chunkPlan?.plan ?? null}, chunkPlan, row}
-  })
+      return {block: {...block, chunkPlan: chunkPlan?.plan ?? null}, chunkPlan, row}
+    }),
+  )
   const newPlans = entries.flatMap(({chunkPlan, row}): StoredFullTextChunkPlan[] => {
     return chunkPlan && !chunkPlan.stored ? [{...row, plan: chunkPlan.plan}] : []
   })

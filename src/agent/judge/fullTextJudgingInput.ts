@@ -1,3 +1,8 @@
+import {
+  getFigureImageTokenEstimates,
+  IMAGE_TOKEN_ESTIMATE_VERSION,
+  isKnownImageTokenEstimateVersion,
+} from '../../server/fullText/figureImageTokenEstimate.ts'
 import type {FullTextTokenCounter} from '../../server/fullText/fullTextTokenizer.ts'
 import {
   type FullTextChunkPolicy,
@@ -8,8 +13,10 @@ import {
 import {
   buildFullTextChunkPlan,
   type FullTextChunkPlan,
+  type FullTextFigureImageTokens,
   getFullTextChunkPlan,
   getFullTextJudgingTextHash,
+  isFullTextChunkPlanCurrent,
 } from './fullTextChunkPlan.ts'
 import {
   FullTextFigureMarkerError,
@@ -24,6 +31,8 @@ export type FullTextJudgingStrategy = {
   chunkPolicy: FullTextChunkPolicy
   figureMode: FullTextFigureMode
   id: string
+  /** The strategy's imageTokenEstimateVersion input; null when the stored inputs have none. */
+  imageTokenEstimateVersion: string | null
 }
 
 export type FullTextJudgingArticleForm = {
@@ -40,8 +49,17 @@ export type FullTextJudgingBlock = {
 
 export type FullTextJudgingFigureImage = {bytes: Uint8Array; figureIndex: number; mimeType: 'image/jpeg' | 'image/png'}
 
+export type FullTextJudgingText = {
+  block: FullTextJudgingBlock
+  renderedText: string
+  strategy: FullTextJudgingStrategy
+  textHash: string
+}
+
 export type FullTextJudgingInput = {
   chunkPlan: FullTextChunkPlan | null
+  /** Figure index → img-tok estimate of the image sent for it; null on strategies that send no images. */
+  figureImageTokens: FullTextFigureImageTokens
   figureImages: FullTextJudgingFigureImage[]
   renderedText: string
   strategy: FullTextJudgingStrategy
@@ -69,6 +87,13 @@ export class FullTextTooLargeError extends Error {
   }
 }
 
+export class FullTextFigureTooLargeError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'FullTextFigureTooLargeError'
+  }
+}
+
 const markerFormFigureModesBuilt = ['markers', 'native_images']
 
 const figureFreeFormsBuilt = [...markerFormFigureModesBuilt, 'none']
@@ -89,8 +114,45 @@ export const getFullTextJudgingStrategyFromInputs = (id: string, inputs: unknown
   const canonicalTextVersion = getStringOrNull(record.canonicalTextVersion)
 
   return chunkPolicy && isFullTextFigureMode(figureMode) && canonicalTextVersion
-    ? {canonicalTextVersion, chunkPolicy, figureMode, id}
+    ? {
+        canonicalTextVersion,
+        chunkPolicy,
+        figureMode,
+        id,
+        imageTokenEstimateVersion: getStringOrNull(record.imageTokenEstimateVersion),
+      }
     : null
+}
+
+const getUnknownImageTokenEstimateMessage = (strategy: FullTextJudgingStrategy): string => {
+  return strategy.imageTokenEstimateVersion === null
+    ? `Full-text strategy ${strategy.id} sends figures as images but was saved before image tokens were budgeted, so it has no image token estimate. Save the project on its edit page to record the current strategy (image token estimate ${IMAGE_TOKEN_ESTIMATE_VERSION}), then start the job again.`
+    : `Full-text strategy ${strategy.id} uses image token estimate ${strategy.imageTokenEstimateVersion}, which this build does not include (it has ${IMAGE_TOKEN_ESTIMATE_VERSION}). Save the project on its edit page to record the current strategy, then start the job again.`
+}
+
+export const getFullTextImageTokenEstimateError = (strategy: FullTextJudgingStrategy): string | null => {
+  return strategy.figureMode !== 'native_images' || isKnownImageTokenEstimateVersion(strategy.imageTokenEstimateVersion)
+    ? null
+    : getUnknownImageTokenEstimateMessage(strategy)
+}
+
+/** The figure image tokens a strategy budgets with; null when it sends no images. */
+export const getStrategyFigureImageTokens = ({
+  figureImages,
+  strategy,
+}: {
+  figureImages: Array<Pick<FullTextJudgingFigureImage, 'bytes' | 'figureIndex'>>
+  strategy: FullTextJudgingStrategy
+}): FullTextFigureImageTokens => {
+  if (strategy.figureMode !== 'native_images') {
+    return null
+  }
+
+  if (!isKnownImageTokenEstimateVersion(strategy.imageTokenEstimateVersion)) {
+    throw new FullTextJudgingConfigError(getUnknownImageTokenEstimateMessage(strategy))
+  }
+
+  return getFigureImageTokenEstimates({images: figureImages, version: strategy.imageTokenEstimateVersion})
 }
 
 const getFigureAssetsOrNull = (value: unknown): FullTextJudgingFigureAsset[] | null => {
@@ -175,27 +237,26 @@ const renderOrThrow = (
 
 const getChunkPlanForText = ({
   abstract,
-  block,
   countTokens,
-  renderedText,
-  strategy,
-  textHash,
+  figureImageTokens,
+  text,
 }: {
   abstract: string | null
-  block: FullTextJudgingBlock
   countTokens: FullTextTokenCounter
-  renderedText: string
-  strategy: FullTextJudgingStrategy
-  textHash: string
+  figureImageTokens: FullTextFigureImageTokens
+  text: FullTextJudgingText
 }): FullTextChunkPlan | null => {
+  const {block, renderedText, strategy, textHash} = text
+
   return strategy.chunkPolicy.mode !== 'chunked'
     ? null
-    : block.chunkPlan?.textHash === textHash
+    : block.chunkPlan && isFullTextChunkPlanCurrent({figureImageTokens, plan: block.chunkPlan, renderedText, textHash})
       ? block.chunkPlan
       : buildFullTextChunkPlan({
           abstract,
           chunkPolicy: strategy.chunkPolicy,
           countTokens,
+          figureImageTokens,
           fullTextStrategyId: strategy.id,
           renderedText,
         })
@@ -227,27 +288,29 @@ export const assertModelContextFitsChunkPolicy = (input: {
   }
 }
 
-export const prepareFullTextJudgingInput = ({
-  abstract,
+export const prepareFullTextJudgingText = ({
   articleId,
   block,
-  countTokens,
   fullText,
   fullTextStrategyId,
 }: {
-  abstract: string | null
   articleId: string
   block: FullTextJudgingBlock | null
-  countTokens: FullTextTokenCounter
   fullText: string
   fullTextStrategyId: string
-}): FullTextJudgingInput => {
+}): FullTextJudgingText => {
   const strategy = block?.strategy ?? null
 
   if (!block || !strategy) {
     throw new FullTextJudgingConfigError(
       `Full-text strategy ${fullTextStrategyId} has no stored chunk policy and figure mode. Set them on the project's edit page and start the job again.`,
     )
+  }
+
+  const estimateError = getFullTextImageTokenEstimateError(strategy)
+
+  if (estimateError) {
+    throw new FullTextJudgingConfigError(estimateError)
   }
 
   const formError = getFullTextArticleFormError({article: block.article, articleId, strategy})
@@ -261,13 +324,34 @@ export const prepareFullTextJudgingInput = ({
     figureMode: strategy.figureMode,
     text: fullText,
   })
-  const textHash = getFullTextJudgingTextHash(renderedText)
+
+  return {block, renderedText, strategy, textHash: getFullTextJudgingTextHash(renderedText)}
+}
+
+/**
+ * Completes the judging input once the figure images are loaded: their img-tok estimates budget the single-call
+ * decision and every part, and a cached chunk plan is reused only when its text hash and per-part image tokens
+ * still match.
+ */
+export const prepareFullTextJudgingInput = ({
+  abstract,
+  countTokens,
+  figureImages,
+  text,
+}: {
+  abstract: string | null
+  countTokens: FullTextTokenCounter
+  figureImages: FullTextJudgingFigureImage[]
+  text: FullTextJudgingText
+}): FullTextJudgingInput => {
+  const figureImageTokens = getStrategyFigureImageTokens({figureImages, strategy: text.strategy})
 
   return {
-    chunkPlan: getChunkPlanForText({abstract, block, countTokens, renderedText, strategy, textHash}),
-    figureImages: [],
-    renderedText,
-    strategy,
-    textHash,
+    chunkPlan: getChunkPlanForText({abstract, countTokens, figureImageTokens, text}),
+    figureImageTokens,
+    figureImages,
+    renderedText: text.renderedText,
+    strategy: text.strategy,
+    textHash: text.textHash,
   }
 }

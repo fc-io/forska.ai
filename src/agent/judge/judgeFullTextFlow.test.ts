@@ -4,7 +4,13 @@ import {loadFullTextTokenCounter} from '../../server/fullText/fullTextTokenizer.
 import {buildCanonicalFixture, getCanonicalFixtureAssets} from '../../server/test/canonicalFullTextFixtures.ts'
 import type {FullTextChunkPolicy} from '../../utils/fullTextStrategyOptions.ts'
 import {buildFullTextChunkPlan} from './fullTextChunkPlan.ts'
-import {type FullTextJudgingInput, FullTextTooLargeError, prepareFullTextJudgingInput} from './fullTextJudgingInput.ts'
+import {
+  FullTextFigureTooLargeError,
+  type FullTextJudgingInput,
+  FullTextTooLargeError,
+  prepareFullTextJudgingInput,
+  prepareFullTextJudgingText,
+} from './fullTextJudgingInput.ts'
 import {getFullTextJudgingFigureAssets} from './renderFullTextForJudging.ts'
 import {JudgmentPersistenceError} from './storeSinglePromptJudgment.ts'
 
@@ -50,26 +56,44 @@ const getFullTextJudgingInput = async ({
   chunkPolicy,
   figureImages = [],
   figureMode = 'none',
+  imageTokens = 1_000,
   renderedText,
 }: {
   chunkPolicy: FullTextChunkPolicy
   figureImages?: FullTextJudgingInput['figureImages']
   figureMode?: 'native_images' | 'none'
+  imageTokens?: number
   renderedText: string
 }): Promise<FullTextJudgingInput> => {
+  const figureImageTokens =
+    figureMode === 'native_images'
+      ? new Map(
+          figureImages.map((image) => {
+            return [image.figureIndex, imageTokens] as const
+          }),
+        )
+      : null
   const plan = buildFullTextChunkPlan({
     abstract: 'Preview summary',
     chunkPolicy,
     countTokens: await loadFullTextTokenCounter(),
+    figureImageTokens,
     fullTextStrategyId: strategyId,
     renderedText,
   })
 
   return {
     chunkPlan: chunkPolicy.mode === 'chunked' ? plan : null,
+    figureImageTokens,
     figureImages,
     renderedText,
-    strategy: {canonicalTextVersion: 'canonical-v1', chunkPolicy, figureMode, id: strategyId},
+    strategy: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy,
+      figureMode,
+      id: strategyId,
+      imageTokenEstimateVersion: figureMode === 'native_images' ? 'img-tok-v1' : null,
+    },
     textHash: plan.textHash,
   }
 }
@@ -310,24 +334,28 @@ const getStoredMarkerTextJudgingInput = async (): Promise<FullTextJudgingInput> 
 
   return prepareFullTextJudgingInput({
     abstract: 'Preview summary',
-    articleId: 'article-full-text',
-    block: {
-      article: {
-        canonicalTextVersion: 'canonical-v1',
-        figureAssets: getFullTextJudgingFigureAssets(assets),
-        figureModeBuilt: 'markers',
-      },
-      chunkPlan: null,
-      strategy: {
-        canonicalTextVersion: 'canonical-v1',
-        chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
-        figureMode: 'none',
-        id: strategyId,
-      },
-    },
     countTokens: await loadFullTextTokenCounter(),
-    fullText: markerText,
-    fullTextStrategyId: strategyId,
+    figureImages: [],
+    text: prepareFullTextJudgingText({
+      articleId: 'article-full-text',
+      block: {
+        article: {
+          canonicalTextVersion: 'canonical-v1',
+          figureAssets: getFullTextJudgingFigureAssets(assets),
+          figureModeBuilt: 'markers',
+        },
+        chunkPlan: null,
+        strategy: {
+          canonicalTextVersion: 'canonical-v1',
+          chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
+          figureMode: 'none',
+          id: strategyId,
+          imageTokenEstimateVersion: null,
+        },
+      },
+      fullText: markerText,
+      fullTextStrategyId: strategyId,
+    }),
   })
 }
 
@@ -458,4 +486,109 @@ test('native images: each part carries only its own figures and the merge call i
       return entry.merge
     }),
   ).toEqual([{images: [], merge: true}])
+})
+
+const mediumFullText = Array.from({length: 4}, (_, section) => {
+  return `## Results > Part ${section + 1}\n\n${getSectionText(section + 1)}`
+}).join('\n\n')
+
+const getImageBudgetRun = async ({
+  chunkPolicy,
+  imageTokens,
+  renderedText,
+}: {
+  chunkPolicy: FullTextChunkPolicy
+  imageTokens: number
+  renderedText: string
+}) => {
+  const imageCounts: number[] = []
+  const invokeStoredProviderModel = mock(async (input: InvokeInput) => {
+    const isMerge = getPromptText(input).includes('## part_judgments')
+
+    imageCounts.push(typeof input.prompt === 'string' ? 0 : input.prompt.images.length)
+
+    return getResponse(
+      isMerge
+        ? {answer: 'yes', explanation: 'merged', quotes: []}
+        : {answer: 'yes', confidence: 0.5, explanation: 'part', quotes: []},
+    )
+  })
+  const storeSinglePromptJudgment = mock(async (_input: unknown) => {})
+  const {judgeSinglePrompt} = await loadJudgeModule({invokeStoredProviderModel, storeSinglePromptJudgment})
+  const fullTextJudging = await getFullTextJudgingInput({
+    chunkPolicy,
+    figureImages: [getImage(1)],
+    figureMode: 'native_images',
+    imageTokens,
+    renderedText,
+  })
+  const error = await judgeSinglePrompt(createInput(fullTextJudging)).then(
+    () => {
+      return null
+    },
+    (rejection: unknown) => {
+      return rejection
+    },
+  )
+
+  return {error, fullTextJudging, imageCounts, invokeStoredProviderModel, storeSinglePromptJudgment}
+}
+
+const figureText = `${mediumFullText}\n\nFigure 1: Flow of participants\n[figure:1]`
+
+test('native images: image tokens decide single vs chunked; text that fits alone is chunked once its images do not', async () => {
+  const small = await getImageBudgetRun({
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+    imageTokens: 100,
+    renderedText: figureText,
+  })
+  const large = await getImageBudgetRun({
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+    imageTokens: 9_000,
+    renderedText: figureText,
+  })
+
+  expect(small.imageCounts).toEqual([1])
+  expect(small.storeSinglePromptJudgment.mock.calls[0]?.[0]).toMatchObject({
+    fullTextExecution: {fullTextMode: 'single'},
+  })
+  expect(large.fullTextJudging.chunkPlan?.chunkCount).toBe(2)
+  expect(
+    large.fullTextJudging.chunkPlan?.chunks.map((chunk) => {
+      return chunk.imageTokenCount
+    }),
+  ).toEqual([0, 9_000])
+  expect(large.imageCounts).toEqual([0, 1, 0])
+  expect(large.storeSinglePromptJudgment.mock.calls[0]?.[0]).toMatchObject({
+    fullTextExecution: {chunkCount: 2, fullTextMode: 'chunked'},
+  })
+})
+
+test('native images on single_only: images that push the article over the limit skip it before any call', async () => {
+  const run = await getImageBudgetRun({
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
+    imageTokens: 9_000,
+    renderedText: figureText,
+  })
+
+  expect(run.error).toBeInstanceOf(FullTextTooLargeError)
+  expect((run.error as Error).message).toMatch(
+    /^Article article-full-text needs \d+ prompt tokens and 9000 estimated image tokens \(img-tok-v1\) plus 4000 completion tokens; the project's single-only chunk policy allows 24000\.$/,
+  )
+  expect(run.invokeStoredProviderModel).not.toHaveBeenCalled()
+})
+
+test('a figure that does not fit in a part of its own is skipped by name before any call', async () => {
+  const run = await getImageBudgetRun({
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+    imageTokens: 21_000,
+    renderedText: figureText,
+  })
+
+  expect(run.error).toBeInstanceOf(FullTextFigureTooLargeError)
+  expect((run.error as Error).message).toMatch(
+    /^Figure 1 of article article-full-text does not fit in a part of its own: it needs \d+ prompt tokens and 21000 estimated image tokens \(img-tok-v1\) plus 4000 completion tokens; the limit is 24000\. A figure is never split or sent without its image, so the article is skipped\.$/,
+  )
+  expect(run.invokeStoredProviderModel).not.toHaveBeenCalled()
+  expect(run.storeSinglePromptJudgment).not.toHaveBeenCalled()
 })

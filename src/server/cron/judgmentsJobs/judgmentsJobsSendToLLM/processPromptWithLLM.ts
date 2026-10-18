@@ -2,6 +2,7 @@ import {Effect} from 'effect'
 
 import {judgeSinglePrompt, MAX_COMPLETION_TOKENS, RecoverableJudgeError} from '../../../../agent/judge.ts'
 import {
+  FullTextFigureTooLargeError,
   type FullTextJudgingBlock,
   FullTextJudgingConfigError,
   type FullTextJudgingInput,
@@ -1094,6 +1095,12 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
             if (error instanceof FullTextTooLargeError) {
               logFullTextSkip(promptToProcess, 'fulltext_too_large', error.message)
               terminalState = {kind: 'skipped', skipReason: 'fulltext_too_large'}
+              return undefined
+            }
+
+            if (error instanceof FullTextFigureTooLargeError) {
+              logFullTextSkip(promptToProcess, 'fulltext_figure_too_large', error.message)
+              terminalState = {kind: 'skipped', skipReason: 'fulltext_figure_too_large'}
               return undefined
             }
 

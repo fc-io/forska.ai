@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {IMAGE_TOKEN_ESTIMATE_VERSION} from './figureImageTokenEstimate.ts'
 import {IMAGE_TRANSPORT_VERSION, isFullTextFigureMode} from './fullTextStrategy.ts'
 import {
   type FullTextStrategyEnvironment,
@@ -15,6 +16,7 @@ const environment: FullTextStrategyEnvironment = {
     converterVersion: '4.0.12',
     modelLabel: 'MinerU standard',
   },
+  imageTokenEstimateVersion: null,
   imageTransportVersion: null,
 }
 
@@ -82,7 +84,14 @@ test('native images need image transports and the inputs hold no figure-descript
 
   expect(resolveFullTextStrategy({chunkPolicy, figureMode: 'native_images'}, environment).errors).toEqual([
     fullTextStrategyErrorMessages.imageTransportMissing,
+    fullTextStrategyErrorMessages.imageTokenEstimateMissing,
   ])
+  expect(
+    resolveFullTextStrategy(
+      {chunkPolicy, figureMode: 'native_images'},
+      {...environment, imageTransportVersion: IMAGE_TRANSPORT_VERSION},
+    ).errors,
+  ).toEqual([fullTextStrategyErrorMessages.imageTokenEstimateMissing])
   expect(fullTextStrategyErrorMessages.imageTransportMissing).toContain('Choose Text only')
   expect(fullTextStrategyErrorMessages.figureModeMissing).toBe(
     'Full text needs a figure mode: choose Text only (figures reduced to their captions) or Include figures as images.',
@@ -108,13 +117,21 @@ test('the figure modes are none and native_images; a stored descriptions value i
 
 test('native images resolve with the shipped image transport version, which only enters native-image strategies', () => {
   const chunkPolicy = {maxPromptTokens: 48_000, mode: 'single_only'} as const
-  const imageEnvironment = {...environment, imageTransportVersion: IMAGE_TRANSPORT_VERSION}
+  const imageEnvironment = {
+    ...environment,
+    imageTokenEstimateVersion: IMAGE_TOKEN_ESTIMATE_VERSION,
+    imageTransportVersion: IMAGE_TRANSPORT_VERSION,
+  }
   const nativeImages = resolveFullTextStrategy({chunkPolicy, figureMode: 'native_images'}, imageEnvironment)
 
   expect(IMAGE_TRANSPORT_VERSION).toBe('img-v1')
   expect(nativeImages.errors).toEqual([])
   expect(nativeImages.strategy?.label).toBe('mineru 4.0.12 / native images / single 48k')
-  expect(nativeImages.strategy?.inputs).toMatchObject({figureMode: 'native_images', imageTransportVersion: 'img-v1'})
+  expect(nativeImages.strategy?.inputs).toMatchObject({
+    figureMode: 'native_images',
+    imageTokenEstimateVersion: 'img-tok-v1',
+    imageTransportVersion: 'img-v1',
+  })
   expect(resolveFullTextStrategy({chunkPolicy, figureMode: 'none'}, imageEnvironment)).toEqual(
     resolveFullTextStrategy({chunkPolicy, figureMode: 'none'}, environment),
   )

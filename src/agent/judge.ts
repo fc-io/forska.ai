@@ -22,7 +22,6 @@ import {
   withJudgmentRequest,
 } from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {type FullTextTokenCounter, loadFullTextTokenCounter} from '../server/fullText/fullTextTokenizer.ts'
-import {getNativeFigureMarkerIndexes} from '../server/fullText/nativeFigureImages.ts'
 import {claudeCodeRecoverableFailureCodes} from '../server/providers/claudeCodeFailureCodes.ts'
 import {
   invokeStoredProviderModel,
@@ -32,8 +31,14 @@ import {ProviderInvocationError, type ProviderInvokeImage} from '../server/provi
 import {inferenceRuntimeConfig} from '../server/utils/getInferenceRuntimeConfig.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {FULL_TEXT_STRATEGY_NONE, type FullTextChunkPolicy} from '../utils/fullTextStrategyOptions.ts'
-import {type FullTextChunkPlan, getFullTextChunkText} from './judge/fullTextChunkPlan.ts'
 import {
+  type FullTextChunkPlan,
+  getFullTextChunkText,
+  getFullTextFigureImageTokenCount,
+  getFullTextFigureMarkerIndexes,
+} from './judge/fullTextChunkPlan.ts'
+import {
+  FullTextFigureTooLargeError,
   FullTextJudgingConfigError,
   type FullTextJudgingInput,
   FullTextTooLargeError,
@@ -1602,22 +1607,46 @@ const getPromptTokens = ({
   return countTokens(systemPrompt) + countTokens(userPrompt)
 }
 
+/**
+ * A call fits when its prompt text tokens, the estimated tokens of the images it carries (native-images strategies
+ * only; 0 otherwise) and the completion reserve fit `min(maxPromptTokens, model window)`.
+ */
 export const getFullTextCallMode = ({
   chunkPolicy,
+  imageTokens,
   modelContext,
   promptTokens,
 }: {
   chunkPolicy: FullTextChunkPolicy
+  imageTokens: number
   modelContext: number
   promptTokens: number
 }): 'chunked' | 'single' | 'too_large' => {
   const limit = Math.min(chunkPolicy.maxPromptTokens, modelContext)
 
-  return promptTokens + MAX_COMPLETION_TOKENS <= limit
+  return promptTokens + imageTokens + MAX_COMPLETION_TOKENS <= limit
     ? 'single'
     : chunkPolicy.mode === 'chunked'
       ? 'chunked'
       : 'too_large'
+}
+
+const getCallImageTokens = (fullText: FullTextJudgingInput, text: string): number => {
+  return getFullTextFigureImageTokenCount({figureImageTokens: fullText.figureImageTokens, text})
+}
+
+const getCallTokensLabel = ({
+  fullText,
+  imageTokens,
+  promptTokens,
+}: {
+  fullText: FullTextJudgingInput
+  imageTokens: number
+  promptTokens: number
+}): string => {
+  return fullText.figureImageTokens === null
+    ? `${promptTokens} prompt tokens`
+    : `${promptTokens} prompt tokens and ${imageTokens} estimated image tokens (${fullText.strategy.imageTokenEstimateVersion})`
 }
 
 const getCallFigureImages = (fullText: FullTextJudgingInput, text: string): ProviderInvokeImage[] => {
@@ -1627,7 +1656,7 @@ const getCallFigureImages = (fullText: FullTextJudgingInput, text: string): Prov
     }),
   )
 
-  return getNativeFigureMarkerIndexes(text).flatMap((figureIndex) => {
+  return getFullTextFigureMarkerIndexes(text).flatMap((figureIndex) => {
     const image = imageByFigureIndex.get(figureIndex)
 
     return image ? [{bytes: image.bytes, mimeType: image.mimeType}] : []
@@ -1709,6 +1738,92 @@ const assertPromptFitsFullTextLimit = ({
   if (promptTokens + MAX_COMPLETION_TOKENS > limit) {
     throw new FullTextTooLargeError(
       `${label} needs ${promptTokens} prompt tokens plus ${MAX_COMPLETION_TOKENS} completion tokens; the limit is ${limit}.`,
+    )
+  }
+}
+
+type FullTextPartBudget = {chunkIndex: number; chunkText: string; imageTokens: number; promptTokens: number}
+
+const getFigureBlocks = (chunkText: string): string[] => {
+  return [...chunkText.matchAll(/[^\n]+(?:\n[^\n]+)*/g)]
+    .map((match) => {
+      return match[0]
+    })
+    .filter((block) => {
+      return getFullTextFigureMarkerIndexes(block).length > 0
+    })
+}
+
+/**
+ * A figure block (caption plus marker) is never split and its image is never dropped. When a part overflows because
+ * one figure block does not fit even as a part of its own, the article is skipped with that figure named.
+ */
+const assertFiguresFitOnTheirOwn = ({
+  fullText,
+  limit,
+  part,
+  partCount,
+  request,
+  run,
+}: {
+  fullText: FullTextJudgingInput
+  limit: number
+  part: FullTextPartBudget
+  partCount: number
+  request: ReturnType<typeof getSinglePromptJudgmentRequest>
+  run: JudgeRunInput
+}): void => {
+  getFigureBlocks(part.chunkText).forEach((figureBlock) => {
+    const promptTokens = getPromptTokens({
+      countTokens: run.countTokens,
+      systemPrompt: request.systemPrompt,
+      userPrompt: getFullTextChunkJudgingUserPrompt({
+        article: run.context.article,
+        chunkCount: partCount,
+        chunkIndex: part.chunkIndex,
+        chunkText: figureBlock,
+        contentSettings: run.contentSettings,
+        prompt: run.prompt,
+      }),
+    })
+    const imageTokens = getCallImageTokens(fullText, figureBlock)
+
+    if (promptTokens + imageTokens + MAX_COMPLETION_TOKENS > limit) {
+      throw new FullTextFigureTooLargeError(
+        `Figure ${getFullTextFigureMarkerIndexes(figureBlock).join(', ')} of article ${run.context.article.id} does not fit in a part of its own: it needs ${getCallTokensLabel({fullText, imageTokens, promptTokens})} plus ${MAX_COMPLETION_TOKENS} completion tokens; the limit is ${limit}. A figure is never split or sent without its image, so the article is skipped.`,
+      )
+    }
+  })
+}
+
+const assertPartsFitFullTextLimit = ({
+  fullText,
+  limit,
+  parts,
+  request,
+  run,
+}: {
+  fullText: FullTextJudgingInput
+  limit: number
+  parts: FullTextPartBudget[]
+  request: ReturnType<typeof getSinglePromptJudgmentRequest>
+  run: JudgeRunInput
+}): void => {
+  const overflowing = parts.filter((part) => {
+    return part.promptTokens + part.imageTokens + MAX_COMPLETION_TOKENS > limit
+  })
+
+  overflowing.forEach((part) => {
+    assertFiguresFitOnTheirOwn({fullText, limit, part, partCount: parts.length, request, run})
+  })
+
+  const [largest] = [...overflowing].sort((left, right) => {
+    return right.promptTokens + right.imageTokens - (left.promptTokens + left.imageTokens)
+  })
+
+  if (largest) {
+    throw new FullTextTooLargeError(
+      `Part ${largest.chunkIndex + 1} of ${parts.length} of article ${run.context.article.id} needs ${getCallTokensLabel({fullText, imageTokens: largest.imageTokens, promptTokens: largest.promptTokens})} plus ${MAX_COMPLETION_TOKENS} completion tokens; the limit is ${limit}.`,
     )
   }
 }
@@ -1923,16 +2038,22 @@ const runChunkedJudgment = async ({
     })
   })
 
-  const chunkPromptTokens = chunkPrompts.map((chunkPrompt) => {
-    return getPromptTokens({countTokens: run.countTokens, systemPrompt: request.systemPrompt, userPrompt: chunkPrompt})
-  })
-  const largestChunkIndex = chunkPromptTokens.indexOf(Math.max(...chunkPromptTokens))
+  const parts = plan.chunks.map((chunk, chunkIndex): FullTextPartBudget => {
+    const chunkText = getFullTextChunkText({chunk, renderedText: fullText.renderedText})
 
-  assertPromptFitsFullTextLimit({
-    label: `Part ${largestChunkIndex + 1} of ${plan.chunkCount} of article ${run.context.article.id}`,
-    limit,
-    promptTokens: chunkPromptTokens[largestChunkIndex] ?? 0,
+    return {
+      chunkIndex,
+      chunkText,
+      imageTokens: getCallImageTokens(fullText, chunkText),
+      promptTokens: getPromptTokens({
+        countTokens: run.countTokens,
+        systemPrompt: request.systemPrompt,
+        userPrompt: chunkPrompts[chunkIndex] ?? '',
+      }),
+    }
   })
+
+  assertPartsFitFullTextLimit({fullText, limit, parts, request, run})
   updateJudgmentPromptRequestWork({
     judgmentsJobId: run.context.judgmentsJobId,
     queueRecordId: run.context.queueRecordId,
@@ -1975,12 +2096,13 @@ const runFullTextJudgment = async ({
     systemPrompt: request.systemPrompt,
     userPrompt: request.userPrompt,
   })
-  const mode = getFullTextCallMode({chunkPolicy, modelContext: run.modelContext, promptTokens})
+  const imageTokens = getCallImageTokens(fullText, fullText.renderedText)
+  const mode = getFullTextCallMode({chunkPolicy, imageTokens, modelContext: run.modelContext, promptTokens})
   const limit = Math.min(chunkPolicy.maxPromptTokens, run.modelContext)
 
   if (mode === 'too_large') {
     throw new FullTextTooLargeError(
-      `Article ${run.context.article.id} needs ${promptTokens} prompt tokens plus ${MAX_COMPLETION_TOKENS} completion tokens; the project's single-only chunk policy allows ${limit}.`,
+      `Article ${run.context.article.id} needs ${getCallTokensLabel({fullText, imageTokens, promptTokens})} plus ${MAX_COMPLETION_TOKENS} completion tokens; the project's single-only chunk policy allows ${limit}.`,
     )
   }
 

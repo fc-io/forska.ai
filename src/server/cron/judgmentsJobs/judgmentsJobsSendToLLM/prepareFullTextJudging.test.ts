@@ -20,6 +20,7 @@ const strategy: FullTextJudgingStrategy = {
   chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
   figureMode: 'none',
   id: strategyId,
+  imageTokenEstimateVersion: null,
 }
 
 const getBlock = (): FullTextJudgingBlock => {
@@ -159,7 +160,11 @@ test('the local path renders the stored article and ignores stored description f
 test('native images: preparation loads one flattened image per marker and closes the prompt when a crop is missing', async () => {
   const {prepareFullTextJudging} = await loadPrepareModule()
   const fixturePath = new URL('../../../fullText/fixtures/figureImages/opaque-2x1.png', import.meta.url).pathname
-  const nativeStrategy: FullTextJudgingStrategy = {...strategy, figureMode: 'native_images'}
+  const nativeStrategy: FullTextJudgingStrategy = {
+    ...strategy,
+    figureMode: 'native_images',
+    imageTokenEstimateVersion: 'img-tok-v1',
+  }
   const getNativeBlock = (imagePath: string): FullTextJudgingBlock => {
     return {
       article: {
@@ -188,6 +193,12 @@ test('native images: preparation loads one flattened image per marker and closes
     [2, 'image/png'],
   ])
   expect(ready.kind === 'ready' ? ready.fullTextJudging.renderedText : '').toContain('[figure:1]')
+  expect(ready.kind === 'ready' ? ready.fullTextJudging.figureImageTokens : null).toEqual(
+    new Map([
+      [1, 8],
+      [2, 8],
+    ]),
+  )
   expect(await prepareFullTextJudging(getPreparationInput(getNativeBlock(`${fixturePath}.missing.png`)))).toMatchObject(
     {kind: 'closed'},
   )
@@ -205,4 +216,60 @@ test('native images: preparation loads one flattened image per marker and closes
   } finally {
     rmSync(notPngDirectory, {force: true, recursive: true})
   }
+})
+
+test('native images saved before image token budgeting requeue with a named full_text_config message', async () => {
+  const {prepareFullTextJudging} = await loadPrepareModule()
+  const oldNativeStrategy: FullTextJudgingStrategy = {
+    ...strategy,
+    figureMode: 'native_images',
+    id: 'fts-698be0c41743fbaf',
+    imageTokenEstimateVersion: null,
+  }
+
+  expect(await prepareFullTextJudging(getPreparationInput({...getBlock(), strategy: oldNativeStrategy}))).toEqual({
+    kind: 'requeue',
+    message:
+      'Full-text strategy fts-698be0c41743fbaf sends figures as images but was saved before image tokens were budgeted, so it has no image token estimate. Save the project on its edit page to record the current strategy (image token estimate img-tok-v1), then start the job again.',
+    reason: 'full_text_config',
+  })
+})
+
+test('native images on chunked: a cached plan without per-part image tokens is rebuilt with them', async () => {
+  const {prepareFullTextJudging} = await loadPrepareModule()
+  const fixturePath = new URL('../../../fullText/fixtures/figureImages/opaque-2x1.png', import.meta.url).pathname
+  const chunkedNative: FullTextJudgingStrategy = {
+    ...strategy,
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+    figureMode: 'native_images',
+    imageTokenEstimateVersion: 'img-tok-v1',
+  }
+  const {getFullTextJudgingTextHash} = await import('../../../../agent/judge/fullTextChunkPlan.ts')
+  const textOnlyPlan = {
+    chunkCount: 1,
+    chunks: [{endOffset: markerText.length, headingPath: null, index: 0, startOffset: 0, tokenCount: 30}],
+    planHash: 'cached-without-image-tokens',
+    textHash: getFullTextJudgingTextHash(markerText),
+  }
+  const block: FullTextJudgingBlock = {
+    article: {
+      canonicalTextVersion: 'canonical-v1',
+      figureAssets: [1, 2].map((index) => {
+        return {imagePath: fixturePath, index}
+      }),
+      figureModeBuilt: 'markers',
+    },
+    chunkPlan: textOnlyPlan,
+    strategy: chunkedNative,
+  }
+
+  const result = await prepareFullTextJudging(getPreparationInput(block))
+  const plan = result.kind === 'ready' ? result.fullTextJudging.chunkPlan : null
+
+  expect(plan?.planHash).not.toBe('cached-without-image-tokens')
+  expect(
+    plan?.chunks.map((chunk) => {
+      return chunk.imageTokenCount
+    }),
+  ).toEqual([16])
 })

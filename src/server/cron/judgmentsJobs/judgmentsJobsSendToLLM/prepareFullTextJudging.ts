@@ -5,7 +5,9 @@ import {
   FullTextJudgingConfigError,
   type FullTextJudgingFigureImage,
   type FullTextJudgingInput,
+  type FullTextJudgingText,
   prepareFullTextJudgingInput,
+  prepareFullTextJudgingText,
 } from '../../../../agent/judge/fullTextJudgingInput.ts'
 import {isFigureImageEncodingError} from '../../../fullText/figureImageEncoding.ts'
 import {getFullTextChunkPlanKey} from '../../../fullText/fullTextChunkPlanStore.ts'
@@ -57,29 +59,21 @@ export const getLegacyFullTextStrategyMessage = (): string => {
   return `This project uses full text without a full-text strategy (${FULL_TEXT_STRATEGY_LEGACY}). Choose a figure mode and a chunk policy on the project's edit page, then start the job again.`
 }
 
-const getFigureImages = async ({
-  block,
-  fullTextJudging,
-}: {
-  block: FullTextJudgingBlock | null
-  fullTextJudging: FullTextJudgingInput
-}): Promise<FullTextJudgingFigureImage[]> => {
-  return fullTextJudging.strategy.figureMode === 'native_images'
+const getFigureImages = async (text: FullTextJudgingText): Promise<FullTextJudgingFigureImage[]> => {
+  return text.strategy.figureMode === 'native_images'
     ? getNativeFigureImageInputs({
-        assets: (block?.article.figureAssets ?? []).flatMap((asset) => {
+        assets: (text.block.article.figureAssets ?? []).flatMap((asset) => {
           return asset.imagePath === null ? [] : [{imagePath: asset.imagePath, index: asset.index}]
         }),
-        renderedText: fullTextJudging.renderedText,
+        renderedText: text.renderedText,
       })
     : []
 }
 
 const getPreparedResult = async (input: FullTextJudgingPreparationInput): Promise<FullTextJudgingPreparedResult> => {
-  const fullTextJudging = prepareFullTextJudgingInput({
-    abstract: input.abstract,
+  const text = prepareFullTextJudgingText({
     articleId: input.articleId,
     block: input.block,
-    countTokens: await loadFullTextTokenCounter(),
     fullText: input.fullText,
     fullTextStrategyId: input.fullTextStrategyId,
   })
@@ -87,13 +81,17 @@ const getPreparedResult = async (input: FullTextJudgingPreparationInput): Promis
   assertModelContextFitsChunkPolicy({
     modelContext: input.modelContext,
     modelName: input.modelName,
-    strategy: fullTextJudging.strategy,
+    strategy: text.strategy,
   })
 
-  return {
-    fullTextJudging: {...fullTextJudging, figureImages: await getFigureImages({block: input.block, fullTextJudging})},
-    kind: 'ready',
-  }
+  const fullTextJudging: FullTextJudgingInput = prepareFullTextJudgingInput({
+    abstract: input.abstract,
+    countTokens: await loadFullTextTokenCounter(),
+    figureImages: await getFigureImages(text),
+    text,
+  })
+
+  return {fullTextJudging, kind: 'ready'}
 }
 
 const getErrorResult = (error: unknown): FullTextJudgingPreparedResult => {

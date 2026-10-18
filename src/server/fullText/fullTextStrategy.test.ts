@@ -150,3 +150,12 @@ test('input differences list the changed fields in key order', () => {
     }),
   ).toEqual(['chunkPolicy', 'converterVersion'])
 })
+
+test('an input present on one side only is a difference in either direction', () => {
+  const nativeBefore = {...frozenInputs, figureMode: 'native_images' as const, imageTransportVersion: 'img-v1'}
+  const nativeNow = {...nativeBefore, imageTokenEstimateVersion: 'img-tok-v1'}
+
+  expect(getFullTextStrategyInputDifferences(nativeBefore, nativeNow)).toEqual(['imageTokenEstimateVersion'])
+  expect(getFullTextStrategyInputDifferences(nativeNow, nativeBefore)).toEqual(['imageTokenEstimateVersion'])
+  expect(getFullTextStrategyId(nativeNow)).not.toBe(getFullTextStrategyId(nativeBefore))
+})

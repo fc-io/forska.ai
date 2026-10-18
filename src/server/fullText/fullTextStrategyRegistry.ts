@@ -1,6 +1,7 @@
 import {CANONICAL_TEXT_VERSION} from './canonicalFullText.ts'
 import {getConverterOptionsHash} from './converters/converterOptionsHash.ts'
 import {getFullTextConverter} from './converters/fullTextConverter.ts'
+import {IMAGE_TOKEN_ESTIMATE_VERSION} from './figureImageTokenEstimate.ts'
 import {
   FULL_TEXT_PROMPT_LAYOUT_VERSION,
   FULL_TEXT_TOKENIZER_ID,
@@ -815,6 +816,216 @@ export const fullTextStrategyRegistry: FullTextStrategyRegistryEntry[] = [
     },
     label: 'docling 1.37.0 / native images / chunked 96k',
   },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-72beb3c1f9a5a77e',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
+      converterVersion: '4.0.12',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'mineru 4.0.12 / native images / single 24k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-074936d3b17dc424',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
+      converterVersion: '4.0.12',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'mineru 4.0.12 / native images / chunked 24k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-253135a2fbfb8026',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
+      converterVersion: '4.0.12',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'mineru 4.0.12 / native images / single 48k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-fd40fe255df5a2c3',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
+      converterVersion: '4.0.12',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'mineru 4.0.12 / native images / chunked 48k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-21b048b7d47ecdaa',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
+      converterVersion: '4.0.12',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'mineru 4.0.12 / native images / single 96k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-bfb219b481ef7874',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
+      converterKind: 'mineru',
+      converterOptionsHash: 'e9d85ef6fe205701cea9cf7f29abcc18f3ba884041b2f392facf5262be7ffb96',
+      converterVersion: '4.0.12',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'mineru 4.0.12 / native images / chunked 96k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-386400411638ed40',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 24_000, mode: 'single_only'},
+      converterKind: 'docling',
+      converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
+      converterVersion:
+        'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'docling 1.37.0 / native images / single 24k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-7cf17f29db733ee4',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+      converterKind: 'docling',
+      converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
+      converterVersion:
+        'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'docling 1.37.0 / native images / chunked 24k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-efcb17fbc6197720',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 48_000, mode: 'single_only'},
+      converterKind: 'docling',
+      converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
+      converterVersion:
+        'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'docling 1.37.0 / native images / single 48k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-11863ad30bdcd381',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+      converterKind: 'docling',
+      converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
+      converterVersion:
+        'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'docling 1.37.0 / native images / chunked 48k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-c3f00a6d2e94c879',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 96_000, mode: 'single_only'},
+      converterKind: 'docling',
+      converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
+      converterVersion:
+        'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'docling 1.37.0 / native images / single 96k',
+  },
+  {
+    firstSeen: '2026-10-18',
+    id: 'fts-fe9596e66520a719',
+    inputs: {
+      canonicalTextVersion: 'canonical-v1',
+      chunkPolicy: {maxPromptTokens: 96_000, mode: 'chunked'},
+      converterKind: 'docling',
+      converterOptionsHash: '586cab5f8f4f27c9346faf409e31f8b6867e1af612c3bb824aacb5a9a6417bf0',
+      converterVersion:
+        'docling=2.140.0 docling-core=2.101.1 docling-ibm-models=4.0.3 docling-jobkit=3.8.2 docling-parse=7.22.3 docling-serve=1.37.0',
+      figureMode: 'native_images',
+      imageTokenEstimateVersion: 'img-tok-v1',
+      imageTransportVersion: 'img-v1',
+      promptLayoutVersion: 'layout-v2',
+      tokenizerId: 'o200k_base',
+    },
+    label: 'docling 1.37.0 / native images / chunked 96k',
+  },
 ]
 
 const shippedChunkPolicies: FullTextChunkPolicy[] = [
@@ -828,15 +1039,21 @@ const shippedChunkPolicies: FullTextChunkPolicy[] = [
 
 const shippedConverterKinds: Array<FullTextStrategyInputs['converterKind']> = ['mineru', 'docling']
 
-const shippedFigureModes: Array<Pick<FullTextStrategyInputs, 'figureMode' | 'imageTransportVersion'>> = [
+const shippedFigureModes: Array<
+  Pick<FullTextStrategyInputs, 'figureMode' | 'imageTokenEstimateVersion' | 'imageTransportVersion'>
+> = [
   {figureMode: 'none', imageTransportVersion: null},
-  {figureMode: 'native_images', imageTransportVersion: IMAGE_TRANSPORT_VERSION},
+  {
+    figureMode: 'native_images',
+    imageTokenEstimateVersion: IMAGE_TOKEN_ESTIMATE_VERSION,
+    imageTransportVersion: IMAGE_TRANSPORT_VERSION,
+  },
 ]
 
 const getShippedConverterStrategyInputs = (
   converterKind: FullTextStrategyInputs['converterKind'],
 ): FullTextStrategyInputs[] => {
-  return shippedFigureModes.flatMap(({figureMode, imageTransportVersion}) => {
+  return shippedFigureModes.flatMap((figureModeInputs) => {
     return shippedChunkPolicies.map((chunkPolicy): FullTextStrategyInputs => {
       return {
         canonicalTextVersion: CANONICAL_TEXT_VERSION,
@@ -844,8 +1061,7 @@ const getShippedConverterStrategyInputs = (
         converterKind,
         converterOptionsHash: getConverterOptionsHash(getFullTextConverter(converterKind).options),
         converterVersion: fullTextStrategyReferenceConverterVersions[converterKind],
-        figureMode,
-        imageTransportVersion,
+        ...figureModeInputs,
         promptLayoutVersion: FULL_TEXT_PROMPT_LAYOUT_VERSION,
         tokenizerId: FULL_TEXT_TOKENIZER_ID,
       }

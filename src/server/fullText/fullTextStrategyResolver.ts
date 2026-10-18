@@ -19,6 +19,7 @@ export type FullTextConversionModelStrategyInputs = {
 export type FullTextStrategyEnvironment = {
   canonicalTextVersion: string | null
   conversionModel: FullTextConversionModelStrategyInputs | null
+  imageTokenEstimateVersion: string | null
   imageTransportVersion: string | null
 }
 
@@ -44,6 +45,9 @@ const getFullTextStrategyErrors = (selection: FullTextStrategySelection, environ
     selection.figureMode === 'native_images' && !environment.imageTransportVersion
       ? fullTextStrategyErrorMessages.imageTransportMissing
       : null,
+    selection.figureMode === 'native_images' && !environment.imageTokenEstimateVersion
+      ? fullTextStrategyErrorMessages.imageTokenEstimateMissing
+      : null,
   ].filter((error): error is string => {
     return error !== null
   })
@@ -67,6 +71,9 @@ const getFullTextStrategyInputs = ({
     converterOptionsHash: conversionModel.converterOptionsHash,
     converterVersion: conversionModel.converterVersion,
     figureMode,
+    ...(figureMode === 'native_images' && environment.imageTokenEstimateVersion
+      ? {imageTokenEstimateVersion: environment.imageTokenEstimateVersion}
+      : {}),
     imageTransportVersion: figureMode === 'native_images' ? environment.imageTransportVersion : null,
     promptLayoutVersion: FULL_TEXT_PROMPT_LAYOUT_VERSION,
     tokenizerId: FULL_TEXT_TOKENIZER_ID,
