@@ -1,6 +1,6 @@
 import type {FullTextConversionRuntimeConfig} from '../../fullText/converters/fullTextConverter.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {getDateValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
+import {getDateValue, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../../services/userConfigQueryService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 
@@ -88,102 +88,86 @@ export const logFullTextCronGateBlocked = ({
   )
 }
 
-const getProjectDateConditions = ({dateFrom, dateTo}: Pick<FullTextCronProject, 'dateFrom' | 'dateTo'>) => {
-  return [
-    dateFrom ? `a.article_created_at >= ${getTimestampLiteral(getDateValue(dateFrom) ?? new Date(0))}` : null,
-    dateTo ? `a.article_created_at <= ${getTimestampLiteral(getDateValue(dateTo) ?? new Date(0))}` : null,
-  ].filter((part): part is string => {
-    return part !== null
-  })
+const getProjectDateBoundSql = (value: unknown) => {
+  return value ? getTimestampLiteral(getDateValue(value) ?? new Date(0)) : 'CAST(NULL AS TIMESTAMPTZ)'
 }
 
-export const getFullTextCronProjectArticleSql = ({
+const getCronProjectValuesSql = (projects: FullTextCronProject[]) => {
+  return projects
+    .map((project, projectRank) => {
+      return `(${getSqlLiteral(project.projectId)}, ${projectRank}, ${getProjectDateBoundSql(project.dateFrom)}, ${getProjectDateBoundSql(project.dateTo)})`
+    })
+    .join(',\n        ')
+}
+
+const projectDateConditions = [
+  '(psa.date_from IS NULL OR a.article_created_at >= psa.date_from)',
+  '(psa.date_to IS NULL OR a.article_created_at <= psa.date_to)',
+]
+
+export const getFullTextCronArticleSql = ({
   articleConditions,
-  excludedArticleIds,
   limit,
-  project,
+  projects,
   selectColumns,
 }: {
   articleConditions: string[]
-  excludedArticleIds: string[]
   limit: number
-  project: FullTextCronProject
+  projects: FullTextCronProject[]
   selectColumns: string
 }) => {
-  const projectId = getSqlLiteral(project.projectId)
-  const conditions = [
-    ...articleConditions,
-    ...getProjectDateConditions(project),
-    ...(excludedArticleIds.length > 0 ? [`a.id NOT IN (${getQuotedStringList(excludedArticleIds).join(', ')})`] : []),
-  ]
-
   return `
-    WITH project_scope_article AS (
-      SELECT air.article_id
-      FROM app.project_import_route pir
+    WITH cron_project(project_id, project_rank, date_from, date_to) AS (
+      VALUES
+        ${getCronProjectValuesSql(projects)}
+    ),
+    project_scope_article AS (
+      SELECT air.article_id, cp.project_rank, cp.date_from, cp.date_to
+      FROM cron_project cp
+      INNER JOIN app.project_import_route pir ON pir.project_id = cp.project_id
       INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-      WHERE pir.project_id = ${projectId}
-      UNION
-      SELECT pa.article_id
-      FROM app.project_article pa
-      WHERE pa.project_id = ${projectId}
+      UNION ALL
+      SELECT pa.article_id, cp.project_rank, cp.date_from, cp.date_to
+      FROM cron_project cp
+      INNER JOIN app.project_article pa ON pa.project_id = cp.project_id
+    ),
+    ranked_article AS (
+      SELECT a.id, MIN(psa.project_rank) AS project_rank, ANY_VALUE(a.article_created_at) AS article_created_at
+      FROM app.article a
+      INNER JOIN project_scope_article psa ON psa.article_id = a.id
+      WHERE ${[...articleConditions, ...projectDateConditions].join('\n        AND ')}
+      GROUP BY a.id
+    ),
+    selected_article AS (
+      SELECT id, project_rank, article_created_at
+      FROM ranked_article
+      ORDER BY project_rank ASC, article_created_at DESC NULLS LAST, id ASC
+      LIMIT ${limit}
     )
     SELECT ${selectColumns}
-    FROM app.article a
-    INNER JOIN project_scope_article psa ON psa.article_id = a.id
-    ${conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''}
-    ORDER BY a.article_created_at DESC NULLS LAST, a.id ASC
-    LIMIT ${limit}
+    FROM selected_article selected
+    INNER JOIN app.article a ON a.id = selected.id
+    ORDER BY selected.project_rank ASC, selected.article_created_at DESC NULLS LAST, selected.id ASC
   `
 }
 
 export const selectFullTextCronArticles = async <Row extends {id: string}>({
   articleConditions,
   limit,
-  onProjectScanned,
   projects,
   selectColumns,
-  selected = [],
   workloadContext,
 }: {
   articleConditions: string[]
   limit: number
-  onProjectScanned?: (input: {durationMs: number; project: FullTextCronProject; resultCount: number}) => void
   projects: FullTextCronProject[]
   selectColumns: string
-  selected?: Row[]
   workloadContext: FullTextCronWorkloadContext
 }): Promise<Row[]> => {
-  const [project, ...remainingProjects] = projects
-  const remaining = limit - selected.length
-
-  if (!project || remaining <= 0) {
-    return selected
-  }
-
-  const startedAt = Date.now()
-  const rows = await getAppDatabaseService().queryJsonBackground<Row>(
-    getFullTextCronProjectArticleSql({
-      articleConditions,
-      excludedArticleIds: selected.map((row) => {
-        return row.id
-      }),
-      limit: remaining,
-      project,
-      selectColumns,
-    }),
-    {...workloadContext, maxResultRows: remaining, projectId: project.projectId},
-  )
-
-  onProjectScanned?.({durationMs: Date.now() - startedAt, project, resultCount: rows.length})
-
-  return selectFullTextCronArticles({
-    articleConditions,
-    limit,
-    onProjectScanned,
-    projects: remainingProjects,
-    selectColumns,
-    selected: [...selected, ...rows],
-    workloadContext,
-  })
+  return projects.length === 0 || limit <= 0
+    ? []
+    : getAppDatabaseService().queryJsonBackground<Row>(
+        getFullTextCronArticleSql({articleConditions, limit, projects, selectColumns}),
+        {...workloadContext, maxResultRows: limit},
+      )
 }
