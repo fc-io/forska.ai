@@ -310,6 +310,36 @@ test('editing away the chunk policy of a full-text project is a 400', async () =
   expect(response.text).toContain('Full text needs a chunk policy')
 })
 
+test('PATCH /api/projects/:id refuses edit-page settings by name and leaves the project unchanged', async () => {
+  const before = await getStoredProject('fts-legacy-project')
+  const response = await requestJson('/api/projects/fts-legacy-project', 'PATCH', {
+    fullTextChunkPolicy: {maxPromptTokens: 48_000, mode: 'chunked'},
+    fullTextFigureMode: 'native_images',
+    name: 'Renamed by PATCH',
+    recordCurrentFullTextStrategy: true,
+    useFulltext: true,
+  })
+
+  expect(response.status).toBe(400)
+  expect(response.text).toBe(
+    'PATCH /api/projects/:id updates only name and description; it does not accept fullTextChunkPolicy, fullTextFigureMode, recordCurrentFullTextStrategy, useFulltext. Send project settings (model, content flags, full text, fullTextFigureMode, fullTextChunkPolicy, recordCurrentFullTextStrategy, prompts, import routes, dates) to PATCH /api/projects/:id/edit.',
+  )
+  expect(await getStoredProject('fts-legacy-project')).toEqual(before)
+
+  const legacy = await requestJson('/api/projects/fts-legacy-project', 'PATCH', {useFulltextNoImages: false})
+
+  expect(legacy.status).toBe(400)
+  expect(legacy.text).toContain('useFulltextNoImages is a frozen legacy setting')
+
+  const rename = await requestJson('/api/projects/fts-legacy-project', 'PATCH', {description: null, name: 'Renamed'})
+
+  expect(rename.status).toBe(200)
+  expect(await getStoredProject('fts-legacy-project')).toMatchObject({
+    fullTextChunkPolicy: before?.fullTextChunkPolicy ?? null,
+    fullTextFigureMode: before?.fullTextFigureMode ?? null,
+  })
+})
+
 test('turning full text off clears the full-text settings and the strategy', async () => {
   const response = await requestJson('/api/projects/fts-legacy-project/edit', 'PATCH', {useFulltext: false})
 

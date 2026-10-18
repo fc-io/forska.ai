@@ -75,6 +75,7 @@ import {projectsRoutesGetReviewsWarnings} from './projectsRoutes/projectsRoutesG
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 import {projectsRoutesPostDeleteArchived} from './projectsRoutes/projectsRoutesPostDeleteArchived.ts'
 import {projectsRoutesPostFullTextValidation} from './projectsRoutes/projectsRoutesPostFullTextValidation.ts'
+import {rejectProjectPatchSettingsBody} from './projectsRoutes/rejectProjectPatchSettingsBody.ts'
 
 const parseOptionalDate = (value?: string | null) => {
   if (!value) {
@@ -1946,7 +1947,7 @@ export const projectsRoutes = new Elysia()
     },
     {
       body: t.Object({name: t.Optional(t.String()), description: t.Optional(t.Union([t.String(), t.Null()]))}),
-      transform: rejectLegacyFullTextNoImagesBody,
+      transform: rejectProjectPatchSettingsBody,
     },
   )
   .patch(
