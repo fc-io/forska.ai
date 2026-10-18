@@ -51,7 +51,7 @@ export const fullTextArticleFetchFromUnpaywall = async ({
       tried: false,
       success: false,
       reason: 'Unpaywall email missing',
-      details: 'Set a Unpaywall email in Settings before fetching PDFs from Unpaywall',
+      details: 'Set an Unpaywall email in Settings before fetching PDFs from Unpaywall',
     }
   }
 
