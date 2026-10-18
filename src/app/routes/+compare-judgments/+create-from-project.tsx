@@ -20,6 +20,7 @@ import {
   fetchComparisonProjectSources,
 } from '../../../services/comparisonProjectsService'
 import {getComparisonProjectFullTextStrategyMixError} from '../../../utils/comparisonProjectFullTextStrategyMix.ts'
+import {legacyFullTextNoImagesLabel} from '../../../utils/legacyFullTextNoImagesLabel.ts'
 
 type PostCreateConflictResolutionImportWarningResult = {
   createdComparisonProject: CreateComparisonProjectFromProjectResult['data']
@@ -51,7 +52,7 @@ const formatContentSettings = (sourceProject: ComparisonProjectSource) => {
   const parts = [
     sourceProject.useTitle ? 'title' : null,
     sourceProject.useAbstract ? 'abstract' : null,
-    sourceProject.useFulltextNoImages ? 'fulltext (no images)' : sourceProject.useFulltext ? 'fulltext' : null,
+    sourceProject.useFulltextNoImages ? legacyFullTextNoImagesLabel : sourceProject.useFulltext ? 'fulltext' : null,
   ].filter(Boolean) as string[]
 
   return parts.length > 0 ? parts.join(' + ') : 'none'

@@ -12,7 +12,7 @@ test('the project content label names the full-text strategy, or the legacy flag
     }),
   ).toBe('fulltext (mineru 4.0.12 / none / chunked 48k)')
   expect(getProjectFullTextContentLabel({useFulltext: false, useFulltextNoImages: true})).toBe(
-    'fulltext (legacy, no images)',
+    'full text (legacy, no images)',
   )
   expect(
     getProjectFullTextContentLabel({

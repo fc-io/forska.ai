@@ -6,6 +6,7 @@ import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
 import {ensureSelectableModelId} from '../../../services/ensureSelectableModelId.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
+import {legacyFullTextNoImagesLabel} from '../../../utils/legacyFullTextNoImagesLabel.ts'
 import {
   getPromptAnswerTypesWithoutProject,
   getSubprojectDateRangeError,
@@ -57,7 +58,7 @@ const formatContentSettings = (project: ProjectSource): string => {
   if (project.useTitle) parts.push('title')
   if (project.useAbstract) parts.push('abstract')
   if (project.useFulltext) parts.push('fulltext')
-  if (project.useFulltextNoImages) parts.push('fulltext (no images)')
+  if (project.useFulltextNoImages) parts.push(legacyFullTextNoImagesLabel)
   if (project.useMetadata) parts.push('metadata')
   return parts.length > 0 ? parts.join(' + ') : 'none'
 }
