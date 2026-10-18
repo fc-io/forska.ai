@@ -234,7 +234,10 @@ const legacyBooleanField = (field: string) => {
 }
 
 const legacySelectListByTable: Record<LegacyFileTempTable, string[]> = {
-  articleCreates: [`${legacyStringField('sourceArticleId')} AS source_article_id`],
+  articleCreates: [
+    `${legacyStringField('sourceArticleId')} AS source_article_id`,
+    `json_extract(row_json, '$.assetFields') AS asset_fields_json`,
+  ],
   articleFieldFills: [
     `${legacyStringField('sourceArticleId')} AS source_article_id`,
     `${legacyStringField('targetArticleId')} AS target_article_id`,
