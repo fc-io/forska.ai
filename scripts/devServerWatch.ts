@@ -36,7 +36,7 @@ import {
 import {getLiveProcessTreeDependencies, isProcessAlive, stopProcessTree} from './processTree.ts'
 import {getDevServerWatchStackShutdownTimeoutMs, getServerStackShutdownTimeouts} from './serverStackShutdown.ts'
 
-const watchedPaths = ['src', 'package.json', 'tsconfig.json']
+const watchedPaths = ['src', 'package.json', 'bun.lock', 'tsconfig.json']
 const restartDelayMs = 150
 const restartGatePollIntervalMs = 1_000
 const restartGateTimeoutMs = 90_000

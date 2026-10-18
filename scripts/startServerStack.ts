@@ -12,6 +12,10 @@ import {getConfiguredDuckdbPath} from '../src/server/utils/getDuckdbPath.ts'
 import {readJudgeWorkerJournalLock} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
 import {isLockOwnedByCurrentMachine} from '../src/server/utils/localMachineIdentity.ts'
 import {shouldUseProcessStopRequests, startProcessStopRequestWatcher} from '../src/server/utils/processStopRequest.ts'
+import {
+  getRuntimeDependencyPreflightMessage,
+  getRuntimeDependencyProblems,
+} from '../src/server/utils/runtimeDependencyPreflight.ts'
 import {installRuntimeJsonlSink, writeRuntimeLogEvent} from '../src/server/utils/runtimeLogger.ts'
 import {resolveRuntimeProcessIdentity, type RuntimeProcessIdentity} from '../src/server/utils/runtimeProcessIdentity.ts'
 import {runtimeReadyPath, runtimeStatePath} from '../src/server/utils/runtimeReadyContract.ts'
@@ -968,6 +972,13 @@ if (shouldUseProcessStopRequests()) {
       void shutdown(0)
     },
   })
+}
+
+const runtimeDependencyProblems = getRuntimeDependencyProblems()
+
+if (runtimeDependencyProblems.length > 0) {
+  console.error(`[server:stack] ${getRuntimeDependencyPreflightMessage(runtimeDependencyProblems)}`)
+  process.exit(1)
 }
 
 startParentMonitor()
