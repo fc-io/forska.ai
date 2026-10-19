@@ -144,3 +144,58 @@ test('title and abstract prompts keep their provider-specific bytes', () => {
       .userPrompt,
   ).not.toContain('article_fulltext')
 })
+
+test('screening_v2 with use_metadata changes only the part and merge quote sources and adds the metadata lines to recordText', () => {
+  const metadataQuoteSources = 'the title, the metadata or the summary'
+  const recordQuoteSources = 'the title or the summary'
+  const single = getSinglePromptJudgmentRequest({
+    article,
+    contentSettings,
+    prompt,
+    provider: 'anthropic',
+    renderedFullText,
+    systemPromptVariant: 'screening_v2',
+  })
+  const part = getFullTextChunkJudgingUserPrompt({
+    article,
+    chunkCount: 3,
+    chunkIndex: 1,
+    chunkText: '## 2 Methods\n\nWe randomised 40 patients.',
+    contentSettings: {...contentSettings, useAbstract: false},
+    prompt,
+    systemPromptVariant: 'screening_v2',
+  })
+  const merge = getFullTextMergeJudgingUserPrompt({
+    article,
+    chunkJudgments: [
+      {
+        answer: 'yes',
+        chunkIndex: 0,
+        confidence: 0.9,
+        explanation: 'Randomised.',
+        headingPath: '2 Methods',
+        quotes: ['We randomised 40 patients.'],
+      },
+      {answer: 'no', chunkIndex: 1, confidence: 0, explanation: 'Silent.', headingPath: null, quotes: []},
+    ],
+    contentSettings,
+    prompt,
+    systemPromptVariant: 'screening_v2',
+  })
+
+  expect(single.recordText).toBe(
+    `Masked Autoencoders\n\njournal: CVPR\nyear: 2022\ndoi: 10.48550/arXiv.2111.06377\n\nMasked autoencoders are scalable vision learners.\n\n${renderedFullText}`,
+  )
+  expect(getSha256(single.userPrompt)).toBe('114204f1abeead00f0588e7013b367cf47be52a35671aed020d77b421e9e3523')
+  expect(part.endsWith(`Quotes must come from this part, ${metadataQuoteSources}.`)).toBe(true)
+  expect(merge).toContain(
+    `- Copy up to 3 quotes verbatim from the part_judgments quotes, ${metadataQuoteSources}, or return`,
+  )
+  expect({
+    merge: getSha256(merge.replace(metadataQuoteSources, recordQuoteSources)),
+    part: getSha256(part.replace(metadataQuoteSources, recordQuoteSources)),
+  }).toEqual({
+    merge: 'b9d68097b94d32f34a144c6e1704848af0b87409b199ecd62c826059f7889953',
+    part: '4326661a76380227766f1ef4d1a8c51eed631e302f2d60bbde8b54ad2d2a3efd',
+  })
+})

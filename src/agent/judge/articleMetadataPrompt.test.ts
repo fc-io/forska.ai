@@ -1,7 +1,11 @@
 import {expect, test} from 'bun:test'
 
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
-import {getArticleMetadataLines, getArticleMetadataPromptText} from './articleMetadataPrompt.ts'
+import {
+  getArticleMetadataLines,
+  getArticleMetadataPromptText,
+  getArticleMetadataSourceText,
+} from './articleMetadataPrompt.ts'
 
 const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => {
   return {
@@ -190,4 +194,8 @@ test('getArticleMetadataPromptText renders exactly the getArticleMetadataLines l
   })
   expect(getArticleMetadataLines(buildArticle())).toEqual([])
   expect(getArticleMetadataPromptText(buildArticle())).toBe('none available')
+  expect(getArticleMetadataSourceText(buildArticle())).toBe('')
+  expect(getArticleMetadataSourceText(articles[0] as ArticleRecord)).toBe(
+    getArticleMetadataPromptText(articles[0] as ArticleRecord),
+  )
 })

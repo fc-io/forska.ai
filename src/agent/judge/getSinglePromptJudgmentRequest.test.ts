@@ -4,6 +4,7 @@ import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {getSinglePromptJudgmentRequest} from './getSinglePromptJudgmentRequest.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC} from './judgeSinglePromptSystemPromptScreeningV1.ts'
+import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2_ANTHROPIC} from './judgeSinglePromptSystemPromptScreeningV2.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => {
@@ -186,4 +187,61 @@ test('getSinglePromptJudgmentRequest adds the article_metadata block only when u
   expect(withMetadata.recordText).toBe(withoutMetadata.recordText)
   expect(withMetadata.recordText).not.toContain('BMJ')
   expect(withMetadata.systemPrompt).toBe(withoutMetadata.systemPrompt)
+})
+
+test('getSinglePromptJudgmentRequest adds the metadata lines to recordText only for screening_v2 with use_metadata on', () => {
+  const article = buildArticle({
+    articleSummary: 'Covidence summary',
+    articleTitle: 'Covidence title',
+    doi: '10.1000/covidence',
+    fullText: 'Covidence full text',
+    pubmedId: '31234567',
+    sourceMetadata: {journalTitle: 'BMJ', publicationYear: 2019, volume: '12'},
+  })
+  const prompt = {
+    id: 'prompt-4',
+    originalText: 'Should this study be included for full text review?',
+    order: 4,
+    promptHeading: 'Covidence title/abstract screening',
+    type: `'yes' | 'no' | 'maybe'`,
+  }
+  const getRequest = (systemPromptVariant: 'screening_v1' | 'screening_v2', useMetadata: boolean) => {
+    return getSinglePromptJudgmentRequest({
+      article,
+      contentSettings: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useMetadata, useTitle: true},
+      prompt,
+      provider: 'anthropic',
+      systemPromptVariant,
+    })
+  }
+  const v1 = getRequest('screening_v1', true)
+  const v2 = getRequest('screening_v2', true)
+  const v2WithoutMetadata = getRequest('screening_v2', false)
+
+  expect(v2.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2_ANTHROPIC)
+  expect(v2.userPrompt).toBe(v1.userPrompt)
+  expect(v2.recordText).toBe(
+    'Covidence title\n\njournal: BMJ\nyear: 2019\nvolume/issue/pages: 12\ndoi: 10.1000/covidence\npmid: 31234567\n\nCovidence summary\n\nCovidence full text',
+  )
+  expect(v1.recordText).toBe('Covidence title\n\nCovidence summary\n\nCovidence full text')
+  expect(v2WithoutMetadata.recordText).toBe(v1.recordText)
+})
+
+test('getSinglePromptJudgmentRequest keeps none available out of the screening_v2 recordText', () => {
+  const result = getSinglePromptJudgmentRequest({
+    article: buildArticle({articleSummary: 'Summary', articleTitle: 'Title', fullText: null, sourceMetadata: null}),
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: true,
+      useTitle: true,
+    },
+    prompt: {id: 'prompt-5', originalText: 'Question?', order: 5, promptHeading: null, type: `'yes' | 'no'`},
+    provider: 'openai',
+    systemPromptVariant: 'screening_v2',
+  })
+
+  expect(result.userPrompt).toContain('none available')
+  expect(result.recordText).toBe('Title\n\nSummary\n\n')
 })

@@ -296,6 +296,72 @@ test('chunked judges every part with the real question, merges once, validates q
   })
 })
 
+const runChunkedMetadataQuoteJudgment = async (systemPromptVariant: 'screening_v1' | 'screening_v2') => {
+  const partPrompts: string[] = []
+  const mergePrompts: string[] = []
+  const invokeStoredProviderModel = mock(async (input: InvokeInput) => {
+    if (getPromptText(input).includes('## part_judgments')) {
+      mergePrompts.push(getPromptText(input))
+
+      return getResponse({answer: 'yes', explanation: 'Trial journal.', quotes: ['journal: Trials', 'year: 2021']})
+    }
+
+    partPrompts.push(getPromptText(input))
+
+    return getResponse({answer: 'yes', confidence: 0.8, explanation: 'Trial journal.', quotes: ['Trials']})
+  })
+  const storeSinglePromptJudgment = mock(async (_input: unknown) => {})
+  const {judgeSinglePrompt} = await loadJudgeModule({invokeStoredProviderModel, storeSinglePromptJudgment})
+  const fullTextJudging = await getFullTextJudgingInput({
+    chunkPolicy: {maxPromptTokens: 24_000, mode: 'chunked'},
+    renderedText: longFullText,
+  })
+  const input = createInput(fullTextJudging)
+
+  await judgeSinglePrompt({
+    ...input,
+    article: {...input.article, sourceMetadata: {journalTitle: 'Trials', publicationYear: 2021}},
+    contentSettings: {...input.contentSettings, useMetadata: true},
+    systemPromptVariant,
+  })
+
+  return {mergePrompts, partPrompts, storedJudgment: storeSinglePromptJudgment.mock.calls[0]?.[0]}
+}
+
+test('chunked screening_v2 keeps article_metadata quotes in parts and merge when the project uses metadata', async () => {
+  const {mergePrompts, partPrompts, storedJudgment} = await runChunkedMetadataQuoteJudgment('screening_v2')
+
+  expect(partPrompts.length).toBeGreaterThan(1)
+  expect(
+    partPrompts.every((prompt) => {
+      return (
+        prompt.includes('journal: Trials\nyear: 2021')
+        && prompt.endsWith('Quotes must come from this part, the title, the metadata or the summary.')
+      )
+    }),
+  ).toBe(true)
+  expect(mergePrompts).toHaveLength(1)
+  expect(mergePrompts[0]).toContain('"quotes":["Trials"]')
+  expect(mergePrompts[0]).toContain('quotes, the title, the metadata or the summary, or return an empty quotes array.')
+  expect(storedJudgment).toMatchObject({judgment: {answer: 'yes', quotes: ['journal: Trials', 'year: 2021']}})
+})
+
+test('chunked screening_v1 keeps main behaviour: metadata quotes are dropped and the instructions name title or summary', async () => {
+  const {mergePrompts, partPrompts, storedJudgment} = await runChunkedMetadataQuoteJudgment('screening_v1')
+
+  expect(
+    partPrompts.every((prompt) => {
+      return (
+        prompt.includes('journal: Trials\nyear: 2021')
+        && prompt.endsWith('Quotes must come from this part, the title or the summary.')
+      )
+    }),
+  ).toBe(true)
+  expect(mergePrompts[0]).toContain('"quotes":[]')
+  expect(mergePrompts[0]).toContain('quotes, the title or the summary, or return an empty quotes array.')
+  expect(storedJudgment).toMatchObject({judgment: {answer: 'yes', quotes: []}})
+})
+
 test('a failed part stops the article before the merge call', async () => {
   const invokeStoredProviderModel = mock(async (input: InvokeInput) => {
     return getPromptText(input).includes('## part_judgments')

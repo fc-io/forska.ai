@@ -1,5 +1,6 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {getArticleMetadataPromptText} from './articleMetadataPrompt.ts'
+import {type SystemPromptVariant, systemPromptVariantAllowsArticleMetadataQuotes} from './systemPromptVariant.ts'
 
 const SOURCE_TEXT_START = '<SOURCE_TEXT_START>'
 const SOURCE_TEXT_END = '</SOURCE_TEXT_END>'
@@ -226,12 +227,31 @@ export const getFullTextJudgingUserPrompt = ({
   return `${recordSections}${fullTextSection}${getQuestionSection(prompt)}`
 }
 
-const getChunkInstructions = ({chunkCount, chunkNumber}: {chunkCount: number; chunkNumber: number}): string => {
+export const getIsArticleMetadataQuotable = (params: {
+  systemPromptVariant?: SystemPromptVariant | null
+  useMetadata: boolean
+}): boolean => {
+  return params.useMetadata && systemPromptVariantAllowsArticleMetadataQuotes(params.systemPromptVariant)
+}
+
+const getRecordQuoteSourcesText = (isArticleMetadataQuotable: boolean): string => {
+  return isArticleMetadataQuotable ? 'the title, the metadata or the summary' : 'the title or the summary'
+}
+
+const getChunkInstructions = ({
+  chunkCount,
+  chunkNumber,
+  isArticleMetadataQuotable,
+}: {
+  chunkCount: number
+  chunkNumber: number
+  isArticleMetadataQuotable: boolean
+}): string => {
   return `## Part instructions
 
 The article full text is too long for one request, so it is split into ${chunkCount} parts. This request holds part ${chunkNumber} of ${chunkCount}. Judge the question from this part together with the title, metadata and summary only. The other parts are judged in separate requests and the answers are combined afterwards.
 Add one more key to your JSON response: "confidence", a number from 0 to 1 that says how strongly this part supports your answer (0 when this part says nothing about the question).
-Quotes must come from this part, the title or the summary.`
+Quotes must come from this part, ${getRecordQuoteSourcesText(isArticleMetadataQuotable)}.`
 }
 
 export const getFullTextChunkJudgingUserPrompt = ({
@@ -241,6 +261,7 @@ export const getFullTextChunkJudgingUserPrompt = ({
   chunkText,
   contentSettings,
   prompt,
+  systemPromptVariant,
 }: {
   article: ArticleType
   chunkCount: number
@@ -248,6 +269,7 @@ export const getFullTextChunkJudgingUserPrompt = ({
   chunkText: string
   contentSettings: ContentSettings
   prompt: SinglePromptType
+  systemPromptVariant?: SystemPromptVariant | null
 }): string => {
   const summary = article.articleSummary ?? ''
   const recordSections = getRecordSections({
@@ -269,7 +291,14 @@ ${wrapFullTextSourceText(chunkText)}
 
   return `${recordSections}${partSection}${getQuestionSection(prompt)}
 
-${getChunkInstructions({chunkCount, chunkNumber: chunkIndex + 1})}`
+${getChunkInstructions({
+  chunkCount,
+  chunkNumber: chunkIndex + 1,
+  isArticleMetadataQuotable: getIsArticleMetadataQuotable({
+    systemPromptVariant,
+    useMetadata: contentSettings.useMetadata,
+  }),
+})}`
 }
 
 export type FullTextChunkJudgmentForMerge = {
@@ -297,14 +326,19 @@ export const getFullTextMergeJudgingUserPrompt = ({
   chunkJudgments,
   contentSettings,
   prompt,
+  systemPromptVariant,
 }: {
   article: ArticleType
   chunkJudgments: FullTextChunkJudgmentForMerge[]
   contentSettings: ContentSettings
   prompt: SinglePromptType
+  systemPromptVariant?: SystemPromptVariant | null
 }): string => {
   const recordSections = getRecordSections({article, settings: contentSettings, wrap: wrapFullTextSourceText})
   const partLines = chunkJudgments.map(getChunkJudgmentLine).join('\n')
+  const recordQuoteSources = getRecordQuoteSourcesText(
+    getIsArticleMetadataQuotable({systemPromptVariant, useMetadata: contentSettings.useMetadata}),
+  )
 
   return `${recordSections}## part_judgments
 
@@ -317,6 +351,6 @@ ${getQuestionSection(prompt)}
 The article full text was too long for one request. It was split into ${chunkJudgments.length} parts and the question was judged on each part separately; part_judgments holds one JSON line per part. Combine them into one final answer to the question for the whole article.
 - A part that does not mention a fact says nothing about it; do not count its silence as evidence against.
 - Weigh each part by its explanation and its confidence.
-- Copy up to 3 quotes verbatim from the part_judgments quotes, the title or the summary, or return an empty quotes array.
+- Copy up to 3 quotes verbatim from the part_judgments quotes, ${recordQuoteSources}, or return an empty quotes array.
 - Respond ONLY with valid JSON with the keys answer, explanation and quotes, as the system prompt describes.`
 }

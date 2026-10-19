@@ -1813,6 +1813,7 @@ const assertFiguresFitOnTheirOwn = ({
         chunkText: figureBlock,
         contentSettings: run.contentSettings,
         prompt: run.prompt,
+        systemPromptVariant: run.storeIdentity.systemPromptVariant,
       }),
     })
     const imageTokens = getCallImageTokens(fullText, figureBlock)
@@ -1993,6 +1994,7 @@ const runMergeJudgment = async ({
     chunkJudgments,
     contentSettings: run.contentSettings,
     prompt: run.prompt,
+    systemPromptVariant: run.storeIdentity.systemPromptVariant,
   })
 
   assertPromptFitsFullTextLimit({
@@ -2064,6 +2066,7 @@ const runChunkedJudgment = async ({
       chunkText: getFullTextChunkText({chunk, renderedText: fullText.renderedText}),
       contentSettings: run.contentSettings,
       prompt: run.prompt,
+      systemPromptVariant: run.storeIdentity.systemPromptVariant,
     })
   })
 

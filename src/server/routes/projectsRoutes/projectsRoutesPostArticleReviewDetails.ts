@@ -1,6 +1,6 @@
 import {Elysia, t} from 'elysia'
 
-import {type ArticleMetadataLine, getArticleMetadataLines} from '../../../agent/judge/articleMetadataPrompt.ts'
+import {getArticleMetadataLines} from '../../../agent/judge/articleMetadataPrompt.ts'
 import {getJudgmentFullTextExecution} from '../../../agent/judge/judgmentFullTextExecution.ts'
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
@@ -11,6 +11,7 @@ import type {
   JudgmentRecord,
   PromptRecord,
 } from '../../../db/schemaTypes.ts'
+import type {ArticleMetadataLine} from '../../../utils/articleMetadataText.ts'
 import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadata.ts'
 import {getEffectiveFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
