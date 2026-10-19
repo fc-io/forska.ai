@@ -8,6 +8,10 @@ import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV1.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV2.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 type PromptSelectionCase = {
@@ -124,6 +128,20 @@ describe('judge prompt selection', () => {
     expect(getSinglePromptSystemPromptForArticle(article, 'anthropic', 'screening_v1')).toBe(
       SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
     )
+  })
+
+  test('uses the screening_v2 system prompt for a scientific article on the screening_v2 variant', () => {
+    const article = buildArticle()
+
+    expect(getSinglePromptSystemPromptForArticle(article, 'openai', 'screening_v2')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, 'anthropic', 'screening_v2')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2_ANTHROPIC,
+    )
+    expect(
+      getSinglePromptSystemPromptForArticle(buildArticle({articleId: 'fhir:patient-1'}), null, 'screening_v2'),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT)
   })
 
   test('treats a missing or legacy variant as the legacy system prompt', () => {

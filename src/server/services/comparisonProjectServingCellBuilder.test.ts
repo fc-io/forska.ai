@@ -1604,10 +1604,10 @@ test('article metadata judgments discovered in scope become separate comparison 
     'comparison-metadata-summary': ['legacy:false', 'legacy:true'],
   })
   expect(result.contentOrders).toEqual({
-    'comparison-metadata-ab': ['1100:0', '1100m:9'],
+    'comparison-metadata-ab': ['1100:0', '1100m:12'],
     'comparison-metadata-legacy': ['1100:0'],
-    'comparison-metadata-route': ['1100:0', '1100m:9'],
-    'comparison-metadata-screening': ['1100m-screening_v1:12'],
-    'comparison-metadata-summary': ['1100:0', '1100m:9'],
+    'comparison-metadata-route': ['1100:0', '1100m:12'],
+    'comparison-metadata-screening': ['1100m-screening_v1:15'],
+    'comparison-metadata-summary': ['1100:0', '1100m:12'],
   })
 })

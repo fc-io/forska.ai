@@ -1,5 +1,6 @@
 import type {QueryClient} from '@tanstack/solid-query'
 
+import type {SystemPromptVariant} from '../agent/judge/systemPromptVariant.ts'
 import {apiClient} from './apiClient.ts'
 import {handleApiResponse} from './utils/handleApiResponse.ts'
 
@@ -52,7 +53,7 @@ export type ProjectPromptPreview = {
     | null
   status: 'ready' | 'unavailable'
   systemPrompt: string | null
-  systemPromptVariant: 'legacy' | 'screening_v1'
+  systemPromptVariant: SystemPromptVariant
   userPrompt: string | null
 }
 

@@ -4,14 +4,17 @@ The judge system prompt for scientific articles is selected per project through 
 
 ## Variants
 
-| Variant        | Source                                                    | Used by                                                            |
-| -------------- | --------------------------------------------------------- | ------------------------------------------------------------------ |
-| `legacy`       | `src/agent/judge/judgeSinglePromptSystemPrompt.ts`        | Every project that existed before the column, and new manual ones. |
-| `screening_v1` | `src/agent/judge/judgeSinglePromptSystemPromptScreeningV1.ts` | Covidence projects created after the column was added.         |
+| Variant        | Source                                                        | Used by                                                                                              |
+| -------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `legacy`       | `src/agent/judge/judgeSinglePromptSystemPrompt.ts`            | Every project that existed before the column, and new manual ones.                                   |
+| `screening_v1` | `src/agent/judge/judgeSinglePromptSystemPromptScreeningV1.ts` | Covidence projects created after the column was added and before 2026-10-19.                         |
+| `screening_v2` | `src/agent/judge/judgeSinglePromptSystemPromptScreeningV2.ts` | Covidence projects created after 2026-10-19; v1 plus the model may quote the article_metadata block. |
 
 `NULL` in the column means `legacy`. The list of variants and the defaults live in `src/agent/judge/systemPromptVariant.ts`. Selection happens in `getSinglePromptSystemPromptForArticle` (`src/agent/judge/judgePromptSelection.ts`). FHIR patient records and structured file imports keep their own system prompts whatever the variant. The chunked evidence system prompt does not vary.
 
 `screening_v1` frames the task as screening a record against one section of the eligibility criteria, applies exclusion lines first, treats any one inclusion line as enough unless the criteria text says otherwise, asks for a structured explanation that ends with `Missing: <fact>` on a `maybe`, restricts quotes to the part of the record the section is about, counts the title as part of the record, and shows yes, no and maybe examples with `'yes' | 'no' | 'maybe'`. The text is the one specified in `forska-plans/2026-09-30-judge-system-prompt-variants.md`; the reasoning behind it is in `CRITERIA_PROMPT_REFINEMENTS_FABLE.md`, section 5.2. `src/agent/judge/judgePromptConstants.test.ts` pins its rules.
+
+`screening_v2` is `screening_v1` with exactly two changes: "You will receive" item 4 no longer says `, do not quote it`, and the quote rule reads `Quotes may come only from article_title, article_summary, article_metadata, or article_fulltext.` `src/agent/judge/judgeSinglePromptSystemPromptScreeningV2.test.ts` pins that it is v1 with exactly those two replacements. Existing projects keep their stored variant; nothing is backfilled. A variant's frozen text is never edited, so a prompt change becomes a new variant.
 
 ## How the variant reaches the model
 
