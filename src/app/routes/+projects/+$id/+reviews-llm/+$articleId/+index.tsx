@@ -236,6 +236,7 @@ export const ReviewDetail = () => {
 
                     <ReviewArticleDetails
                       article={data().article}
+                      articleMetadata={data().articleMetadata}
                       judgment={selectedJudgment()}
                       showTitle={false}
                       isFulltextExpanded={isFulltextExpanded()}
