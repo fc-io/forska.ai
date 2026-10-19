@@ -1,7 +1,7 @@
 import {expect, test} from 'bun:test'
 
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
-import {getArticleMetadataPromptText} from './articleMetadataPrompt.ts'
+import {getArticleMetadataLines, getArticleMetadataPromptText} from './articleMetadataPrompt.ts'
 
 const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => {
   return {
@@ -129,4 +129,65 @@ test('getArticleMetadataPromptText tolerates malformed source metadata and unkno
       }),
     ),
   ).toBe('journal: Journal of Tests')
+})
+
+test('getArticleMetadataLines returns the prompt labels and values in prompt order', () => {
+  expect(
+    getArticleMetadataLines(
+      buildArticle({
+        articleCreatedAt: new Date('2001-05-01T00:00:00.000Z'),
+        doi: '10.1000/example',
+        publicationStatus: 'published',
+        pubmedId: '31234567',
+        sourceMetadata: {issue: '3', journalTitle: 'BMJ', pages: '100-110', publicationYear: 2019, volume: '12'},
+      }),
+    ),
+  ).toEqual([
+    {label: 'journal', value: 'BMJ'},
+    {label: 'year', value: '2019'},
+    {label: 'volume/issue/pages', value: '12(3):100-110'},
+    {label: 'publication_type', value: 'published'},
+    {label: 'doi', value: '10.1000/example'},
+    {label: 'pmid', value: '31234567'},
+  ])
+  expect(getArticleMetadataLines(buildArticle())).toEqual([])
+  expect(getArticleMetadataLines(buildArticle({doi: '  ', sourceMetadata: '{not json'}))).toEqual([])
+})
+
+test('getArticleMetadataLines accepts an unvalidated publication status string like the judge article read', () => {
+  expect(
+    getArticleMetadataLines({
+      articleCreatedAt: null,
+      doi: null,
+      publicationStatus: 'in press',
+      pubmedId: null,
+      sourceMetadata: null,
+    }),
+  ).toEqual([{label: 'publication_type', value: 'in press'}])
+})
+
+test('getArticleMetadataPromptText renders exactly the getArticleMetadataLines lines', () => {
+  const articles = [
+    buildArticle({
+      articleCreatedAt: new Date('2024-02-03T00:00:00.000Z'),
+      doi: '10.1000/x',
+      publicationStatus: 'accepted',
+      pubmedId: '99',
+      sourceMetadata: {isPreprint: true, journalTitle: 'Journal\nof   Tests', pages: 'e12'},
+    }),
+    buildArticle({sourceMetadata: JSON.stringify({issue: '4', pages: '7-9'})}),
+    buildArticle({sourceMetadata: {volume: '12'}}),
+  ]
+
+  articles.map((article) => {
+    return expect(getArticleMetadataPromptText(article)).toBe(
+      getArticleMetadataLines(article)
+        .map((line) => {
+          return `${line.label}: ${line.value}`
+        })
+        .join('\n'),
+    )
+  })
+  expect(getArticleMetadataLines(buildArticle())).toEqual([])
+  expect(getArticleMetadataPromptText(buildArticle())).toBe('none available')
 })
