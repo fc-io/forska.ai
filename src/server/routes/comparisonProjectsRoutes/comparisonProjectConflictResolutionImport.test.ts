@@ -138,10 +138,14 @@ test('import source query selects only eligible comparison projects in newest or
 test('import source row query starts from selected conflict-resolution rows', () => {
   const sql = getComparisonProjectConflictResolutionImportSourceRowsSql({
     articleIdentifierTable: 'app.article_identifier',
+    articleImportRouteTable: 'app.article_import_route',
     articleTable: 'app.article',
     comparisonProjectConflictCommentTable: 'app.comparison_project_conflict_comment',
+    comparisonProjectImportRouteTable: 'app.comparison_project_import_route',
+    comparisonProjectSourceProjectTable: 'app.comparison_project_source_project',
     comparisonProjectTable: 'app.comparison_project',
     comparisonProjectConflictResolutionTable: 'app.comparison_project_conflict_resolution',
+    projectImportRouteTable: 'app.project_import_route',
     sourceComparisonProjectIds: ['comparison-source-1', 'comparison-source-2'],
   })
 
@@ -159,8 +163,28 @@ test('import source row query starts from selected conflict-resolution rows', ()
   expect(sql).toContain('FULL OUTER JOIN source_comment')
   expect(sql).toContain('COALESCE(source_resolution.sourceRowId, source_comment.sourceCommentId) AS sourceRowId')
   expect(sql).toContain('INNER JOIN app.article source_article ON source_article.id = source_row.sourceArticleId')
-  expect(sql).toContain('source_article.article_id AS sourceExternalArticleId')
   expect(sql).toContain('source_article.article_title AS sourceArticleTitle')
+  expect(sql).toContain('source_route AS (')
+  expect(sql).toContain('FROM app.comparison_project_import_route cpir')
+  expect(sql).toContain("WHERE cpir.comparison_project_id IN ('comparison-source-1', 'comparison-source-2')")
+  expect(sql).toContain('FROM app.comparison_project_source_project cpsp')
+  expect(sql).toContain('INNER JOIN app.project_import_route pir ON pir.project_id = cpsp.source_project_id')
+  expect(sql).toContain("WHERE cpsp.comparison_project_id IN ('comparison-source-1', 'comparison-source-2')")
+  expect(sql).toContain('source_external_article AS (')
+  expect(sql).toContain('INNER JOIN app.article_import_route air')
+  expect(sql).toContain('ON air.import_route_id = source_route.importRouteId')
+  expect(sql).toContain('AND air.article_id = source_row.sourceArticleId')
+  expect(sql).toContain("WHERE NULLIF(TRIM(COALESCE(air.external_article_id, '')), '') IS NOT NULL")
+  expect(sql).toContain('ORDER BY source_route.routeOrder ASC, air.external_article_id ASC')
+  expect(sql).toContain(
+    'COALESCE(source_external_article.externalArticleId, source_article.article_id) AS sourceExternalArticleId',
+  )
+  expect(sql).toContain(
+    'COALESCE(source_external_article.externalArticleId, source_article.article_id) AS externalArticleId',
+  )
+  expect(sql).not.toContain('source_article.article_id AS sourceExternalArticleId')
+  expect(sql).not.toContain('source_article.article_id AS externalArticleId')
+  expect(sql).not.toContain('--')
   expect(sql).toContain('LIST(DISTINCT normalized_value ORDER BY normalized_value) AS doiKeys')
   expect(sql).toContain('doi_identifier.doiKeys AS doiKeys')
   expect(sql).toContain("WHERE kind = 'doi'")
@@ -1151,6 +1175,65 @@ test('import plan keeps duplicate title matches ambiguous when no Covidence arti
       matchKind: 'title',
       targetArticles: [{articleId: 'target-a'}, {articleId: 'target-b'}],
     },
+  ])
+})
+
+test('import plan matches same-title identifier-less source rows to distinct targets by Covidence article key', () => {
+  const sourceRows = [
+    getSourceRow({
+      externalArticleId: 'covidence:r:covidence%3A%231',
+      sourceArticleId: 'source-article-1',
+      sourceExternalArticleId: 'covidence:r:covidence%3A%231',
+      sourceResolutionId: 'source-resolution-1',
+      sourceRowId: 'source-row-1',
+      title: 'Shared',
+    }),
+    getSourceRow({
+      externalArticleId: 'covidence:r:covidence%3A%232',
+      resolutionValue: 'no',
+      sourceArticleId: 'source-article-2',
+      sourceExternalArticleId: 'covidence:r:covidence%3A%232',
+      sourceResolutionId: 'source-resolution-2',
+      sourceRowId: 'source-row-2',
+      title: 'Shared',
+    }),
+  ]
+  const targetArticles = [
+    getTargetArticle({articleId: 'target-1', externalArticleId: 'covidence:t:covidence%3A%231', title: 'Shared'}),
+    getTargetArticle({articleId: 'target-2', externalArticleId: 'covidence:t:covidence%3A%232', title: ' Shared '}),
+  ]
+  const plan = getPlan({sourceRows, targetArticles})
+  const titleOnlyPlan = getPlan({
+    sourceRows: sourceRows.map((row) => {
+      return {...row, externalArticleId: null, sourceExternalArticleId: null}
+    }),
+    targetArticles,
+  })
+
+  expect(plan.errors).toEqual([])
+  expect(plan.warnings).toEqual([])
+  expect(plan.skipCounts).toEqual(getSkipCounts())
+  expect(plan.candidates).toEqual([
+    {
+      resolutionValue: 'yes',
+      sourceRows: [
+        {matchKey: 'covidence:#1\u001Fshared', matchKind: 'covidence-id-title', sourceRowId: 'source-row-1'},
+      ],
+      targetArticleId: 'target-1',
+    },
+    {
+      resolutionValue: 'no',
+      sourceRows: [
+        {matchKey: 'covidence:#2\u001Fshared', matchKind: 'covidence-id-title', sourceRowId: 'source-row-2'},
+      ],
+      targetArticleId: 'target-2',
+    },
+  ])
+  expect(titleOnlyPlan.candidates).toEqual([])
+  expect(titleOnlyPlan.skipCounts).toEqual(getSkipCounts({ambiguousTarget: 2}))
+  expect(titleOnlyPlan.skippedRows).toEqual([
+    {reason: 'ambiguous-target-match', sourceRowId: 'source-row-1'},
+    {reason: 'ambiguous-target-match', sourceRowId: 'source-row-2'},
   ])
 })
 

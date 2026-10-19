@@ -2099,10 +2099,14 @@ const getConflictResolutionImportSourceRows = async (
   const rows = await db.queryJson<ComparisonProjectConflictResolutionImportSourceRowQueryRow>(
     getComparisonProjectConflictResolutionImportSourceRowsSql({
       articleIdentifierTable,
+      articleImportRouteTable,
       articleTable,
       comparisonProjectConflictCommentTable,
+      comparisonProjectImportRouteTable,
+      comparisonProjectSourceProjectTable,
       comparisonProjectTable,
       comparisonProjectConflictResolutionTable,
+      projectImportRouteTable,
       sourceComparisonProjectIds,
     }),
   )
