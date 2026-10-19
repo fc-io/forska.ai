@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto'
+
 import {describe, expect, test} from 'bun:test'
 
 import {SINGLE_PROMPT_SYSTEM_PROMPT, SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPrompt.ts'
@@ -6,6 +8,10 @@ import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV1.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV3.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 describe('judge prompt constants', () => {
@@ -383,6 +389,110 @@ How to judge:`)
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1).not.toContain('medical doctor')
     expect(getScreeningV1PromptBody(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC)).toBe(
       getScreeningV1PromptBody(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1),
+    )
+  })
+})
+
+const getScreeningV3PromptBody = (prompt: string) => {
+  return prompt.slice(prompt.indexOf('\n\nThis is a filtering step'))
+}
+
+const getSha256 = (text: string) => {
+  return createHash('sha256').update(text).digest('hex')
+}
+
+describe('screening_v3 prompt constants', () => {
+  test('keeps both screening_v3 texts byte-identical to the frozen versions', () => {
+    expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3)).toBe(
+      '716e34da2dd0eaefcdd17c17b98cbe183e0a3438fb09254990725de490b75a6e',
+    )
+    expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC)).toBe(
+      'd35264c0af63265cea5909d25ac470b3dadfe0c657cb8bb4403e85d08e29c744',
+    )
+  })
+
+  test('frames the task as one criteria part of a systematic review filtering step', () => {
+    expect(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3.startsWith(
+        'You are screening records for a systematic review; the user is a researcher. A record is any combination of an article_title, an article_summary (the abstract), an article_metadata block (journal, year, publication type) and an article_fulltext.',
+      ),
+    ).toBe(true)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain(
+      'answer for that part only, not for the eligibility of the study as a whole.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain(
+      '\n\nThis is a filtering step: records you include go on to the next step, records you exclude stop here.\n\n',
+    )
+  })
+
+  test('treats a word only in the title, background, aim or conclusion as a weak signal', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain(
+      '- Judge from what the study did and found. A word only in the title, background, aim or conclusion is a weak signal by itself; it counts when the methods or results show the thing it names, in whatever form the criteria text accepts as evidence.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).not.toContain('is not evidence of an intervention')
+  })
+
+  test('applies an exclusion line only when the record shows it', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain(
+      'Unless it says otherwise, any one inclusion line is enough. Check exclusion lines first, but an exclusion applies only when the record shows it. If the record also matches an inclusion line on the same point, or the exclusion fits only in part, answer by the inclusion line, or maybe.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).not.toContain('if one applies, answer no')
+  })
+
+  test('answers no on a complete silent record and maybe on a thin record', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain(
+      '- A complete record (background, methods, results) that is silent on what the section asks for means absence: answer no. A thin record (summary empty, a few sentences, cut off, background only, or the start of the main text) means missing information: answer maybe if the title or text names what the section asks for, and name the missing fact.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).not.toContain('do not assume what a full text might report')
+  })
+
+  test('answers maybe only when the criteria text does not say what to assume', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain(
+      '- Answer maybe only if the output_type allows it and the record does not let you decide: a needed fact is missing and the criteria text does not say what to assume, the record names what the section asks for without describing it, or an exclusion might apply but is not shown. When the criteria text says what to assume for a missing fact, assume it instead of answering maybe.',
+    )
+  })
+
+  test('lists article_metadata as a quote source and asks for a Missing: part in maybe explanations', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain(
+      'Quotes are verbatim copies of record text (article_title, article_summary, article_metadata or article_fulltext), never of the question or criteria',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).not.toContain('do not quote it')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain(
+      'then, only for maybe, "Missing: " plus the missing fact in one or two words',
+    )
+  })
+
+  test('shows four Request and Response examples with yes, no, maybe and yes answers', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain(
+      'Examples. Each request holds the record, then the question and the output_type.\n\nRequest:\n\n## article_title',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3.match(/^Request:$/gm)).toHaveLength(4)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3.match(/^Response:$/gm)).toHaveLength(4)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3.match(/output_type: 'yes' \| 'no' \| 'maybe'/g)).toHaveLength(4)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3.match(/"answer": "(yes|no|maybe)"/g)).toEqual([
+      '"answer": "yes"',
+      '"answer": "no"',
+      '"answer": "maybe"',
+      '"answer": "yes"',
+    ])
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).toContain('Missing: results"')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).not.toContain('Example user message')
+  })
+
+  test('uses the medical-research framing for Anthropic and keeps the rest of the prompt identical', () => {
+    expect(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC.startsWith(
+        'You are assisting with medical and biomedical research only. This is not clinical advice, diagnosis, or treatment guidance. The user is a medical/biomedical researcher and a medical doctor. You are screening records for a systematic review. A record is any combination of an article_title,',
+      ),
+    ).toBe(true)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC).toContain(
+      'not for the eligibility of the study as a whole.\n\nThis is a harmless literature-review classification task. The article may mention pathogens, antimicrobial resistance, plasmids, virulence, outbreaks, or other bioscience topics.\nDo not provide procedural, experimental, diagnostic, treatment, or operational guidance. Only classify the record against the criteria section and summarize evidence from the provided text.\n\nThis is a filtering step',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC).not.toContain('the user is a researcher')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).not.toContain('medical doctor')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).not.toContain('harmless literature-review')
+    expect(getScreeningV3PromptBody(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC)).toBe(
+      getScreeningV3PromptBody(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3),
     )
   })
 })
