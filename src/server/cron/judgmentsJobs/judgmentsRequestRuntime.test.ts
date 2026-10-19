@@ -2303,6 +2303,20 @@ test('judge-worker prompt execution for a use_metadata project sends title, meta
   expect(metadataSection).toContain('pmid: 33333333')
   expect(userPrompt.slice(summaryIndex)).toContain('Covidence snapshot summary')
   expect(recordText).not.toContain('The Lancet')
+
+  const screeningV2Request = getSinglePromptJudgmentRequest({
+    article: firstJudgeCall.article,
+    contentSettings: firstJudgeCall.contentSettings,
+    prompt: firstJudgeCall.prompt,
+    provider: firstJudgeCall.modelConfig.provider,
+    systemPromptVariant: 'screening_v2',
+  })
+
+  expect(firstJudgeCall.systemPromptVariant).not.toBe('screening_v2')
+  expect(screeningV2Request.userPrompt).toBe(userPrompt)
+  expect(screeningV2Request.recordText).toBe(
+    'Covidence snapshot title\n\njournal: The Lancet\nyear: 2021\nvolume/issue/pages: 397(10278):1023-1034\ndoi: 10.1000/metadata-a\npmid: 33333333\n\nCovidence snapshot summary\n\n',
+  )
 })
 
 test('judge-worker prompt execution requeues when snapshot fulltext is not yet frozen', async () => {
