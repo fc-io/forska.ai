@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {
   getSystemPromptVariant,
+  newProjectSystemPromptVariant,
   type SystemPromptVariant,
   systemPromptVariants,
 } from '../../agent/judge/systemPromptVariant.ts'
@@ -1727,7 +1728,7 @@ export const projectsRoutes = new Elysia()
             ${(body.useFulltext ?? false) ? 'TRUE' : 'FALSE'},
             FALSE,
             ${(body.useMetadata ?? false) ? 'TRUE' : 'FALSE'},
-            ${getSqlLiteral(body.systemPromptVariant ?? null)},
+            ${getSqlLiteral(body.systemPromptVariant ?? newProjectSystemPromptVariant)},
             ${fullTextColumnValues.fullTextFigureMode},
             ${fullTextColumnValues.fullTextChunkPolicy},
             ${fullTextColumnValues.fullTextStrategyId},

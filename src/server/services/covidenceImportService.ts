@@ -3,8 +3,8 @@ import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import path from 'node:path'
 
 import {
-  covidenceSystemPromptVariant,
   getSystemPromptVariant,
+  newProjectSystemPromptVariant,
   type SystemPromptVariant,
 } from '../../agent/judge/systemPromptVariant.ts'
 import {type ArticleBibliographicSourceMetadata, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
@@ -2681,7 +2681,7 @@ export const getOrCreateCovidenceProject = async (params: {
       ${getSqlLiteral(params.title)},
       '${escapeSqlString(modelId)}',
       'summary',
-      ${getSqlLiteral(covidenceSystemPromptVariant)},
+      ${getSqlLiteral(newProjectSystemPromptVariant)},
       ${settings.useTitle ? 'TRUE' : 'FALSE'},
       ${settings.useAbstract ? 'TRUE' : 'FALSE'},
       ${settings.useFulltext ? 'TRUE' : 'FALSE'},
@@ -2748,7 +2748,7 @@ export const getOrCreateCovidenceProject = async (params: {
     id: projectId,
     modelId,
     name: params.title,
-    systemPromptVariant: covidenceSystemPromptVariant,
+    systemPromptVariant: newProjectSystemPromptVariant,
     ...settings,
   }
 }
