@@ -1,5 +1,6 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {getJsonValue} from '../../server/services/appQueryHelpers.ts'
+import {type ArticleMetadataLine, getArticleMetadataLinesText} from '../../utils/articleMetadataText.ts'
 import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 
 type ArticleMetadataPromptLine = [label: string, value: string | null]
@@ -7,8 +8,6 @@ type ArticleMetadataPromptLine = [label: string, value: string | null]
 type ArticleMetadataSource = Pick<ArticleRecord, 'articleCreatedAt' | 'doi' | 'pubmedId' | 'sourceMetadata'> & {
   publicationStatus: string | null
 }
-
-export type ArticleMetadataLine = {label: string; value: string}
 
 const noArticleMetadataText = 'none available'
 
@@ -69,12 +68,10 @@ export const getArticleMetadataLines = (article: ArticleMetadataSource): Article
     })
 }
 
-const getArticleMetadataLineText = (line: ArticleMetadataLine) => {
-  return `${line.label}: ${line.value}`
+export const getArticleMetadataSourceText = (article: ArticleMetadataSource): string => {
+  return getArticleMetadataLinesText(getArticleMetadataLines(article))
 }
 
 export const getArticleMetadataPromptText = (article: ArticleRecord): string => {
-  const lines = getArticleMetadataLines(article)
-
-  return lines.length > 0 ? lines.map(getArticleMetadataLineText).join('\n') : noArticleMetadataText
+  return getArticleMetadataSourceText(article) || noArticleMetadataText
 }

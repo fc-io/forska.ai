@@ -1,15 +1,32 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
+import {getArticleMetadataSourceText} from './articleMetadataPrompt.ts'
 import {
   type ContentSettings,
   getFullTextJudgingUserPrompt,
+  getIsArticleMetadataQuotable,
   judgeGetSinglePrompt,
   type SinglePromptType,
 } from './judgeGetPrompt.ts'
 import {getSinglePromptSystemPromptForArticle} from './judgePromptSelection.ts'
 import type {SystemPromptVariant} from './systemPromptVariant.ts'
 
-export const getJudgmentRecordText = (article: ArticleRecord, fullText: string | null): string => {
-  return `${article.articleTitle}\n\n${article.articleSummary ?? ''}\n\n${fullText ?? ''}`
+const getJudgmentRecordMetadataText = (article: ArticleRecord, isArticleMetadataQuotable: boolean) => {
+  return isArticleMetadataQuotable ? getArticleMetadataSourceText(article) : ''
+}
+
+export const getJudgmentRecordText = ({
+  article,
+  fullText,
+  isArticleMetadataQuotable,
+}: {
+  article: ArticleRecord
+  fullText: string | null
+  isArticleMetadataQuotable: boolean
+}): string => {
+  const metadataText = getJudgmentRecordMetadataText(article, isArticleMetadataQuotable)
+  const titleAndMetadata = metadataText === '' ? article.articleTitle : `${article.articleTitle}\n\n${metadataText}`
+
+  return `${titleAndMetadata}\n\n${article.articleSummary ?? ''}\n\n${fullText ?? ''}`
 }
 
 export const getSinglePromptJudgmentRequest = ({
@@ -32,7 +49,14 @@ export const getSinglePromptJudgmentRequest = ({
     renderedFullText === null
       ? judgeGetSinglePrompt(article, prompt, contentSettings, provider)
       : getFullTextJudgingUserPrompt({article, contentSettings, prompt, renderedFullText})
-  const recordText = getJudgmentRecordText(article, renderedFullText ?? article.fullText)
+  const recordText = getJudgmentRecordText({
+    article,
+    fullText: renderedFullText ?? article.fullText,
+    isArticleMetadataQuotable: getIsArticleMetadataQuotable({
+      systemPromptVariant,
+      useMetadata: contentSettings.useMetadata,
+    }),
+  })
 
   return {recordText, systemPrompt, userPrompt}
 }

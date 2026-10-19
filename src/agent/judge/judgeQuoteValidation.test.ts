@@ -1,6 +1,9 @@
 import {expect, test} from 'bun:test'
 
+import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {validateSinglePromptJudgmentQuotes} from '../judge.ts'
+import {getSinglePromptJudgmentRequest} from './getSinglePromptJudgmentRequest.ts'
+import {type SystemPromptVariant, systemPromptVariants} from './systemPromptVariant.ts'
 
 test('single prompt quote validation accepts matching quotes', () => {
   const result = validateSinglePromptJudgmentQuotes({
@@ -425,4 +428,116 @@ Is the study set in a hospital?`
     judgment: {answer: 'yes', explanation: 'because', quotes: ['fell from 62 to 41']},
     kind: 'valid',
   })
+})
+
+const getMetadataQuoteRequest = (input: {
+  sourceMetadata?: ArticleRecord['sourceMetadata']
+  systemPromptVariant: SystemPromptVariant
+  useMetadata: boolean
+}) => {
+  return getSinglePromptJudgmentRequest({
+    article: {
+      articleAuthors: null,
+      articleCreatedAt: null,
+      articleId: 'article:metadata',
+      articleSummary: 'Antibiotic prescriptions per 100 admissions fell from 62 to 41.',
+      articleTitle: 'Weekly pharmacist review of antibiotic orders',
+      articleUpdatedAt: null,
+      articleVersion: null,
+      arxivId: null,
+      biorxivId: null,
+      contentHash: null,
+      createdAt: new Date('2026-10-01T00:00:00.000Z'),
+      doi: null,
+      fullText: null,
+      fullTextAssets: null,
+      fullTextCharCount: null,
+      fullTextConversionAttempts: null,
+      fullTextConversionError: null,
+      fullTextConversionMetadata: null,
+      fullTextConversionModelId: null,
+      fullTextConversionStatus: null,
+      fullTextFetchedAt: null,
+      fullTextHtml: null,
+      fullTextOriginalFormat: null,
+      fullTextPDF: null,
+      fullTextSource: null,
+      id: 'article-metadata',
+      importRoute: null,
+      medrxivId: null,
+      originalData: null,
+      publicationStatus: null,
+      pubmedId: null,
+      sourceMetadata:
+        input.sourceMetadata === undefined
+          ? {journalTitle: 'Journal of Antimicrobial Chemotherapy', publicationYear: 2019}
+          : input.sourceMetadata,
+      updatedAt: new Date('2026-10-01T00:00:00.000Z'),
+      url: null,
+    },
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: input.useMetadata,
+      useTitle: true,
+    },
+    prompt: {
+      id: 'prompt-metadata',
+      originalText: 'Is the study set in a hospital?',
+      order: 1,
+      promptHeading: null,
+      type: `'yes' | 'no' | 'maybe'`,
+    },
+    provider: 'anthropic',
+    systemPromptVariant: input.systemPromptVariant,
+  })
+}
+
+const getValidatedMetadataQuotes = (request: ReturnType<typeof getMetadataQuoteRequest>, quotes: string[]) => {
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {answer: 'yes', explanation: 'because', quotes},
+    lastResponse: '{"answer":"yes"}',
+    maxRetries: 2,
+    recordText: request.recordText,
+    retryBasePrompt: request.userPrompt,
+  })
+
+  return result.kind === 'valid' ? result.judgment.quotes : result.kind
+}
+
+test('only screening_v2 with use_metadata on keeps a quote copied from the article_metadata block', () => {
+  const quotes = ['Journal of Antimicrobial Chemotherapy', 'year: 2019', 'fell from 62 to 41']
+
+  expect(
+    systemPromptVariants.flatMap((systemPromptVariant) => {
+      return [false, true].map((useMetadata) => {
+        return [
+          `${systemPromptVariant}:${useMetadata ? 'metadata' : 'no-metadata'}`,
+          getValidatedMetadataQuotes(getMetadataQuoteRequest({systemPromptVariant, useMetadata}), quotes),
+        ]
+      })
+    }),
+  ).toEqual([
+    ['legacy:no-metadata', 'retry'],
+    ['legacy:metadata', ['fell from 62 to 41']],
+    ['screening_v1:no-metadata', 'retry'],
+    ['screening_v1:metadata', ['fell from 62 to 41']],
+    ['screening_v2:no-metadata', 'retry'],
+    ['screening_v2:metadata', quotes],
+  ])
+})
+
+test('screening_v2 still drops the article_metadata heading and none available', () => {
+  const request = getMetadataQuoteRequest({
+    sourceMetadata: null,
+    systemPromptVariant: 'screening_v2',
+    useMetadata: true,
+  })
+
+  expect(request.userPrompt).toContain('## article_metadata\n\nnone available\n\n')
+  expect(getValidatedMetadataQuotes(request, ['none available', 'article_metadata', 'fell from 62 to 41'])).toEqual([
+    'fell from 62 to 41',
+  ])
 })
