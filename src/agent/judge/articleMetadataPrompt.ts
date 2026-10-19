@@ -4,6 +4,12 @@ import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.t
 
 type ArticleMetadataPromptLine = [label: string, value: string | null]
 
+type ArticleMetadataSource = Pick<ArticleRecord, 'articleCreatedAt' | 'doi' | 'pubmedId' | 'sourceMetadata'> & {
+  publicationStatus: string | null
+}
+
+export type ArticleMetadataLine = {label: string; value: string}
+
 const noArticleMetadataText = 'none available'
 
 const getPromptLineValue = (value: unknown) => {
@@ -33,7 +39,7 @@ const getVolumeIssuePagesText = (metadata: ReturnType<typeof getArticleSourceMet
 }
 
 const getPublicationTypeText = (
-  article: Pick<ArticleRecord, 'publicationStatus'>,
+  article: Pick<ArticleMetadataSource, 'publicationStatus'>,
   metadata: ReturnType<typeof getArticleSourceMetadataValue>,
 ) => {
   return (
@@ -43,7 +49,7 @@ const getPublicationTypeText = (
   )
 }
 
-export const getArticleMetadataPromptText = (article: ArticleRecord): string => {
+export const getArticleMetadataLines = (article: ArticleMetadataSource): ArticleMetadataLine[] => {
   const metadata = getArticleSourceMetadataValue(getJsonValue(article.sourceMetadata))
   const lines: ArticleMetadataPromptLine[] = [
     ['journal', getPromptLineValue(metadata?.journalTitle)],
@@ -53,13 +59,22 @@ export const getArticleMetadataPromptText = (article: ArticleRecord): string => 
     ['doi', getPromptLineValue(article.doi)],
     ['pmid', getPromptLineValue(article.pubmedId)],
   ]
-  const presentLines = lines
+
+  return lines
     .filter((line): line is [string, string] => {
       return line[1] !== null
     })
     .map(([label, value]) => {
-      return `${label}: ${value}`
+      return {label, value}
     })
+}
 
-  return presentLines.length > 0 ? presentLines.join('\n') : noArticleMetadataText
+const getArticleMetadataLineText = (line: ArticleMetadataLine) => {
+  return `${line.label}: ${line.value}`
+}
+
+export const getArticleMetadataPromptText = (article: ArticleRecord): string => {
+  const lines = getArticleMetadataLines(article)
+
+  return lines.length > 0 ? lines.map(getArticleMetadataLineText).join('\n') : noArticleMetadataText
 }
