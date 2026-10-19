@@ -329,10 +329,10 @@ test('full-text strategies discovered in scope become separate comparison column
     'comparison-fts-summary': ['legacy:false:fts-aaaaaaaaaaaaaaaa', 'legacy:false:fts-bbbbbbbbbbbbbbbb'],
   })
   expect(result.contentOrders).toEqual({
-    'comparison-fts-ab': ['1100:0', `${fullTextAContentKey}:19`, `${fullTextBContentKey}:37`],
+    'comparison-fts-ab': ['1100:0', `${fullTextAContentKey}:25`, `${fullTextBContentKey}:49`],
     'comparison-fts-none': ['1100:0', '0010:1'],
-    'comparison-fts-route': [`${fullTextAContentKey}:1`, `${fullTextBContentKey}:19`],
-    'comparison-fts-summary': [`${fullTextAContentKey}:1`, `${fullTextBContentKey}:19`],
+    'comparison-fts-route': [`${fullTextAContentKey}:1`, `${fullTextBContentKey}:25`],
+    'comparison-fts-summary': [`${fullTextAContentKey}:1`, `${fullTextBContentKey}:25`],
   })
   expect(result.actualRows).toEqual([
     {
