@@ -599,14 +599,63 @@ const getSourceComparisonProjectWhereSql = (alias: string, sourceComparisonProje
     : 'WHERE FALSE'
 }
 
-export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params: {
-  articleIdentifierTable: string
-  articleTable: string
-  comparisonProjectConflictCommentTable: string
-  comparisonProjectTable: string
-  comparisonProjectConflictResolutionTable: string
+type ComparisonProjectConflictResolutionImportSourceExternalArticleSqlParams = {
+  articleImportRouteTable: string
+  comparisonProjectImportRouteTable: string
+  comparisonProjectSourceProjectTable: string
+  projectImportRouteTable: string
   sourceComparisonProjectIds: string[]
-}) => {
+}
+
+const getComparisonProjectConflictResolutionImportSourceExternalArticleCtesSql = (
+  params: ComparisonProjectConflictResolutionImportSourceExternalArticleSqlParams,
+) => {
+  return `
+    source_route AS (
+      SELECT
+        cpir.comparison_project_id AS sourceComparisonProjectId,
+        cpir.import_route_id AS importRouteId,
+        0 AS routeOrder
+      FROM ${params.comparisonProjectImportRouteTable} cpir
+      ${getSourceComparisonProjectWhereSql('cpir', params.sourceComparisonProjectIds)}
+      UNION ALL
+      SELECT
+        cpsp.comparison_project_id AS sourceComparisonProjectId,
+        pir.import_route_id AS importRouteId,
+        1 AS routeOrder
+      FROM ${params.comparisonProjectSourceProjectTable} cpsp
+      INNER JOIN ${params.projectImportRouteTable} pir ON pir.project_id = cpsp.source_project_id
+      ${getSourceComparisonProjectWhereSql('cpsp', params.sourceComparisonProjectIds)}
+    ),
+    source_external_article AS (
+      SELECT
+        source_row.sourceComparisonProjectId AS sourceComparisonProjectId,
+        source_row.sourceArticleId AS sourceArticleId,
+        air.external_article_id AS externalArticleId
+      FROM source_row
+      INNER JOIN source_route ON source_route.sourceComparisonProjectId = source_row.sourceComparisonProjectId
+      INNER JOIN ${params.articleImportRouteTable} air
+        ON air.import_route_id = source_route.importRouteId
+       AND air.article_id = source_row.sourceArticleId
+      WHERE NULLIF(TRIM(COALESCE(air.external_article_id, '')), '') IS NOT NULL
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY source_row.sourceComparisonProjectId, source_row.sourceArticleId
+        ORDER BY source_route.routeOrder ASC, air.external_article_id ASC
+      ) = 1
+    ),`
+}
+
+export const getComparisonProjectConflictResolutionImportSourceRowsSql = (
+  params: {
+    articleIdentifierTable: string
+    articleTable: string
+    comparisonProjectConflictCommentTable: string
+    comparisonProjectTable: string
+    comparisonProjectConflictResolutionTable: string
+  } & ComparisonProjectConflictResolutionImportSourceExternalArticleSqlParams,
+) => {
+  const sourceExternalArticleIdSql = 'COALESCE(source_external_article.externalArticleId, source_article.article_id)'
+
   return `
     WITH source_resolution AS (
       SELECT
@@ -656,6 +705,7 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
         ON source_comment.sourceComparisonProjectId = source_resolution.sourceComparisonProjectId
        AND source_comment.sourceArticleId = source_resolution.sourceArticleId
     ),
+    ${getComparisonProjectConflictResolutionImportSourceExternalArticleCtesSql(params)}
     doi_identifier AS (
       SELECT
         article_id AS articleId,
@@ -678,7 +728,7 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       source_row.sourceResolutionId AS sourceResolutionId,
       source_row.sourceRowId AS sourceRowId,
       source_row.sourceArticleId AS sourceArticleId,
-      source_article.article_id AS sourceExternalArticleId,
+      ${sourceExternalArticleIdSql} AS sourceExternalArticleId,
       source_article.article_title AS sourceArticleTitle,
       source_row.resolutionValue AS resolutionValue,
       source_row.sourceReviewerUserId AS sourceReviewerUserId,
@@ -693,12 +743,15 @@ export const getComparisonProjectConflictResolutionImportSourceRowsSql = (params
       source_article.doi AS doi,
       source_article.pubmed_id AS pubmedId,
       source_article.arxiv_id AS arxivId,
-      source_article.article_id AS externalArticleId,
+      ${sourceExternalArticleIdSql} AS externalArticleId,
       source_article.article_title AS title
     FROM source_row
     INNER JOIN ${params.comparisonProjectTable} source_comparison_project
       ON source_comparison_project.id = source_row.sourceComparisonProjectId
     INNER JOIN ${params.articleTable} source_article ON source_article.id = source_row.sourceArticleId
+    LEFT JOIN source_external_article
+      ON source_external_article.sourceComparisonProjectId = source_row.sourceComparisonProjectId
+     AND source_external_article.sourceArticleId = source_row.sourceArticleId
     LEFT JOIN doi_identifier ON doi_identifier.articleId = source_article.id
     LEFT JOIN strong_identifier ON strong_identifier.articleId = source_article.id
     ORDER BY source_row.sourceRowId ASC
