@@ -6294,6 +6294,60 @@ test('clone route copies the metadata flag', async () => {
   expect(cloneConfigFields).toContain('useMetadata')
 })
 
+test('clone route keeps the source system prompt variant', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const screeningProjectId = 'clone-variant-screening-source'
+  const legacyProjectId = 'clone-variant-legacy-source'
+
+  await insertProjectFixture({
+    connectionId: 'clone-variant-screening-connection',
+    modelId: 'clone-variant-screening-model',
+    projectId: screeningProjectId,
+  })
+  await insertProjectFixture({
+    connectionId: 'clone-variant-legacy-connection',
+    modelId: 'clone-variant-legacy-model',
+    projectId: legacyProjectId,
+  })
+  await runDatabase(`
+    UPDATE app.project
+    SET system_prompt_variant = 'screening_v1'
+    WHERE id = '${screeningProjectId}'
+  `)
+
+  const screeningCloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${screeningProjectId}/clone`, {method: 'POST'}),
+  )
+  const screeningCloneBody = (await screeningCloneResponse.json()) as {data: {id: string}}
+  const legacyCloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${legacyProjectId}/clone`, {method: 'POST'}),
+  )
+  const legacyCloneBody = (await legacyCloneResponse.json()) as {data: {id: string}}
+
+  expect(screeningCloneResponse.status).toBe(200)
+  expect(legacyCloneResponse.status).toBe(200)
+
+  const projectRows = await queryDatabase<{id: string; systemPromptVariant: string | null}>(`
+    SELECT id, system_prompt_variant AS systemPromptVariant
+    FROM app.project
+    WHERE id IN ('${screeningCloneBody.data.id}', '${legacyCloneBody.data.id}')
+  `)
+
+  expect(
+    projectRows.find((row) => {
+      return row.id === screeningCloneBody.data.id
+    }),
+  ).toEqual({id: screeningCloneBody.data.id, systemPromptVariant: 'screening_v1'})
+  expect(
+    projectRows.find((row) => {
+      return row.id === legacyCloneBody.data.id
+    }),
+  ).toEqual({id: legacyCloneBody.data.id, systemPromptVariant: null})
+})
+
 test('editing a cloned project model leaves the source project model unchanged', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
@@ -6358,7 +6412,7 @@ test('editing a cloned project model leaves the source project model unchanged',
   await flushMartRefreshes()
 })
 
-test('create route stores the requested system prompt variant and defaults to legacy', async () => {
+test('create route stores the requested system prompt variant and defaults to screening_v3', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -6391,23 +6445,34 @@ test('create route stores the requested system prompt variant and defaults to le
     }),
   )
   const defaultBody = (await defaultResponse.json()) as {data: {id: string; systemPromptVariant: string}}
+  const legacyResponse = await app.handle(
+    new Request('http://localhost/api/projects', {
+      body: JSON.stringify({name: 'Legacy variant project', modelId, systemPromptVariant: 'legacy'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const legacyBody = (await legacyResponse.json()) as {data: {id: string; systemPromptVariant: string}}
 
   expect(screeningResponse.status).toBe(200)
   expect(screeningBody.data.systemPromptVariant).toBe('screening_v1')
   expect(defaultResponse.status).toBe(200)
-  expect(defaultBody.data.systemPromptVariant).toBe('legacy')
+  expect(defaultBody.data.systemPromptVariant).toBe('screening_v3')
+  expect(legacyResponse.status).toBe(200)
+  expect(legacyBody.data.systemPromptVariant).toBe('legacy')
 
   const projectRows = await queryDatabase<{id: string; systemPromptVariant: string | null}>(`
     SELECT id, system_prompt_variant AS systemPromptVariant
     FROM app.project
-    WHERE id IN ('${screeningBody.data.id}', '${defaultBody.data.id}')
+    WHERE id IN ('${screeningBody.data.id}', '${defaultBody.data.id}', '${legacyBody.data.id}')
     ORDER BY id ASC
   `)
 
   expect(projectRows).toEqual(
     [
       {id: screeningBody.data.id, systemPromptVariant: 'screening_v1'},
-      {id: defaultBody.data.id, systemPromptVariant: null},
+      {id: defaultBody.data.id, systemPromptVariant: 'screening_v3'},
+      {id: legacyBody.data.id, systemPromptVariant: 'legacy'},
     ].sort((left, right) => {
       return left.id.localeCompare(right.id)
     }),
@@ -6421,7 +6486,16 @@ test('create route stores the requested system prompt variant and defaults to le
     LIMIT 1
   `)
 
+  const [defaultConfigDelta] = await queryDatabase<{configFieldSet: string}>(`
+    SELECT config_field_set AS configFieldSet
+    FROM app.review_change_delta
+    WHERE project_id = '${defaultBody.data.id}'
+      AND change_kind = 'project.reviewConfig.updated'
+    LIMIT 1
+  `)
+
   expect(screeningConfigDelta?.configFieldSet.split(',')).toContain('systemPromptVariant')
+  expect(defaultConfigDelta?.configFieldSet.split(',')).toContain('systemPromptVariant')
 
   await flushMartRefreshes()
 })

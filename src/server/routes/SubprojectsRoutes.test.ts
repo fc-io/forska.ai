@@ -287,6 +287,11 @@ test('subproject prompt filters only match source judgments with the source syst
     WHERE project_id = '${subprojectId}'
     ORDER BY article_id
   `)
+  const [projectRow] = await queryDatabase<{systemPromptVariant: string | null}>(`
+    SELECT system_prompt_variant AS systemPromptVariant
+    FROM app.project
+    WHERE id = '${subprojectId}'
+  `)
   const [configDelta] = await queryDatabase<{configFieldSet: string}>(`
     SELECT config_field_set AS configFieldSet
     FROM app.review_change_delta
@@ -297,7 +302,65 @@ test('subproject prompt filters only match source judgments with the source syst
 
   expect(body.data.articleCount).toBe(1)
   expect(articleRows).toEqual([{articleId: screeningArticleId}])
+  expect(projectRow).toEqual({systemPromptVariant: 'screening_v1'})
   expect(configDelta?.configFieldSet.split(',')).toContain('systemPromptVariant')
+})
+
+test('subproject route uses screening_v3 when the sources do not share one system prompt variant', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const modelId = 'subproject-mixed-variant-model'
+  const legacySourceProjectId = 'subproject-mixed-variant-legacy-source'
+  const screeningSourceProjectId = 'subproject-mixed-variant-screening-source'
+
+  await insertProjectFixture({
+    connectionId: 'subproject-mixed-variant-connection',
+    modelId,
+    projectId: legacySourceProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, system_prompt_variant)
+    VALUES ('${screeningSourceProjectId}', 'Subproject Screening Source', '${modelId}', TRUE, TRUE, FALSE, FALSE, 'screening_v1')
+  `)
+
+  const testApp = app
+  const createSubproject = async (name: string, sourceProjectIds: string[]) => {
+    const response = await testApp.handle(
+      new Request('http://localhost/api/subprojects', {
+        body: JSON.stringify({name, modelId, promptSelections: [], sourceProjectIds}),
+        headers: {'content-type': 'application/json'},
+        method: 'POST',
+      }),
+    )
+    const body = (await response.json()) as {data: {project: {id: string}}}
+
+    expect(response.status).toBe(200)
+
+    return body.data.project.id
+  }
+
+  const mixedSubprojectId = await createSubproject('Mixed variant subproject', [
+    legacySourceProjectId,
+    screeningSourceProjectId,
+  ])
+  const sourcelessSubprojectId = await createSubproject('Sourceless subproject', [])
+  const legacySubprojectId = await createSubproject('Legacy source subproject', [legacySourceProjectId])
+  const projectRows = await queryDatabase<{id: string; systemPromptVariant: string | null}>(`
+    SELECT id, system_prompt_variant AS systemPromptVariant
+    FROM app.project
+    WHERE id IN ('${mixedSubprojectId}', '${sourcelessSubprojectId}', '${legacySubprojectId}')
+  `)
+  const getStoredVariant = (projectId: string) => {
+    return projectRows.find((row) => {
+      return row.id === projectId
+    })?.systemPromptVariant
+  }
+
+  expect(getStoredVariant(mixedSubprojectId)).toBe('screening_v3')
+  expect(getStoredVariant(sourcelessSubprojectId)).toBe('screening_v3')
+  expect(getStoredVariant(legacySubprojectId)).toBe('legacy')
 })
 
 test('subproject prompt filters only match source judgments with the source metadata flag and copy the flag', async () => {

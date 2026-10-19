@@ -1,6 +1,10 @@
 import {Elysia, t} from 'elysia'
 
-import {getSystemPromptVariant, type SystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
+import {
+  getSystemPromptVariant,
+  newProjectSystemPromptVariant,
+  type SystemPromptVariant,
+} from '../../agent/judge/systemPromptVariant.ts'
 import {getEffectiveFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
@@ -100,6 +104,19 @@ const getSubprojectUseMetadata = (projectBounds: ProjectBound[]) => {
       return project.useMetadata
     })
   )
+}
+
+const getSubprojectSystemPromptVariant = (projectBounds: ProjectBound[]): SystemPromptVariant => {
+  const sourceSystemPromptVariants = new Set(
+    projectBounds.map((project) => {
+      return project.systemPromptVariant
+    }),
+  )
+  const [sourceSystemPromptVariant] = sourceSystemPromptVariants
+
+  return sourceSystemPromptVariants.size === 1 && sourceSystemPromptVariant
+    ? sourceSystemPromptVariant
+    : newProjectSystemPromptVariant
 }
 
 const getProjectArticleWhereClause = (params: {
@@ -530,6 +547,7 @@ export const subprojectsRoutes = new Elysia()
             use_abstract,
             use_fulltext,
             use_metadata,
+            system_prompt_variant,
             date_from,
             date_to
           )
@@ -542,6 +560,7 @@ export const subprojectsRoutes = new Elysia()
             TRUE,
             FALSE,
             ${getSubprojectUseMetadata(projectBounds) ? 'TRUE' : 'FALSE'},
+            ${appQueryHelpers.getSqlLiteral(getSubprojectSystemPromptVariant(projectBounds))},
             ${appQueryHelpers.getSqlLiteral(body.dateFrom ? new Date(body.dateFrom) : null)},
             ${appQueryHelpers.getSqlLiteral(body.dateTo ? new Date(body.dateTo) : null)}
           )

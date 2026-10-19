@@ -4,7 +4,7 @@ export type SystemPromptVariant = (typeof systemPromptVariants)[number]
 
 export const defaultSystemPromptVariant: SystemPromptVariant = 'legacy'
 
-export const covidenceSystemPromptVariant: SystemPromptVariant = 'screening_v2'
+export const newProjectSystemPromptVariant: SystemPromptVariant = 'screening_v3'
 
 const articleMetadataQuoteSystemPromptVariants: readonly SystemPromptVariant[] = ['screening_v2', 'screening_v3']
 

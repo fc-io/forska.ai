@@ -1,17 +1,17 @@
 import {expect, test} from 'bun:test'
 
 import {
-  covidenceSystemPromptVariant,
   defaultSystemPromptVariant,
   getSystemPromptVariant,
+  newProjectSystemPromptVariant,
   systemPromptVariantAllowsArticleMetadataQuotes,
   systemPromptVariants,
 } from './systemPromptVariant.ts'
 
-test('screening_v2 is a registered variant and the default for new Covidence projects', () => {
+test('screening_v2 and screening_v3 are registered variants and screening_v3 is the default for new projects', () => {
   expect(systemPromptVariants).toEqual(['legacy', 'screening_v1', 'screening_v2', 'screening_v3'])
   expect(defaultSystemPromptVariant).toBe('legacy')
-  expect(covidenceSystemPromptVariant).toBe('screening_v2')
+  expect(newProjectSystemPromptVariant).toBe('screening_v3')
   expect(getSystemPromptVariant('screening_v2')).toBe('screening_v2')
   expect(getSystemPromptVariant('screening_v3')).toBe('screening_v3')
   expect(getSystemPromptVariant('screening_v4')).toBe('legacy')
