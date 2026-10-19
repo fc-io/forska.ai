@@ -888,6 +888,116 @@ test('creating a comparison project from a project copies comments, also comment
   await postComment('comment-article-3', null)
 })
 
+test('creating a comparison project from a project matches same-title Covidence articles by the source comparison project route ids', async () => {
+  const sharedTitle = '围手术期患者抗生素合理应用分析'
+
+  await getDatabase().run(`
+    INSERT INTO app.import_route (id, route)
+    VALUES
+      ('covidence-route-source', 'covidence:route-source'),
+      ('covidence-route-other', 'covidence:route-other'),
+      ('covidence-route-target', 'covidence:route-target');
+
+    INSERT INTO app.project (id, name, description, model_id, human_judgment_mode, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES
+      ('covidence-source', 'Covidence source', NULL, 'comment-model', 'summary', TRUE, TRUE, FALSE, FALSE),
+      ('covidence-target', 'Covidence target', NULL, 'comment-model', 'summary', TRUE, TRUE, FALSE, FALSE);
+
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled, criteria_disposition, criteria_section_key, criteria_section_label)
+    VALUES
+      ('covidence-source-include', 'covidence-source', 'comment-include', 0, TRUE, 'include', 'population', 'Population'),
+      ('covidence-source-exclude', 'covidence-source', 'comment-exclude', 1, TRUE, 'exclude', 'exclusion', 'Exclusion'),
+      ('covidence-target-include', 'covidence-target', 'comment-include', 0, TRUE, 'include', 'population', 'Population'),
+      ('covidence-target-exclude', 'covidence-target', 'comment-exclude', 1, TRUE, 'exclude', 'exclusion', 'Exclusion');
+
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES
+      ('covidence-source-project-route', 'covidence-source', 'covidence-route-source'),
+      ('covidence-target-project-route', 'covidence-target', 'covidence-route-target');
+
+    INSERT INTO app.article (id, article_id, article_title, article_summary, article_created_at)
+    VALUES
+      ('covidence-source-article-1', NULL, '${sharedTitle}', NULL, TIMESTAMPTZ '2026-10-04T00:00:00Z'),
+      ('covidence-source-article-2', NULL, '${sharedTitle}', NULL, TIMESTAMPTZ '2026-10-05T00:00:00Z'),
+      ('covidence-target-article-1', NULL, '${sharedTitle}', NULL, TIMESTAMPTZ '2026-10-06T00:00:00Z'),
+      ('covidence-target-article-2', NULL, '${sharedTitle}', NULL, TIMESTAMPTZ '2026-10-07T00:00:00Z');
+
+    INSERT INTO app.article_import_route (id, article_id, import_route_id, external_article_id)
+    VALUES
+      ('covidence-air-source-1', 'covidence-source-article-1', 'covidence-route-source', 'covidence:route-source:covidence%3A%2339727'),
+      ('covidence-air-other-1', 'covidence-source-article-1', 'covidence-route-other', 'covidence:route-other:covidence%3A%2339397'),
+      ('covidence-air-source-2', 'covidence-source-article-2', 'covidence-route-source', 'covidence:route-source:covidence%3A%2339397'),
+      ('covidence-air-target-1', 'covidence-target-article-1', 'covidence-route-target', 'covidence:route-target:covidence%3A%2339727'),
+      ('covidence-air-target-2', 'covidence-target-article-2', 'covidence-route-target', 'covidence:route-target:covidence%3A%2339397');
+
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('covidence-source-project-article-1', 'covidence-source', 'covidence-source-article-1'),
+      ('covidence-source-project-article-2', 'covidence-source', 'covidence-source-article-2'),
+      ('covidence-target-project-article-1', 'covidence-target', 'covidence-target-article-1'),
+      ('covidence-target-project-article-2', 'covidence-target', 'covidence-target-article-2');
+
+    INSERT INTO app.comparison_project (
+      id, name, description, model_ids, compare_with_humans, allow_conflict_resolution, human_judgment_mode,
+      summary_source_project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images
+    )
+    VALUES ('covidence-comparison-source', 'Covidence A', NULL, ['comment-model'], TRUE, TRUE, 'summary', 'covidence-source', TRUE, TRUE, FALSE, FALSE);
+
+    INSERT INTO app.comparison_project_prompt (id, comparison_project_id, prompt_id, prompt_order, criteria_disposition, criteria_section_key, criteria_section_label)
+    VALUES
+      ('covidence-a-include', 'covidence-comparison-source', 'comment-include', 0, 'include', 'population', 'Population'),
+      ('covidence-a-exclude', 'covidence-comparison-source', 'comment-exclude', 1, 'exclude', 'exclusion', 'Exclusion');
+
+    INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id)
+    VALUES ('covidence-a-source', 'covidence-comparison-source', 'covidence-source');
+
+    INSERT INTO app.comparison_project_import_route (id, comparison_project_id, import_route_id)
+    VALUES ('covidence-a-route', 'covidence-comparison-source', 'covidence-route-source');
+
+    INSERT INTO app.comparison_project_conflict_resolution (id, comparison_project_id, article_id, answer_value)
+    VALUES
+      ('covidence-resolution-1', 'covidence-comparison-source', 'covidence-source-article-1', 'yes'),
+      ('covidence-resolution-2', 'covidence-comparison-source', 'covidence-source-article-2', 'no');
+  `)
+
+  const response = await postJson('/api/comparison-projects/from-project', {
+    allowConflictResolution: true,
+    compareWithHumans: true,
+    conflictResolutionImportMode: 'all-matched',
+    conflictResolutionImportSourceComparisonProjectIds: ['covidence-comparison-source'],
+    description: null,
+    humanJudgmentMode: 'summary',
+    name: 'Covidence B',
+    sourceProjectId: 'covidence-target',
+    sourceProjectIds: ['covidence-target'],
+  })
+  const bodyText = await response.text()
+
+  expect(response.status, bodyText).toBe(200)
+
+  const body = JSON.parse(bodyText) as {conflictResolutionImportSummary: Record<string, unknown>; data: {id: string}}
+  const importedResolutions = await getDatabase().queryJson<{answerValue: string; articleId: string}>(`
+    SELECT article_id AS articleId, answer_value AS answerValue
+    FROM app.comparison_project_conflict_resolution
+    WHERE comparison_project_id = '${body.data.id}'
+    ORDER BY article_id ASC
+  `)
+
+  expect(body.conflictResolutionImportSummary).toMatchObject({
+    imported: 2,
+    matched: 2,
+    scanned: 2,
+    skipped: 0,
+    skippedAmbiguousTarget: 0,
+    skippedConflicting: 0,
+    warnings: [],
+  })
+  expect(importedResolutions).toEqual([
+    {answerValue: 'yes', articleId: 'covidence-target-article-1'},
+    {answerValue: 'no', articleId: 'covidence-target-article-2'},
+  ])
+})
+
 test('PDF imports without comment fields leave comments alone, also when clearing an undecided article', async () => {
   const targetBefore = await setTargetResolution('no', 'Target note')
   const importResponse = await commitPdfImport('yes', 'ignore')
