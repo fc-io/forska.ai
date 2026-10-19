@@ -34,6 +34,12 @@ const storeImportedArticlesWithTxRef = {
   },
 }
 
+const fullArticlesByIdsRef = {
+  current: async (_articleIds: string[]): Promise<unknown[]> => {
+    return []
+  },
+}
+
 const registerModuleMocks = () => {
   void mock.module(appDatabaseServiceModulePath, () => {
     return {
@@ -77,6 +83,9 @@ const registerModuleMocks = () => {
     return {
       getAppQueryService: () => {
         return {
+          getFullArticlesByIds: (articleIds: string[]) => {
+            return fullArticlesByIdsRef.current(articleIds)
+          },
           getProjectReviewConfig: async () => {
             return {dateFrom: '2026-01-01', dateTo: '2026-12-31'}
           },
@@ -106,6 +115,9 @@ const getApp = async () => {
 
 afterEach(() => {
   mock.restore()
+  fullArticlesByIdsRef.current = async () => {
+    return []
+  }
 })
 
 test.each(['0', '12'])('conversion stats return a numeric count when DuckDB returns %s', async (count) => {
@@ -537,4 +549,64 @@ test('PDF project route returns detail-indexing availability before queueing whe
     success: false,
   })
   expect(jobRequests).toHaveLength(0)
+})
+
+const getArticleDetailsRow = (overrides: Record<string, unknown> = {}) => {
+  return {
+    articleCreatedAt: new Date('2018-03-01T00:00:00.000Z'),
+    articleTitle: 'Article 1',
+    doi: '10.1000/global',
+    id: 'article-1',
+    publicationStatus: 'published',
+    pubmedId: '31234567',
+    sourceMetadata: {issue: '3', journalTitle: 'BMJ', pages: '100-110', publicationYear: 2019, volume: '12'},
+    ...overrides,
+  }
+}
+
+const getArticleDetails = async (row: Record<string, unknown>) => {
+  const fullArticleRequests: string[][] = []
+  fullArticlesByIdsRef.current = async (articleIds) => {
+    fullArticleRequests.push(articleIds)
+    return [row]
+  }
+  queryJsonRef.current = async () => {
+    return []
+  }
+
+  const app = await getApp()
+  const response = await app.handle(new Request('http://localhost/api/articles/article-1'))
+  const body = (await response.json()) as {articleMetadata: Array<{label: string; value: string}>}
+
+  return {body, fullArticleRequests, status: response.status}
+}
+
+test('article details always return the article_metadata lines built from the article read', async () => {
+  const result = await getArticleDetails(getArticleDetailsRow())
+
+  expect(result.status).toBe(200)
+  expect(result.fullArticleRequests).toEqual([['article-1']])
+  expect(result.body.articleMetadata).toEqual([
+    {label: 'journal', value: 'BMJ'},
+    {label: 'year', value: '2019'},
+    {label: 'volume/issue/pages', value: '12(3):100-110'},
+    {label: 'publication_type', value: 'published'},
+    {label: 'doi', value: '10.1000/global'},
+    {label: 'pmid', value: '31234567'},
+  ])
+})
+
+test('article details return an empty article_metadata list when nothing is known', async () => {
+  const result = await getArticleDetails(
+    getArticleDetailsRow({
+      articleCreatedAt: null,
+      doi: null,
+      publicationStatus: null,
+      pubmedId: null,
+      sourceMetadata: null,
+    }),
+  )
+
+  expect(result.status).toBe(200)
+  expect(result.body.articleMetadata).toEqual([])
 })

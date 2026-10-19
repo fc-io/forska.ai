@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto'
 
 import {Elysia, t} from 'elysia'
 
+import {getArticleMetadataLines} from '../../agent/judge/articleMetadataPrompt.ts'
 import {getJudgmentFullTextExecution} from '../../agent/judge/judgmentFullTextExecution.ts'
 import {getSystemPromptVariant} from '../../agent/judge/systemPromptVariant.ts'
 import {getEffectiveFullTextStrategyId} from '../fullText/fullTextStrategy.ts'
@@ -678,7 +679,7 @@ export const articlesRoutes = new Elysia()
         return acc
       }, {})
 
-      return {article, allJudgments, projectsById}
+      return {article, articleMetadata: getArticleMetadataLines(article), allJudgments, projectsById}
     },
     {params: t.Object({id: t.String()})},
   )
