@@ -1,8 +1,11 @@
 import {reviewArticleDetailsGetHighlightedText} from './reviewArticleDetailsGetHighlightedText'
+import {
+  reviewArticleDetailsGetHighlightedTextHtml,
+  reviewArticleDetailsGetHighlightOptions,
+  type ReviewArticleDetailsHighlightTextKind as HighlightTextKind,
+} from './reviewArticleDetailsHighlightTextHtml.ts'
 
 type HighlightRequest = {type: 'highlight'; requestId: number; cacheKey: string; quotes: string[]}
-
-type HighlightTextKind = 'title' | 'summary'
 
 type HighlightTextRequest = {
   type: 'highlightText'
@@ -61,13 +64,6 @@ const getHighlightedHtmlFromRanges = (text: string, ranges: Array<[number, numbe
   return `${reduced.html}${text.slice(reduced.cursor)}`
 }
 
-const getHighlightOptions = (textLength: number) => {
-  const useFuzzy = textLength > 0 && textLength <= 200_000
-  return useFuzzy
-    ? {maxDistance: 1, caseInsensitive: true, fuzzyScanLimit: 10_000 as const}
-    : {maxDistance: 0, caseInsensitive: true}
-}
-
 const handleSetText = (text: string) => {
   if (fulltext === text) return
   fulltext = text
@@ -96,7 +92,7 @@ const handleHighlight = (request: HighlightRequest): HighlightResponse => {
     }
   }
 
-  const options = getHighlightOptions(text.length)
+  const options = reviewArticleDetailsGetHighlightOptions(text.length)
   const pieces = reviewArticleDetailsGetHighlightedText(text, request.quotes, options)
   const ranges = getHitRangesFromPieces(pieces)
   hitRangesByCacheKey.set(request.cacheKey, ranges)
@@ -130,13 +126,11 @@ const handleHighlightText = (request: HighlightTextRequest): HighlightTextRespon
     }
   }
 
-  const options = getHighlightOptions(request.text.length)
-  const pieces = reviewArticleDetailsGetHighlightedText(request.text, request.quotes, options)
-  const html = pieces
-    .map(([pieceText, isHit]) => {
-      return isHit ? `<span class="text-red-500 underline" data-review-highlight="true">${pieceText}</span>` : pieceText
-    })
-    .join('')
+  const html = reviewArticleDetailsGetHighlightedTextHtml({
+    kind: request.kind,
+    quotes: request.quotes,
+    text: request.text,
+  })
 
   highlightedTextByCacheKey.set(request.cacheKey, html)
   return {

@@ -3,7 +3,11 @@ import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from '
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
 import {getRuntimeAssetUrl} from '../../../../../app/utils/getRuntimeAssetUrl.ts'
-import {ReviewArticleDetailsArticleMetadata} from './reviewArticleDetails/reviewArticleDetailsArticleMetadata.tsx'
+import {
+  ReviewArticleDetailsArticleMetadata,
+  reviewArticleDetailsGetArticleMetadataHtml,
+} from './reviewArticleDetails/reviewArticleDetailsArticleMetadata.tsx'
+import type {ReviewArticleDetailsHighlightTextKind as HighlightTextKind} from './reviewArticleDetails/reviewArticleDetailsHighlightTextHtml.ts'
 import {reviewArticleDetailsNormalizeQuoteForHtmlMatch} from './reviewArticleDetails/reviewArticleDetailsNormalizeQuoteForHtmlMatch.ts'
 import {
   ReviewArticleDetailsPatientTimelineExpandable,
@@ -52,6 +56,7 @@ type ReviewArticleDetailsArticle = {
 type ReviewArticleDetailsProps = {
   article: ReviewArticleDetailsArticle
   articleMetadata?: Array<{label: string; value: string}> | null
+  articleMetadataHeading?: string
   judgment?: Judgment
   showTitle?: boolean
   enableSticky?: boolean
@@ -64,8 +69,6 @@ type ReviewArticleDetailsProps = {
 }
 
 const stickyOffsets = {top: 24, bottom: 24}
-
-type HighlightTextKind = 'title' | 'summary'
 
 type FulltextHighlightWorkerRequest =
   | {type: 'setText'; text: string}
@@ -206,6 +209,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const [highlightedFulltextHtml, setHighlightedFulltextHtml] = createSignal<string | undefined>(undefined)
   const [highlightedTitleHtml, setHighlightedTitleHtml] = createSignal<string | undefined>(undefined)
   const [highlightedSummaryHtml, setHighlightedSummaryHtml] = createSignal<string | undefined>(undefined)
+  const [highlightedMetadataHtml, setHighlightedMetadataHtml] = createSignal<string | undefined>(undefined)
   const [pendingScrollRequest, setPendingScrollRequest] = createSignal<PendingScrollRequest | undefined>(undefined)
   const quoteCycleStateByJudgmentId = new Map<string, QuoteCycleState>()
   let fulltextHighlightWorker: Worker | undefined = undefined
@@ -219,6 +223,8 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   let activeTitleHighlightCacheKey: string | undefined
   let activeSummaryHighlightRequestId = 0
   let activeSummaryHighlightCacheKey: string | undefined
+  let activeMetadataHighlightRequestId = 0
+  let activeMetadataHighlightCacheKey: string | undefined
   const isFulltextExpandedControlled = () => {
     return props.isFulltextExpanded !== undefined && props.setIsFulltextExpanded !== undefined
   }
@@ -232,6 +238,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   let containerRef: HTMLDivElement | undefined
   let titleContainerRef: HTMLParagraphElement | undefined
   let summaryContainerRef: HTMLDivElement | undefined
+  let metadataContainerRef: HTMLDivElement | undefined
   let fulltextContainerRef: HTMLDivElement | undefined
   const fulltextForDisplay = () => {
     return getArticleFulltextForDisplay(props.article)
@@ -257,6 +264,10 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     return decodeAndSanitize(props.article.articleSummary ?? '')
   })
 
+  const articleMetadataHtml = createMemo(() => {
+    return reviewArticleDetailsGetArticleMetadataHtml(props.articleMetadata ?? [])
+  })
+
   const isFhirPatientRecord = createMemo(() => {
     return isFhirPatientRecordArticleId(props.article.articleId)
   })
@@ -272,6 +283,11 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
   const summaryHtmlForDisplay = createMemo(() => {
     const highlighted = props.judgment ? highlightedSummaryHtml() : undefined
     return highlighted ?? sanitizedSummary()
+  })
+
+  const metadataHtmlForDisplay = createMemo(() => {
+    const highlighted = props.judgment ? highlightedMetadataHtml() : undefined
+    return highlighted ?? articleMetadataHtml()
   })
 
   const fulltextHtmlForDisplay = createMemo(() => {
@@ -334,6 +350,14 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
         && msg.cacheKey === activeSummaryHighlightCacheKey
       ) {
         setHighlightedSummaryHtml(msg.html)
+      }
+      if (
+        msg.type === 'highlightTextResult'
+        && msg.kind === 'metadata'
+        && msg.requestId === activeMetadataHighlightRequestId
+        && msg.cacheKey === activeMetadataHighlightCacheKey
+      ) {
+        setHighlightedMetadataHtml(msg.html)
       }
     }
 
@@ -441,6 +465,46 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       requestId,
       cacheKey,
       kind: 'summary',
+      text,
+      quotes,
+    } as FulltextHighlightWorkerRequest)
+  })
+
+  createEffect(() => {
+    const text = articleMetadataHtml()
+    const shouldCompute = shouldComputeTitleSummaryHighlight() && text !== ''
+    const judgment = props.judgment
+
+    if (!shouldCompute || !judgment) {
+      activeMetadataHighlightCacheKey = undefined
+      setHighlightedMetadataHtml(undefined)
+      return
+    }
+
+    const worker = getFulltextHighlightWorker()
+    if (!worker) {
+      activeMetadataHighlightCacheKey = undefined
+      setHighlightedMetadataHtml(undefined)
+      return
+    }
+
+    const quotes = getNormalizedQuotes(judgment)
+    if (quotes.length === 0) {
+      activeMetadataHighlightCacheKey = undefined
+      setHighlightedMetadataHtml(undefined)
+      return
+    }
+
+    const requestId = activeMetadataHighlightRequestId + 1
+    activeMetadataHighlightRequestId = requestId
+    const cacheKey = `${articleCacheKey()}::${judgment.id}::metadata::${text}`
+    activeMetadataHighlightCacheKey = cacheKey
+    setHighlightedMetadataHtml(undefined)
+    return worker.postMessage({
+      type: 'highlightText',
+      requestId,
+      cacheKey,
+      kind: 'metadata',
       text,
       quotes,
     } as FulltextHighlightWorkerRequest)
@@ -576,6 +640,11 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
 
   const getConnectedSummaryContainer = (): HTMLDivElement | undefined => {
     const container = summaryContainerRef
+    return container && container.isConnected ? container : undefined
+  }
+
+  const getConnectedMetadataContainer = (): HTMLDivElement | undefined => {
+    const container = metadataContainerRef
     return container && container.isConnected ? container : undefined
   }
 
@@ -718,12 +787,19 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
         : false
   }
 
+  const scrollToQuoteInMetadata = (quote: string): boolean => {
+    const container = getConnectedMetadataContainer()
+    const best = container ? getBestHighlightElementForQuote(container, quote) : undefined
+    return best ? scrollElementIntoView(best) : false
+  }
+
   const scrollToQuoteInSummary = (quote: string): boolean => {
     const titleContainer = getConnectedTitleContainer()
     const summaryContainer = getConnectedSummaryContainer()
 
     return (
       (titleContainer ? scrollToQuoteInContainer(titleContainer, quote) : false)
+      || scrollToQuoteInMetadata(quote)
       || (summaryContainer ? scrollToQuoteInContainer(summaryContainer, quote) : false)
     )
   }
@@ -770,18 +846,20 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     const highlighted = highlightedFulltextHtml()
     const highlightedTitle = highlightedTitleHtml()
     const highlightedSummary = highlightedSummaryHtml()
+    const highlightedMetadata = highlightedMetadataHtml()
+    const hasTitleSummaryHighlight = Boolean(highlightedTitle || highlightedSummary || highlightedMetadata)
 
     if (!pending) return
     if (pending.judgmentId && pending.judgmentId !== currentJudgmentId) return
 
     if (mode === 'summary') {
-      if (!highlightedTitle && !highlightedSummary) return
+      if (!hasTitleSummaryHighlight) return
       return attemptScrollRequest(pending) ? setPendingScrollRequest(undefined) : undefined
     }
 
     if (mode !== 'fulltext' && mode !== 'all') return setPendingScrollRequest(undefined)
 
-    if (mode === 'all' && pending.type === 'quote' && (highlightedTitle || highlightedSummary)) {
+    if (mode === 'all' && pending.type === 'quote' && hasTitleSummaryHighlight) {
       const didScrollInSummary = attemptScrollRequest(pending)
       if (didScrollInSummary) {
         setPendingScrollRequest(undefined)
@@ -964,9 +1042,14 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
             </Show>
 
             <Show when={props.articleMetadata}>
-              {(lines) => {
-                return <ReviewArticleDetailsArticleMetadata lines={lines()} />
-              }}
+              <ReviewArticleDetailsArticleMetadata
+                containerRef={(el) => {
+                  metadataContainerRef = el
+                }}
+                heading={props.articleMetadataHeading ?? 'Article metadata'}
+                html={metadataHtmlForDisplay()}
+                onClick={handleTitleSummaryClick}
+              />
             </Show>
           </Show>
 
