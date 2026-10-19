@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {type ArticleMetadataLine, getArticleMetadataLines} from '../../../agent/judge/articleMetadataPrompt.ts'
 import {getJudgmentFullTextExecution} from '../../../agent/judge/judgmentFullTextExecution.ts'
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import {getArticleUrl} from '../../../app/utils/getArticleUrl.ts'
@@ -1005,6 +1006,23 @@ const getArticleRecordFromServing = (input: {
   }
 }
 
+const getJudgeArticleMetadataLines = async (params: {articleId: string; projectId: string}) => {
+  const [article] = await getAppQueryService().getFullArticlesByIds([params.articleId], {
+    includeFullText: false,
+    projectId: params.projectId,
+  })
+
+  return article ? getArticleMetadataLines(article) : null
+}
+
+const getArticleMetadataForReviewDetail = async (params: {
+  articleId: string
+  projectId: string
+  useMetadata: boolean
+}): Promise<ArticleMetadataLine[] | null> => {
+  return params.useMetadata ? getJudgeArticleMetadataLines(params) : null
+}
+
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
   '/api/projectsreview',
   async ({body, set}) => {
@@ -1047,7 +1065,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         return getUnavailableReviewDetail({articleId, reason: 'article not in project scope'})
       }
 
-      const [articleFullTextRows, allArticleJudgments] = await Promise.all([
+      const [articleFullTextRows, allArticleJudgments, articleMetadata] = await Promise.all([
         getAppDatabaseService().queryJson<ArticleFullTextRow>(
           `
           SELECT
@@ -1066,6 +1084,11 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           getProjectReviewDetailsWorkloadContext({maxResultRows: 1, operation: 'articleFullText', projectId}),
         ),
         getArticleJudgmentRows({articleId, projectId}),
+        getArticleMetadataForReviewDetail({
+          articleId,
+          projectId,
+          useMetadata: projectReviewConfig.useMetadata ?? false,
+        }),
       ])
       const article = getArticleRecordFromServing({
         articleId,
@@ -1380,6 +1403,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       return {
         article,
+        articleMetadata,
         covidenceRelatedRecords,
         covidenceRelatedRecordsOverflow: covidenceRelatedRecordsResult.overflow,
         detailSource,

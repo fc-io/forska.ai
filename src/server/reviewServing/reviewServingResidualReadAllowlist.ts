@@ -172,6 +172,14 @@ export const reviewServingResidualReadAllowlist = [
         purpose: 'interpret content flags and human summary mode for the requested project',
         workloadClass: 'foreground-metadata',
       }),
+      sourceRead({
+        cap: 'one requested articleId, project-scoped, no full text, only when the project uses article_metadata',
+        marker: 'getAppQueryService().getFullArticlesByIds([params.articleId], {',
+        migrationTarget:
+          'keep while the judge reads its article through getFullArticlesByIds so the lines match the prompt',
+        purpose: 'build the article_metadata lines from the same article read the judge uses for the prompt',
+        workloadClass: 'foreground-detail',
+      }),
     ],
     routeFile: 'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
   },
