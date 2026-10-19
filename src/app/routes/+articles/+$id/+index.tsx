@@ -80,6 +80,7 @@ const ArticleDetails = () => {
 
                   <ReviewArticleDetails
                     article={data().article}
+                    articleMetadata={data().articleMetadata}
                     judgment={selectedJudgment()}
                     showTitle={false}
                     enableSticky={true}

@@ -140,6 +140,8 @@ export const ReviewDetailFulltext = () => {
 
                     <ReviewArticleDetails
                       article={data().article}
+                      articleMetadata={data().articleMetadata}
+                      articleMetadataHeading="Article metadata (sent to the model)"
                       judgment={selectedJudgment()}
                       showTitle={false}
                       viewMode="fulltext"

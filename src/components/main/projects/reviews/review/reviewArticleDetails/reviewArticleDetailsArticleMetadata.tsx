@@ -1,24 +1,36 @@
-import {For, Show} from 'solid-js'
+import {Show} from 'solid-js'
 
-type ArticleMetadataLine = {label: string; value: string}
+import {type ArticleMetadataLine, getArticleMetadataLinesText} from '../../../../../../utils/articleMetadataText.ts'
 
-export const ReviewArticleDetailsArticleMetadata = (props: {lines: ArticleMetadataLine[]}) => {
+const escapeHtmlText = (text: string) => {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+export const reviewArticleDetailsGetArticleMetadataHtml = (lines: readonly ArticleMetadataLine[]) => {
+  return escapeHtmlText(getArticleMetadataLinesText(lines))
+}
+
+export const ReviewArticleDetailsArticleMetadata = (props: {
+  containerRef: (element: HTMLDivElement) => void
+  heading: string
+  html: string
+  onClick: (event: MouseEvent) => void
+}) => {
   return (
     <div class="text-sm text-gray-600" data-testid="review-article-metadata">
-      <p class="font-medium text-gray-700">Article metadata (sent to the model)</p>
-      <Show when={props.lines.length > 0} fallback={<p>none available</p>}>
-        <dl class="grid grid-cols-[auto_1fr] gap-x-3">
-          <For each={props.lines}>
-            {(line) => {
-              return (
-                <>
-                  <dt class="text-gray-500">{line.label}</dt>
-                  <dd class="break-words">{line.value}</dd>
-                </>
-              )
-            }}
-          </For>
-        </dl>
+      <p class="font-medium text-gray-700">{props.heading}</p>
+      <Show when={props.html !== ''} fallback={<p>none available</p>}>
+        <div
+          ref={(element) => {
+            props.containerRef(element)
+          }}
+          class="whitespace-pre-line break-words"
+          onClick={(event) => {
+            props.onClick(event)
+          }}
+          // eslint-disable-next-line solid/no-innerhtml
+          innerHTML={props.html}
+        />
       </Show>
     </div>
   )
