@@ -37,6 +37,17 @@ const queryJsonRef = {
   },
 }
 
+type FullArticlesByIdsOptions = {includeFullText?: boolean; projectId?: string}
+
+const getLegacyArticleHydrationRejection = async (
+  _articleIds: string[],
+  _options?: FullArticlesByIdsOptions,
+): Promise<unknown[]> => {
+  throw new Error('legacy article hydration should not run')
+}
+
+const fullArticlesByIdsRef = {current: getLegacyArticleHydrationRejection}
+
 const reviewServingRowsRef = {
   current: async (
     _request: ReviewServingRouteTestRequest,
@@ -73,8 +84,8 @@ const registerModuleMocks = () => {
     return {
       getAppQueryService: () => {
         return {
-          getFullArticlesByIds: () => {
-            throw new Error('legacy article hydration should not run')
+          getFullArticlesByIds: (articleIds: string[], options?: FullArticlesByIdsOptions) => {
+            return fullArticlesByIdsRef.current(articleIds, options)
           },
           getProjectReviewConfig: (projectId: string) => {
             return projectReviewConfigRef.current(projectId)
@@ -159,6 +170,7 @@ afterEach(() => {
 })
 
 beforeEach(() => {
+  fullArticlesByIdsRef.current = getLegacyArticleHydrationRejection
   reviewServingV4RebuildRequestsRef.current = []
   rejectReviewServingV4RebuildRef.current = false
   reviewServingV4RebuildStatusRef.current = 'admitted'
@@ -895,4 +907,121 @@ test('covidence related record cap reserves the reviewed article before sorting 
   )
   expect(covidenceRelatedRecordRead).toContain('article.id = ${getSqlLiteral(article.id)} AS isCurrentRecord')
   expect(covidenceRelatedRecordRead).toContain('isCurrentRecord: row.isCurrentRecord || row.id === article.id')
+})
+
+const getJudgeArticleRow = () => {
+  return {
+    articleCreatedAt: new Date('2018-03-01T00:00:00.000Z'),
+    doi: '10.1000/judge',
+    id: 'article-1',
+    publicationStatus: 'published',
+    pubmedId: '31234567',
+    sourceMetadata: {issue: '3', journalTitle: 'BMJ', pages: '100-110', publicationYear: 2019, volume: '12'},
+  }
+}
+
+const useProjectReviewConfig = (useMetadata: boolean | undefined) => {
+  projectReviewConfigRef.current = async () => {
+    return {
+      humanJudgmentMode: 'prompt',
+      modelId: 'model-1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata,
+      useTitle: true,
+    }
+  }
+}
+
+const recordFullArticleRequests = (rows: unknown[]) => {
+  const requests: Array<{articleIds: string[]; options?: FullArticlesByIdsOptions}> = []
+
+  fullArticlesByIdsRef.current = async (articleIds, options) => {
+    requests.push({articleIds, options})
+    return rows
+  }
+
+  return requests
+}
+
+const serveArticleDetailRow = () => {
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.row'
+      ? {rows: [getServingArticleRow()], status: 'accepted'}
+      : {rows: [], status: 'accepted'}
+  }
+}
+
+type ArticleMetadataResponseBody = {
+  article: {doi: string | null; publicationStatus: string | null}
+  articleMetadata: Array<{label: string; value: string}> | null
+}
+
+test('project review details returns the article_metadata lines from the judge article read when the project uses metadata', async () => {
+  useProjectReviewConfig(true)
+  serveArticleDetailRow()
+  const fullArticleRequests = recordFullArticleRequests([getJudgeArticleRow()])
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as ArticleMetadataResponseBody
+
+  expect(response.status).toBe(200)
+  expect(body.articleMetadata).toEqual([
+    {label: 'journal', value: 'BMJ'},
+    {label: 'year', value: '2019'},
+    {label: 'volume/issue/pages', value: '12(3):100-110'},
+    {label: 'publication_type', value: 'published'},
+    {label: 'doi', value: '10.1000/judge'},
+    {label: 'pmid', value: '31234567'},
+  ])
+  expect(body.article).toMatchObject({doi: '10.1000/example', publicationStatus: null})
+  expect(fullArticleRequests).toEqual([
+    {articleIds: ['article-1'], options: {includeFullText: false, projectId: 'project-1'}},
+  ])
+})
+
+test('project review details returns the article_metadata lines on the app fallback too', async () => {
+  useProjectReviewConfig(true)
+  rejectAllReviewServingReads()
+  appRowsRef.articleDetail = [getAppArticleDetailRow()]
+  const fullArticleRequests = recordFullArticleRequests([getJudgeArticleRow()])
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as ArticleMetadataResponseBody & {detailSource: string}
+
+  expect(response.status).toBe(200)
+  expect(body.detailSource).toBe('app')
+  expect(body.articleMetadata?.[0]).toEqual({label: 'journal', value: 'BMJ'})
+  expect(fullArticleRequests).toHaveLength(1)
+})
+
+test('project review details returns an empty article_metadata list when the judge would send none available', async () => {
+  useProjectReviewConfig(true)
+  serveArticleDetailRow()
+  recordFullArticleRequests([
+    {articleCreatedAt: null, doi: ' ', id: 'article-1', publicationStatus: null, pubmedId: null, sourceMetadata: null},
+  ])
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as ArticleMetadataResponseBody
+
+  expect(response.status).toBe(200)
+  expect(body.articleMetadata).toEqual([])
+})
+
+const getArticleMetadataResult = async (useMetadata: boolean | undefined) => {
+  useProjectReviewConfig(useMetadata)
+  serveArticleDetailRow()
+  const fullArticleRequests = recordFullArticleRequests([getJudgeArticleRow()])
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as ArticleMetadataResponseBody
+
+  return {articleMetadata: body.articleMetadata, requests: fullArticleRequests.length, status: response.status}
+}
+
+test('project review details returns null article_metadata and skips the judge article read when the project does not use metadata', async () => {
+  expect(await getArticleMetadataResult(false)).toEqual({articleMetadata: null, requests: 0, status: 200})
+  expect(await getArticleMetadataResult(undefined)).toEqual({articleMetadata: null, requests: 0, status: 200})
+  expect(await getArticleMetadataResult(true)).toMatchObject({requests: 1, status: 200})
 })
