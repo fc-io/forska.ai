@@ -3,6 +3,7 @@ import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from '
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
 import {getRuntimeAssetUrl} from '../../../../../app/utils/getRuntimeAssetUrl.ts'
+import {ReviewArticleDetailsArticleMetadata} from './reviewArticleDetails/reviewArticleDetailsArticleMetadata.tsx'
 import {reviewArticleDetailsNormalizeQuoteForHtmlMatch} from './reviewArticleDetails/reviewArticleDetailsNormalizeQuoteForHtmlMatch.ts'
 import {
   ReviewArticleDetailsPatientTimelineExpandable,
@@ -50,6 +51,7 @@ type ReviewArticleDetailsArticle = {
 
 type ReviewArticleDetailsProps = {
   article: ReviewArticleDetailsArticle
+  articleMetadata?: Array<{label: string; value: string}> | null
   judgment?: Judgment
   showTitle?: boolean
   enableSticky?: boolean
@@ -959,6 +961,12 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
                   </button>
                 </Show>
               </div>
+            </Show>
+
+            <Show when={props.articleMetadata}>
+              {(lines) => {
+                return <ReviewArticleDetailsArticleMetadata lines={lines()} />
+              }}
             </Show>
           </Show>
 
