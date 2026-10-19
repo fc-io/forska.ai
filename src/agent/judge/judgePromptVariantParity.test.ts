@@ -5,6 +5,10 @@ import {expect, test} from 'bun:test'
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {getSinglePromptJudgmentRequest} from './getSinglePromptJudgmentRequest.ts'
 import {getFullTextChunkJudgingUserPrompt, getFullTextMergeJudgingUserPrompt} from './judgeGetPrompt.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV3.ts'
 import type {SystemPromptVariant} from './systemPromptVariant.ts'
 
 const article = {
@@ -192,5 +196,28 @@ test('screening_v2 differs from screening_v1 only in the system prompt, plus the
       ),
     )
     return expect(v2On.fullTextRecordText).toContain(metadataLines)
+  })
+})
+
+test('screening_v3 differs from screening_v2 only in the system prompt, with use_metadata on or off', () => {
+  const v3SystemPromptByProvider: Record<string, string> = {
+    anthropic: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC,
+    openai: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
+  }
+  const providers = ['anthropic', 'openai']
+
+  providers.flatMap((provider) => {
+    return [false, true].map((useMetadata) => {
+      const v2 = getVariantPromptStrings({provider, systemPromptVariant: 'screening_v2', useMetadata})
+      const v3 = getVariantPromptStrings({provider, systemPromptVariant: 'screening_v3', useMetadata})
+
+      expect(v3.titleAbstractSystemPrompt).toBe(v3SystemPromptByProvider[provider] ?? '')
+      expect(v3.fullTextSystemPrompt).toBe(v3SystemPromptByProvider[provider] ?? '')
+      return expect({...v3, fullTextSystemPrompt: null, titleAbstractSystemPrompt: null}).toEqual({
+        ...v2,
+        fullTextSystemPrompt: null,
+        titleAbstractSystemPrompt: null,
+      })
+    })
   })
 })

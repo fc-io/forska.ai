@@ -12,6 +12,10 @@ import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV2.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV3.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 type PromptSelectionCase = {
@@ -144,6 +148,20 @@ describe('judge prompt selection', () => {
     ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT)
   })
 
+  test('uses the screening_v3 system prompt for a scientific article on the screening_v3 variant', () => {
+    const article = buildArticle()
+
+    expect(getSinglePromptSystemPromptForArticle(article, 'openai', 'screening_v3')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, null, 'screening_v3')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, 'anthropic', 'screening_v3')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC,
+    )
+  })
+
   test('treats a missing or legacy variant as the legacy system prompt', () => {
     const article = buildArticle()
 
@@ -165,6 +183,19 @@ describe('judge prompt selection', () => {
         buildArticle({importRoute: 'structured-file:registry-entry.xml'}),
         'anthropic',
         'screening_v1',
+      ),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
+  })
+
+  test('keeps patient and structured import prompts on the screening_v3 variant', () => {
+    expect(
+      getSinglePromptSystemPromptForArticle(buildArticle({articleId: 'fhir:patient-1'}), 'anthropic', 'screening_v3'),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT)
+    expect(
+      getSinglePromptSystemPromptForArticle(
+        buildArticle({importRoute: 'structured-file:registry-entry.xml'}),
+        'openai',
+        'screening_v3',
       ),
     ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
   })
