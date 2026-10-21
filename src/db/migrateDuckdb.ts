@@ -1,4 +1,4 @@
-import {readdirSync, readFileSync} from 'fs'
+import {readFileSync} from 'fs'
 import {resolve} from 'path'
 
 import {getAppDatabaseService} from '../server/services/appDatabaseService.ts'
@@ -6,8 +6,8 @@ import {parseDuckdbMemoryLimitToMiB} from '../server/utils/duckdbMemoryLimit.ts'
 import {withDuckdbMaintenanceAccess} from '../server/utils/duckdbScriptAccess.ts'
 import {getMaintenanceDuckdbWorkloadContext} from '../server/utils/duckdbService.ts'
 import {getEnv} from '../server/utils/env.ts'
+import {duckdbMigrationsFolder as migrationsFolder, getDuckdbMigrationFileNames} from './duckdbSchemaMigrationStatus.ts'
 
-const migrationsFolder = resolve(import.meta.dir, 'duckdbMigrations')
 const workloadContext = getMaintenanceDuckdbWorkloadContext('migrateDuckdb')
 
 const nonTransactionalDuckdbMigrationFiles = new Set([
@@ -21,16 +21,6 @@ const nonTransactionalDuckdbMigrationFiles = new Set([
   '0095_comparisonServingLlmTrueDifferenceFilter.sql',
   '0183_backfillReviewArticleServingListModeStateFilters.sql',
 ])
-
-const getDuckdbMigrationFiles = (folder: string) => {
-  return readdirSync(folder)
-    .filter((fileName) => {
-      return fileName.endsWith('.sql')
-    })
-    .sort((left, right) => {
-      return left.localeCompare(right)
-    })
-}
 
 const escapeSqlString = (value: string) => {
   return value.replaceAll("'", "''")
@@ -190,7 +180,7 @@ const shouldCheckpointAfterDuckdbMigration = (duckdbMemoryLimit: string) => {
 }
 
 export const migrateDuckdb = async ({throughFileName}: {throughFileName?: string} = {}): Promise<void> => {
-  const allMigrationFiles = getDuckdbMigrationFiles(migrationsFolder)
+  const allMigrationFiles = getDuckdbMigrationFileNames(migrationsFolder)
   const throughIndex =
     throughFileName === undefined ? allMigrationFiles.length - 1 : allMigrationFiles.indexOf(throughFileName)
 
