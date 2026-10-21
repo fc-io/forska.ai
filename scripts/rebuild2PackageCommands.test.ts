@@ -46,37 +46,37 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
     })
 
   expect(packageJson.scripts['db:duck:rebuild2-cutover']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/rebuild2Cutover.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/rebuild2Cutover.ts',
   )
   expect(packageJson.scripts['db:duck:request-project-large-rebuild']).toBeUndefined()
   expect(packageJson.scripts['db:duck:request-review-serving-large-rebuild']).toBeUndefined()
   expect(packageJson.scripts['db:duck:request-review-serving-project-rebuild']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingProjectRebuild.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/requestReviewServingProjectRebuild.ts',
   )
   expect(packageJson.scripts['db:duck:request-review-serving-all-projects-rebuild']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingAllProjectsRebuild.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/requestReviewServingAllProjectsRebuild.ts',
   )
   expect(packageJson.scripts['db:duck:run-large-rebuild-worker-once']).toBeUndefined()
   expect(packageJson.scripts['db:duck:run-large-rebuild-worker-cycles']).toBeUndefined()
   expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-once']).toBeUndefined()
   expect(packageJson.scripts['db:duck:legacy-admin-run-large-rebuild-worker-cycles']).toBeUndefined()
   expect(packageJson.scripts['db:duck:legacy-quarantine-dirty-refresh-article']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/quarantineDirtyRefreshArticle.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/quarantineDirtyRefreshArticle.ts',
   )
   expect(packageJson.scripts['db:duck:legacy-unquarantine-dirty-refresh-article']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/unquarantineDirtyRefreshArticle.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/unquarantineDirtyRefreshArticle.ts',
   )
   expect(packageJson.scripts['db:duck:legacy-inspect-dirty-refresh-risk']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/inspectDirtyRefreshRisk.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/inspectDirtyRefreshRisk.ts',
   )
   expect(packageJson.scripts['db:duck:legacy-recover-dirty-refresh-claims']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/recoverDirtyRefreshClaims.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/recoverDirtyRefreshClaims.ts',
   )
   expect(packageJson.scripts['db:duck:request-judgment-fact-repair']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestJudgmentFactRepair.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/requestJudgmentFactRepair.ts',
   )
   expect(packageJson.scripts['db:duck:run-archived-project-bounded-cleanup']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runArchivedProjectBoundedCleanup.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/runArchivedProjectBoundedCleanup.ts',
   )
   expect(obsoleteCommandMatches).toEqual([])
 })

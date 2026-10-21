@@ -78,7 +78,7 @@ test('package exposes the rebuild2 cutover command', async () => {
   }
 
   expect(packageJson.scripts['db:duck:rebuild2-cutover']).toBe(
-    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/rebuild2Cutover.ts',
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/rebuild2Cutover.ts',
   )
 })
 

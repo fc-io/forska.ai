@@ -6,13 +6,20 @@ import {expect, test} from 'bun:test'
 const projectRoot = process.cwd()
 
 type PackageJson = {scripts: Record<string, string>}
-type PackageScriptExpectation = {commandIncludes?: string[]; description: string; mustContain?: string[]; path?: string}
+type RuntimeProfileName = 'primary' | 'secondary'
+type PackageScriptExpectation = {
+  commandIncludes?: string[]
+  description: string
+  mustContain?: string[]
+  path?: string
+  profile?: RuntimeProfileName
+}
 
 const readSource = (path: string) => {
   return readFileSync(join(projectRoot, path), 'utf8')
 }
 
-const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
+const primaryPackageScriptExpectations: Record<string, PackageScriptExpectation> = {
   'db:backup': {
     description: 'snapshot backup',
     mustContain: ['createDuckdbSnapshotForCli'],
@@ -72,7 +79,6 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     path: 'scripts/inspectReviewServingRebuildTimings.ts',
   },
   'db:duck:inspect-review-serving-project-state': {
-    commandIncludes: ['DUCKDB_PATH=', 'runtime/primary/forska.duckdb'],
     description: 'V4 project state readonly snapshot diagnostics',
     mustContain: [
       'createDuckdbSnapshotForCli',
@@ -87,7 +93,6 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     path: 'scripts/inspectReviewServingProjectState.ts',
   },
   'db:duck:inspect-review-serving-physical-evidence': {
-    commandIncludes: ['DUCKDB_PATH=', 'runtime/primary/forska.duckdb'],
     description: 'V4 physical storage shape readonly snapshot diagnostics',
     mustContain: [
       'createDuckdbSnapshotForCli',
@@ -176,12 +181,7 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     path: 'scripts/requestReviewServingAllProjectsRebuild.ts',
   },
   'db:duck:release-failed-requestless-review-serving-rebuild-chunks': {
-    commandIncludes: [
-      'FORSKA_RUNTIME_PROFILE=primary',
-      'DUCKDB_PATH="$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb"',
-      'SERVER_ROLE=maintenance-worker',
-      'SERVER_DUCKDB_OWNER_URL=',
-    ],
+    commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'V4 failed requestless rebuild chunk release',
     mustContain: [
       'withDuckdbMaintenanceAccess',
@@ -197,12 +197,7 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     path: 'scripts/releaseFailedRequestlessReviewServingRebuildChunks.ts',
   },
   'db:duck:fail-stale-review-serving-candidate-snapshots': {
-    commandIncludes: [
-      'FORSKA_RUNTIME_PROFILE=primary',
-      'DUCKDB_PATH="$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb"',
-      'SERVER_ROLE=maintenance-worker',
-      'SERVER_DUCKDB_OWNER_URL=',
-    ],
+    commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'V4 stale candidate snapshot recovery',
     mustContain: [
       'withDuckdbMaintenanceAccess',
@@ -218,12 +213,7 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
     path: 'scripts/failStaleReviewServingCandidateSnapshots.ts',
   },
   'db:duck:delete-orphan-review-serving-dirty-work': {
-    commandIncludes: [
-      'FORSKA_RUNTIME_PROFILE=primary',
-      'DUCKDB_PATH="$HOME/Library/Application Support/Forska/runtime/primary/forska.duckdb"',
-      'SERVER_ROLE=maintenance-worker',
-      'SERVER_DUCKDB_OWNER_URL=',
-    ],
+    commandIncludes: ['SERVER_ROLE=maintenance-worker', 'SERVER_DUCKDB_OWNER_URL='],
     description: 'V4 orphan dirty work deletion',
     mustContain: [
       'withDuckdbMaintenanceAccess',
@@ -303,6 +293,29 @@ const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
   },
 }
 
+const secondaryPackageScriptNames = [
+  'db:backup',
+  'db:duck:checkpoint',
+  'db:duck:rebuild-secondary-indexes',
+  'db:query:snapshot',
+  'db:studio',
+]
+
+const secondaryPackageScriptExpectations = Object.fromEntries(
+  secondaryPackageScriptNames.map((name) => {
+    return [`${name}:secondary`, {...primaryPackageScriptExpectations[name], profile: 'secondary'}]
+  }),
+) as Record<string, PackageScriptExpectation>
+
+const packageScriptExpectations: Record<string, PackageScriptExpectation> = {
+  ...primaryPackageScriptExpectations,
+  ...secondaryPackageScriptExpectations,
+}
+
+const getRuntimeProfileScriptCommand = (expectation: PackageScriptExpectation) => {
+  return `bun scripts/runWithRuntimeProfile.ts --profile ${expectation.profile ?? 'primary'} --mode script -- bun ${expectation.path}`
+}
+
 test('package-exposed db scripts are explicitly classified and guarded', async () => {
   const packageJson = (await globalThis.Bun.file(join(projectRoot, 'package.json')).json()) as PackageJson
   const dbScripts = Object.keys(packageJson.scripts)
@@ -324,12 +337,32 @@ test('package-exposed db scripts are explicitly classified and guarded', async (
       continue
     }
 
+    expect(command, `${name} should run through the runtime profile script mode`).toContain(
+      getRuntimeProfileScriptCommand(expectation),
+    )
+
     const source = readSource(expectation.path)
 
     for (const expectedText of expectation.mustContain ?? []) {
       expect(source, `${name} (${expectation.description}) should include ${expectedText}`).toContain(expectedText)
     }
   }
+})
+
+test('package scripts select DuckDB through runtime profiles, never hardcoded profile env', async () => {
+  const packageJson = (await globalThis.Bun.file(join(projectRoot, 'package.json')).json()) as PackageJson
+  const hardcodedTargets = Object.entries(packageJson.scripts)
+    .filter(([, command]) => {
+      return command.includes('DUCKDB_PATH=') || command.includes('FORSKA_RUNTIME_PROFILE=')
+    })
+    .map(([name]) => {
+      return name
+    })
+
+  expect(hardcodedTargets).toEqual([])
+  expect(packageJson.scripts['test:review-serving:current-db-tab-count-parity']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/checkReviewServingCurrentDbTabCountParity.ts',
+  )
 })
 
 test('package no longer exposes legacy mart refresh or large-rebuild worker scripts', async () => {
