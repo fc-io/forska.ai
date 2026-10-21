@@ -2968,9 +2968,11 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
     expect(parsed.articles[0]?.importMetadata).toMatchObject(studyAMetadata)
     expect(parsed.articles[1]?.sourceMetadata).toMatchObject({journalTitle: null, publicationYear: 2023})
     expect(
-      ['publicationMonth', 'volume', 'issue', 'pages', 'publicationType', 'accessionNumber'].filter((key) => {
-        return key in (parsed.articles[1]?.sourceMetadata ?? {}) || key in (parsed.articles[1]?.importMetadata ?? {})
-      }),
+      ['publicationMonth', 'volume', 'issue', 'pages', 'publicationType', 'accessionNumber', 'sourceUrl'].filter(
+        (key) => {
+          return key in (parsed.articles[1]?.sourceMetadata ?? {}) || key in (parsed.articles[1]?.importMetadata ?? {})
+        },
+      ),
     ).toEqual([])
     expect(parsed.sourceRecords).toHaveLength(2)
     expect(parsed.sourceRecords[0]?.importMetadata).toMatchObject(studyAMetadata)
@@ -3800,6 +3802,60 @@ test('getCovidenceBibliographicMetadata normalizes RIS citation fields including
     publicationYear: 2019,
     volume: '9',
   })
+})
+
+test('getCovidenceBibliographicMetadata keeps a non-DOI url from the DOI column, else the URL column, as sourceUrl', () => {
+  expect(
+    getCovidenceBibliographicMetadata({
+      accession_number: 'NCT00005915',
+      doi: ' https://clinicaltrials.gov/study/NCT00005915 ',
+    }),
+  ).toEqual({accessionNumber: 'NCT00005915', sourceUrl: 'https://clinicaltrials.gov/study/NCT00005915'})
+  expect(
+    getCovidenceBibliographicMetadata({doi: 'http://www.ctri.nic.in/Clinicaltrials/pmaindet2.php?trialid=3379'}),
+  ).toEqual({sourceUrl: 'http://www.ctri.nic.in/Clinicaltrials/pmaindet2.php?trialid=3379'})
+  expect(
+    getCovidenceBibliographicMetadata({doi: '10.1000/alpha', url: 'https://www.isrctn.com/ISRCTN10957189'}),
+  ).toEqual({sourceUrl: 'https://www.isrctn.com/ISRCTN10957189'})
+  expect(
+    getCovidenceBibliographicMetadata({
+      doi: 'https://www.cochranelibrary.com/central/doi/10.1002/central/CN-01800343/full',
+      url: 'https://www.isrctn.com/ISRCTN13817256',
+    }),
+  ).toEqual({sourceUrl: 'https://www.cochranelibrary.com/central/doi/10.1002/central/CN-01800343/full'})
+  expect(getCovidenceBibliographicMetadata({doi: 'https://dx.doi.org/10.1000/Alpha'})).toEqual({})
+  expect(
+    getCovidenceBibliographicMetadata({doi: 'https://dx.doi.org/0161903/AIM.009', url: 'https://doi.org/10.1/x'}),
+  ).toEqual({})
+  expect(getCovidenceBibliographicMetadata({doi: '10.1000/alpha', url: null})).toEqual({})
+})
+
+test('getCovidenceBibliographicMetadata reads the RIS DO and UR fields into sourceUrl', () => {
+  const parsed = parseCovidenceReferenceRows({
+    content: [
+      'TY  - JOUR',
+      'TI  - Registry record',
+      'PY  - 2020',
+      'DO  - 10.1000/registry',
+      'UR  - http://www.chictr.org.cn/showproj.aspx?proj=48693',
+      'ER  - ',
+      'TY  - JOUR',
+      'TI  - Registry record without DOI',
+      'PY  - 2021',
+      'DO  - https://irct.behdasht.gov.ir/trial/78702',
+      'ER  - ',
+    ].join('\n'),
+    fileRole: 'all',
+    format: 'ris',
+    sourceFileName: 'all.ris',
+  })
+  const rows = parsed.ok ? parsed.rows : []
+
+  expect(
+    rows.map((row) => {
+      return getCovidenceBibliographicMetadata(row.citation).sourceUrl
+    }),
+  ).toEqual(['http://www.chictr.org.cn/showproj.aspx?proj=48693', 'https://irct.behdasht.gov.ir/trial/78702'])
 })
 
 test('getCovidenceBibliographicMetadata reads Covidence csv columns and omits missing values', () => {
