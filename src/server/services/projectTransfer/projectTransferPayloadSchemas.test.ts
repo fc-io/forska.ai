@@ -173,11 +173,12 @@ test('accepts known system prompt variants, keeps packages without one importabl
   expect(getValidationError(getSettingsResult('screening_v1'))).toBeNull()
   expect(getValidationError(getSettingsResult('screening_v2'))).toBeNull()
   expect(getValidationError(getSettingsResult('screening_v3'))).toBeNull()
-  expect(getValidationError(getSettingsResult('screening_v4'))).toContain(
-    'project.settings.systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3',
+  expect(getValidationError(getSettingsResult('screening_v4'))).toBeNull()
+  expect(getValidationError(getSettingsResult('screening_v5'))).toContain(
+    'project.settings.systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3, screening_v4',
   )
   expect(getValidationError(getSettingsResult(1))).toContain(
-    'project.settings.systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3',
+    'project.settings.systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3, screening_v4',
   )
 })
 
@@ -247,20 +248,21 @@ test('accepts known judgment system prompt variants, keeps judgments without one
   expect(parsedScreeningJudgments[0]?.systemPromptVariant).toBe('screening_v1')
   expect(getValidationError(getJudgmentResult('screening_v2'))).toBeNull()
   expect(getValidationError(getJudgmentResult('screening_v3'))).toBeNull()
+  expect(getValidationError(getJudgmentResult('screening_v4'))).toBeNull()
   expect(
     parseProjectTransferPayload(
       'judgments',
-      serializeProjectTransferPayload('judgments', [{...judgment, systemPromptVariant: 'screening_v3'}]),
+      serializeProjectTransferPayload('judgments', [{...judgment, systemPromptVariant: 'screening_v4'}]),
     )[0]?.systemPromptVariant,
-  ).toBe('screening_v3')
-  expect(getValidationError(getJudgmentResult('screening_v4'))).toContain(
-    'systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3',
+  ).toBe('screening_v4')
+  expect(getValidationError(getJudgmentResult('screening_v5'))).toContain(
+    'systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3, screening_v4',
   )
   expect(getValidationError(getJudgmentResult(''))).toContain(
-    'systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3',
+    'systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3, screening_v4',
   )
   expect(getValidationError(getJudgmentResult(1))).toContain(
-    'systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3',
+    'systemPromptVariant must be one of legacy, screening_v1, screening_v2, screening_v3, screening_v4',
   )
 })
 

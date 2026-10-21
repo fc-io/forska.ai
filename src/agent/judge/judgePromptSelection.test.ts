@@ -16,6 +16,10 @@ import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV3.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV4.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 type PromptSelectionCase = {
@@ -162,6 +166,20 @@ describe('judge prompt selection', () => {
     )
   })
 
+  test('uses the screening_v4 system prompt for a scientific article on the screening_v4 variant', () => {
+    const article = buildArticle()
+
+    expect(getSinglePromptSystemPromptForArticle(article, 'openai', 'screening_v4')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, null, 'screening_v4')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, 'anthropic', 'screening_v4')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC,
+    )
+  })
+
   test('treats a missing or legacy variant as the legacy system prompt', () => {
     const article = buildArticle()
 
@@ -196,6 +214,19 @@ describe('judge prompt selection', () => {
         buildArticle({importRoute: 'structured-file:registry-entry.xml'}),
         'openai',
         'screening_v3',
+      ),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
+  })
+
+  test('keeps patient and structured import prompts on the screening_v4 variant', () => {
+    expect(
+      getSinglePromptSystemPromptForArticle(buildArticle({articleId: 'fhir:patient-1'}), 'anthropic', 'screening_v4'),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT)
+    expect(
+      getSinglePromptSystemPromptForArticle(
+        buildArticle({importRoute: 'structured-file:registry-entry.xml'}),
+        'openai',
+        'screening_v4',
       ),
     ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
   })

@@ -12,6 +12,10 @@ import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV3.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV4.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 describe('judge prompt constants', () => {
@@ -494,5 +498,112 @@ describe('screening_v3 prompt constants', () => {
     expect(getScreeningV3PromptBody(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC)).toBe(
       getScreeningV3PromptBody(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3),
     )
+  })
+})
+
+const getScreeningV4PromptParts = (prompt: string) => {
+  const bodyStart = prompt.indexOf('\n\nThis is a filtering step')
+
+  return {body: prompt.slice(bodyStart), intro: prompt.slice(0, bodyStart)}
+}
+
+describe('screening_v4 prompt constants', () => {
+  test('keeps both screening_v4 texts byte-identical to the frozen versions', () => {
+    expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4)).toBe(
+      '6584de3c37a7850cd4e49fe2703470784d7801cf6f0d6b54860f2bf278056cbc',
+    )
+    expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC)).toBe(
+      '6f1b81af7337a1a5453e97a78c6c1cf22fa6a81a383dc0233fb9b6e3fdde2f8b',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4.endsWith('}\n')).toBe(true)
+  })
+
+  test('keeps the screening_v3 opening paragraph', () => {
+    expect(getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).intro).toBe(
+      getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3).intro,
+    )
+  })
+
+  test('says the next step reads the full text and a wrong exclusion loses the study', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      '\n\nThis is a filtering step: records you include go on to the next step, where the full text is read; records you exclude stop here. A wrong exclusion loses the study for good; a wrong inclusion costs one more look. When the record does not settle the question, pass it on.\n\n',
+    )
+  })
+
+  test('answers no only when the record shows an exclusion or shows absence', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      '- Answer no only when the record shows it: an exclusion line is met, or the record shows that what the section asks for is absent (for example, it measured one point in time and compared nothing, or its results section reports none of the listed outcomes).',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      'Check exclusion lines first, but an exclusion applies only when the record shows it.',
+    )
+  })
+
+  test('treats a record that does not show what the section asks for as missing information, complete or thin', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      '- A record that does not show what the section asks for is missing information, not evidence of absence: answer maybe and name the missing fact. This holds for a complete abstract that is silent on the point (a hospital study that names no country, an intervention named but not described) as much as for a thin record (summary empty, a few sentences, cut off, background only, or the start of the main text).',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain(
+      'that is silent on what the section asks for means absence',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain(
+      'answer maybe if the title or text names what the section asks for',
+    )
+  })
+
+  test('assumes or answers no for a missing fact only when the criteria text says so', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      'Only when the criteria text says what to assume for a missing fact, assume it; only when the criteria text says that a missing fact counts as no, answer no.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      '- Answer maybe when the record does not let you decide: a needed fact is missing, the record names what the section asks for without describing it, or an exclusion might apply but is not shown. If the output_type has no maybe, answer yes in those cases.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain('the criteria text does not say what to assume')
+  })
+
+  test('keeps the screening_v3 evidence, metadata quote and explanation rules', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      '- Judge from what the study did and found. A word only in the title, background, aim or conclusion is a weak signal by itself; it counts when the methods or results show the thing it names, in whatever form the criteria text accepts as evidence.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      'Quotes are verbatim copies of record text (article_title, article_summary, article_metadata or article_fulltext), never of the question or criteria',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain('do not quote it')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      'then, only for maybe, "Missing: " plus the missing fact in one or two words',
+    )
+  })
+
+  test('shows five Request and Response examples, including a complete abstract without a country answered maybe', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4.match(/^Request:$/gm)).toHaveLength(5)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4.match(/^Response:$/gm)).toHaveLength(5)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4.match(/output_type: 'yes' \| 'no' \| 'maybe'/g)).toHaveLength(5)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4.match(/"answer": "(yes|no|maybe)"/g)).toEqual([
+      '"answer": "yes"',
+      '"answer": "no"',
+      '"answer": "maybe"',
+      '"answer": "maybe"',
+      '"answer": "yes"',
+    ])
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      'Other criteria: Is the study set in a low- or middle-income country? Include: a country that the list classes as low or middle income. Exclude: studies from high-income countries.',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
+      'The abstract is complete but names only a 900-bed tertiary hospital, with no country, city or other clue to the setting, so neither the inclusion line nor the exclusion is shown. Missing: country"',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain('Missing: results"')
+  })
+
+  test('uses the screening_v3 Anthropic opening and keeps the rest of the prompt identical', () => {
+    const defaultParts = getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4)
+    const anthropicParts = getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC)
+
+    expect(anthropicParts.intro).toBe(
+      getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC).intro,
+    )
+    expect(anthropicParts.body).toBe(defaultParts.body)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC).not.toContain('the user is a researcher')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain('medical doctor')
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain('harmless literature-review')
   })
 })
