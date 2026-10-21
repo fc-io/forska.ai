@@ -510,10 +510,10 @@ const getScreeningV4PromptParts = (prompt: string) => {
 describe('screening_v4 prompt constants', () => {
   test('keeps both screening_v4 texts byte-identical to the frozen versions', () => {
     expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4)).toBe(
-      '6584de3c37a7850cd4e49fe2703470784d7801cf6f0d6b54860f2bf278056cbc',
+      '5778afa4211ffb788c34d15cb0d46c32100a8e2167ee15d75bfffd75f1e66956',
     )
     expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC)).toBe(
-      '6f1b81af7337a1a5453e97a78c6c1cf22fa6a81a383dc0233fb9b6e3fdde2f8b',
+      '0f7fdff18d490b84def08dd45e35de11a65d42fc64b3cd220271fa3fdde5669c',
     )
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4.endsWith('}\n')).toBe(true)
   })
@@ -530,18 +530,24 @@ describe('screening_v4 prompt constants', () => {
     )
   })
 
-  test('answers no only when the record shows an exclusion or shows absence', () => {
+  test('answers no only when the record shows an exclusion or leaves no room for what the section asks for', () => {
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
-      '- Answer no only when the record shows it: an exclusion line is met, or the record shows that what the section asks for is absent (for example, it measured one point in time and compared nothing, or its results section reports none of the listed outcomes).',
+      '- Answer no only when the record shows it: an exclusion line is met, or what the record reports the study did or found leaves no room for what the section asks for (for example, it measured one point in time and compared nothing, or it reports results and none of them is a listed outcome).',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain(
+      'the record shows that what the section asks for is absent',
     )
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
       'Check exclusion lines first, but an exclusion applies only when the record shows it.',
     )
   })
 
-  test('treats a record that does not show what the section asks for as missing information, complete or thin', () => {
+  test('treats a fact the record leaves unstated as missing information, complete or thin', () => {
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).toContain(
-      '- A record that does not show what the section asks for is missing information, not evidence of absence: answer maybe and name the missing fact. This holds for a complete abstract that is silent on the point (a hospital study that names no country, an intervention named but not described) as much as for a thin record (summary empty, a few sentences, cut off, background only, or the start of the main text).',
+      '- A fact about the study that the record leaves unstated is missing information, not evidence of absence: answer maybe and name the missing fact. This holds for a complete abstract that leaves such a fact unstated (a hospital study that names no country, an intervention named but not described) as much as for a thin record (summary empty, a few sentences, cut off, background only, or the start of the main text).',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain(
+      'A record that does not show what the section asks for',
     )
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain(
       'that is silent on what the section asks for means absence',
