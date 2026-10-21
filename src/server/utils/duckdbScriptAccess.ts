@@ -60,8 +60,7 @@ const getDuckdbStudioUrls = async () => {
   const currentLease = await Effect.runPromise(readDuckdbOwnerLease(env.DUCKDB_PATH))
   const leaseDuckdbOwnerUrl = currentLease === null ? null : getDuckdbOwnerLeaseUrl(currentLease)
   const configuredDuckdbOwnerUrl = getNormalizedDuckdbOwnerUrl(env.SERVER_DUCKDB_OWNER_URL)
-  const localDuckdbOwnerUrl = getNormalizedDuckdbOwnerUrl(`http://127.0.0.1:${env.API_SERVER_PORT}`)
-  const duckdbOwnerUrls = [leaseDuckdbOwnerUrl, configuredDuckdbOwnerUrl, localDuckdbOwnerUrl]
+  const duckdbOwnerUrls = [leaseDuckdbOwnerUrl, configuredDuckdbOwnerUrl]
     .filter((duckdbOwnerUrl): duckdbOwnerUrl is string => {
       return duckdbOwnerUrl !== null
     })
@@ -171,7 +170,7 @@ export const createRemoteSnapshotFromUrls = async (urls: string[]): Promise<AppD
   const [currentUrl, ...remainingUrls] = urls
 
   if (currentUrl === undefined) {
-    throw new Error('DuckDB snapshot route is unavailable')
+    throw new DuckdbSnapshotRouteUnavailableError('DuckDB snapshot route is unavailable')
   }
 
   try {
