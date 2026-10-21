@@ -2,12 +2,16 @@ import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {getJsonValue} from '../../server/services/appQueryHelpers.ts'
 import {type ArticleMetadataLine, getArticleMetadataLinesText} from '../../utils/articleMetadataText.ts'
 import {getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
+import {getArticleSourceUrls} from '../../utils/articleSourceUrl.ts'
+import {getTrialRegistryIdentifier, isTrialRegistryUrl} from '../../utils/trialRegistryIdentifier.ts'
 
 type ArticleMetadataPromptLine = [label: string, value: string | null]
 
 type ArticleMetadataSource = Pick<ArticleRecord, 'articleCreatedAt' | 'doi' | 'pubmedId' | 'sourceMetadata'> & {
   publicationStatus: string | null
 }
+
+type ArticleSourceMetadataValue = ReturnType<typeof getArticleSourceMetadataValue>
 
 const noArticleMetadataText = 'none available'
 
@@ -26,7 +30,7 @@ const getDateYear = (value: unknown) => {
   return date && Number.isFinite(date.getTime()) ? date.getUTCFullYear() : null
 }
 
-const getVolumeIssuePagesText = (metadata: ReturnType<typeof getArticleSourceMetadataValue>) => {
+const getVolumeIssuePagesText = (metadata: ArticleSourceMetadataValue) => {
   const volume = getPromptLineValue(metadata?.volume) ?? ''
   const issue = getPromptLineValue(metadata?.issue)
   const pages = getPromptLineValue(metadata?.pages)
@@ -39,7 +43,7 @@ const getVolumeIssuePagesText = (metadata: ReturnType<typeof getArticleSourceMet
 
 const getPublicationTypeText = (
   article: Pick<ArticleMetadataSource, 'publicationStatus'>,
-  metadata: ReturnType<typeof getArticleSourceMetadataValue>,
+  metadata: ArticleSourceMetadataValue,
 ) => {
   return (
     getPromptLineValue(metadata?.publicationType)
@@ -48,15 +52,42 @@ const getPublicationTypeText = (
   )
 }
 
+const getRegistryIdText = (metadata: ArticleSourceMetadataValue) => {
+  return (
+    [metadata?.accessionNumber, metadata?.sourceUrl, metadata?.journalTitle]
+      .map(getTrialRegistryIdentifier)
+      .find((registryId): registryId is string => {
+        return registryId !== null
+      }) ?? null
+  )
+}
+
+const getAccessionText = (metadata: ArticleSourceMetadataValue) => {
+  const accession = getPromptLineValue(metadata?.accessionNumber)
+
+  return getTrialRegistryIdentifier(accession) === null ? accession : null
+}
+
+const getSourceUrlText = (metadata: ArticleSourceMetadataValue, doi: string | null) => {
+  const sourceUrls = getArticleSourceUrls(metadata?.sourceUrl)
+  const registryUrl = sourceUrls.find(isTrialRegistryUrl) ?? null
+
+  return registryUrl ?? (doi === null ? (sourceUrls[0] ?? null) : null)
+}
+
 export const getArticleMetadataLines = (article: ArticleMetadataSource): ArticleMetadataLine[] => {
   const metadata = getArticleSourceMetadataValue(getJsonValue(article.sourceMetadata))
+  const doi = getPromptLineValue(article.doi)
   const lines: ArticleMetadataPromptLine[] = [
     ['journal', getPromptLineValue(metadata?.journalTitle)],
     ['year', getPromptLineValue(metadata?.publicationYear ?? getDateYear(article.articleCreatedAt))],
     ['volume/issue/pages', getVolumeIssuePagesText(metadata)],
     ['publication_type', getPublicationTypeText(article, metadata)],
-    ['doi', getPromptLineValue(article.doi)],
+    ['doi', doi],
     ['pmid', getPromptLineValue(article.pubmedId)],
+    ['registry_id', getRegistryIdText(metadata)],
+    ['accession', getAccessionText(metadata)],
+    ['source_url', getSourceUrlText(metadata, doi)],
   ]
 
   return lines
