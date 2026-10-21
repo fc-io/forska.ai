@@ -14,6 +14,10 @@ import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV3.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV4.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 import {getSystemPromptVariant, type SystemPromptVariant} from './systemPromptVariant.ts'
 
@@ -30,6 +34,10 @@ const singlePromptSystemPromptByVariant = {
   screening_v3: {
     anthropic: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3_ANTHROPIC,
     default: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3,
+  },
+  screening_v4: {
+    anthropic: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC,
+    default: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4,
   },
 } as const satisfies Record<SystemPromptVariant, {anthropic: string; default: string}>
 
