@@ -164,6 +164,7 @@ test('keeps normalized bibliographic source metadata keys and drops unknown keys
       pages: '100-110',
       publicationType: 'JOUR',
       accessionNumber: '31234567',
+      sourceUrl: ' https://clinicaltrials.gov/study/NCT00005915 ',
       unknownKey: 'dropped',
     }),
   ).toEqual({
@@ -180,6 +181,7 @@ test('keeps normalized bibliographic source metadata keys and drops unknown keys
     pages: '100-110',
     publicationType: 'JOUR',
     accessionNumber: '31234567',
+    sourceUrl: 'https://clinicaltrials.gov/study/NCT00005915',
   })
 })
 

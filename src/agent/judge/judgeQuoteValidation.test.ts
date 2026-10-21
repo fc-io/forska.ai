@@ -533,6 +533,27 @@ test('only screening_v2, screening_v3 and screening_v4 with use_metadata on keep
   ])
 })
 
+test('screening_v3 with use_metadata on keeps quotes of the registry id and source url of a registry record', () => {
+  const sourceMetadata = {
+    accessionNumber: 'NCT01234567',
+    journalTitle: null,
+    publicationYear: 2017,
+    sourceUrl: 'https://clinicaltrials.gov/study/NCT01234567',
+  }
+  const quotes = ['registry_id: NCT01234567', 'https://clinicaltrials.gov/study/NCT01234567', 'fell from 62 to 41']
+  const v3Request = getMetadataQuoteRequest({sourceMetadata, systemPromptVariant: 'screening_v3', useMetadata: true})
+  const v1Request = getMetadataQuoteRequest({sourceMetadata, systemPromptVariant: 'screening_v1', useMetadata: true})
+
+  expect(v3Request.userPrompt).toContain(
+    '## article_metadata\n\nyear: 2017\nregistry_id: NCT01234567\nsource_url: https://clinicaltrials.gov/study/NCT01234567\n\n',
+  )
+  expect(v1Request.userPrompt).toContain(
+    '## article_metadata\n\nyear: 2017\nregistry_id: NCT01234567\nsource_url: https://clinicaltrials.gov/study/NCT01234567\n\n',
+  )
+  expect(getValidatedMetadataQuotes(v3Request, quotes)).toEqual(quotes)
+  expect(getValidatedMetadataQuotes(v1Request, quotes)).toEqual(['fell from 62 to 41'])
+})
+
 test('screening_v2 still drops the article_metadata heading and none available', () => {
   const request = getMetadataQuoteRequest({
     sourceMetadata: null,

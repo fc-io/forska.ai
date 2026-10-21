@@ -75,6 +75,7 @@ test('getArticleMetadataPromptText writes every available line in a fixed order'
       'publication_type: JOUR',
       'doi: 10.1000/example',
       'pmid: 31234567',
+      'accession: AN-1',
     ].join('\n'),
   )
 })
@@ -198,4 +199,109 @@ test('getArticleMetadataPromptText renders exactly the getArticleMetadataLines l
   expect(getArticleMetadataSourceText(articles[0] as ArticleRecord)).toBe(
     getArticleMetadataPromptText(articles[0] as ArticleRecord),
   )
+})
+
+test('getArticleMetadataLines writes the registry id and source url of a ClinicalTrials.gov record after doi and pmid', () => {
+  expect(
+    getArticleMetadataPromptText(
+      buildArticle({
+        sourceMetadata: {
+          accessionNumber: 'NCT01234567',
+          journalTitle: null,
+          publicationYear: 2017,
+          sourceUrl: 'https://clinicaltrials.gov/study/NCT01234567',
+        },
+      }),
+    ),
+  ).toBe(
+    ['year: 2017', 'registry_id: NCT01234567', 'source_url: https://clinicaltrials.gov/study/NCT01234567'].join('\n'),
+  )
+})
+
+test('getArticleMetadataLines takes the registry id from the source url or a WHO ICTRP journal when the accession has none', () => {
+  expect(
+    getArticleMetadataLines(
+      buildArticle({
+        sourceMetadata: {publicationYear: 2014, sourceUrl: 'https://anzctr.org.au/ACTRN12614001209684.aspx'},
+      }),
+    ),
+  ).toEqual([
+    {label: 'year', value: '2014'},
+    {label: 'registry_id', value: 'ACTRN12614001209684'},
+    {label: 'source_url', value: 'https://anzctr.org.au/ACTRN12614001209684.aspx'},
+  ])
+  expect(
+    getArticleMetadataLines(
+      buildArticle({
+        sourceMetadata: {
+          accessionNumber: 'CN-01800343',
+          journalTitle: 'https://trialsearch.who.int/Trial2.aspx?TrialID=IRCT138804092106N1',
+          sourceUrl: 'https://www.cochranelibrary.com/central/doi/10.1002/central/CN-01800343/full',
+        },
+      }),
+    ),
+  ).toEqual([
+    {label: 'journal', value: 'https://trialsearch.who.int/Trial2.aspx?TrialID=IRCT138804092106N1'},
+    {label: 'registry_id', value: 'IRCT138804092106N1'},
+    {label: 'accession', value: 'CN-01800343'},
+    {label: 'source_url', value: 'https://www.cochranelibrary.com/central/doi/10.1002/central/CN-01800343/full'},
+  ])
+})
+
+test('getArticleMetadataLines writes a registry source url without a registry id when the url carries only an internal number', () => {
+  expect(
+    getArticleMetadataLines(
+      buildArticle({sourceMetadata: {sourceUrl: 'http://www.ctri.nic.in/Clinicaltrials/pmaindet2.php?trialid=3379'}}),
+    ),
+  ).toEqual([{label: 'source_url', value: 'http://www.ctri.nic.in/Clinicaltrials/pmaindet2.php?trialid=3379'}])
+})
+
+test('getArticleMetadataLines picks the registry url out of a concatenated Embase export url', () => {
+  expect(
+    getArticleMetadataLines(
+      buildArticle({
+        sourceMetadata: {
+          journalTitle: 'clinicaltrials.gov',
+          sourceUrl:
+            'https://www.embase.com/search/results?subaction=viewrecord&id=LNCT00144638&from=exporthttps://clinicaltrials.gov/study/NCT00144638',
+        },
+      }),
+    ),
+  ).toEqual([
+    {label: 'journal', value: 'clinicaltrials.gov'},
+    {label: 'registry_id', value: 'NCT00144638'},
+    {label: 'source_url', value: 'https://clinicaltrials.gov/study/NCT00144638'},
+  ])
+})
+
+test('getArticleMetadataLines writes a non-registry source url only when the article has no doi', () => {
+  const sourceUrl = 'https://www.embase.com/search/results?subaction=viewrecord&id=L2001234567'
+
+  expect(getArticleMetadataLines(buildArticle({sourceMetadata: {sourceUrl}}))).toEqual([
+    {label: 'source_url', value: sourceUrl},
+  ])
+  expect(getArticleMetadataLines(buildArticle({doi: '10.1000/x', sourceMetadata: {sourceUrl}}))).toEqual([
+    {label: 'doi', value: '10.1000/x'},
+  ])
+  expect(
+    getArticleMetadataLines(
+      buildArticle({doi: '10.1000/x', sourceMetadata: {sourceUrl: 'https://www.isrctn.com/ISRCTN10957189'}}),
+    ),
+  ).toEqual([
+    {label: 'doi', value: '10.1000/x'},
+    {label: 'registry_id', value: 'ISRCTN10957189'},
+    {label: 'source_url', value: 'https://www.isrctn.com/ISRCTN10957189'},
+  ])
+})
+
+test('getArticleMetadataLines writes a non-registry accession under accession and ignores DOI urls and the article url', () => {
+  expect(
+    getArticleMetadataLines(
+      buildArticle({
+        sourceMetadata: {accessionNumber: '  WOS:000422265700030 ', sourceUrl: 'https://dx.doi.org/10.1000/alpha'},
+        url: 'https://pubmed.ncbi.nlm.nih.gov/31234567/',
+      }),
+    ),
+  ).toEqual([{label: 'accession', value: 'WOS:000422265700030'}])
+  expect(getArticleMetadataLines(buildArticle({sourceMetadata: {accessionNumber: '   '}}))).toEqual([])
 })
