@@ -5643,7 +5643,7 @@ const getDuckdbStartupRepairLadderManifestFields = (ladder: DuckdbStartupRepairL
 
 const duckdbStartupRepairOperatorAction =
   'Startup is stopped and the live database file was not modified. Stop the server stack, copy preservedDatabasePath, '
-  + 'repair the copy (for example DUCKDB_PATH=<copy> bun run db:duck:rebuild-secondary-indexes), verify it, '
+  + 'repair the copy (for example DUCKDB_PATH=<copy> bun scripts/duckdbRebuildSecondaryIndexes.ts), verify it, '
   + 'put it in place of the live file, then restart.'
 
 const stopDuckdbStartupIndexedTableRepair = async ({

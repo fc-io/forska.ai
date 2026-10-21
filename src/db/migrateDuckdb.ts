@@ -219,10 +219,14 @@ const closeAppDatabaseService = async () => {
 }
 
 const runDuckdbMigrationScript = async () => {
-  await withDuckdbMaintenanceAccess('duckdb migration', async () => {
-    await migrateDuckdb()
-    await closeAppDatabaseService()
-  })
+  await withDuckdbMaintenanceAccess(
+    'duckdb migration',
+    async () => {
+      await migrateDuckdb()
+      await closeAppDatabaseService()
+    },
+    {requireExplicitDuckdbTarget: false},
+  )
 }
 
 if (import.meta.main) {

@@ -8,15 +8,40 @@ import {
   isDuckdbOwnerLeaseStale,
   readDuckdbOwnerLease,
 } from './duckdbOwnerLease.ts'
-import {env} from './env.ts'
+import {env, getEnv} from './env.ts'
+import {getOperatorScriptDuckdbTarget} from './operatorScriptDuckdbTarget.ts'
 import {ensureCurrentDuckdbOwnerLease, withCurrentServerRoleOverride} from './serverRuntimeRole.ts'
 
 type DuckdbScriptAccessSnapshotResponse = {data?: AppDatabaseSnapshot; error?: string}
+type DuckdbMaintenanceAccessOptions = {requireExplicitDuckdbTarget?: boolean}
 
 class DuckdbSnapshotRouteUnavailableError extends Error {}
 
 const duckdbOwnerPrivateApiPrefix = '/__duckdb-owner-rpc'
 const duckdbStudioSnapshotPath = '/api/duckdbStudioSnapshots'
+const operatorScriptDuckdbTargetState = {checked: false}
+
+const ensureOperatorScriptDuckdbTarget = () => {
+  if (operatorScriptDuckdbTargetState.checked) {
+    return
+  }
+
+  operatorScriptDuckdbTargetState.checked = true
+
+  const target = getOperatorScriptDuckdbTarget({
+    cwd: process.cwd(),
+    duckdbPath: getEnv().DUCKDB_PATH,
+    envValues: process.env,
+    scriptPath: process.argv[1] ?? null,
+  })
+
+  if (target.status === 'refused') {
+    console.error(target.message)
+    process.exit(1)
+  }
+
+  console.error(target.banner)
+}
 
 const getDuckdbOwnerHealthUrl = (duckdbOwnerUrl: string) => {
   return `${duckdbOwnerUrl}/api/duckdb_owner_connections`
@@ -160,7 +185,15 @@ export const createRemoteSnapshotFromUrls = async (urls: string[]): Promise<AppD
   }
 }
 
-export const withDuckdbMaintenanceAccess = async <_T>(taskName: string, work: () => Promise<_T>) => {
+export const withDuckdbMaintenanceAccess = async <_T>(
+  taskName: string,
+  work: () => Promise<_T>,
+  {requireExplicitDuckdbTarget = true}: DuckdbMaintenanceAccessOptions = {},
+) => {
+  if (requireExplicitDuckdbTarget) {
+    ensureOperatorScriptDuckdbTarget()
+  }
+
   return withCurrentServerRoleOverride('maintenance-worker', async () => {
     await ensureDuckdbMaintenanceIsAvailable(taskName)
     await ensureCurrentDuckdbOwnerLease()
@@ -174,6 +207,8 @@ export const withDuckdbMaintenanceAccess = async <_T>(taskName: string, work: ()
 }
 
 export const createDuckdbSnapshotForCli = async () => {
+  ensureOperatorScriptDuckdbTarget()
+
   try {
     return await createRemoteSnapshotFromUrls(await getDuckdbStudioUrls())
   } catch (error) {
