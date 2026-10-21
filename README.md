@@ -108,6 +108,8 @@ If you ever need to run migrations without starting the app:
 bun run db:mig
 ```
 
+Operator DB scripts such as `bun run db:query:snapshot` open the same primary runtime DB and print the path first; see [Operator DB Scripts](./docs/README_RUN_LOCAL.md#operator-db-scripts) for the `:secondary` variants and for running a script against another file.
+
 More local runtime notes: [Run Local](./docs/README_RUN_LOCAL.md)
 
 ## Configure Providers

@@ -66,6 +66,30 @@ Normal local startup does not require this. If you ever need to run migrations w
 bun run db:mig
 ```
 
+## Operator DB Scripts
+
+The `bun run db:*` scripts (snapshot queries, studio, backups, checkpoints, index rebuilds, review-serving repair tools) run through `scripts/runWithRuntimeProfile.ts --profile primary --mode script`, so they open the same DuckDB file as `bun run dev:server`. Snapshot query, studio, backup, checkpoint and index rebuild also have a `:secondary` variant; for other scripts call the wrapper with `--profile secondary`:
+
+```bash
+bun run db:query:snapshot -- --sql="SELECT COUNT(*) FROM app.article"
+bun run db:query:snapshot:secondary -- --sql="SELECT COUNT(*) FROM app.article"
+bun scripts/runWithRuntimeProfile.ts --profile secondary --mode script -- bun scripts/inspectReviewServingProjectState.ts --project-id=<id>
+```
+
+Every operator script prints the DB it opens as its first line (on stderr), for example `[dbQuerySnapshot] duckdb path: ~/Library/Application Support/Forska/runtime/primary/forska.duckdb profile: primary`.
+
+Running a script directly (`bun scripts/<name>.ts`) without `FORSKA_RUNTIME_PROFILE` refuses to open DuckDB: the fallback would be the old local default (`.../Forska/forska.duckdb`), not the dev server's DB. Choose the DB explicitly:
+
+```bash
+FORSKA_RUNTIME_PROFILE=primary bun scripts/duckdbCheckpoint.ts
+FORSKA_RUNTIME_PROFILE=local bun scripts/duckdbCheckpoint.ts
+DUCKDB_PATH=/path/to/copy.duckdb bun scripts/duckdbRebuildSecondaryIndexes.ts
+```
+
+`FORSKA_RUNTIME_PROFILE=primary` or `secondary` alone opens that profile's DB file; `local` opens the local default. The wrapper refuses a shell `DUCKDB_PATH`, `DUCKDB_PATH_FILE` or `FORSKA_RUNTIME_PROFILE` that disagrees with its `--profile` instead of overriding it, so to work on a copy run the script directly, as in the last line above.
+
+`db:query:snapshot` also compares the DB's applied migrations (`app_schema_migration`) with `src/db/duckdbMigrations`. If the DB is behind, it lists the missing migrations and exits 1; pass `--allow-schema-behind` to query it anyway. Applied migrations this checkout does not have only produce a warning.
+
 ## Configure Providers
 
 1. Open `/providers`.
