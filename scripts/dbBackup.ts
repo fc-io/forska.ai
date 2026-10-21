@@ -62,7 +62,6 @@ const deleteSnapshot = async (snapshot: AppDatabaseSnapshot) => {
 const runDuckdbBackup = async () => {
   const runtimeConfig = getAppDatabaseService().getRuntimeConfig()
 
-  log(`Resolved DuckDB path: ${runtimeConfig.databasePath}`)
   await mkdir(backupDirectory, {recursive: true})
 
   const snapshot = await createDuckdbSnapshotForCli()

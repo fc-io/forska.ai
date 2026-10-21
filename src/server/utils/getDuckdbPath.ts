@@ -38,6 +38,12 @@ const getLinuxDataRoot = (pathModule: PathModule, homeDir: string, envValues: Re
   return getAbsoluteRootPath(pathModule, homeDir, rawRoot)
 }
 
+const getRuntimeProfileDirectorySegments = (envValues: Record<string, string | undefined>) => {
+  const profileName = getTrimmedValue(envValues['FORSKA_RUNTIME_PROFILE'])?.toLowerCase()
+
+  return profileName === 'primary' || profileName === 'secondary' ? ['runtime', profileName] : []
+}
+
 const getDefaultDuckdbPath = (
   pathModule: PathModule,
   platform: Platform,
@@ -56,7 +62,7 @@ const getDefaultDuckdbPath = (
       : platform === 'win32'
         ? pathModule.join(windowsDataRoot, 'Forska')
         : pathModule.join(getLinuxDataRoot(pathModule, homeDir, envValues), 'forska')
-  return pathModule.join(appDataRoot, 'forska.duckdb')
+  return pathModule.join(appDataRoot, ...getRuntimeProfileDirectorySegments(envValues), 'forska.duckdb')
 }
 
 const getResolvedDuckdbPath = (
