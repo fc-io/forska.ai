@@ -6,6 +6,7 @@ import {SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPr
 import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC} from './judgeSinglePromptSystemPromptScreeningV1.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2_ANTHROPIC} from './judgeSinglePromptSystemPromptScreeningV2.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3} from './judgeSinglePromptSystemPromptScreeningV3.ts'
+import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC} from './judgeSinglePromptSystemPromptScreeningV4.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => {
@@ -263,6 +264,43 @@ test('getSinglePromptJudgmentRequest adds the metadata lines to recordText for s
   )
   expect(v3.recordText).toBe(v2.recordText)
   expect(v3WithoutMetadata.recordText).toBe('Covidence title\n\nCovidence summary\n\nCovidence full text')
+})
+
+test('getSinglePromptJudgmentRequest adds the metadata lines to recordText for screening_v4 with use_metadata on', () => {
+  const article = buildArticle({
+    articleSummary: 'Covidence summary',
+    articleTitle: 'Covidence title',
+    doi: '10.1000/covidence',
+    fullText: 'Covidence full text',
+    pubmedId: '31234567',
+    sourceMetadata: {journalTitle: 'BMJ', publicationYear: 2019, volume: '12'},
+  })
+  const getRequest = (systemPromptVariant: 'screening_v3' | 'screening_v4', useMetadata: boolean) => {
+    return getSinglePromptJudgmentRequest({
+      article,
+      contentSettings: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useMetadata, useTitle: true},
+      prompt: {
+        id: 'prompt-6',
+        originalText: 'Should this study be included for full text review?',
+        order: 6,
+        promptHeading: 'Covidence title/abstract screening',
+        type: `'yes' | 'no' | 'maybe'`,
+      },
+      provider: 'anthropic',
+      systemPromptVariant,
+    })
+  }
+  const v3 = getRequest('screening_v3', true)
+  const v4 = getRequest('screening_v4', true)
+  const v4WithoutMetadata = getRequest('screening_v4', false)
+
+  expect(v4.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC)
+  expect(v4.userPrompt).toBe(v3.userPrompt)
+  expect(v4.recordText).toBe(
+    'Covidence title\n\njournal: BMJ\nyear: 2019\nvolume/issue/pages: 12\ndoi: 10.1000/covidence\npmid: 31234567\n\nCovidence summary\n\nCovidence full text',
+  )
+  expect(v4.recordText).toBe(v3.recordText)
+  expect(v4WithoutMetadata.recordText).toBe('Covidence title\n\nCovidence summary\n\nCovidence full text')
 })
 
 test('getSinglePromptJudgmentRequest keeps none available out of the screening_v2 recordText', () => {
