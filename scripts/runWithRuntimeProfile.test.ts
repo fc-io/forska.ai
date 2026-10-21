@@ -20,8 +20,12 @@ import {
   ensureAppPortAvailable,
   formatAppPortListeners,
   getAppPortConflictPolicy,
+  getRuntimeProfileCommand,
   getRuntimeProfileCommandEnv,
+  getRuntimeProfileScriptEnv,
+  getRuntimeProfileScriptEnvConflicts,
   parseLsofFieldOutput,
+  parseRuntimeProfileCommandOptions,
 } from './runWithRuntimeProfile.ts'
 
 type SpawnedProcess = ReturnType<typeof globalThis.Bun.spawn>
@@ -2150,6 +2154,188 @@ test('propagates the selected runtime profile into launcher child env', () => {
   expect(
     getRuntimeProfileCommandEnv({mode: 'maintenance-only-server', profileName: 'secondary'}).FORSKA_RUNTIME_PROFILE,
   ).toBe('secondary')
+})
+
+const getScriptModeTestEnv = (dataRoot: string, overrides: Record<string, string> = {}) => {
+  const {
+    DUCKDB_PATH: _duckdbPath,
+    DUCKDB_PATH_FILE: _duckdbPathFile,
+    FORSKA_RUNTIME_PROFILE: _runtimeProfile,
+    ...inheritedEnv
+  } = process.env
+
+  return {
+    ...inheritedEnv,
+    HOME: dataRoot,
+    LOCALAPPDATA: join(dataRoot, 'AppData', 'Local'),
+    USERPROFILE: dataRoot,
+    XDG_DATA_HOME: join(dataRoot, '.local', 'share'),
+    ...overrides,
+  }
+}
+
+const runScriptModeWrapper = (
+  profileName: string,
+  command: string[],
+  envValues: Record<string, string | undefined>,
+) => {
+  const result = globalThis.Bun.spawnSync(
+    [
+      bunExecutablePath,
+      'scripts/runWithRuntimeProfile.ts',
+      '--profile',
+      profileName,
+      '--mode',
+      'script',
+      '--',
+      ...command,
+    ],
+    {cwd: process.cwd(), env: envValues},
+  )
+
+  return {exitCode: result.exitCode, stderr: result.stderr.toString(), stdout: result.stdout.toString()}
+}
+
+test('script mode parses wrapper flags before -- and passes the child command through unchanged', () => {
+  expect(
+    parseRuntimeProfileCommandOptions([
+      '--profile',
+      'secondary',
+      '--mode',
+      'script',
+      '--',
+      'bun',
+      'scripts/dbQuerySnapshot.ts',
+      '--profile',
+      'primary',
+      '--sql=SELECT 1',
+    ]),
+  ).toEqual({
+    mode: 'script',
+    profileName: 'secondary',
+    scriptCommand: ['bun', 'scripts/dbQuerySnapshot.ts', '--profile', 'primary', '--sql=SELECT 1'],
+  })
+  expect(parseRuntimeProfileCommandOptions(['--profile', 'primary', '--mode', 'duckdb-migration'])).toEqual({
+    mode: 'duckdb-migration',
+    profileName: 'primary',
+  })
+  expect(() => {
+    return parseRuntimeProfileCommandOptions(['--mode', 'script', '--', 'bun', 'x.ts', '--profile', 'primary'])
+  }).toThrow('Expected --profile primary|secondary, received null')
+})
+
+test('script mode runs bun commands with the wrapper bun binary and requires a command', () => {
+  expect(
+    getRuntimeProfileCommand({mode: 'script', profileName: 'primary', scriptCommand: ['bun', 'scripts/dbBackup.ts']}),
+  ).toEqual([bunExecutablePath, 'scripts/dbBackup.ts'])
+  expect(
+    getRuntimeProfileCommand({mode: 'script', profileName: 'primary', scriptCommand: ['sqlite3', 'jobs.sqlite']}),
+  ).toEqual(['sqlite3', 'jobs.sqlite'])
+  expect(() => {
+    return getRuntimeProfileCommand({mode: 'script', profileName: 'primary', scriptCommand: []})
+  }).toThrow('Expected a command after -- for --mode script')
+})
+
+test('script mode uses the migration-mode profile env and keeps inherited maintenance role settings', () => {
+  const baseEnv = {HOME: '/Users/tester', SERVER_DUCKDB_OWNER_URL: '', SERVER_ROLE: 'maintenance-worker'}
+  const scriptEnv = getRuntimeProfileScriptEnv({baseEnv, profileName: 'secondary'})
+
+  expect(scriptEnv).toMatchObject({
+    API_SERVER_PORT: '3101',
+    DUCKDB_PATH: getRuntimeProfileDuckdbPath({envValues: {...process.env, ...baseEnv}, profileName: 'secondary'}),
+    FORSKA_RUNTIME_PROFILE: 'secondary',
+    SERVER_DUCKDB_OWNER_URL: '',
+    SERVER_ROLE: 'maintenance-worker',
+  })
+  expect(scriptEnv).not.toHaveProperty('FORSKA_RUNTIME_SERVICE')
+  expect(getRuntimeProfileCommandEnv({mode: 'script', profileName: 'primary'})).toEqual(
+    getRuntimeProfileCommandEnv({mode: 'duckdb-migration', profileName: 'primary'}),
+  )
+})
+
+test('script mode accepts an inherited DuckDB target that matches the profile', () => {
+  const baseEnv = {HOME: '/Users/tester'}
+  const primaryPath = getRuntimeProfileDuckdbPath({envValues: baseEnv, profileName: 'primary'})
+
+  expect(
+    getRuntimeProfileScriptEnvConflicts({
+      baseEnv: {...baseEnv, DUCKDB_PATH: primaryPath, FORSKA_RUNTIME_PROFILE: 'primary'},
+      profileName: 'primary',
+    }),
+  ).toEqual([])
+})
+
+test('script mode refuses an inherited DuckDB target that disagrees with --profile', () => {
+  expect(
+    getRuntimeProfileScriptEnvConflicts({
+      baseEnv: {
+        DUCKDB_PATH: '/tmp/copy.duckdb',
+        DUCKDB_PATH_FILE: '/run/secrets/duckdb_path',
+        FORSKA_RUNTIME_PROFILE: 'secondary',
+        HOME: '/Users/tester',
+      },
+      profileName: 'primary',
+    }),
+  ).toEqual([
+    {name: 'FORSKA_RUNTIME_PROFILE', value: 'secondary'},
+    {name: 'DUCKDB_PATH', value: '/tmp/copy.duckdb'},
+    {name: 'DUCKDB_PATH_FILE', value: '/run/secrets/duckdb_path'},
+  ])
+  expect(() => {
+    return getRuntimeProfileScriptEnv({
+      baseEnv: {DUCKDB_PATH: '/tmp/copy.duckdb', HOME: '/Users/tester'},
+      profileName: 'primary',
+      scriptCommand: ['bun', 'scripts/duckdbRebuildSecondaryIndexes.ts'],
+    })
+  }).toThrow(
+    'but the shell already sets DUCKDB_PATH=/tmp/copy.duckdb.\nThe wrapper does not override an explicit DuckDB target. Unset it to use the profile, use the matching :secondary script, or run the command directly against that target:\n  DUCKDB_PATH=/tmp/copy.duckdb bun scripts/duckdbRebuildSecondaryIndexes.ts',
+  )
+})
+
+test('script mode runs the child with the profile env and propagates its exit code', () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'f1-runtime-profile-script-mode-'))
+  const envValues = getScriptModeTestEnv(dataRoot)
+
+  try {
+    const result = runScriptModeWrapper(
+      'secondary',
+      [
+        'bun',
+        '-e',
+        'console.log(JSON.stringify({apiPort: process.env.API_SERVER_PORT, duckdbPath: process.env.DUCKDB_PATH, profile: process.env.FORSKA_RUNTIME_PROFILE})); process.exit(7)',
+      ],
+      envValues,
+    )
+
+    expect(result.exitCode).toBe(7)
+    expect(JSON.parse(result.stdout.trim())).toEqual({
+      apiPort: '3101',
+      duckdbPath: getRuntimeProfileDuckdbPath({envValues, profileName: 'secondary'}),
+      profile: 'secondary',
+    })
+  } finally {
+    rmSync(dataRoot, {force: true, recursive: true})
+  }
+})
+
+test('script mode exits 1 before starting the child when the shell targets another DuckDB file', () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'f1-runtime-profile-script-conflict-'))
+  const copyPath = join(dataRoot, 'copy.duckdb')
+
+  try {
+    const result = runScriptModeWrapper(
+      'primary',
+      ['bun', '-e', 'console.log("child started")'],
+      getScriptModeTestEnv(dataRoot, {DUCKDB_PATH: copyPath}),
+    )
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).not.toContain('child started')
+    expect(result.stderr).toContain(`[runtime-profile] --profile primary opens `)
+    expect(result.stderr).toContain(`but the shell already sets DUCKDB_PATH=${copyPath}.`)
+  } finally {
+    rmSync(dataRoot, {force: true, recursive: true})
+  }
 })
 
 test('app launcher port preflight explains conflicting Vite listeners', async () => {
