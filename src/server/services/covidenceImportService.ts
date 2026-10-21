@@ -8,6 +8,7 @@ import {
   type SystemPromptVariant,
 } from '../../agent/judge/systemPromptVariant.ts'
 import {type ArticleBibliographicSourceMetadata, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
+import {getArticleSourceUrl} from '../../utils/articleSourceUrl.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {appendHumanJudgmentReviewServingDeltas} from '../reviewServing/humanJudgmentReviewServingDeltaService.ts'
 import {appendProjectScopeArticleReviewServingDeltas} from '../reviewServing/projectScopeReviewServingDeltaService.ts'
@@ -339,6 +340,8 @@ const covidenceStartPageKeys = ['sp']
 const covidenceEndPageKeys = ['ep']
 const covidencePublicationTypeKeys = ['publication_type', 'reference_type']
 const covidenceAccessionNumberKeys = ['accession_number']
+const covidenceDoiKeys = ['doi']
+const covidenceUrlKeys = ['url']
 const emptyCovidenceStageMembership = {
   all: false,
   excluded: false,
@@ -1801,6 +1804,13 @@ const getCovidencePages = (citation: Record<string, string | null>) => {
   return pages ?? pageRange
 }
 
+const getCovidenceSourceUrl = (citation: Record<string, string | null>) => {
+  return (
+    getArticleSourceUrl(getCovidenceCitationValue(citation, covidenceDoiKeys))
+    ?? getArticleSourceUrl(getCovidenceCitationValue(citation, covidenceUrlKeys))
+  )
+}
+
 export const getCovidenceBibliographicMetadata = (citation: Record<string, string | null>) => {
   const entries: Array<[string, number | string | null]> = [
     ['publicationYear', getCovidencePublicationYear(citation)],
@@ -1810,6 +1820,7 @@ export const getCovidenceBibliographicMetadata = (citation: Record<string, strin
     ['pages', getCovidencePages(citation)],
     ['publicationType', getCovidenceTrimmedCitationValue(citation, covidencePublicationTypeKeys)],
     ['accessionNumber', getCovidenceTrimmedCitationValue(citation, covidenceAccessionNumberKeys)],
+    ['sourceUrl', getCovidenceSourceUrl(citation)],
   ]
 
   return Object.fromEntries(

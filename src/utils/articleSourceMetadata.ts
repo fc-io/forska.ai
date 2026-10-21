@@ -45,6 +45,7 @@ export type ArticleBibliographicSourceMetadata = {
   pages?: string
   publicationType?: string
   accessionNumber?: string
+  sourceUrl?: string
 }
 
 export type ArticleSourceMetadata = {
@@ -415,6 +416,7 @@ const articleBibliographicTextKeys = [
   'pages',
   'publicationType',
   'accessionNumber',
+  'sourceUrl',
 ] as const
 
 const getBibliographicTextValue = (value: unknown) => {
