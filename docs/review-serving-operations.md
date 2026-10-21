@@ -41,8 +41,9 @@ timings) and `repairWorkPath`. If no rung passes, the manifest says
 `recovery: indexed-table-rebuild-failed` and `liveDatabaseModified: false`, and
 the owner refuses to start until the process restarts. Recover by hand from a
 copy of the `*.pre-repair.duckdb` file with the stack stopped (for example
-`DUCKDB_PATH=<copy> bun run db:duck:rebuild-secondary-indexes`), then put the
-verified copy in place and restart.
+`DUCKDB_PATH=<copy> bun scripts/duckdbRebuildSecondaryIndexes.ts`; the wrapped
+`bun run db:duck:rebuild-secondary-indexes` targets the profile DB and refuses a
+different `DUCKDB_PATH`), then put the verified copy in place and restart.
 
 If the affected table is `mart.review_filter_option_serving_v4`, use exclusive
 maintenance access and rebuild the table into a fresh catalog lineage:

@@ -12,6 +12,9 @@ description: Use ONLY when touching DuckDB, duckdbMigrations, schema work, db:* 
 - Prefer the shared DuckDB services and helpers over ad hoc DB access.
 - For local DuckDB work, never open the live DB file directly.
 - Use `bun run db:studio`, `bun run db:query:snapshot -- --sql="..."`, or maintenance scripts with no running writer.
+- `db:*` package scripts run through `bun scripts/runWithRuntimeProfile.ts --profile primary --mode script -- bun scripts/<name>.ts`; add a `:secondary` variant when a secondary run makes sense. Never hardcode `DUCKDB_PATH` or `FORSKA_RUNTIME_PROFILE` in `package.json`.
+- Running an operator script directly needs an explicit `FORSKA_RUNTIME_PROFILE=local|primary|secondary` or `DUCKDB_PATH`; the access layer refuses otherwise. Check the first `duckdb path: ... profile: ...` line before trusting the output.
+- `db:query:snapshot` refuses a DB whose applied migrations are behind the repo; pass `--allow-schema-behind` only when querying an old DB on purpose.
 - For direct DuckDB CLI or manual work, always set a memory cap.
 - Use `SET memory_limit = '20GB'` unless a smaller limit is needed.
 - Use transactions for multi-table operations.
