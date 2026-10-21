@@ -1,8 +1,9 @@
 import {realpathSync} from 'node:fs'
 
 import {getBackgroundServerEnv} from '../src/server/utils/backgroundServerStack.ts'
+import {getDuckdbPath} from '../src/server/utils/getDuckdbPath.ts'
 import {shouldUseProcessStopRequests, startProcessStopRequestWatcher} from '../src/server/utils/processStopRequest.ts'
-import {mergeRuntimeProfileEnv, type RuntimeProfileName} from '../src/utils/runtimeProfile.ts'
+import {getRuntimeProfileEnv, mergeRuntimeProfileEnv, type RuntimeProfileName} from '../src/utils/runtimeProfile.ts'
 import {getRuntimeProfileWrapperShutdownTimeoutMs} from './serverStackShutdown.ts'
 import {getLiveStopChildProcessDependencies, stopChildProcess} from './stopChildProcess.ts'
 
@@ -13,15 +14,25 @@ export type RuntimeProfileMode =
   | 'duckdb-migration'
   | 'judge-only-server'
   | 'maintenance-only-server'
+  | 'script'
   | 'server-stack'
   | 'stacked-server'
 type RuntimeProfileServerRole = 'api' | 'judge-worker' | 'maintenance-worker'
 
-export type RuntimeProfileCommandOptions = {mode: RuntimeProfileMode; profileName: RuntimeProfileName}
+export type RuntimeProfileCommandOptions = {
+  mode: RuntimeProfileMode
+  profileName: RuntimeProfileName
+  scriptCommand?: string[]
+}
 
 type RuntimeProfileCommandConfig = {
-  command: string[]
+  command: (commandOptions: RuntimeProfileCommandOptions) => string[]
   env: (commandOptions: RuntimeProfileCommandOptions) => Record<string, string | undefined>
+}
+type EnvValues = Record<string, string | undefined>
+type RuntimeProfileScriptEnvConflict = {
+  name: 'DUCKDB_PATH' | 'DUCKDB_PATH_FILE' | 'FORSKA_RUNTIME_PROFILE'
+  value: string
 }
 
 export type AppPortConflictPolicy = 'abort' | 'ignore' | 'kill'
@@ -47,65 +58,215 @@ const getRuntimeProfileJudgeWorkerEnv = (profileName: RuntimeProfileName) => {
   return getBackgroundServerEnv({baseEnv: getRuntimeProfileBaseEnv(profileName), role: 'judge-worker'})
 }
 
+const getTrimmedEnvValue = (value: string | undefined) => {
+  const normalized = String(value ?? '').trim()
+
+  return normalized === '' ? null : normalized
+}
+
+const getInheritedRuntimeProfileConflict = (
+  baseEnv: EnvValues,
+  profileName: RuntimeProfileName,
+): RuntimeProfileScriptEnvConflict[] => {
+  const inheritedProfileName = getTrimmedEnvValue(baseEnv.FORSKA_RUNTIME_PROFILE)
+
+  return inheritedProfileName === null || inheritedProfileName === profileName
+    ? []
+    : [{name: 'FORSKA_RUNTIME_PROFILE', value: inheritedProfileName}]
+}
+
+const getInheritedDuckdbPathConflict = (
+  baseEnv: EnvValues,
+  profileDuckdbPath: string,
+): RuntimeProfileScriptEnvConflict[] => {
+  const inheritedDuckdbPath = getTrimmedEnvValue(baseEnv.DUCKDB_PATH)
+
+  return inheritedDuckdbPath === null
+    || getDuckdbPath({duckdbPath: inheritedDuckdbPath, envValues: baseEnv}) === profileDuckdbPath
+    ? []
+    : [{name: 'DUCKDB_PATH', value: inheritedDuckdbPath}]
+}
+
+const getInheritedDuckdbPathFileConflict = (baseEnv: EnvValues): RuntimeProfileScriptEnvConflict[] => {
+  const inheritedDuckdbPathFile = getTrimmedEnvValue(baseEnv.DUCKDB_PATH_FILE)
+
+  return inheritedDuckdbPathFile === null ? [] : [{name: 'DUCKDB_PATH_FILE', value: inheritedDuckdbPathFile}]
+}
+
+const getProfileDuckdbPath = (profileName: RuntimeProfileName, baseEnv: EnvValues) => {
+  return getDuckdbPath({
+    duckdbPath: getRuntimeProfileEnv(profileName, {envValues: baseEnv}).DUCKDB_PATH,
+    envValues: baseEnv,
+  })
+}
+
+export const getRuntimeProfileScriptEnvConflicts = ({
+  baseEnv = process.env,
+  profileName,
+}: {
+  baseEnv?: EnvValues
+  profileName: RuntimeProfileName
+}) => {
+  const profileDuckdbPath = getProfileDuckdbPath(profileName, baseEnv)
+
+  return [
+    ...getInheritedRuntimeProfileConflict(baseEnv, profileName),
+    ...getInheritedDuckdbPathConflict(baseEnv, profileDuckdbPath),
+    ...getInheritedDuckdbPathFileConflict(baseEnv),
+  ]
+}
+
+const getShellWord = (value: string) => {
+  return /\s/u.test(value) ? `"${value}"` : value
+}
+
+const getRuntimeProfileScriptEnvConflictError = ({
+  baseEnv,
+  conflicts,
+  profileName,
+  scriptCommand,
+}: {
+  baseEnv: EnvValues
+  conflicts: RuntimeProfileScriptEnvConflict[]
+  profileName: RuntimeProfileName
+  scriptCommand: string[]
+}) => {
+  const conflictAssignments = conflicts.map((conflict) => {
+    return `${conflict.name}=${getShellWord(conflict.value)}`
+  })
+
+  return new Error(
+    [
+      `--profile ${profileName} opens ${getProfileDuckdbPath(profileName, baseEnv)}, but the shell already sets ${conflictAssignments.join(' and ')}.`,
+      'The wrapper does not override an explicit DuckDB target. Unset it to use the profile, use the matching :secondary script, or run the command directly against that target:',
+      `  ${[...conflictAssignments, ...scriptCommand.map(getShellWord)].join(' ')}`,
+    ].join('\n'),
+  )
+}
+
+export const getRuntimeProfileScriptEnv = ({
+  baseEnv = process.env,
+  profileName,
+  scriptCommand = [],
+}: {
+  baseEnv?: EnvValues
+  profileName: RuntimeProfileName
+  scriptCommand?: string[]
+}) => {
+  const conflicts = getRuntimeProfileScriptEnvConflicts({baseEnv, profileName})
+
+  if (conflicts.length > 0) {
+    throw getRuntimeProfileScriptEnvConflictError({baseEnv, conflicts, profileName, scriptCommand})
+  }
+
+  return mergeRuntimeProfileEnv({baseEnv, profileName})
+}
+
+export const getRuntimeProfileScriptCommand = (scriptCommand: string[] = []) => {
+  const [executable, ...args] = scriptCommand
+
+  if (executable === undefined) {
+    throw new Error('Expected a command after -- for --mode script, for example: -- bun scripts/dbQuerySnapshot.ts')
+  }
+
+  return [executable === 'bun' ? bunExecutablePath : executable, ...args]
+}
+
 const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfig> = {
   'api-only-server': {
-    command: [bunExecutablePath, '--watch', 'src/server/index.ts'],
+    command: () => {
+      return [bunExecutablePath, '--watch', 'src/server/index.ts']
+    },
     env: (commandOptions) => {
       return getRuntimeProfileServerEnv(commandOptions, 'api')
     },
   },
   app: {
-    command: [bunExecutablePath, 'x', '--bun', 'vite'],
+    command: () => {
+      return [bunExecutablePath, 'x', '--bun', 'vite']
+    },
     env: ({profileName}) => {
       return getRuntimeProfileBaseEnv(profileName)
     },
   },
   'app-server': {
-    command: [bunExecutablePath, 'src/appServer.ts'],
+    command: () => {
+      return [bunExecutablePath, 'src/appServer.ts']
+    },
     env: ({profileName}) => {
       return getAppServerEnv(profileName)
     },
   },
   'duckdb-migration': {
-    command: [bunExecutablePath, 'src/db/migrateDuckdb.ts'],
+    command: () => {
+      return [bunExecutablePath, 'src/db/migrateDuckdb.ts']
+    },
     env: ({profileName}) => {
       return getRuntimeProfileBaseEnv(profileName)
     },
   },
   'judge-only-server': {
-    command: [bunExecutablePath, '--watch', 'src/server/index.ts'],
+    command: () => {
+      return [bunExecutablePath, '--watch', 'src/server/index.ts']
+    },
     env: ({profileName}) => {
       return getRuntimeProfileJudgeWorkerEnv(profileName)
     },
   },
+  script: {
+    command: ({scriptCommand}) => {
+      return getRuntimeProfileScriptCommand(scriptCommand)
+    },
+    env: ({profileName, scriptCommand}) => {
+      return getRuntimeProfileScriptEnv({profileName, scriptCommand})
+    },
+  },
   'server-stack': {
-    command: [bunExecutablePath, 'scripts/startServerStack.ts'],
+    command: () => {
+      return [bunExecutablePath, 'scripts/startServerStack.ts']
+    },
     env: ({profileName}) => {
       return {...getRuntimeProfileBaseEnv(profileName), FORSKA_RUNTIME_SERVICE: 'dev-single-server'}
     },
   },
   'stacked-server': {
-    command: [bunExecutablePath, 'scripts/devServerWatch.ts'],
+    command: () => {
+      return [bunExecutablePath, 'scripts/devServerWatch.ts']
+    },
     env: ({profileName}) => {
       return {...getRuntimeProfileBaseEnv(profileName), FORSKA_RUNTIME_SERVICE: 'dev-single-server'}
     },
   },
   'maintenance-only-server': {
-    command: [bunExecutablePath, '--watch', 'src/server/index.ts'],
+    command: () => {
+      return [bunExecutablePath, '--watch', 'src/server/index.ts']
+    },
     env: (commandOptions) => {
       return getRuntimeProfileServerEnv(commandOptions, 'maintenance-worker')
     },
   },
 }
 
-const getCliFlagValue = (flagName: string): string | null => {
-  const flagIndex = process.argv.indexOf(flagName)
+const getWrapperArgs = (args: string[]) => {
+  const separatorIndex = args.indexOf('--')
 
-  return flagIndex === -1 ? null : (process.argv[flagIndex + 1] ?? null)
+  return separatorIndex === -1 ? args : args.slice(0, separatorIndex)
 }
 
-const getProfileName = (): RuntimeProfileName => {
-  const profileName = getCliFlagValue('--profile')
+const getScriptCommandArgs = (args: string[]) => {
+  const separatorIndex = args.indexOf('--')
+
+  return separatorIndex === -1 ? [] : args.slice(separatorIndex + 1)
+}
+
+const getCliFlagValue = (args: string[], flagName: string): string | null => {
+  const flagIndex = args.indexOf(flagName)
+
+  return flagIndex === -1 ? null : (args[flagIndex + 1] ?? null)
+}
+
+const getProfileName = (args: string[]): RuntimeProfileName => {
+  const profileName = getCliFlagValue(args, '--profile')
 
   if (profileName === 'primary' || profileName === 'secondary') {
     return profileName
@@ -114,8 +275,8 @@ const getProfileName = (): RuntimeProfileName => {
   throw new Error(`Expected --profile primary|secondary, received ${String(profileName)}`)
 }
 
-const getMode = (): RuntimeProfileMode => {
-  const mode = getCliFlagValue('--mode')
+const getMode = (args: string[]): RuntimeProfileMode => {
+  const mode = getCliFlagValue(args, '--mode')
 
   if (
     mode === 'api-only-server'
@@ -124,6 +285,7 @@ const getMode = (): RuntimeProfileMode => {
     || mode === 'duckdb-migration'
     || mode === 'judge-only-server'
     || mode === 'maintenance-only-server'
+    || mode === 'script'
     || mode === 'server-stack'
     || mode === 'stacked-server'
   ) {
@@ -131,16 +293,20 @@ const getMode = (): RuntimeProfileMode => {
   }
 
   throw new Error(
-    `Expected --mode api-only-server|app|app-server|duckdb-migration|judge-only-server|maintenance-only-server|server-stack|stacked-server, received ${String(mode)}`,
+    `Expected --mode api-only-server|app|app-server|duckdb-migration|judge-only-server|maintenance-only-server|script|server-stack|stacked-server, received ${String(mode)}`,
   )
 }
 
-const getRuntimeProfileCommandOptions = (): RuntimeProfileCommandOptions => {
-  return {mode: getMode(), profileName: getProfileName()}
+export const parseRuntimeProfileCommandOptions = (args: string[]): RuntimeProfileCommandOptions => {
+  const wrapperArgs = getWrapperArgs(args)
+  const mode = getMode(wrapperArgs)
+  const profileName = getProfileName(wrapperArgs)
+
+  return mode === 'script' ? {mode, profileName, scriptCommand: getScriptCommandArgs(args)} : {mode, profileName}
 }
 
-const getRuntimeProfileCommand = ({mode}: RuntimeProfileCommandOptions): string[] => {
-  return runtimeProfileModes[mode].command
+export const getRuntimeProfileCommand = (commandOptions: RuntimeProfileCommandOptions): string[] => {
+  return runtimeProfileModes[commandOptions.mode].command(commandOptions)
 }
 
 export const getRuntimeProfileCommandEnv = (commandOptions: RuntimeProfileCommandOptions) => {
@@ -405,15 +571,34 @@ const logRuntimeProfileWrapperMessage = (message: string) => {
   console.error(`[runtime-profile] ${message}`)
 }
 
+const getErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const getScriptModeLaunchOrExit = (commandOptions: RuntimeProfileCommandOptions) => {
+  try {
+    return {command: getRuntimeProfileCommand(commandOptions), env: getRuntimeProfileCommandEnv(commandOptions)}
+  } catch (error) {
+    logRuntimeProfileWrapperMessage(getErrorMessage(error))
+    process.exit(1)
+  }
+}
+
+const getRuntimeProfileLaunch = (commandOptions: RuntimeProfileCommandOptions) => {
+  return commandOptions.mode === 'script'
+    ? getScriptModeLaunchOrExit(commandOptions)
+    : {command: getRuntimeProfileCommand(commandOptions), env: getRuntimeProfileCommandEnv(commandOptions)}
+}
+
 const runWithRuntimeProfile = async () => {
-  const commandOptions = getRuntimeProfileCommandOptions()
-  const commandEnv = getRuntimeProfileCommandEnv(commandOptions)
+  const commandOptions = parseRuntimeProfileCommandOptions(process.argv.slice(2))
+  const {command, env: commandEnv} = getRuntimeProfileLaunch(commandOptions)
 
   if (commandOptions.mode === 'app') {
     await ensureAppPortAvailable({envValues: commandEnv})
   }
 
-  const childProcess = globalThis.Bun.spawn(getRuntimeProfileCommand(commandOptions), {
+  const childProcess = globalThis.Bun.spawn(command, {
     cwd: process.cwd(),
     env: commandEnv,
     stderr: 'inherit',
