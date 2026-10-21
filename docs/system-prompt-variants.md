@@ -41,6 +41,26 @@ Routes that copy a project keep the source's variant: clone copies the stored va
 - `PromptToProcess.systemPromptVariant` carries it to `judgeSinglePrompt`.
 - The prompt preview (`GET /api/projects/:id/prompts/:promptId/preview`, the "Preview Prompt" button on the Project Details page) uses the project's variant and reports it as `systemPromptVariant`. When no served article is available yet (no ready review-serving snapshot, no articles, or no full text), the response is still `unavailable` for the user prompt, but it carries the current `systemPrompt` built for a plain scientific article with the project's provider, so the page always shows the system prompt in use.
 
+## Article metadata block
+
+With `use_metadata` on, the user prompt has an `## article_metadata` block after the title. `getArticleMetadataLines` in `src/agent/judge/articleMetadataPrompt.ts` builds it as `label: value` lines. The same lines feed `recordText` and quote validation for the variants with the metadata-quote capability, the Article Details pages (`articleMetadata` from `GET /api/articles/:id` and from the project review details) and the `articleMetadataDigest` in a project transfer judgment input signature. A line without a value is left out, and a block without lines reads `none available`. The lines, in order:
+
+| Label                | Value                                                                                                                                                                        |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `journal`            | source metadata `journalTitle`                                                                                                                                               |
+| `year`               | `publicationYear`, else the year of `article_created_at`                                                                                                                     |
+| `volume/issue/pages` | volume, issue and pages as `12(3):100-110`                                                                                                                                   |
+| `publication_type`   | `publicationType`, else `publication_status`, else `preprint` for a preprint                                                                                                 |
+| `doi`                | `article.doi`                                                                                                                                                                |
+| `pmid`               | `article.pubmed_id`                                                                                                                                                          |
+| `registry_id`        | the first trial-registry id (`getTrialRegistryIdentifier` in `src/utils/trialRegistryIdentifier.ts`) found in `accessionNumber`, then in `sourceUrl`, then in `journalTitle` |
+| `accession`          | `accessionNumber` when it holds no registry id, for example `WOS:…`, an Embase number or a CENTRAL `CN-…`                                                                    |
+| `source_url`         | from `sourceUrl`: the first trial-registry url (`isTrialRegistryUrl`), else the first url when the article has no DOI                                                        |
+
+Covidence exports a trial-registry record (ClinicalTrials.gov, CTRI, IRCT, ChiCTR, ISRCTN, ANZCTR, ReBEC, TCTR, PACTR and others) with an empty Journal. Its identity is in Accession Number (`NCT…`, ClinicalTrials.gov only) and in the DOI column, which then holds the registry url, for example `https://clinicaltrials.gov/study/NCT…` or `http://www.ctri.nic.in/Clinicaltrials/pmaindet2.php?trialid=3379`. The Covidence import stores that url as `sourceUrl` in the article source metadata and the import metadata. It takes the DOI column when it is an http(s) url that is not a doi.org url, else the URL column (RIS `UR`, `L1`–`L4`) under the same rule (`getArticleSourceUrl` in `src/utils/articleSourceUrl.ts`). Embase joins two urls into one value (`…&from=exporthttps://clinicaltrials.gov/study/NCT…`). The value is stored as it is and split when the line is built. Records imported before the field existed get it from migration `0274_covidenceSourceUrlBackfill.sql`. Like `0257`, it fills a missing `sourceUrl` from the raw Covidence citation on the source records, the current import links and the article. The article takes the value from its earliest Covidence source record.
+
+The metadata text is not part of the judgment identity (see "Judgment identity"), so these lines needed no identity migration, and existing judgments stay visible. The block is the same for every variant. With `use_metadata` on, a record that has an accession number or a source url now gets a longer block under `legacy` and `screening_v1` too. Records with neither are unchanged. Judgments already stored were made with the shorter block. Re-judging such a record, or judging it in a new project, sends the new lines.
+
 ## Switching a project
 
 There is no UI switch. Use the API:
