@@ -34,6 +34,55 @@ const waitForFile = async (filePath: string, timeoutMs: number): Promise<void> =
   })
 }
 
+test('snapshot creation never asks a server on API_SERVER_PORT that does not own the target DuckDB file', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'f1-operator-snapshot-owner-'))
+  const duckdbPath = join(dataRoot, 'target.duckdb')
+  const foreignSnapshotPath = join(dataRoot, 'foreign-owner-snapshot.duckdb')
+  const requestedPaths: string[] = []
+  const foreignOwner = globalThis.Bun.serve({
+    fetch: (request) => {
+      requestedPaths.push(new URL(request.url).pathname)
+      return Response.json({data: {createdAt: new Date().toISOString(), snapshotPath: foreignSnapshotPath}})
+    },
+    port: 36109,
+  })
+
+  try {
+    const snapshotProcess = globalThis.Bun.spawn(
+      [
+        bunExecutablePath,
+        '-e',
+        `
+          const {createDuckdbSnapshotForCli} = await import('./src/server/utils/duckdbScriptAccess.ts')
+          const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+          const snapshot = await createDuckdbSnapshotForCli()
+          await getAppDatabaseService().deleteSnapshot(snapshot.snapshotPath)
+          console.log(JSON.stringify({snapshotPath: snapshot.snapshotPath}))
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: getIsolatedOperatorScriptEnv(dataRoot, {API_SERVER_PORT: '36109', DUCKDB_PATH: duckdbPath}),
+        stderr: 'pipe',
+        stdout: 'pipe',
+      },
+    )
+    const [exitCode, stdout, stderr] = await Promise.all([
+      snapshotProcess.exited,
+      new Response(snapshotProcess.stdout).text(),
+      new Response(snapshotProcess.stderr).text(),
+    ])
+    const lastStdoutLine = stdout.trim().split('\n').at(-1) ?? ''
+
+    expect(exitCode, stderr).toBe(0)
+    expect((JSON.parse(lastStdoutLine) as {snapshotPath: string}).snapshotPath).not.toBe(foreignSnapshotPath)
+    expect(requestedPaths).toEqual([])
+  } finally {
+    await foreignOwner.stop(true)
+    rmSync(dataRoot, {force: true, recursive: true})
+  }
+})
+
 test('maintenance scripts fail while a live writer holds DuckDB', async () => {
   const duckdbPath = join(tmpdir(), `f1-duckdb-maintenance-guard-${Date.now()}.duckdb`)
   const leasePath = `${duckdbPath}.duckdb-owner.lock`
