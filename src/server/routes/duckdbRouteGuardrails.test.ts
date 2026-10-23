@@ -71,7 +71,15 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts',
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts',
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostStructuredFileCreate.ts',
-  'src/server/routes/DataSourcesRoutes.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesDeleteDataSource.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetArchived.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetDataSource.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetDataSources.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesPatchDataSource.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesPostDataSource.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesPostTrackingReconcile.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesTypes.ts',
+  'src/server/routes/DataSourcesRoutes/getDataSourcesWorkloadContext.ts',
   'src/server/routes/DuckdbStudioRoutes.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts',
@@ -393,26 +401,15 @@ test('owner-routed diagnostic route DuckDB reads keep explicit workload contexts
 
 test('unpaginated product route lists do not silently truncate with hard SQL limits', () => {
   const routePaths = [
-    'src/server/routes/DataSourcesRoutes.ts',
+    'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetDataSources.ts',
+    'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetArchived.ts',
     'src/server/routes/ImportRoutes.ts',
     'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts',
   ]
 
   const violations = routePaths.flatMap((routePath) => {
     const fileText = readFileSync(join(workspaceRoot, routePath), 'utf8')
-    const listSqlFragments =
-      routePath === 'src/server/routes/DataSourcesRoutes.ts'
-        ? [
-            fileText.slice(
-              fileText.indexOf("operation: 'listActive'") - 500,
-              fileText.indexOf("operation: 'listActive'") + 120,
-            ),
-            fileText.slice(
-              fileText.indexOf("operation: 'listArchived'") - 500,
-              fileText.indexOf("operation: 'listArchived'") + 120,
-            ),
-          ]
-        : [fileText]
+    const listSqlFragments = [fileText]
 
     return listSqlFragments.flatMap((fragment, index) => {
       return [/\bLIMIT\s+\d+\b/iu, /maxResultRows\s*:/u]
