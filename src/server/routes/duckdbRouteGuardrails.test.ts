@@ -134,6 +134,9 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/articlesRoutes/articlesRoutesPostConversionReset.ts',
   'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchByProject.ts',
   'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchReset.ts',
+  'src/server/routes/adminInvestigateRoutes/adminInvestigateRoutesGetMaintenanceRuntimeDiagnostics.ts',
+  'src/server/routes/adminInvestigateRoutes/adminInvestigateRoutesServices.ts',
+  'src/server/routes/adminInvestigateRoutes/getWorkerRuntimeDiagnostics/getPendingCompletionAckVisibilityFromSharedState.ts',
   'src/server/routes/projectsRoutes/projectAccessGuard.ts',
   'src/server/routes/projectsRoutes/projectsRoutesDeleteProject.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArchived.ts',
@@ -198,7 +201,6 @@ const forbiddenNormalForegroundSqlPatterns = [
   {label: 'json extraction', pattern: /\bjson_(?:extract|extract_string|array|object|valid|type)\s*\(/iu},
 ]
 const normalForegroundSqlAllowlist = new Set([
-  'src/server/routes/AdminInvestigateRoutes.ts',
 
   'src/server/routes/DuckdbStudioRoutes.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts',
@@ -231,6 +233,9 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/articlesRoutes/articlesRoutesGetLatest.ts',
   'src/server/routes/articlesRoutes/articlesRoutesGetSearch.ts',
   'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchReset.ts',
+  'src/server/routes/adminInvestigateRoutes/deleteUnexpectedJudgments.ts',
+  'src/server/routes/adminInvestigateRoutes/getProjectJudgmentClause.ts',
+  'src/server/routes/adminInvestigateRoutes/getUnexpectedAnswersSummary/unexpectedAnswerBuckets.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows/getComparisonProjectScopedArticleBatch.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectStats/getComparisonProjectStatsAggregatesSql.ts',
