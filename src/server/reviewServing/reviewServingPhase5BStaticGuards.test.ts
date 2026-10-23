@@ -9,36 +9,25 @@ const readText = async (path: string) => {
   return globalThis.Bun.file(join(projectRoot, path)).text()
 }
 
-const reviewWarningsRouteFile = 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts'
-const reviewWarningsRouteFolder = 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings'
-
-const readReviewWarningsSource = async () => {
-  const helperFiles = readdirSync(join(projectRoot, reviewWarningsRouteFolder))
+const readRouteSources = async (routeFile: string, routeFolder: string) => {
+  const folderFiles = readdirSync(join(projectRoot, routeFolder), {recursive: true})
+    .map(String)
     .filter((fileName) => {
       return fileName.endsWith('.ts') && !fileName.endsWith('.test.ts')
     })
     .map((fileName) => {
-      return `${reviewWarningsRouteFolder}/${fileName}`
+      return join(routeFolder, fileName)
     })
-  const sources = await Promise.all([reviewWarningsRouteFile, ...helperFiles].map(readText))
+  const sources = await Promise.all([routeFile, ...folderFiles].map(readText))
 
   return sources.join('\n')
 }
 
-const routeInventoryFile = 'src/server/routes/routeSurfaceInventory.ts'
-const routeInventoryFolder = 'src/server/routes/routeSurfaceInventory'
-
-const readRouteInventorySource = async () => {
-  const familyFiles = readdirSync(join(projectRoot, routeInventoryFolder))
-    .filter((fileName) => {
-      return fileName.endsWith('.ts') && !fileName.endsWith('.test.ts')
-    })
-    .map((fileName) => {
-      return `${routeInventoryFolder}/${fileName}`
-    })
-  const sources = await Promise.all([routeInventoryFile, ...familyFiles].map(readText))
-
-  return sources.join('\n')
+const readReviewWarningsSource = async () => {
+  return readRouteSources(
+    'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
+    'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings',
+  )
 }
 
 test('Phase 5B startup stays cut over to V4 projector work', async () => {
@@ -359,8 +348,14 @@ test('Phase 5B package commands do not expose normal legacy rebuild workers', as
 })
 
 test('admin legacy mart mutation routes stay retired or removed', async () => {
-  const adminSource = await readText('src/server/routes/AdminInvestigateRoutes.ts')
-  const routeInventorySource = await readRouteInventorySource()
+  const adminSource = await readRouteSources(
+    'src/server/routes/AdminInvestigateRoutes.ts',
+    'src/server/routes/adminInvestigateRoutes',
+  )
+  const routeInventorySource = await readRouteSources(
+    'src/server/routes/routeSurfaceInventory.ts',
+    'src/server/routes/routeSurfaceInventory',
+  )
   const navigationSource = await readText('src/components/Navigation.tsx')
   const settingsSource = await readText('src/app/routes/+settings/+index.tsx')
   const removedRoutePaths = [
