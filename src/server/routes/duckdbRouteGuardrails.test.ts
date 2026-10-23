@@ -8,7 +8,13 @@ const workspaceRoot = process.cwd()
 const srcRoot = join(workspaceRoot, 'src')
 const routesRoot = join(workspaceRoot, 'src/server/routes')
 const serverMainPath = join(workspaceRoot, 'src/server/serverMain.ts')
-const testOnlyRouteFiles = new Set(['src/server/routes/judgmentWorkflowTopologyTestRoutes.ts'])
+const testOnlyRouteFiles = new Set([
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/getTopologyVisibleProjectionCount.ts',
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/judgmentWorkflowTopologyTestRoutesPostCleanupStale.ts',
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/judgmentWorkflowTopologyTestRoutesPostEvidence.ts',
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/judgmentWorkflowTopologyTestRoutesPostRealCodexEvidence.ts',
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/judgmentWorkflowTopologyTestRoutesPostSeed.ts',
+])
 
 const getSourceFiles = (directory: string): string[] => {
   return readdirSync(directory, {withFileTypes: true}).flatMap((entry) => {
@@ -392,7 +398,14 @@ test('normal foreground route SQL cannot add unallowlisted raw OOM-prone shapes'
 
 test('test-only topology routes are token gated and absent from normal product API composition', () => {
   const productRoutesText = readFileSync(join(routesRoot, 'productApiRoutes.ts'), 'utf8')
-  const topologyRoutesText = readFileSync(join(routesRoot, 'judgmentWorkflowTopologyTestRoutes.ts'), 'utf8')
+  const topologyRoutesText = [
+    join(routesRoot, 'judgmentWorkflowTopologyTestRoutes.ts'),
+    ...getSourceFiles(join(routesRoot, 'judgmentWorkflowTopologyTestRoutes')),
+  ]
+    .map((filePath) => {
+      return readFileSync(filePath, 'utf8')
+    })
+    .join('\n')
   const sqliteServiceText = readFileSync(
     join(process.cwd(), 'src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'),
     'utf8',
