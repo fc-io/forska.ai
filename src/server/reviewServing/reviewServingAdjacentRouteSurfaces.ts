@@ -73,7 +73,7 @@ export const reviewServingAdjacentRouteClassifications = [
     guard: 'owner-dependent local product API for browser admin job pages; not linked from normal review row flows',
     method: 'GET',
     reason: 'Judgment-job unassessed count is served from the V4 unassessed queue with no legacy OLAP raw fallback.',
-    routeFile: 'src/server/routes/JudgmentsJobsRoutes.ts',
+    routeFile: 'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesGetUnassessedCount.ts',
     routePath: '/api/judgmentsjobs-unassessed-count',
   },
   {
@@ -85,7 +85,7 @@ export const reviewServingAdjacentRouteClassifications = [
     method: 'GET',
     reason:
       'Judgment-job unassessed article preview is served from the V4 unassessed queue with no legacy OLAP raw fallback.',
-    routeFile: 'src/server/routes/JudgmentsJobsRoutes.ts',
+    routeFile: 'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesGetUnassessedArticles.ts',
     routePath: '/api/judgmentsjobs-unassessed-articles',
   },
   {

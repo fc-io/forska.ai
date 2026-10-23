@@ -2045,7 +2045,14 @@ test('mounted review residual reads are explicitly allowlisted', () => {
 })
 
 test('judgment job foreground routes do not import legacy OLAP unassessed helpers', () => {
-  const routeText = readFileSync(join(workspaceRoot, 'src/server/routes/JudgmentsJobsRoutes.ts'), 'utf8')
+  const routeText = [
+    'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesGetUnassessedCount.ts',
+    'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesGetUnassessedArticles.ts',
+  ]
+    .map((routeFile) => {
+      return readFileSync(join(workspaceRoot, routeFile), 'utf8')
+    })
+    .join('\n')
   const cronText = readFileSync(
     join(workspaceRoot, 'src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts'),
     'utf8',
