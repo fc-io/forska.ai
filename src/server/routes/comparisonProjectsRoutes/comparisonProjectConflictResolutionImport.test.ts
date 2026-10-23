@@ -6,36 +6,40 @@ import {
   comparisonProjectConflictResolutionTransferVersion,
 } from './comparisonProjectConflictResolutionFileTransfer.ts'
 import {
-  type ComparisonProjectConflictResolutionImportMode,
-  type ComparisonProjectConflictResolutionImportSourceRow,
-  type ComparisonProjectConflictResolutionImportTargetArticle,
   getComparisonProjectConflictResolutionImportAnalyzeResult,
-  getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql,
-  getComparisonProjectConflictResolutionImportCommentChanges,
   getComparisonProjectConflictResolutionImportCommitResult,
+  getComparisonProjectConflictResolutionImportPlan,
+} from './comparisonProjectConflictResolutionImport.ts'
+import {getComparisonProjectConflictResolutionImportCommentChanges} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportCommentChanges.ts'
+import {normalizeComparisonProjectConflictResolutionImportDoi} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportIdentifierKeys.ts'
+import {
   getComparisonProjectConflictResolutionImportCovidenceArticleKey,
   getComparisonProjectConflictResolutionImportCovidenceIdTitleKey,
-  getComparisonProjectConflictResolutionImportDoiTargetArticlesSql,
-  getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql,
   getComparisonProjectConflictResolutionImportIdTitleKey,
-  getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql,
-  getComparisonProjectConflictResolutionImportPlan,
-  getComparisonProjectConflictResolutionImportServingArticleIdTargetArticlesSql,
-  getComparisonProjectConflictResolutionImportServingIdentifierTargetArticlesSql,
-  getComparisonProjectConflictResolutionImportServingIdTitleTargetArticlesSql,
-  getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql,
-  getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact,
-  getComparisonProjectConflictResolutionImportSourceRowsSql,
-  getComparisonProjectConflictResolutionImportSourceRowValue,
-  getComparisonProjectConflictResolutionImportSourcesSql,
-  getComparisonProjectConflictResolutionImportSourceValue,
   getComparisonProjectConflictResolutionImportTitleKey,
-  getComparisonProjectConflictResolutionImportTitleTargetArticlesSql,
-  mergeComparisonProjectConflictResolutionImportTargetArticleRows,
-  normalizeComparisonProjectConflictResolutionImportDoi,
   normalizeComparisonProjectConflictResolutionImportExternalArticleId,
   normalizeComparisonProjectConflictResolutionImportTitle,
-} from './comparisonProjectConflictResolutionImport.ts'
+} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTitleKeys.ts'
+import type {
+  ComparisonProjectConflictResolutionImportMode,
+  ComparisonProjectConflictResolutionImportSourceRow,
+  ComparisonProjectConflictResolutionImportTargetArticle,
+} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
+import {getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportArticleIdTargetArticlesSql.ts'
+import {getComparisonProjectConflictResolutionImportDoiTargetArticlesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportDoiTargetArticlesSql.ts'
+import {getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportIdentifierTargetArticlesSql.ts'
+import {getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportIdTitleTargetArticlesSql.ts'
+import {getComparisonProjectConflictResolutionImportServingArticleIdTargetArticlesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportServingArticleIdTargetArticlesSql.ts'
+import {getComparisonProjectConflictResolutionImportServingIdentifierTargetArticlesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportServingIdentifierTargetArticlesSql.ts'
+import {getComparisonProjectConflictResolutionImportServingIdTitleTargetArticlesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportServingIdTitleTargetArticlesSql.ts'
+import {getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportServingTitleTargetArticlesSql.ts'
+import {getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact.ts'
+import {getComparisonProjectConflictResolutionImportSourceRowsSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceRowsSql.ts'
+import {getComparisonProjectConflictResolutionImportSourceRowValue} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceRowValue.ts'
+import {getComparisonProjectConflictResolutionImportSourcesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourcesSql.ts'
+import {getComparisonProjectConflictResolutionImportSourceValue} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceValue.ts'
+import {getComparisonProjectConflictResolutionImportTitleTargetArticlesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportTitleTargetArticlesSql.ts'
+import {mergeComparisonProjectConflictResolutionImportTargetArticleRows} from './comparisonProjectConflictResolutionImport/mergeComparisonProjectConflictResolutionImportTargetArticleRows.ts'
 
 const getSourceRow = (
   overrides: Partial<ComparisonProjectConflictResolutionImportSourceRow> = {},
@@ -1142,11 +1146,7 @@ test('import plan uses Covidence article key and title to resolve duplicate titl
 test('import plan keeps duplicate title matches ambiguous when no Covidence article key matches', () => {
   const plan = getPlan({
     sourceRows: [
-      getSourceRow({
-        doi: null,
-        externalArticleId: 'covidence:source-route:covidence%3A%2340264',
-        title: 'Shared',
-      }),
+      getSourceRow({doi: null, externalArticleId: 'covidence:source-route:covidence%3A%2340264', title: 'Shared'}),
     ],
     targetArticles: [
       getTargetArticle({

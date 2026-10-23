@@ -1,130 +1,75 @@
-import {
-  defaultSystemPromptVariant,
-  getSystemPromptVariant,
-  type SystemPromptVariant,
-} from '../../../agent/judge/systemPromptVariant.ts'
-import {
-  type ComparisonProjectArticleCategoryFilter,
-  defaultComparisonProjectArticleCategoryFilter,
-} from '../../../utils/comparisonProjectArticleCategoryFilter.ts'
-import type {ComparisonProjectConflictResolutionFilter} from '../../../utils/comparisonProjectConflictResolutionFilter.ts'
-import {
-  type ComparisonProjectDifferenceColumn,
-  type ComparisonProjectDifferenceFilter,
-  getComparisonProjectHasAnyConflict,
-  getComparisonProjectHasDifferenceFilterMatch,
-  getIsComparisonProjectConflictResolutionDifferenceFilter,
+import {defaultComparisonProjectArticleCategoryFilter} from '../../../utils/comparisonProjectArticleCategoryFilter.ts'
+import type {
+  ComparisonProjectDifferenceColumn,
+  ComparisonProjectDifferenceFilter,
 } from '../../../utils/comparisonProjectDifferenceFilter.ts'
-import type {ComparisonProjectFilterSelection} from '../../../utils/comparisonProjectFilterSelection.ts'
+import type {ComparisonProjectRowFilter} from '../../../utils/comparisonProjectRowFilter.ts'
+import type {
+  ComparisonProjectArticleCategoryFilterSelection,
+  ComparisonProjectConflictResolutionFilterSelection,
+  ComparisonProjectDifferenceFilterSelection,
+  ComparisonProjectJudgmentHumanRow,
+  ComparisonProjectJudgmentLlmRow,
+  ComparisonProjectJudgmentRow,
+  ComparisonProjectRowFilterSelection,
+  ComparisonProjectScopedArticle,
+  ComparisonProjectScopedArticleQueryRunner,
+  ComparisonProjectServingArticleRow,
+  ComparisonProjectServingCellRow,
+  ComparisonProjectServingConflictResolutionProvenanceParams,
+  ComparisonProjectServingMemberRow,
+} from './comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsTypes.ts'
+import {getPositiveInteger} from './comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsUtils.ts'
+import {getComparisonProjectServingNextCursor} from './comparisonProjectJudgmentRows/comparisonProjectServingCursor.ts'
 import {
-  type ComparisonProjectRowFilter,
-  getComparisonProjectPassesRowFilter,
-} from '../../../utils/comparisonProjectRowFilter.ts'
-import {isReservedFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
-import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {getJudgmentDisplayAnswer, hasAnyJudgmentAnswer} from '../../utils/judgmentAnswers.ts'
-import {
-  type ComparisonProjectConflictResolutionProvenanceFilter,
-  getComparisonProjectConflictResolutionProvenanceFilterPredicateSql,
-} from './comparisonProjectConflictResolutionProvenance.ts'
-import {
-  type ComparisonProjectSearchQuery,
-  getComparisonProjectSearchArticleSourceSql,
-  getComparisonProjectSearchPredicateSql,
-  getComparisonProjectSearchQuery,
-} from './comparisonProjectJudgmentSearch.ts'
+  getComparisonProjectFilterSelectionList,
+  getComparisonProjectServingRequiresConflictResolution,
+} from './comparisonProjectJudgmentRows/comparisonProjectServingFilterSql.ts'
+import {getComparisonProjectBatchRows} from './comparisonProjectJudgmentRows/getComparisonProjectBatchRows.ts'
+import {getComparisonProjectRequiredColumnIds} from './comparisonProjectJudgmentRows/getComparisonProjectRequiredColumnIds.ts'
+import {getComparisonProjectServingArticlesSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingArticlesSql.ts'
+import {getComparisonProjectServingCellsSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingCellsSql.ts'
+import {getComparisonProjectServingJudgmentCountSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentCountSql.ts'
+import {getComparisonProjectServingJudgmentFilteredCountSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentFilteredCountSql.ts'
+import {getComparisonProjectServingJudgmentRows} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentRows.ts'
+import {getComparisonProjectServingMemberSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingMemberSql.ts'
+import {getComparisonProjectSearchQuery} from './comparisonProjectJudgmentSearch.ts'
 
-export type ComparisonProjectScopedArticle = {
-  id: string
-  articleExternalId?: string | null
-  articleTitle: string | null
-  articleSummary: string | null
-  articleCreatedAt: Date | null
-  canonicalArticleId?: string
-}
-
-export type ComparisonProjectJudgmentLlmRow = {
-  articleId: string
-  createdAt: Date
-  promptId: string
-  modelId: string
-  sourceProjectId: string | null
-  answeredOriginal: string | null
-  answeredOriginalAsArray: string[] | null
-  explanation?: string | null
-  quotes?: unknown
-  systemPromptVariant?: SystemPromptVariant | null
-  fullTextStrategyId?: string | null
-  useTitle: boolean
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  useMetadata?: boolean | null
-}
-
-export type ComparisonProjectJudgmentHumanRow = {
-  articleId: string
-  promptId: string
-  answer: string | null
-  updatedAt: Date | null
-}
-
-export type ComparisonProjectJudgmentRow = {
-  id: string
-  articleExternalId: string | null
-  articleTitle: string | null
-  articleSummary: string | null
-  articleCreatedAt: Date | null
-  canonicalArticleId: string
-  cells: Record<string, string | null>
-  hasConflict: boolean
-}
+export type {ComparisonProjectConflictResolutionFilter} from '../../../utils/comparisonProjectConflictResolutionFilter.ts'
+export type {
+  ComparisonProjectArticleCategoryFilterSelection,
+  ComparisonProjectConflictResolutionFilterSelection,
+  ComparisonProjectDifferenceFilterSelection,
+  ComparisonProjectJudgmentHumanRow,
+  ComparisonProjectJudgmentLlmRow,
+  ComparisonProjectJudgmentRow,
+  ComparisonProjectRowFilterSelection,
+  ComparisonProjectScopedArticle,
+} from './comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsTypes.ts'
+export {getComparisonProjectFilterSelectionList} from './comparisonProjectJudgmentRows/comparisonProjectServingFilterSql.ts'
+export {getComparisonProjectBatchRows} from './comparisonProjectJudgmentRows/getComparisonProjectBatchRows.ts'
+export {
+  getComparisonProjectBatchCellsByArticle,
+  getComparisonProjectHumanCells,
+  getComparisonProjectLlmCells,
+} from './comparisonProjectJudgmentRows/getComparisonProjectBatchRows/getComparisonProjectBatchCellsByArticle.ts'
+export {getComparisonProjectColumnId} from './comparisonProjectJudgmentRows/getComparisonProjectColumnId.ts'
+export {
+  comparisonProjectContentKeyFullTextStrategySeparator,
+  getComparisonProjectContentKey,
+} from './comparisonProjectJudgmentRows/getComparisonProjectContentKey.ts'
+export {getComparisonProjectRequiredColumnIds} from './comparisonProjectJudgmentRows/getComparisonProjectRequiredColumnIds.ts'
+export {
+  getComparisonProjectScopedArticleBatch,
+  getComparisonProjectScopedArticleBatchSql,
+} from './comparisonProjectJudgmentRows/getComparisonProjectScopedArticleBatch.ts'
+export {getComparisonProjectServingArticlesSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingArticlesSql.ts'
+export {getComparisonProjectServingCellsSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingCellsSql.ts'
+export {getComparisonProjectServingJudgmentCountSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentCountSql.ts'
+export {getComparisonProjectServingJudgmentFilteredCountSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentFilteredCountSql.ts'
+export {getComparisonProjectServingMemberSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingMemberSql.ts'
 
 export type ComparisonProjectScopedArticleBatchRequest = {limit: number; offset: number}
-export type {ComparisonProjectConflictResolutionFilter} from '../../../utils/comparisonProjectConflictResolutionFilter.ts'
-
-type ComparisonProjectScopedArticleRow = Omit<ComparisonProjectScopedArticle, 'articleCreatedAt'> & {
-  articleCreatedAt: unknown
-}
-
-type ComparisonProjectScopedArticleQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
-
-type ComparisonProjectServingMemberRow = {
-  articleId: string
-  generation: unknown
-  rowSortArticleId: string | null
-  rowSortCreatedAt: unknown
-  rowSortTitle: string | null
-}
-
-type ComparisonProjectServingArticleRow = {
-  articleExternalId: string | null
-  articleCreatedAt: unknown
-  articleId: string
-  articleSummary: string | null
-  articleTitle: string | null
-  canonicalArticleId: string
-  hasConflict: boolean
-}
-
-type ComparisonProjectServingCellRow = {articleId: string; columnId: string; displayAnswer: string | null}
-
-type ComparisonProjectBatchCellsByArticle = {
-  humanCellsByArticle: Record<string, Record<string, string | null>>
-  llmCellsByArticle: Record<string, Record<string, string | null>>
-}
-
-type ComparisonProjectBatchRowsParams = {
-  articles: readonly ComparisonProjectScopedArticle[]
-  columns: readonly ComparisonProjectDifferenceColumn[]
-  differenceFilter: ComparisonProjectDifferenceFilter
-  humanRows: readonly ComparisonProjectJudgmentHumanRow[]
-  isSummaryMode: boolean
-  llmRows: readonly ComparisonProjectJudgmentLlmRow[]
-  requiredHumanColumnIds: ReadonlySet<string>
-  requiredLlmColumnIds: ReadonlySet<string>
-  rowFilter: ComparisonProjectRowFilter
-}
 
 type ForEachComparisonProjectJudgmentRowBatchParams = {
   articleBatchSize: number
@@ -138,19 +83,6 @@ type ForEachComparisonProjectJudgmentRowBatchParams = {
   ) => Promise<readonly ComparisonProjectScopedArticle[]>
   onRows: (rows: ComparisonProjectJudgmentRow[]) => Promise<void> | void
   rowFilter: ComparisonProjectRowFilter
-}
-
-export type ComparisonProjectArticleCategoryFilterSelection =
-  ComparisonProjectFilterSelection<ComparisonProjectArticleCategoryFilter>
-export type ComparisonProjectConflictResolutionFilterSelection =
-  ComparisonProjectFilterSelection<ComparisonProjectConflictResolutionFilter>
-export type ComparisonProjectDifferenceFilterSelection =
-  ComparisonProjectFilterSelection<ComparisonProjectDifferenceFilter>
-export type ComparisonProjectRowFilterSelection = ComparisonProjectFilterSelection<ComparisonProjectRowFilter>
-
-type ComparisonProjectServingConflictResolutionProvenanceParams = {
-  conflictResolutionProvenanceFilter?: readonly ComparisonProjectConflictResolutionProvenanceFilter[]
-  currentJudgmentContextId?: string | null
 }
 
 type ComparisonProjectServingJudgmentRowsParams = ComparisonProjectServingConflictResolutionProvenanceParams & {
@@ -187,126 +119,6 @@ type ComparisonProjectServingJudgmentCountParams = ComparisonProjectServingConfl
 export type ComparisonProjectServingJudgmentRowsPage = {nextCursor: string | null; rows: ComparisonProjectJudgmentRow[]}
 export type ComparisonProjectServingJudgmentCount = {totalCount: number; totalPages: number}
 
-type ComparisonProjectServingPageCursor = {articleId: string; createdAt: string | null; title: string}
-
-const comparisonProjectServingRowFilterPredicates = {
-  all: 'article.passes_row_filter_all',
-  'fully-answered': 'article.passes_row_filter_fully_answered',
-  'human-answered-maybe': 'article.has_human_answered_maybe',
-  'human-answered-no': 'article.has_human_answered_no',
-  'human-answered-yes': 'article.has_human_answered_yes',
-  'llm-answered-maybe': 'article.has_llm_answered_maybe',
-  'llm-answered-no': 'article.has_llm_answered_no',
-  'llm-answered-yes': 'article.has_llm_answered_yes',
-  'multiple-answers': 'article.passes_row_filter_multiple_answers',
-} satisfies Record<ComparisonProjectRowFilter, string>
-
-const comparisonProjectServingConflictResolutionAnswerSql = 'LOWER(TRIM(conflict_resolution.answer_value))'
-const comparisonProjectServingHasConflictResolutionSql =
-  "NULLIF(TRIM(conflict_resolution.answer_value), '') IS NOT NULL"
-
-const getComparisonProjectServingConflictResolutionDifferenceSql = (
-  kind: ComparisonProjectDifferenceColumn['kind'],
-) => {
-  return `(${comparisonProjectServingHasConflictResolutionSql}
-        AND (
-          (article.has_${kind}_answered_yes AND ${comparisonProjectServingConflictResolutionAnswerSql} <> 'yes')
-          OR (article.has_${kind}_answered_no AND ${comparisonProjectServingConflictResolutionAnswerSql} <> 'no')
-          OR (article.has_${kind}_answered_maybe AND ${comparisonProjectServingConflictResolutionAnswerSql} <> 'maybe')
-        ))`
-}
-
-const getComparisonProjectServingConflictResolutionTrueConflictSql = (
-  kind: ComparisonProjectDifferenceColumn['kind'],
-) => {
-  return `(${comparisonProjectServingHasConflictResolutionSql}
-        AND (
-          (${comparisonProjectServingConflictResolutionAnswerSql} IN ('yes', 'maybe') AND article.has_${kind}_answered_no)
-          OR (${comparisonProjectServingConflictResolutionAnswerSql} = 'no'
-            AND (article.has_${kind}_answered_yes OR article.has_${kind}_answered_maybe))
-        ))`
-}
-
-const comparisonProjectServingDifferenceFilterPredicates = {
-  all: 'article.passes_difference_filter_all',
-  'any-disagreement': 'article.passes_difference_filter_any_disagreement',
-  'human-vs-llm': 'article.passes_difference_filter_human_vs_llm',
-  'human-vs-llm-overlap': 'article.passes_difference_filter_human_vs_llm_overlap',
-  'human-vs-llm-true-conflict': 'article.passes_difference_filter_human_vs_llm_true_conflict',
-  'llm-vs-llm': 'article.passes_difference_filter_llm_vs_llm',
-  'llm-vs-llm-true-difference': 'article.passes_difference_filter_llm_vs_llm_true_difference',
-  'resolution-vs-human': getComparisonProjectServingConflictResolutionDifferenceSql('human'),
-  'resolution-vs-human-true-conflict': getComparisonProjectServingConflictResolutionTrueConflictSql('human'),
-  'resolution-vs-llm': getComparisonProjectServingConflictResolutionDifferenceSql('llm'),
-  'resolution-vs-llm-true-conflict': getComparisonProjectServingConflictResolutionTrueConflictSql('llm'),
-} satisfies Record<ComparisonProjectDifferenceFilter, string>
-
-const comparisonProjectContentKeySystemPromptVariantSeparator = '-'
-const comparisonProjectContentKeyMetadataSuffix = 'm'
-export const comparisonProjectContentKeyFullTextStrategySeparator = '~'
-
-const getComparisonProjectContentKeyFullTextStrategySuffix = (fullTextStrategyId: string | null | undefined) => {
-  return isReservedFullTextStrategyId(fullTextStrategyId)
-    ? ''
-    : `${comparisonProjectContentKeyFullTextStrategySeparator}${fullTextStrategyId}`
-}
-
-export const getComparisonProjectContentKey = (settings: {
-  useTitle: boolean
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  useMetadata?: boolean | null
-  systemPromptVariant?: string | null
-  fullTextStrategyId?: string | null
-}) => {
-  const flagKey = [settings.useTitle, settings.useAbstract, settings.useFulltext, settings.useFulltextNoImages]
-    .map((value) => {
-      return (value ? 1 : 0).toString()
-    })
-    .join('')
-  const contentKey = settings.useMetadata ? `${flagKey}${comparisonProjectContentKeyMetadataSuffix}` : flagKey
-  const systemPromptVariant = getSystemPromptVariant(settings.systemPromptVariant)
-  const variantContentKey =
-    systemPromptVariant === defaultSystemPromptVariant
-      ? contentKey
-      : `${contentKey}${comparisonProjectContentKeySystemPromptVariantSeparator}${systemPromptVariant}`
-
-  return `${variantContentKey}${getComparisonProjectContentKeyFullTextStrategySuffix(settings.fullTextStrategyId)}`
-}
-
-export const getComparisonProjectColumnId = (
-  kind: 'llm' | 'human',
-  promptId: string,
-  modelId?: string | null,
-  contentKey?: string | null,
-  sourceProjectId?: string | null,
-) => {
-  return kind === 'human'
-    ? `human:${promptId}`
-    : sourceProjectId
-      ? `llm:${sourceProjectId}:${modelId}:${contentKey ?? 'default'}:${promptId}`
-      : `llm:${modelId}:${contentKey ?? 'default'}:${promptId}`
-}
-
-const isDefined = <T>(value: T | null | undefined): value is T => {
-  return value !== null && value !== undefined
-}
-
-const hasValue = (value: string | null | undefined) => {
-  return (value?.trim() ?? '') !== ''
-}
-
-const getPositiveInteger = (value: number) => {
-  const integerValue = Number.isFinite(value) ? Math.floor(value) : 1
-  return Math.max(integerValue, 1)
-}
-
-const getNonNegativeInteger = (value: number) => {
-  const integerValue = Number.isFinite(value) ? Math.floor(value) : 0
-  return Math.max(integerValue, 0)
-}
-
 const getComparisonProjectServingGeneration = (value: unknown) => {
   const parsedGeneration = typeof value === 'bigint' ? Number(value) : Number(value)
 
@@ -317,556 +129,6 @@ const getComparisonProjectServingCount = (value: unknown) => {
   const parsedCount = typeof value === 'bigint' ? Number(value) : Number(value)
 
   return Number.isSafeInteger(parsedCount) && parsedCount >= 0 ? parsedCount : 0
-}
-
-const getInClause = (values: string[]) => {
-  return getQuotedStringList(values).join(', ')
-}
-
-const getComparisonProjectServingPageCursor = (cursor: string | null | undefined) => {
-  if (!cursor) {
-    return null
-  }
-
-  try {
-    const parsedCursor = JSON.parse(
-      Buffer.from(cursor, 'base64url').toString('utf8'),
-    ) as Partial<ComparisonProjectServingPageCursor>
-    const createdAt =
-      parsedCursor.createdAt === null || typeof parsedCursor.createdAt === 'string' ? parsedCursor.createdAt : undefined
-
-    return typeof parsedCursor.articleId === 'string'
-      && typeof parsedCursor.title === 'string'
-      && createdAt !== undefined
-      ? {articleId: parsedCursor.articleId, createdAt, title: parsedCursor.title}
-      : null
-  } catch {
-    return null
-  }
-}
-
-const comparisonProjectServingCursorTimestampPattern =
-  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}(:?\d{2})?)?$/
-
-const getComparisonProjectServingCursorCreatedAt = (value: unknown) => {
-  const rowSortCreatedAt = getDateValue(value)
-
-  return rowSortCreatedAt === null
-    ? null
-    : typeof value === 'string' && comparisonProjectServingCursorTimestampPattern.test(value)
-      ? value
-      : rowSortCreatedAt.toISOString()
-}
-
-const getComparisonProjectServingNextCursor = (memberRow: ComparisonProjectServingMemberRow | undefined) => {
-  const createdAt = getComparisonProjectServingCursorCreatedAt(memberRow?.rowSortCreatedAt)
-  const articleId = memberRow?.rowSortArticleId
-  const title = memberRow?.rowSortTitle
-
-  return articleId !== null && articleId !== undefined && title !== null && title !== undefined
-    ? Buffer.from(JSON.stringify({articleId, createdAt, title}), 'utf8').toString('base64url')
-    : null
-}
-
-const getComparisonProjectServingCursorWhereSql = (cursor: ComparisonProjectServingPageCursor | null) => {
-  if (cursor === null) {
-    return ''
-  }
-
-  const titleCondition = `article.row_sort_title > ${getSqlLiteral(cursor.title)}
-        OR (article.row_sort_title = ${getSqlLiteral(cursor.title)}
-          AND article.row_sort_article_id > ${getSqlLiteral(cursor.articleId)})`
-
-  if (cursor.createdAt === null) {
-    return `
-      AND article.row_sort_created_at IS NULL
-      AND (${titleCondition})
-    `
-  }
-
-  const cursorCreatedAt = getComparisonProjectServingCursorCreatedAt(cursor.createdAt)
-  const cursorCreatedAtLiteral = cursorCreatedAt === null ? null : `TIMESTAMPTZ ${getSqlLiteral(cursorCreatedAt)}`
-
-  return cursorCreatedAtLiteral
-    ? `
-      AND (
-        article.row_sort_created_at < ${cursorCreatedAtLiteral}
-        OR article.row_sort_created_at IS NULL
-        OR (
-          article.row_sort_created_at = ${cursorCreatedAtLiteral}
-          AND (${titleCondition})
-        )
-      )
-    `
-    : ''
-}
-
-export const getComparisonProjectFilterSelectionList = <T extends string>(
-  selection: ComparisonProjectFilterSelection<T>,
-): T[] => {
-  const values = selection === null || selection === undefined ? [] : Array.isArray(selection) ? selection : [selection]
-
-  return Array.from(
-    new Set(
-      (values as readonly T[]).filter((value) => {
-        return value !== 'all'
-      }),
-    ),
-  )
-}
-
-const getComparisonProjectServingOrPredicateSql = (predicates: readonly string[], allPredicate: string) => {
-  return predicates.length === 0
-    ? allPredicate
-    : predicates.length === 1
-      ? (predicates[0] ?? allPredicate)
-      : `(${predicates.join(' OR ')})`
-}
-
-const getComparisonProjectServingRowFilterPredicateSql = (rowFilter: ComparisonProjectRowFilterSelection) => {
-  return getComparisonProjectServingOrPredicateSql(
-    getComparisonProjectFilterSelectionList(rowFilter).map((value) => {
-      return comparisonProjectServingRowFilterPredicates[value]
-    }),
-    comparisonProjectServingRowFilterPredicates.all,
-  )
-}
-
-const getComparisonProjectServingDifferenceFilterPredicateSql = (
-  differenceFilter: ComparisonProjectDifferenceFilterSelection,
-) => {
-  return getComparisonProjectServingOrPredicateSql(
-    getComparisonProjectFilterSelectionList(differenceFilter).map((value) => {
-      return comparisonProjectServingDifferenceFilterPredicates[value]
-    }),
-    comparisonProjectServingDifferenceFilterPredicates.all,
-  )
-}
-
-const getComparisonProjectServingArticleCategoryFilterPredicateSql = (
-  articleCategoryFilter: ComparisonProjectArticleCategoryFilterSelection,
-  articleAlias: string,
-) => {
-  const articleCategories = getComparisonProjectFilterSelectionList(articleCategoryFilter)
-
-  return articleCategories.length === 0
-    ? 'TRUE'
-    : articleCategories.length === 1
-      ? `${articleAlias}.article_category = ${getSqlLiteral(articleCategories[0] ?? '')}`
-      : `${articleAlias}.article_category IN (${getInClause(articleCategories)})`
-}
-
-const getComparisonProjectServingRequiresConflictResolution = (
-  conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection,
-  differenceFilter: ComparisonProjectDifferenceFilterSelection,
-  conflictResolutionProvenanceFilter: readonly ComparisonProjectConflictResolutionProvenanceFilter[] = [],
-) => {
-  return (
-    getComparisonProjectFilterSelectionList(conflictResolutionFilter).length > 0
-    || conflictResolutionProvenanceFilter.length > 0
-    || getComparisonProjectFilterSelectionList(differenceFilter).some(
-      getIsComparisonProjectConflictResolutionDifferenceFilter,
-    )
-  )
-}
-
-const getComparisonProjectServingConflictResolutionJoinSql = (
-  conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection,
-  differenceFilter: ComparisonProjectDifferenceFilterSelection,
-  conflictResolutionProvenanceFilter: readonly ComparisonProjectConflictResolutionProvenanceFilter[] = [],
-) => {
-  return getComparisonProjectServingRequiresConflictResolution(
-    conflictResolutionFilter,
-    differenceFilter,
-    conflictResolutionProvenanceFilter,
-  )
-    ? `
-    LEFT JOIN app.comparison_project_conflict_resolution conflict_resolution
-      ON conflict_resolution.comparison_project_id = article.comparison_project_id
-     AND conflict_resolution.article_id = article.article_id`
-    : ''
-}
-
-const comparisonProjectServingArticleTable = 'mart.comparison_article_serving'
-const comparisonProjectServingActiveGenerationSql = '(SELECT generation FROM active_generation)'
-
-const getComparisonProjectServingArticleSourceSql = (
-  searchQuery: ComparisonProjectSearchQuery | null,
-  comparisonProjectId: string,
-) => {
-  return searchQuery === null
-    ? comparisonProjectServingArticleTable
-    : getComparisonProjectSearchArticleSourceSql({
-        articleTable: comparisonProjectServingArticleTable,
-        comparisonProjectIdSql: getSqlLiteral(comparisonProjectId),
-        generationSql: comparisonProjectServingActiveGenerationSql,
-        query: searchQuery,
-      })
-}
-
-const getComparisonProjectServingSearchPredicateSql = (searchQuery: ComparisonProjectSearchQuery | null) => {
-  return searchQuery === null ? 'TRUE' : getComparisonProjectSearchPredicateSql(searchQuery, 'article')
-}
-
-const getComparisonProjectServingConflictResolutionAnswerPredicateSql = (answerValues: readonly string[]) => {
-  return answerValues.length === 0
-    ? null
-    : answerValues.length === 1
-      ? `conflict_resolution.answer_value = ${getSqlLiteral(answerValues[0] ?? '')}`
-      : `conflict_resolution.answer_value IN (${getInClause([...answerValues])})`
-}
-
-const getComparisonProjectServingConflictResolutionFilterPredicateSql = (
-  conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection,
-) => {
-  const conflictResolutionFilters = getComparisonProjectFilterSelectionList(conflictResolutionFilter)
-
-  if (conflictResolutionFilters.length === 0) {
-    return 'TRUE'
-  }
-
-  const answerPredicate = getComparisonProjectServingConflictResolutionAnswerPredicateSql(
-    conflictResolutionFilters.filter((value) => {
-      return value !== 'not-set'
-    }),
-  )
-  const predicates = [
-    conflictResolutionFilters.includes('not-set')
-      ? '(article.has_conflict AND conflict_resolution.article_id IS NULL)'
-      : null,
-    answerPredicate,
-  ].filter(isDefined)
-
-  return getComparisonProjectServingOrPredicateSql(predicates, 'TRUE')
-}
-
-const getRowsByArticleId = <T extends {articleId: string}>(rows: readonly T[]) => {
-  return rows.reduce<Map<string, T[]>>((rowMap, row) => {
-    const currentRows = rowMap.get(row.articleId) ?? []
-    currentRows.push(row)
-    rowMap.set(row.articleId, currentRows)
-    return rowMap
-  }, new Map<string, T[]>())
-}
-
-const getComparisonProjectAnsweredPromptIds = (
-  llmRows: readonly ComparisonProjectJudgmentLlmRow[],
-  humanRows: readonly ComparisonProjectJudgmentHumanRow[],
-) => {
-  const llmPromptIds = llmRows
-    .filter((row) => {
-      return hasAnyJudgmentAnswer(row)
-    })
-    .map((row) => {
-      return row.promptId
-    })
-  const humanPromptIds = humanRows
-    .filter((row) => {
-      return hasValue(row.answer)
-    })
-    .map((row) => {
-      return row.promptId
-    })
-
-  return new Set([...llmPromptIds, ...humanPromptIds])
-}
-
-const getComparisonProjectAnsweredColumnCount = (
-  llmCells: Record<string, string | null> | undefined,
-  humanCells: Record<string, string | null> | undefined,
-  columnIds: ReadonlySet<string>,
-) => {
-  return Array.from(columnIds).filter((columnId) => {
-    return hasValue(llmCells?.[columnId]) || hasValue(humanCells?.[columnId])
-  }).length
-}
-
-export const getComparisonProjectRequiredColumnIds = (
-  columns: readonly ComparisonProjectDifferenceColumn[],
-  kind: ComparisonProjectDifferenceColumn['kind'],
-) => {
-  return new Set(
-    columns
-      .filter((column) => {
-        return column.kind === kind
-      })
-      .map((column) => {
-        return column.id
-      }),
-  )
-}
-
-const getHasAllRequiredColumns = (
-  cellMap: Record<string, string | null> | undefined,
-  requiredColumnIds: ReadonlySet<string>,
-) => {
-  return Array.from(requiredColumnIds).every((columnId) => {
-    return hasValue(cellMap?.[columnId])
-  })
-}
-
-export const getComparisonProjectScopedArticleBatchSql = (params: {
-  articleTable: string
-  limit: number
-  offset: number
-  whereClause: string
-}) => {
-  const limit = getPositiveInteger(params.limit)
-  const offset = getNonNegativeInteger(params.offset)
-
-  return `
-      SELECT
-        id,
-        id AS canonicalArticleId,
-        article_id AS articleExternalId,
-        article_title AS articleTitle,
-        article_summary AS articleSummary,
-        article_created_at AS articleCreatedAt
-      FROM ${params.articleTable} a
-      ${params.whereClause}
-      ORDER BY a.article_created_at DESC, a.article_title ASC, a.id ASC
-      LIMIT ${limit}
-      OFFSET ${offset}
-    `
-}
-
-export const getComparisonProjectScopedArticleBatch = async (params: {
-  articleTable: string
-  limit: number
-  offset: number
-  queryRunner: ComparisonProjectScopedArticleQueryRunner
-  whereClause: string
-}) => {
-  const rows = await params.queryRunner.queryJson<ComparisonProjectScopedArticleRow>(
-    getComparisonProjectScopedArticleBatchSql(params),
-  )
-
-  return rows.map((row) => {
-    return {...row, articleCreatedAt: getDateValue(row.articleCreatedAt)}
-  })
-}
-
-const getComparisonProjectServingProvenancePredicateSql = (
-  params: ComparisonProjectServingConflictResolutionProvenanceParams,
-) => {
-  return getComparisonProjectConflictResolutionProvenanceFilterPredicateSql({
-    currentJudgmentContextId: params.currentJudgmentContextId ?? null,
-    filters: params.conflictResolutionProvenanceFilter ?? [],
-  })
-}
-
-export const getComparisonProjectServingMemberSql = (
-  params: ComparisonProjectServingConflictResolutionProvenanceParams & {
-    articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
-    comparisonProjectId: string
-    conflictResolutionFilter?: ComparisonProjectConflictResolutionFilterSelection
-    cursor?: string | null
-    differenceFilter: ComparisonProjectDifferenceFilterSelection
-    limit: number
-    rowFilter: ComparisonProjectRowFilterSelection
-    searchText?: string | null
-  },
-) => {
-  const cursor = getComparisonProjectServingPageCursor(params.cursor)
-  const limit = getPositiveInteger(params.limit)
-  const searchQuery = getComparisonProjectSearchQuery(params.searchText)
-  const rowFilterPredicate = getComparisonProjectServingRowFilterPredicateSql(params.rowFilter)
-  const differenceFilterPredicate = getComparisonProjectServingDifferenceFilterPredicateSql(params.differenceFilter)
-  const articleCategoryFilterPredicate = getComparisonProjectServingArticleCategoryFilterPredicateSql(
-    params.articleCategoryFilter ?? defaultComparisonProjectArticleCategoryFilter,
-    'article',
-  )
-  const conflictResolutionJoin = getComparisonProjectServingConflictResolutionJoinSql(
-    params.conflictResolutionFilter,
-    params.differenceFilter,
-    params.conflictResolutionProvenanceFilter,
-  )
-  const conflictResolutionFilterPredicate = getComparisonProjectServingConflictResolutionFilterPredicateSql(
-    params.conflictResolutionFilter,
-  )
-
-  return `
-    WITH active_generation AS (
-      SELECT active_generation AS generation
-      FROM app.comparison_project_serving_generation
-      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-        AND active_generation > 0
-    )
-    SELECT
-      article.article_id AS articleId,
-      article.generation AS generation,
-      article.row_sort_created_at AS rowSortCreatedAt,
-      article.row_sort_title AS rowSortTitle,
-      article.row_sort_article_id AS rowSortArticleId
-    FROM ${getComparisonProjectServingArticleSourceSql(searchQuery, params.comparisonProjectId)} article
-    INNER JOIN active_generation active ON active.generation = article.generation
-    ${conflictResolutionJoin}
-    WHERE article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-      AND ${rowFilterPredicate}
-      AND ${differenceFilterPredicate}
-      AND ${articleCategoryFilterPredicate}
-      AND ${conflictResolutionFilterPredicate}
-      AND ${getComparisonProjectServingProvenancePredicateSql(params)}
-      AND ${getComparisonProjectServingSearchPredicateSql(searchQuery)}
-      ${getComparisonProjectServingCursorWhereSql(cursor)}
-    ORDER BY article.row_sort_created_at DESC NULLS LAST, article.row_sort_title ASC, article.row_sort_article_id ASC
-    LIMIT ${limit + 1}
-  `
-}
-
-export const getComparisonProjectServingArticlesSql = (params: {
-  articleIds: string[]
-  comparisonProjectId: string
-  generation: number
-}) => {
-  return `
-    SELECT
-      article.article_id AS articleId,
-      article.article_id AS canonicalArticleId,
-      article.article_external_id AS articleExternalId,
-      article.article_title AS articleTitle,
-      article.article_summary AS articleSummary,
-      article.article_created_at AS articleCreatedAt,
-      article.has_conflict AS hasConflict
-    FROM mart.comparison_article_serving article
-    WHERE article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-      AND article.generation = ${getSqlLiteral(params.generation)}
-      AND article.article_id IN (${getInClause(params.articleIds)})
-  `
-}
-
-export const getComparisonProjectServingCellsSql = (params: {
-  articleIds: string[]
-  comparisonProjectId: string
-  generation: number
-}) => {
-  return `
-    SELECT
-      cell.article_id AS articleId,
-      cell.column_id AS columnId,
-      cell.display_answer AS displayAnswer
-    FROM mart.comparison_cell_serving cell
-    WHERE cell.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-      AND cell.generation = ${getSqlLiteral(params.generation)}
-      AND cell.article_id IN (${getInClause(params.articleIds)})
-    ORDER BY cell.article_id ASC, cell.column_order ASC, cell.column_id ASC
-  `
-}
-
-export const getComparisonProjectServingJudgmentCountSql = (params: {
-  articleCategoryFilter?: ComparisonProjectArticleCategoryFilter
-  comparisonProjectId: string
-  differenceFilter: ComparisonProjectDifferenceFilter
-  rowFilter: ComparisonProjectRowFilter
-}) => {
-  return `
-    WITH active_generation AS (
-      SELECT active_generation AS generation
-      FROM app.comparison_project_serving_generation
-      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-        AND active_generation > 0
-    )
-    SELECT stats.total_count AS totalCount
-    FROM mart.comparison_filter_stats stats
-    INNER JOIN active_generation active ON active.generation = stats.generation
-    WHERE stats.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-      AND stats.row_filter = ${getSqlLiteral(params.rowFilter)}
-      AND stats.difference_filter = ${getSqlLiteral(params.differenceFilter)}
-      AND stats.article_category_filter = ${getSqlLiteral(
-        params.articleCategoryFilter ?? defaultComparisonProjectArticleCategoryFilter,
-      )}
-    LIMIT 1
-  `
-}
-
-export const getComparisonProjectServingJudgmentFilteredCountSql = (
-  params: ComparisonProjectServingConflictResolutionProvenanceParams & {
-    articleCategoryFilter?: ComparisonProjectArticleCategoryFilterSelection
-    comparisonProjectId: string
-    conflictResolutionFilter: ComparisonProjectConflictResolutionFilterSelection
-    differenceFilter: ComparisonProjectDifferenceFilterSelection
-    rowFilter: ComparisonProjectRowFilterSelection
-    searchText?: string | null
-  },
-) => {
-  const searchQuery = getComparisonProjectSearchQuery(params.searchText)
-  const rowFilterPredicate = getComparisonProjectServingRowFilterPredicateSql(params.rowFilter)
-  const differenceFilterPredicate = getComparisonProjectServingDifferenceFilterPredicateSql(params.differenceFilter)
-  const articleCategoryFilterPredicate = getComparisonProjectServingArticleCategoryFilterPredicateSql(
-    params.articleCategoryFilter ?? defaultComparisonProjectArticleCategoryFilter,
-    'article',
-  )
-  const conflictResolutionJoin = getComparisonProjectServingConflictResolutionJoinSql(
-    params.conflictResolutionFilter,
-    params.differenceFilter,
-    params.conflictResolutionProvenanceFilter,
-  )
-  const conflictResolutionFilterPredicate = getComparisonProjectServingConflictResolutionFilterPredicateSql(
-    params.conflictResolutionFilter,
-  )
-
-  return `
-    WITH active_generation AS (
-      SELECT active_generation AS generation
-      FROM app.comparison_project_serving_generation
-      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-        AND active_generation > 0
-    )
-    SELECT COUNT(*) AS totalCount
-    FROM ${getComparisonProjectServingArticleSourceSql(searchQuery, params.comparisonProjectId)} article
-    INNER JOIN active_generation active ON active.generation = article.generation
-    ${conflictResolutionJoin}
-    WHERE article.comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-      AND ${rowFilterPredicate}
-      AND ${differenceFilterPredicate}
-      AND ${articleCategoryFilterPredicate}
-      AND ${conflictResolutionFilterPredicate}
-      AND ${getComparisonProjectServingProvenancePredicateSql(params)}
-      AND ${getComparisonProjectServingSearchPredicateSql(searchQuery)}
-  `
-}
-
-const getComparisonProjectServingCellsByArticle = (cellRows: readonly ComparisonProjectServingCellRow[]) => {
-  return cellRows.reduce<Record<string, Record<string, string | null>>>((articleMap, cellRow) => {
-    const articleCells = articleMap[cellRow.articleId] ?? {}
-
-    return {...articleMap, [cellRow.articleId]: {...articleCells, [cellRow.columnId]: cellRow.displayAnswer}}
-  }, {})
-}
-
-const getComparisonProjectServingArticleRowsById = (articleRows: readonly ComparisonProjectServingArticleRow[]) => {
-  return articleRows.reduce<Map<string, ComparisonProjectServingArticleRow>>((articleMap, articleRow) => {
-    articleMap.set(articleRow.articleId, articleRow)
-    return articleMap
-  }, new Map<string, ComparisonProjectServingArticleRow>())
-}
-
-const getComparisonProjectServingJudgmentRows = (params: {
-  articleRows: readonly ComparisonProjectServingArticleRow[]
-  cellRows: readonly ComparisonProjectServingCellRow[]
-  memberRows: readonly ComparisonProjectServingMemberRow[]
-}) => {
-  const articlesById = getComparisonProjectServingArticleRowsById(params.articleRows)
-  const cellsByArticle = getComparisonProjectServingCellsByArticle(params.cellRows)
-
-  return params.memberRows
-    .map<ComparisonProjectJudgmentRow | null>((memberRow) => {
-      const articleRow = articlesById.get(memberRow.articleId)
-
-      return articleRow
-        ? {
-            articleCreatedAt: getDateValue(articleRow.articleCreatedAt),
-            articleExternalId: articleRow.articleExternalId,
-            articleSummary: articleRow.articleSummary,
-            articleTitle: articleRow.articleTitle,
-            canonicalArticleId: articleRow.canonicalArticleId,
-            cells: cellsByArticle[memberRow.articleId] ?? {},
-            hasConflict: articleRow.hasConflict,
-            id: articleRow.canonicalArticleId,
-          }
-        : null
-    })
-    .filter(isDefined)
 }
 
 export const getComparisonProjectServingJudgmentCount = async (
@@ -972,135 +234,6 @@ export const forEachComparisonProjectServingJudgmentArticleIdBatch = async (
   return memberRows.length > limit && nextCursor
     ? forEachComparisonProjectServingJudgmentArticleIdBatch(params, nextCursor)
     : undefined
-}
-
-export const getComparisonProjectLlmCells = (rows: readonly ComparisonProjectJudgmentLlmRow[]) => {
-  return rows.reduce<Record<string, Record<string, string | null>>>((articleMap, row) => {
-    const articleCells = articleMap[row.articleId] ?? {}
-    const columnId = getComparisonProjectColumnId(
-      'llm',
-      row.promptId,
-      row.modelId,
-      getComparisonProjectContentKey(row),
-      row.sourceProjectId,
-    )
-
-    return {...articleMap, [row.articleId]: {...articleCells, [columnId]: getJudgmentDisplayAnswer(row)}}
-  }, {})
-}
-
-export const getComparisonProjectHumanCells = (rows: readonly ComparisonProjectJudgmentHumanRow[]) => {
-  const latestRows = rows.reduce<Map<string, ComparisonProjectJudgmentHumanRow>>((rowMap, row) => {
-    const key = `${row.articleId}:${row.promptId}`
-    const existingRow = rowMap.get(key)
-
-    if (!existingRow || (row.updatedAt?.getTime() ?? 0) > (existingRow.updatedAt?.getTime() ?? 0)) {
-      rowMap.set(key, row)
-    }
-
-    return rowMap
-  }, new Map<string, ComparisonProjectJudgmentHumanRow>())
-  const groupedAnswers = Array.from(latestRows.values()).reduce<Record<string, Record<string, string[]>>>(
-    (articleMap, row) => {
-      const articleCells = articleMap[row.articleId] ?? {}
-      const columnId = getComparisonProjectColumnId('human', row.promptId)
-      const existingAnswers = articleCells[columnId] ?? []
-
-      return row.answer
-        ? {...articleMap, [row.articleId]: {...articleCells, [columnId]: [...existingAnswers, row.answer.trim()]}}
-        : articleMap
-    },
-    {},
-  )
-
-  return Object.entries(groupedAnswers).reduce<Record<string, Record<string, string | null>>>(
-    (articleMap, [articleId, articleCells]) => {
-      const normalizedCells = Object.entries(articleCells).reduce<Record<string, string | null>>(
-        (cellMap, [columnId, answers]) => {
-          const uniqueAnswers = Array.from(
-            new Set(
-              answers.filter((answer) => {
-                return answer !== ''
-              }),
-            ),
-          ).sort((left, right) => {
-            return left.localeCompare(right)
-          })
-
-          return {...cellMap, [columnId]: uniqueAnswers.length > 0 ? uniqueAnswers.join('\n') : null}
-        },
-        {},
-      )
-
-      return {...articleMap, [articleId]: normalizedCells}
-    },
-    {},
-  )
-}
-
-export const getComparisonProjectBatchCellsByArticle = (params: {
-  humanRows: readonly ComparisonProjectJudgmentHumanRow[]
-  llmRows: readonly ComparisonProjectJudgmentLlmRow[]
-}): ComparisonProjectBatchCellsByArticle => {
-  return {
-    humanCellsByArticle: getComparisonProjectHumanCells(params.humanRows),
-    llmCellsByArticle: getComparisonProjectLlmCells(params.llmRows),
-  }
-}
-
-export const getComparisonProjectBatchRows = (params: ComparisonProjectBatchRowsParams) => {
-  const llmRowsByArticle = getRowsByArticleId(params.llmRows)
-  const humanRowsByArticle = getRowsByArticleId(params.humanRows)
-  const {llmCellsByArticle, humanCellsByArticle} = getComparisonProjectBatchCellsByArticle(params)
-  const requiredColumnIds = new Set([...params.requiredLlmColumnIds, ...params.requiredHumanColumnIds])
-
-  return params.articles
-    .map<ComparisonProjectJudgmentRow | null>((article) => {
-      const articleLlmRows = llmRowsByArticle.get(article.id) ?? []
-      const articleHumanRows = humanRowsByArticle.get(article.id) ?? []
-      const articleCells = {...(llmCellsByArticle[article.id] ?? {}), ...(humanCellsByArticle[article.id] ?? {})}
-      const hasArticleData = articleLlmRows.length > 0 || articleHumanRows.length > 0
-      const answeredPromptIds = getComparisonProjectAnsweredPromptIds(articleLlmRows, articleHumanRows)
-      const answeredColumnCount = getComparisonProjectAnsweredColumnCount(
-        llmCellsByArticle[article.id],
-        humanCellsByArticle[article.id],
-        requiredColumnIds,
-      )
-      const hasAllLlmColumns = getHasAllRequiredColumns(llmCellsByArticle[article.id], params.requiredLlmColumnIds)
-      const hasAllHumanColumns = getHasAllRequiredColumns(
-        humanCellsByArticle[article.id],
-        params.requiredHumanColumnIds,
-      )
-      const passesRowFilter = getComparisonProjectPassesRowFilter({
-        answeredColumnCount,
-        answeredPromptCount: answeredPromptIds.size,
-        cells: articleCells,
-        columns: params.columns,
-        hasAllHumanColumns,
-        hasAllLlmColumns,
-        isSummaryMode: params.isSummaryMode,
-        rowFilter: params.rowFilter,
-      })
-      const passesDifferenceFilter = getComparisonProjectHasDifferenceFilterMatch(
-        articleCells,
-        params.columns,
-        params.differenceFilter,
-      )
-
-      return hasArticleData && passesRowFilter && passesDifferenceFilter
-        ? {
-            articleExternalId: article.articleExternalId ?? null,
-            articleTitle: article.articleTitle,
-            articleSummary: article.articleSummary,
-            articleCreatedAt: article.articleCreatedAt,
-            canonicalArticleId: article.canonicalArticleId ?? article.id,
-            cells: articleCells,
-            hasConflict: getComparisonProjectHasAnyConflict(articleCells, params.columns),
-            id: article.canonicalArticleId ?? article.id,
-          }
-        : null
-    })
-    .filter(isDefined)
 }
 
 export const forEachComparisonProjectJudgmentRowBatch = async (

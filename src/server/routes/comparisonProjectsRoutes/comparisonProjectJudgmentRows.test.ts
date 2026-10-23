@@ -3,22 +3,24 @@ import {expect, test} from 'bun:test'
 
 import type {ComparisonProjectDifferenceColumn} from '../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
-  type ComparisonProjectJudgmentLlmRow,
-  type ComparisonProjectScopedArticle,
   forEachComparisonProjectJudgmentRowBatch,
   forEachComparisonProjectServingJudgmentArticleIdBatch,
   forEachComparisonProjectServingJudgmentRowBatch,
-  getComparisonProjectBatchCellsByArticle,
-  getComparisonProjectBatchRows,
-  getComparisonProjectScopedArticleBatchSql,
-  getComparisonProjectServingArticlesSql,
-  getComparisonProjectServingCellsSql,
   getComparisonProjectServingJudgmentCount,
-  getComparisonProjectServingJudgmentCountSql,
-  getComparisonProjectServingJudgmentFilteredCountSql,
   getComparisonProjectServingJudgmentRowsPage,
-  getComparisonProjectServingMemberSql,
 } from './comparisonProjectJudgmentRows.ts'
+import type {
+  ComparisonProjectJudgmentLlmRow,
+  ComparisonProjectScopedArticle,
+} from './comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsTypes.ts'
+import {getComparisonProjectBatchRows} from './comparisonProjectJudgmentRows/getComparisonProjectBatchRows.ts'
+import {getComparisonProjectBatchCellsByArticle} from './comparisonProjectJudgmentRows/getComparisonProjectBatchRows/getComparisonProjectBatchCellsByArticle.ts'
+import {getComparisonProjectScopedArticleBatchSql} from './comparisonProjectJudgmentRows/getComparisonProjectScopedArticleBatch.ts'
+import {getComparisonProjectServingArticlesSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingArticlesSql.ts'
+import {getComparisonProjectServingCellsSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingCellsSql.ts'
+import {getComparisonProjectServingJudgmentCountSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentCountSql.ts'
+import {getComparisonProjectServingJudgmentFilteredCountSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentFilteredCountSql.ts'
+import {getComparisonProjectServingMemberSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingMemberSql.ts'
 
 const columns = [
   {id: 'llm:model-1:1100:prompt-1', kind: 'llm', promptId: 'prompt-1'},

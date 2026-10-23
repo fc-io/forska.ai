@@ -2,18 +2,20 @@ import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {
-  type ComparisonProjectStatsAggregateRow,
-  type ComparisonProjectStatsCategoryBreakdown,
-  type ComparisonProjectStatsCellRow,
-  type ComparisonProjectStatsColumn,
-  type ComparisonProjectStatsComparison,
-  type ComparisonProjectStatsResolvedTruthComparison,
   getComparisonProjectAdditionalStats,
-  getComparisonProjectAdditionalStatsFromCells,
   getComparisonProjectStats,
-  getComparisonProjectStatsFromCells,
   getComparisonProjectStatsWithCategoryBreakdowns,
 } from './comparisonProjectStats.ts'
+import type {
+  ComparisonProjectStatsAggregateRow,
+  ComparisonProjectStatsCategoryBreakdown,
+  ComparisonProjectStatsCellRow,
+  ComparisonProjectStatsColumn,
+  ComparisonProjectStatsComparison,
+  ComparisonProjectStatsResolvedTruthComparison,
+} from './comparisonProjectStats/comparisonProjectStatsTypes.ts'
+import {getComparisonProjectAdditionalStatsFromCells} from './comparisonProjectStats/getComparisonProjectAdditionalStatsFromCells.ts'
+import {getComparisonProjectStatsFromCells} from './comparisonProjectStats/getComparisonProjectStatsFromCells.ts'
 
 const humanPromptColumn = {
   id: 'human:prompt-1',
