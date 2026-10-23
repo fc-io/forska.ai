@@ -13,10 +13,8 @@ import {
   comparisonProjectRowFilters,
   getComparisonProjectPassesRowFilter,
 } from '../../utils/comparisonProjectRowFilter.ts'
-import {
-  type ComparisonProjectScopedArticle,
-  getComparisonProjectRequiredColumnIds,
-} from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
+import type {ComparisonProjectScopedArticle} from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsTypes.ts'
+import {getComparisonProjectRequiredColumnIds} from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows/getComparisonProjectRequiredColumnIds.ts'
 import {getComparisonProjectServingRollupBuilder} from './comparisonProjectServingRollupBuilder.ts'
 
 setDefaultTimeout(120_000)

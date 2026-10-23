@@ -2,10 +2,8 @@ import {rmSync} from 'node:fs'
 
 import {expect, setDefaultTimeout, test} from 'bun:test'
 
-import {
-  getComparisonProjectColumnId,
-  getComparisonProjectContentKey,
-} from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
+import {getComparisonProjectColumnId} from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows/getComparisonProjectColumnId.ts'
+import {getComparisonProjectContentKey} from '../routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows/getComparisonProjectContentKey.ts'
 
 setDefaultTimeout(120_000)
 

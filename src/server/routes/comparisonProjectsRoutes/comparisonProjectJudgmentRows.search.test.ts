@@ -3,10 +3,10 @@ import {expect, test} from 'bun:test'
 
 import {
   getComparisonProjectServingJudgmentCount,
-  getComparisonProjectServingJudgmentFilteredCountSql,
   getComparisonProjectServingJudgmentRowsPage,
-  getComparisonProjectServingMemberSql,
 } from './comparisonProjectJudgmentRows.ts'
+import {getComparisonProjectServingJudgmentFilteredCountSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentFilteredCountSql.ts'
+import {getComparisonProjectServingMemberSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingMemberSql.ts'
 
 const createServingFixture = async () => {
   const duckdbInstance = await DuckDBInstance.create(':memory:')
