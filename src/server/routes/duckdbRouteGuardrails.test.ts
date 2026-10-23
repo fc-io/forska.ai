@@ -83,6 +83,9 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/ProjectsRoutes.ts',
   'src/server/routes/ProviderModelsRoutes.ts',
   'src/server/routes/SubprojectsRoutes.ts',
+  'src/server/routes/adminInvestigateRoutes/adminInvestigateRoutesGetMaintenanceRuntimeDiagnostics.ts',
+  'src/server/routes/adminInvestigateRoutes/adminInvestigateRoutesServices.ts',
+  'src/server/routes/adminInvestigateRoutes/getWorkerRuntimeDiagnostics/getPendingCompletionAckVisibilityFromSharedState.ts',
   'src/server/routes/projectTransferRoutes.ts',
   'src/server/routes/projectsRoutes/projectAccessGuard.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
@@ -113,7 +116,6 @@ const forbiddenNormalForegroundSqlPatterns = [
   {label: 'json extraction', pattern: /\bjson_(?:extract|extract_string|array|object|valid|type)\s*\(/iu},
 ]
 const normalForegroundSqlAllowlist = new Set([
-  'src/server/routes/AdminInvestigateRoutes.ts',
   'src/server/routes/ArticleAdminRoutes.ts',
   'src/server/routes/ArticlesRoutes.ts',
   'src/server/routes/ComparisonProjectsRoutes.ts',
@@ -128,6 +130,9 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/ProjectsRoutes.ts',
   'src/server/routes/SubprojectsRoutes.ts',
   'src/server/routes/TokensRoutes.ts',
+  'src/server/routes/adminInvestigateRoutes/deleteUnexpectedJudgments.ts',
+  'src/server/routes/adminInvestigateRoutes/getProjectJudgmentClause.ts',
+  'src/server/routes/adminInvestigateRoutes/getUnexpectedAnswersSummary/unexpectedAnswerBuckets.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.ts',

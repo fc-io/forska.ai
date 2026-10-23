@@ -73,7 +73,9 @@ test('review warnings product route stays separated from legacy mart diagnostics
 })
 
 test('admin maintenance diagnostics do not expose retired large-rebuild runtime metrics', async () => {
-  const adminSource = await readText('src/server/routes/AdminInvestigateRoutes.ts')
+  const adminSource = await readText(
+    'src/server/routes/adminInvestigateRoutes/adminInvestigateRoutesGetMaintenanceRuntimeDiagnostics.ts',
+  )
 
   expect(adminSource).not.toContain('getProjectMartLargeRebuildRuntimeMetrics')
   expect(adminSource).not.toContain('projectMartLargeRebuildRuntimeMetrics')
