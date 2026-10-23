@@ -201,7 +201,7 @@ afterEach(() => {
 
 describe('judgment job detail provider health notices', () => {
   test('shows the usage limit banner with the raw message, failure meta, retry-after time and guidance', async () => {
-    mockState.job = buildJob(buildProviderHealth())
+    mockState.job = {...buildJob(buildProviderHealth()), status: 'running'}
     const {cleanup, container} = await renderJobDetailPage()
 
     try {
@@ -224,9 +224,12 @@ describe('judgment job detail provider health notices', () => {
   })
 
   test('uses the amber tone and skips the retry line for a network failure without retry-after', async () => {
-    mockState.job = buildJob(
-      buildProviderHealth({failureKind: 'network', failureMessage: 'fetch failed: ECONNREFUSED', retryAfterAt: null}),
-    )
+    mockState.job = {
+      ...buildJob(
+        buildProviderHealth({failureKind: 'network', failureMessage: 'fetch failed: ECONNREFUSED', retryAfterAt: null}),
+      ),
+      status: 'running',
+    }
     const {cleanup, container} = await renderJobDetailPage()
 
     try {
@@ -258,6 +261,38 @@ describe('judgment job detail provider health notices', () => {
       expect(note?.classList.contains('bg-sky-50')).toBe(true)
       expect(note?.classList.contains('text-sky-900')).toBe(true)
       expect(container.querySelector('[role="alert"]')).toBeNull()
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('shows nothing for a paused job whose failing row the server reports inactive', async () => {
+    mockState.job = buildJob(buildProviderHealth({isActive: false}))
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      expect(container.querySelector('[role="alert"]')).toBeNull()
+      expect(container.textContent).not.toContain('Usage limit reached')
+      expect(container.textContent).not.toContain('Provider recovered at')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('shows no recovered note after a resume reset without a provider success', async () => {
+    const resumedAt = new Date(Date.now() - hourMs)
+    mockState.job = {
+      ...buildJob({
+        ...buildRecoveredProviderHealth(resumedAt),
+        lastSuccessAt: new Date(Date.now() - 15 * 24 * hourMs).toISOString(),
+      }),
+      status: 'running',
+    }
+    const {cleanup, container} = await renderJobDetailPage()
+
+    try {
+      expect(container.querySelector('[role="alert"]')).toBeNull()
+      expect(container.textContent).not.toContain('Provider recovered at')
     } finally {
       cleanup()
     }

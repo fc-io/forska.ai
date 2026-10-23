@@ -4890,6 +4890,99 @@ test('list badge needs three consecutive failures of kind other', async () => {
   await otherJob.sqliteService.closeAll()
 })
 
+const getJobHealthWithProviderHealth = async (jobId: string) => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+
+  return {body: (await response.json()) as {providerHealth: ProviderHealthResponse | null}, status: response.status}
+}
+
+test('a paused job reports its failing provider health inactive and resuming it resets the owner claim gate', async () => {
+  if (!runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobProviderHealth, recordJudgmentJobProviderFailure, recordJudgmentJobProviderSuccess} =
+    await import('../services/judgmentJobProviderHealthService.ts')
+  const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
+    prefix: 'provider-health-resume',
+    promptCount: 1,
+  })
+  const [firstClaim] = claims
+
+  if (!firstClaim) {
+    throw new Error('Expected owner-backed claim')
+  }
+
+  await sqliteService.addReadyPrompts(
+    jobId,
+    [0, 1, 2].map((index) => {
+      return {articleId: `provider-health-resume-extra-${index}-${jobId}`, promptId: firstClaim.promptId}
+    }),
+    'server-a',
+  )
+
+  const usageLimitFailure = {
+    jobId,
+    message: 'You’ve hit your usage limit. Purchase more credits or try again in 5 days.',
+    modelId: firstClaim.modelId,
+  }
+  const lastSuccessAt = new Date(Date.now() - 90 * 60_000)
+
+  await recordJudgmentJobProviderFailure({...usageLimitFailure, now: new Date(Date.now() - 2 * 60 * 60_000)})
+  await recordJudgmentJobProviderSuccess({jobId, now: lastSuccessAt})
+  await recordJudgmentJobProviderFailure({...usageLimitFailure, now: new Date(Date.now() - 60_000)})
+
+  const runningList = await getListedJobWithProviderHealth(jobId)
+  const runningClaims = await postOwnerBackedClaims(jobId, 5)
+
+  expect(runningList.job?.health).toEqual({badges: ['Provider Failing'], isHealthy: false})
+  expect(runningList.job?.providerHealth).toMatchObject({failureKind: 'usage_limit', isActive: true, status: 'failing'})
+  expect(runningClaims).toEqual({body: {data: {claims: []}, error: null}, status: 200})
+
+  await runDatabase(`UPDATE app.judgment_job SET status = 'paused' WHERE id = '${jobId}'`)
+
+  const pausedList = await getListedJobWithProviderHealth(jobId)
+  const pausedDetail = await getJobDetailWithProviderHealth(jobId)
+  const pausedHealth = await getJobHealthWithProviderHealth(jobId)
+
+  expect(pausedList.job?.health.badges).not.toContain('Provider Failing')
+  expect(pausedList.job?.providerHealth).toMatchObject({isActive: false, status: 'failing'})
+  expect(pausedDetail.body.providerHealth).toMatchObject({isActive: false, status: 'failing'})
+  expect(pausedHealth.status).toBe(200)
+  expect(pausedHealth.body.providerHealth).toMatchObject({isActive: false, status: 'failing'})
+
+  const resumeStartedAt = Date.now()
+  const resumeResponse = await patchJudgmentJobStatus(jobId, 'running')
+  const resetHealth = await getJudgmentJobProviderHealth(jobId)
+  const resumedClaims = await postOwnerBackedClaims(jobId, 5)
+  const resumedDetail = await getJobDetailWithProviderHealth(jobId)
+  const resumedList = await getListedJobWithProviderHealth(jobId)
+
+  expect(resumeResponse?.status).toBe(200)
+  expect(resetHealth).toMatchObject({
+    consecutiveFailureCount: 0,
+    failureKind: 'usage_limit',
+    lastSuccessAt,
+    status: 'recovered',
+    totalFailureCount: 2,
+  })
+  expect(resetHealth?.recoveredAt?.getTime()).toBeGreaterThanOrEqual(resumeStartedAt - 1000)
+  expect(resumedClaims.status).toBe(200)
+  expect(resumedClaims.body.data.claims).toHaveLength(3)
+  expect(resumedDetail.body.providerHealth).toMatchObject({
+    isActive: false,
+    lastSuccessAt: lastSuccessAt.toISOString(),
+    status: 'recovered',
+  })
+  expect(resumedList.job?.health.badges).not.toContain('Provider Failing')
+
+  await sqliteService.closeAll()
+})
+
 test('owner-backed retry completion still succeeds when the provider health table is unavailable', async () => {
   if (!runDatabase) {
     throw new Error('Test app not initialized')

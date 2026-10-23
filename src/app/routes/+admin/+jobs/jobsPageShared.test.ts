@@ -259,13 +259,38 @@ test('provider retry-after and failure text helpers format local times, counts a
 
 test('recent provider recovery covers the last 24 hours only for inactive health', () => {
   const now = Date.parse('2026-10-03T12:00:00.000Z')
-  const recovered = buildProviderHealth({isActive: false, recoveredAt: '2026-10-02T12:00:00.000Z', status: 'recovered'})
+  const recovered = buildProviderHealth({
+    isActive: false,
+    lastSuccessAt: '2026-10-02T12:00:00.000Z',
+    recoveredAt: '2026-10-02T12:00:00.000Z',
+    status: 'recovered',
+  })
 
   expect(isRecentProviderRecovery(recovered, now)).toBe(true)
-  expect(isRecentProviderRecovery({...recovered, recoveredAt: '2026-10-02T11:59:59.999Z'}, now)).toBe(false)
+  expect(
+    isRecentProviderRecovery(
+      {...recovered, lastSuccessAt: '2026-10-02T11:59:59.999Z', recoveredAt: '2026-10-02T11:59:59.999Z'},
+      now,
+    ),
+  ).toBe(false)
   expect(isRecentProviderRecovery({...recovered, recoveredAt: null}, now)).toBe(false)
   expect(isRecentProviderRecovery({...recovered, isActive: true}, now)).toBe(false)
   expect(isRecentProviderRecovery(null, now)).toBe(false)
+})
+
+test('recent provider recovery ignores a resume reset that saw no provider success', () => {
+  const now = Date.parse('2026-10-23T12:00:00.000Z')
+  const resumed = buildProviderHealth({
+    consecutiveFailureCount: 0,
+    isActive: false,
+    lastSuccessAt: null,
+    recoveredAt: '2026-10-23T11:00:00.000Z',
+    status: 'recovered',
+  })
+
+  expect(isRecentProviderRecovery(resumed, now)).toBe(false)
+  expect(isRecentProviderRecovery({...resumed, lastSuccessAt: '2026-10-08T09:00:00.000Z'}, now)).toBe(false)
+  expect(isRecentProviderRecovery({...resumed, lastSuccessAt: '2026-10-23T11:05:00.000Z'}, now)).toBe(true)
 })
 
 test('job provider health accessor tolerates rows without the field', () => {
@@ -291,6 +316,23 @@ test('provider health banner is null when no job has an active provider failure'
   ).toBeNull()
 })
 
+test('provider health banner never lists a paused job, whose failing row the server reports inactive', () => {
+  const pausedFailing = buildProviderHealth({isActive: false, jobId: 'job-paused', status: 'failing'})
+  const runningFailing = buildProviderHealth({jobId: 'job-running'})
+
+  expect(
+    buildJobsProviderHealthBanner([buildBannerJob('job-paused', 'Paused project', pausedFailing, 'paused')]),
+  ).toBeNull()
+  expect(
+    buildJobsProviderHealthBanner([
+      buildBannerJob('job-paused', 'Paused project', pausedFailing, 'paused'),
+      buildBannerJob('job-running', 'Running project', runningFailing),
+    ])?.groups.flatMap((group) => {
+      return group.jobs
+    }),
+  ).toEqual([{id: 'job-running', projectName: 'Running project', status: 'running'}])
+})
+
 test('provider health banner groups failing jobs by model, kind and message', () => {
   const usageLimit = buildProviderHealth()
   const laterUsageLimit = buildProviderHealth({
@@ -307,7 +349,7 @@ test('provider health banner groups failing jobs by model, kind and message', ()
     retryAfterAt: null,
   })
   const banner = buildJobsProviderHealthBanner([
-    buildBannerJob('job-2', 'Zeta project', laterUsageLimit, 'paused'),
+    buildBannerJob('job-2', 'Zeta project', laterUsageLimit),
     buildBannerJob('job-4', 'Rate project', rateLimited),
     buildBannerJob('job-1', 'Alpha project', usageLimit),
     buildBannerJob('job-3', null, otherModelUsageLimit),
@@ -332,7 +374,7 @@ test('provider health banner groups failing jobs by model, kind and message', ()
     {
       jobs: [
         {id: 'job-1', projectName: 'Alpha project', status: 'running'},
-        {id: 'job-2', projectName: 'Zeta project', status: 'paused'},
+        {id: 'job-2', projectName: 'Zeta project', status: 'running'},
       ],
       kind: 'usage_limit',
       label: 'Usage limit reached',

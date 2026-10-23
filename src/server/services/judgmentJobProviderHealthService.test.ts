@@ -468,7 +468,7 @@ test('getJudgmentJobProviderHealthMap reads several jobs through the given read 
   expect(statements).toHaveLength(1)
 })
 
-test('toJudgmentJobProviderHealthApi returns ISO strings and marks failing rows active', async () => {
+test('toJudgmentJobProviderHealthApi returns ISO strings and marks failing rows of running jobs active', async () => {
   const {recordJudgmentJobProviderFailure, recordJudgmentJobProviderSuccess, toJudgmentJobProviderHealthApi} =
     getService()
   const jobId = getJobId('api')
@@ -481,7 +481,7 @@ test('toJudgmentJobProviderHealthApi returns ISO strings and marks failing rows 
     now: failedAt,
   })
 
-  expect(toJudgmentJobProviderHealthApi(failingRow)).toEqual({
+  expect(toJudgmentJobProviderHealthApi(failingRow, {jobStatus: 'running'})).toEqual({
     consecutiveFailureCount: 1,
     failureCode: null,
     failureKind: 'rate_limited',
@@ -503,7 +503,7 @@ test('toJudgmentJobProviderHealthApi returns ISO strings and marks failing rows 
 
   const recoveredRow = await getService().getJudgmentJobProviderHealth(jobId)
 
-  expect(recoveredRow && toJudgmentJobProviderHealthApi(recoveredRow)).toMatchObject({
+  expect(recoveredRow && toJudgmentJobProviderHealthApi(recoveredRow, {jobStatus: 'running'})).toMatchObject({
     isActive: false,
     lastSuccessAt: '2026-10-03T21:34:00.000Z',
     recoveredAt: '2026-10-03T21:34:00.000Z',
@@ -533,6 +533,152 @@ test.each<[JudgmentJobProviderHealthStatus, JudgmentJobProviderFailureKind, numb
   },
 )
 
+test.each<[string, boolean]>([
+  ['running', true],
+  ['paused', false],
+  ['failed', false],
+  ['completed', false],
+  ['not_started', false],
+  ['waiting_on_llm_connection', false],
+])('isJudgmentJobProviderHealthActiveForJob counts a failing row for a %s job: %p', (jobStatus, active) => {
+  expect(
+    getService().isJudgmentJobProviderHealthActiveForJob({
+      health: {consecutiveFailureCount: 1, failureKind: 'usage_limit', status: 'failing'},
+      jobStatus,
+    }),
+  ).toBe(active)
+})
+
+test('toJudgmentJobProviderHealthApi reports a paused job failing row inactive', async () => {
+  const {recordJudgmentJobProviderFailure, toJudgmentJobProviderHealthApi} = getService()
+  const failingRow = await recordJudgmentJobProviderFailure({
+    jobId: getJobId('api-paused'),
+    message: liveCodexUsageLimitMessage,
+  })
+
+  expect(toJudgmentJobProviderHealthApi(failingRow, {jobStatus: 'paused'})).toMatchObject({
+    isActive: false,
+    status: 'failing',
+  })
+  expect(toJudgmentJobProviderHealthApi(failingRow, {jobStatus: 'running'}).isActive).toBe(true)
+})
+
+test('resetJudgmentJobProviderHealthForResume closes the stale window, keeps history and opens the gate at once', async () => {
+  const {
+    getJudgmentJobProviderClaimGate,
+    getJudgmentJobProviderHealth,
+    recordJudgmentJobProviderFailure,
+    recordJudgmentJobProviderSuccess,
+    resetJudgmentJobProviderHealthForResume,
+    toJudgmentJobProviderHealthApi,
+  } = getService()
+  const jobId = getJobId('resume-reset')
+  const lastSuccessAt = getLocalDate(2026, 9, 3, 20, 0)
+  const firstFailedAt = getLocalDate(2026, 9, 3, 21, 0)
+  const lastFailedAt = getLocalDate(2026, 9, 3, 21, 31)
+  const resumedAt = getLocalDate(2026, 9, 3, 21, 32)
+  const nextFailedAt = getLocalDate(2026, 9, 3, 21, 40)
+  const failure = {jobId, message: liveCodexUsageLimitMessage, modelId: 'model-1'}
+
+  await recordJudgmentJobProviderFailure({...failure, now: getLocalDate(2026, 9, 3, 19, 0)})
+  await recordJudgmentJobProviderSuccess({jobId, now: lastSuccessAt})
+  await recordJudgmentJobProviderFailure({...failure, now: firstFailedAt})
+  await recordJudgmentJobProviderFailure({...failure, now: lastFailedAt})
+
+  expect(await getJudgmentJobProviderClaimGate(jobId, resumedAt)).toEqual({
+    backoffUntil: getLocalDate(2026, 9, 3, 21, 33),
+    claimsAllowed: false,
+    maxClaims: 0,
+  })
+
+  await resetJudgmentJobProviderHealthForResume({jobId, now: resumedAt})
+
+  const querySpy = spyOn(getDatabase(), 'queryJson')
+
+  try {
+    expect(await getJudgmentJobProviderClaimGate(jobId, resumedAt)).toEqual({
+      backoffUntil: null,
+      claimsAllowed: true,
+      maxClaims: null,
+    })
+    expect(querySpy).toHaveBeenCalledTimes(0)
+  } finally {
+    querySpy.mockRestore()
+  }
+
+  const resetRow = await getJudgmentJobProviderHealth(jobId)
+
+  expect(resetRow).toMatchObject({
+    consecutiveFailureCount: 0,
+    failureKind: 'usage_limit',
+    failureMessage: liveCodexUsageLimitMessage,
+    firstFailedAt,
+    lastFailedAt,
+    lastSuccessAt,
+    modelId: 'model-1',
+    recoveredAt: resumedAt,
+    retryAfterAt: getLocalDate(2026, 9, 3, 21, 33),
+    status: 'recovered',
+    totalFailureCount: 3,
+    updatedAt: resumedAt,
+  })
+  expect(resetRow && toJudgmentJobProviderHealthApi(resetRow, {jobStatus: 'running'}).isActive).toBe(false)
+
+  await recordJudgmentJobProviderFailure({jobId, message: 'fetch failed', now: nextFailedAt})
+
+  expect(await getJudgmentJobProviderClaimGate(jobId, getLocalDate(2026, 9, 3, 21, 40, 1))).toEqual({
+    backoffUntil: getLocalDate(2026, 9, 3, 21, 40, 30),
+    claimsAllowed: false,
+    maxClaims: 0,
+  })
+  expect(await getJudgmentJobProviderHealth(jobId)).toMatchObject({
+    consecutiveFailureCount: 1,
+    failureKind: 'network',
+    firstFailedAt: nextFailedAt,
+    lastSuccessAt,
+    recoveredAt: null,
+    status: 'failing',
+    totalFailureCount: 4,
+  })
+})
+
+test('resetJudgmentJobProviderHealthForResume resets a row the cache has not loaded and ignores jobs without a row', async () => {
+  const {getJudgmentJobProviderClaimGate, getJudgmentJobProviderHealth, resetJudgmentJobProviderHealthForResume} =
+    getService()
+  const jobId = getJobId('resume-reset-unloaded')
+  const missingJobId = getJobId('resume-reset-missing')
+  const resumedAt = new Date('2026-10-23T10:00:00.000Z')
+
+  await getDatabase().run(`
+    INSERT INTO app.judgment_job_provider_health (
+      job_id, model_id, status, failure_kind, failure_code, failure_message, retry_after_at,
+      first_failed_at, last_failed_at, consecutive_failure_count, total_failure_count, last_success_at
+    ) VALUES (
+      '${jobId}', 'model-1', 'failing', 'usage_limit', NULL, 'usage limit', TIMESTAMPTZ '2026-10-28T08:28:00Z',
+      TIMESTAMPTZ '2026-10-21T08:00:00Z', TIMESTAMPTZ '2026-10-21T08:28:00Z', 7, 7, TIMESTAMPTZ '2026-10-21T07:59:00Z'
+    )
+  `)
+  getService().resetJudgmentJobProviderHealthCacheForTests()
+
+  await resetJudgmentJobProviderHealthForResume({jobId, now: resumedAt})
+  await resetJudgmentJobProviderHealthForResume({jobId: missingJobId, now: resumedAt})
+
+  expect(await getJudgmentJobProviderClaimGate(jobId, resumedAt)).toEqual({
+    backoffUntil: null,
+    claimsAllowed: true,
+    maxClaims: null,
+  })
+  expect(await getJudgmentJobProviderHealth(jobId)).toMatchObject({
+    consecutiveFailureCount: 0,
+    lastSuccessAt: new Date('2026-10-21T07:59:00.000Z'),
+    recoveredAt: resumedAt,
+    retryAfterAt: new Date('2026-10-28T08:28:00.000Z'),
+    status: 'recovered',
+    totalFailureCount: 7,
+  })
+  expect(await getJudgmentJobProviderHealth(missingJobId)).toBeNull()
+})
+
 test('toJudgmentJobProviderHealthApi keeps a kind-other failure inactive until the third consecutive failure', async () => {
   const {recordJudgmentJobProviderFailure, toJudgmentJobProviderHealthApi} = getService()
   const jobId = getJobId('api-other')
@@ -551,9 +697,15 @@ test('toJudgmentJobProviderHealthApi keeps a kind-other failure inactive until t
   })
 
   expect(firstRow.failureKind).toBe('other')
-  expect(toJudgmentJobProviderHealthApi(firstRow)).toMatchObject({isActive: false, status: 'failing'})
-  expect(toJudgmentJobProviderHealthApi(secondRow)).toMatchObject({isActive: false, status: 'failing'})
-  expect(toJudgmentJobProviderHealthApi(thirdRow)).toMatchObject({
+  expect(toJudgmentJobProviderHealthApi(firstRow, {jobStatus: 'running'})).toMatchObject({
+    isActive: false,
+    status: 'failing',
+  })
+  expect(toJudgmentJobProviderHealthApi(secondRow, {jobStatus: 'running'})).toMatchObject({
+    isActive: false,
+    status: 'failing',
+  })
+  expect(toJudgmentJobProviderHealthApi(thirdRow, {jobStatus: 'running'})).toMatchObject({
     consecutiveFailureCount: 3,
     isActive: true,
     status: 'failing',
