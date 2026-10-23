@@ -448,7 +448,16 @@ test('test-only topology routes are token gated and absent from normal product A
 })
 
 test('prompt preview route cannot reintroduce legacy sample article fallback reads', () => {
-  const routeText = readFileSync(join(routesRoot, 'projectsRoutes/projectsRoutesGetPromptPreview.ts'), 'utf8')
+  const routeText = [
+    'projectsRoutes/projectsRoutesGetPromptPreview.ts',
+    ...readdirSync(join(routesRoot, 'projectsRoutes/projectsRoutesGetPromptPreview')).map((fileName) => {
+      return `projectsRoutes/projectsRoutesGetPromptPreview/${fileName}`
+    }),
+  ]
+    .map((routePath) => {
+      return readFileSync(join(routesRoot, routePath), 'utf8')
+    })
+    .join('\n')
 
   expect(routeText).not.toContain('mart.project_scope_article')
   expect(routeText).not.toContain('app.project_article')
