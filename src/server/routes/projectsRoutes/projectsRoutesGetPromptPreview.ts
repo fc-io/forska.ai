@@ -6,90 +6,22 @@ import {
   getSinglePromptJudgmentRequest,
 } from '../../../agent/judge/getSinglePromptJudgmentRequest.ts'
 import {getSinglePromptSystemPromptForArticle} from '../../../agent/judge/judgePromptSelection.ts'
-import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
-import type {ArticleRecord} from '../../../db/schemaTypes.ts'
-import {
-  isFullTextJudgingStrategy,
-  prepareFullTextJudging,
-} from '../../cron/judgmentsJobs/judgmentsJobsSendToLLM/prepareFullTextJudging.ts'
-import {getFullTextChunkPlanKey} from '../../fullText/fullTextChunkPlanStore.ts'
-import {getFullTextJudgingBlocks} from '../../fullText/fullTextJudgingBlocks.ts'
+import {getSystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
+import {isFullTextJudgingStrategy} from '../../cron/judgmentsJobs/judgmentsJobsSendToLLM/prepareFullTextJudging.ts'
 import {getEffectiveFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {getProviderModelContextLimits} from '../../providers/providerModelCapabilities.ts'
-import type {ReviewServingFreshnessState} from '../../reviewServing/reviewServingContracts.ts'
-import {readReviewServingRows, type ReviewServingReaderResult} from '../../reviewServing/reviewServingReader.ts'
+import {readReviewServingRows} from '../../reviewServing/reviewServingReader.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getJsonValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getJsonValue} from '../../services/appQueryHelpers.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
-
-type PromptPreviewServingRow = {
-  article_summary: string | null
-  article_created_at: unknown
-  article_external_id: string | null
-  article_id: string
-  article_title: string | null
-  article_updated_at: unknown
-  arxiv_id: string | null
-  biorxiv_id: string | null
-  doi: string | null
-  full_text_conversion_status: string | null
-  full_text_fetched_at: unknown
-  full_text_pdf: string | null
-  journal_title: string | null
-  medrxiv_id: string | null
-  pmid: string | null
-  publication_year: number | null
-  source_metadata: unknown
-  url: string | null
-}
-type PromptPreviewArticleDetailsRow = {
-  fullText: string | null
-  fullTextAssets: unknown
-  fullTextCanonicalVersion: string | null
-  fullTextFigureModeBuilt: string | null
-  publicationStatus: string | null
-}
-
-const getPromptPreviewWorkloadContext = (params: {maxResultRows?: number; operation: string; projectId: string}) => {
-  return {
-    fallbackIntent: 'reject' as const,
-    maxResultRows: params.maxResultRows,
-    projectId: params.projectId,
-    routeOrJobKey: `projects.promptPreview.${params.operation}`,
-    workloadClass: 'owner.product.promptPreview',
-  }
-}
-
-const getUnavailablePromptPreview = (input: {
-  articleId: string | null
-  articleTitle?: string | null
-  detail?: string | null
-  diagnostics?: ReviewServingReaderResult<PromptPreviewServingRow>['diagnostics'] | null
-  reason:
-    | 'full_text_not_ready'
-    | 'model_context_window_missing'
-    | 'no_articles'
-    | 'no_fulltext'
-    | ReviewServingFreshnessState
-  systemPrompt: string
-  systemPromptVariant: SystemPromptVariant
-}) => {
-  return {
-    data: {
-      articleId: input.articleId,
-      articleTitle: input.articleTitle ?? null,
-      detail: input.detail ?? null,
-      diagnostics: input.diagnostics ?? null,
-      previewText: null,
-      reason: input.reason,
-      status: 'unavailable' as const,
-      systemPrompt: input.systemPrompt,
-      systemPromptVariant: input.systemPromptVariant,
-      userPrompt: null,
-    },
-  }
-}
+import {getPromptPreviewArticleDetails} from './projectsRoutesGetPromptPreview/getPromptPreviewArticleDetails.ts'
+import {getPromptPreviewArticleRecord} from './projectsRoutesGetPromptPreview/getPromptPreviewArticleRecord.ts'
+import {getPromptPreviewFullTextPreparation} from './projectsRoutesGetPromptPreview/getPromptPreviewFullTextPreparation.ts'
+import {getPromptPreviewWorkloadContext} from './projectsRoutesGetPromptPreview/getPromptPreviewWorkloadContext.ts'
+import {getScientificArticlePlaceholderRecord} from './projectsRoutesGetPromptPreview/getScientificArticlePlaceholderRecord.ts'
+import {getUnavailablePromptPreview} from './projectsRoutesGetPromptPreview/getUnavailablePromptPreview.ts'
+import type {PromptPreviewServingRow} from './projectsRoutesGetPromptPreview/promptPreviewServingRow.ts'
 
 const getPromptPreviewProjectModel = async (params: {modelId: string; projectId: string}) => {
   const rows = await getAppDatabaseService().queryJson<{
@@ -120,162 +52,6 @@ const getFirstProjectArticleFromServing = async (projectId: string, reviewConfig
     limit: 1,
     projectId,
     reviewConfigHash,
-  })
-}
-
-const getPromptPreviewArticleDetails = async (params: {
-  articleId: string
-  includeFullText: boolean
-  projectId: string
-}) => {
-  const rows = await getAppDatabaseService().queryJson<PromptPreviewArticleDetailsRow>(
-    `
-    SELECT
-      ${params.includeFullText ? 'full_text' : 'CAST(NULL AS VARCHAR)'} AS fullText,
-      ${params.includeFullText ? 'TO_JSON(full_text_assets)' : 'NULL'} AS fullTextAssets,
-      ${params.includeFullText ? 'full_text_canonical_version' : 'CAST(NULL AS VARCHAR)'} AS fullTextCanonicalVersion,
-      ${params.includeFullText ? 'full_text_figure_mode_built' : 'CAST(NULL AS VARCHAR)'} AS fullTextFigureModeBuilt,
-      publication_status AS publicationStatus
-    FROM app.article
-    WHERE id = ${getSqlLiteral(params.articleId)}
-    LIMIT 1
-  `,
-    getPromptPreviewWorkloadContext({maxResultRows: 1, operation: 'articleDetails', projectId: params.projectId}),
-  )
-
-  return rows[0] ?? null
-}
-
-const publicationStatuses = ['preprint', 'submitted', 'accepted', 'published', 'retracted'] as const
-
-const getPublicationStatus = (value: string | null | undefined): ArticleRecord['publicationStatus'] => {
-  return (
-    publicationStatuses.find((status) => {
-      return status === value
-    }) ?? null
-  )
-}
-
-const getDateValue = (value: unknown) => {
-  return value instanceof Date ? value : typeof value === 'string' || typeof value === 'number' ? new Date(value) : null
-}
-
-const getPromptPreviewArticleRecord = (input: {
-  fullText: string | null
-  publicationStatus: string | null
-  row: PromptPreviewServingRow
-}): ArticleRecord => {
-  return {
-    articleAuthors: null,
-    articleCreatedAt: getDateValue(input.row.article_created_at),
-    articleId: input.row.article_external_id,
-    articleSummary: input.row.article_summary,
-    articleTitle: input.row.article_title ?? '',
-    articleUpdatedAt: getDateValue(input.row.article_updated_at),
-    articleVersion: null,
-    arxivId: input.row.arxiv_id,
-    biorxivId: input.row.biorxiv_id,
-    contentHash: null,
-    createdAt: new Date(0),
-    doi: input.row.doi,
-    fullText: input.fullText,
-    fullTextAssets: null,
-    fullTextCharCount: input.fullText?.length ?? null,
-    fullTextConversionAttempts: null,
-    fullTextConversionError: null,
-    fullTextConversionMetadata: null,
-    fullTextConversionModelId: null,
-    fullTextConversionStatus: input.row.full_text_conversion_status,
-    fullTextFetchedAt: getDateValue(input.row.full_text_fetched_at),
-    fullTextHtml: null,
-    fullTextOriginalFormat: null,
-    fullTextPDF: input.row.full_text_pdf,
-    fullTextSource: null,
-    id: input.row.article_id,
-    importRoute: null,
-    medrxivId: input.row.medrxiv_id,
-    originalData: null,
-    publicationStatus: getPublicationStatus(input.publicationStatus),
-    pubmedId: input.row.pmid,
-    sourceMetadata: getJsonValue(input.row.source_metadata),
-    updatedAt: new Date(0),
-    url: input.row.url,
-  }
-}
-
-const getScientificArticlePlaceholderRecord = (): ArticleRecord => {
-  return {
-    articleAuthors: null,
-    articleCreatedAt: null,
-    articleId: null,
-    articleSummary: null,
-    articleTitle: '',
-    articleUpdatedAt: null,
-    articleVersion: null,
-    arxivId: null,
-    biorxivId: null,
-    contentHash: null,
-    createdAt: new Date(0),
-    doi: null,
-    fullText: null,
-    fullTextAssets: null,
-    fullTextCharCount: null,
-    fullTextConversionAttempts: null,
-    fullTextConversionError: null,
-    fullTextConversionMetadata: null,
-    fullTextConversionModelId: null,
-    fullTextConversionStatus: null,
-    fullTextFetchedAt: null,
-    fullTextHtml: null,
-    fullTextOriginalFormat: null,
-    fullTextPDF: null,
-    fullTextSource: null,
-    id: '',
-    importRoute: null,
-    medrxivId: null,
-    originalData: null,
-    publicationStatus: null,
-    pubmedId: null,
-    sourceMetadata: null,
-    updatedAt: new Date(0),
-    url: null,
-  }
-}
-
-const getPromptPreviewFullTextPreparation = async (input: {
-  article: ArticleRecord
-  details: PromptPreviewArticleDetailsRow | null
-  fullText: string
-  fullTextStrategyId: string
-  modelContext: number
-  modelName: string
-}) => {
-  const blocks = await getFullTextJudgingBlocks({
-    database: getAppDatabaseService(),
-    rows: [
-      {
-        articleId: input.article.id,
-        articleSummary: input.article.articleSummary,
-        fullText: input.fullText,
-        fullTextAssets: getJsonValue(input.details?.fullTextAssets),
-        fullTextCanonicalVersion: input.details?.fullTextCanonicalVersion ?? null,
-        fullTextFigureModeBuilt: input.details?.fullTextFigureModeBuilt ?? null,
-        fullTextStrategyId: input.fullTextStrategyId,
-      },
-    ],
-    writable: false,
-  })
-
-  return prepareFullTextJudging({
-    abstract: input.article.articleSummary,
-    articleId: input.article.id,
-    block:
-      blocks.get(getFullTextChunkPlanKey({articleId: input.article.id, fullTextStrategyId: input.fullTextStrategyId}))
-      ?? null,
-    fullText: input.fullText,
-    fullTextStrategyId: input.fullTextStrategyId,
-    modelContext: input.modelContext,
-    modelName: input.modelName,
   })
 }
 

@@ -80,19 +80,52 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/ProjectArticlesRoutes.ts',
   'src/server/routes/ProjectExportRoutes.ts',
   'src/server/routes/ProjectsAddArticlesRoutes.ts',
-  'src/server/routes/ProjectsRoutes.ts',
   'src/server/routes/PromptsRoutes.ts',
   'src/server/routes/ProviderModelsRoutes.ts',
-  'src/server/routes/SubprojectsRoutes.ts',
   'src/server/routes/projectTransferRoutes.ts',
   'src/server/routes/projectsRoutes/projectAccessGuard.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesDeleteProject.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetArchived.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetProject.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetProjects.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetProjectsWithoutJobs.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview/getPromptPreviewArticleDetails.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview/getPromptPreviewFullTextPreparation.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetReviewsHealth.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getHasActiveEnrichmentMissingSnapshotRepair.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getHasLegacyRequiredBootstrapEnrichmentCandidate.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getHasOverprioritizedMissingSnapshotRepair.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getLatestCandidateSnapshotId.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getReviewWarningsScopeState.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getReviewWarningsWorkloadContext.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getReviewsWarningsCoverage.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPatchEdit.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPatchEdit/getCurrentProjectImportRoutes.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPatchEdit/getExistingProjectPromptComparisonRows.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPatchEdit/runProjectEditTransaction.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPatchProject.ts',
   'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getAppArticleDetailRow.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getAppHumanDetailRows.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getArticleJudgmentRows.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getArticleReviewJudgmentsWithPlaceholders.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getCovidenceRelatedRecords.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getProjectPromptRows.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostClone.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostCreate.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostUnarchive.ts',
   'src/server/routes/promptsRoutes/promptsRoutesReadOnly.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesGetSources.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/collectSubprojectArticleIds.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/insertSubproject.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/linkProjectPromptTx.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryAllArticlesInScope.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryArticlesWithPromptFilters.ts',
 ])
 const forbiddenNormalForegroundSqlPatterns = [
   {label: 'selected scoped import', pattern: /selected_scoped_article_import/iu},
@@ -117,8 +150,6 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/JudgmentsJobsRoutes.ts',
   'src/server/routes/ProjectArticlesRoutes.ts',
   'src/server/routes/ProjectExportRoutes.ts',
-  'src/server/routes/ProjectsRoutes.ts',
-  'src/server/routes/SubprojectsRoutes.ts',
   'src/server/routes/TokensRoutes.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts',
@@ -126,10 +157,18 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/projectTransferRoutes.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
-  'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetPromptPreview/getPromptPreviewArticleDetails.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetReviewsHealth.ts',
-  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getHasActiveEnrichmentMissingSnapshotRepair.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getHasLegacyRequiredBootstrapEnrichmentCandidate.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPatchEdit/getProjectPromptLlmCleanupCandidateRowsTx.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPatchEdit/softDeleteProjectPromptLlmJudgmentsTx.ts',
   'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getAppArticleDetailRow.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getArticleJudgmentRows.ts',
+  'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getCovidenceRelatedRecords.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryAllArticlesInScope.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryArticlesWithPromptFilters.ts',
   'src/server/routes/tokensRoutes/tokensRoutesGetFailedRequests.ts',
   'src/server/routes/tokensRoutes/tokensRoutesTimelineUtils.ts',
 ])
@@ -409,7 +448,16 @@ test('test-only topology routes are token gated and absent from normal product A
 })
 
 test('prompt preview route cannot reintroduce legacy sample article fallback reads', () => {
-  const routeText = readFileSync(join(routesRoot, 'projectsRoutes/projectsRoutesGetPromptPreview.ts'), 'utf8')
+  const routeText = [
+    'projectsRoutes/projectsRoutesGetPromptPreview.ts',
+    ...readdirSync(join(routesRoot, 'projectsRoutes/projectsRoutesGetPromptPreview')).map((fileName) => {
+      return `projectsRoutes/projectsRoutesGetPromptPreview/${fileName}`
+    }),
+  ]
+    .map((routePath) => {
+      return readFileSync(join(routesRoot, routePath), 'utf8')
+    })
+    .join('\n')
 
   expect(routeText).not.toContain('mart.project_scope_article')
   expect(routeText).not.toContain('app.project_article')
