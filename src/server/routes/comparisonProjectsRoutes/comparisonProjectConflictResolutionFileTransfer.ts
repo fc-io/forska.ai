@@ -1,393 +1,69 @@
-import {type as arktype} from 'arktype'
+import {appendComparisonProjectConflictResolutionTransferIdentifier} from './comparisonProjectConflictResolutionFileTransfer/appendComparisonProjectConflictResolutionTransferIdentifier.ts'
+import type {ComparisonProjectConflictResolutionTransferArtifact} from './comparisonProjectConflictResolutionFileTransfer/comparisonProjectConflictResolutionTransferArtifactSchema.ts'
+import {
+  comparisonProjectConflictResolutionTransferFormat,
+  comparisonProjectConflictResolutionTransferVersion,
+} from './comparisonProjectConflictResolutionFileTransfer/comparisonProjectConflictResolutionTransferFormat.ts'
+import {
+  getComparisonProjectConflictResolutionTransferIdTitleKey,
+  getComparisonProjectConflictResolutionTransferTitleKey,
+  normalizeComparisonProjectConflictResolutionTransferIdentifier,
+} from './comparisonProjectConflictResolutionFileTransfer/comparisonProjectConflictResolutionTransferNormalization.ts'
+import type {
+  ComparisonProjectConflictResolutionTransferJudgmentContextV2,
+  ComparisonProjectConflictResolutionTransferMatchKey,
+  ComparisonProjectConflictResolutionTransferRowV1,
+  ComparisonProjectConflictResolutionTransferRowV3,
+  ComparisonProjectConflictResolutionTransferSourceRow,
+  ComparisonProjectConflictResolutionTransferSourceV1,
+} from './comparisonProjectConflictResolutionFileTransfer/comparisonProjectConflictResolutionTransferTypes.ts'
+import {getComparisonProjectConflictResolutionTransferRowBase} from './comparisonProjectConflictResolutionFileTransfer/getComparisonProjectConflictResolutionTransferRowBase.ts'
+import {validateComparisonProjectConflictResolutionTransferArtifact} from './comparisonProjectConflictResolutionFileTransfer/validateComparisonProjectConflictResolutionTransferArtifact.ts'
 
-import type {HumanJudgmentMode} from '../../../db/schemaTypes.ts'
-import {getNormalizedComparisonProjectConflictComment} from '../../../utils/comparisonProjectConflictResolutionComment.ts'
-
-export const comparisonProjectConflictResolutionTransferFormat = 'forska.comparisonProject.conflictResolution.transfer'
-export const comparisonProjectConflictResolutionTransferVersion = 3
-export const comparisonProjectConflictResolutionTransferVersions = [1, 2, 3] as const
-
-export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' | 'doi' | 'pmid'
-export type ComparisonProjectConflictResolutionTransferMatchKind =
-  | ComparisonProjectConflictResolutionTransferIdentifierKind
-  | 'article-id'
-  | 'covidence-id-title'
-  | 'id-title'
-  | 'title'
-
-export type ComparisonProjectConflictResolutionTransferSourceRow = {
-  arxivId?: string | null
-  biorxivId?: string | null
-  doi?: string | null
-  externalArticleId?: string | null
-  identifierIsPrimary?: boolean | null
-  identifierKind?: string | null
-  identifierNormalizedValue?: string | null
-  identifierSource?: string | null
-  medrxivId?: string | null
-  pubmedId?: string | null
-  sourceArticleRowId: string
-  sourceIdentifierId?: string | null
-  sourceResolutionId: string | null
-  title?: string | null
-  url?: string | null
-  resolutionLabel: string | null
-  resolutionMode: HumanJudgmentMode
-  resolutionValue: string | null
-  provenanceContextId?: string | null
-  provenanceOrigin?: string | null
-  provenanceReviewerDisplayName?: string | null
-  provenanceSetAt?: Date | string | null
-  comment?: string | null
-}
-
-export type ComparisonProjectConflictResolutionTransferIdentifierV1 = {
-  sourceIdentifierId: string
-  kind: ComparisonProjectConflictResolutionTransferIdentifierKind
-  normalizedValue: string
-  source: string
-  isPrimary: boolean
-}
-
-export type ComparisonProjectConflictResolutionTransferResolutionV1 = {
-  mode: HumanJudgmentMode
-  value: string
-  label: string
-}
-
-export type ComparisonProjectConflictResolutionTransferRowV1 = {
-  sourceResolutionId: string | null
-  sourceArticleRowId: string | null
-  externalArticleId: string | null
-  title: string | null
-  doi?: string | null
-  pubmedId?: string | null
-  arxivId?: string | null
-  biorxivId?: string | null
-  medrxivId?: string | null
-  url?: string | null
-  identifiers: ComparisonProjectConflictResolutionTransferIdentifierV1[]
-  resolution: ComparisonProjectConflictResolutionTransferResolutionV1
-}
-
-export type ComparisonProjectConflictResolutionTransferProvenanceV2 = {
-  reviewerDisplayName: string | null
-  contextId: string | null
-  setAt: string | null
-  origin: string | null
-}
-
-export type ComparisonProjectConflictResolutionTransferRowV2 = ComparisonProjectConflictResolutionTransferRowV1 & {
-  provenance?: ComparisonProjectConflictResolutionTransferProvenanceV2 | null
-  comment?: string | null
-}
-
-export type ComparisonProjectConflictResolutionTransferRowV3 = Omit<
+export type {
+  ComparisonProjectConflictResolutionTransferArtifact,
+  ComparisonProjectConflictResolutionTransferArtifactV1,
+} from './comparisonProjectConflictResolutionFileTransfer/comparisonProjectConflictResolutionTransferArtifactSchema.ts'
+export {
+  comparisonProjectConflictResolutionTransferArtifactSchema,
+  comparisonProjectConflictResolutionTransferArtifactV1,
+} from './comparisonProjectConflictResolutionFileTransfer/comparisonProjectConflictResolutionTransferArtifactSchema.ts'
+export {
+  comparisonProjectConflictResolutionTransferFormat,
+  comparisonProjectConflictResolutionTransferVersion,
+  comparisonProjectConflictResolutionTransferVersions,
+} from './comparisonProjectConflictResolutionFileTransfer/comparisonProjectConflictResolutionTransferFormat.ts'
+export {
+  getComparisonProjectConflictResolutionTransferIdTitleKey,
+  getComparisonProjectConflictResolutionTransferTitleKey,
+  normalizeComparisonProjectConflictResolutionTransferDoi,
+  normalizeComparisonProjectConflictResolutionTransferExternalArticleId,
+  normalizeComparisonProjectConflictResolutionTransferIdentifier,
+  normalizeComparisonProjectConflictResolutionTransferTitle,
+} from './comparisonProjectConflictResolutionFileTransfer/comparisonProjectConflictResolutionTransferNormalization.ts'
+export type {
+  ComparisonProjectConflictResolutionTransferIdentifierKind,
+  ComparisonProjectConflictResolutionTransferIdentifierV1,
+  ComparisonProjectConflictResolutionTransferJudgmentContextV2,
+  ComparisonProjectConflictResolutionTransferMatchKey,
+  ComparisonProjectConflictResolutionTransferMatchKind,
+  ComparisonProjectConflictResolutionTransferProvenanceV2,
+  ComparisonProjectConflictResolutionTransferResolutionV1,
+  ComparisonProjectConflictResolutionTransferRowV1,
   ComparisonProjectConflictResolutionTransferRowV2,
-  'resolution'
-> & {resolution: ComparisonProjectConflictResolutionTransferResolutionV1 | null}
-
-export type ComparisonProjectConflictResolutionTransferJudgmentContextV2 = {
-  id: string
-  context: Record<string, unknown>
-}
-
-export type ComparisonProjectConflictResolutionTransferSourceV1 = {
-  comparisonProjectId: string
-  comparisonProjectName: string
-  comparisonProjectDescription: string | null
-}
-
-export type ComparisonProjectConflictResolutionTransferMatchKey = {
-  kind: ComparisonProjectConflictResolutionTransferMatchKind
-  value: string
-}
-
-const doiPrefixPattern = /^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i
-const idTitleKeySeparator = '\u001F'
-const transferArtifactRootKeys = ['exportedAt', 'format', 'judgmentContexts', 'rows', 'source', 'version']
-const transferIdentifierKinds = new Set<ComparisonProjectConflictResolutionTransferIdentifierKind>([
-  'arxiv',
-  'doi',
-  'pmid',
-])
-
-const TransferIdentifierKind = arktype('"arxiv" | "doi" | "pmid"')
-const TransferResolutionMode = arktype('"prompt" | "summary"')
-const TransferIdentifier = arktype({
-  sourceIdentifierId: 'string',
-  kind: TransferIdentifierKind,
-  normalizedValue: 'string',
-  source: 'string',
-  isPrimary: 'boolean',
-})
-const TransferResolution = arktype({mode: TransferResolutionMode, value: 'string', label: 'string'})
-const TransferProvenance = arktype({
-  reviewerDisplayName: 'string | null',
-  contextId: 'string | null',
-  setAt: 'string | null',
-  origin: 'string | null',
-})
-const TransferJudgmentContext = arktype({id: 'string', context: 'Record<string, unknown>'})
-const TransferRow = arktype({
-  sourceResolutionId: 'string | null',
-  sourceArticleRowId: 'string | null',
-  externalArticleId: 'string | null',
-  title: 'string | null',
-  'doi?': 'string | null',
-  'pubmedId?': 'string | null',
-  'arxivId?': 'string | null',
-  'biorxivId?': 'string | null',
-  'medrxivId?': 'string | null',
-  'url?': 'string | null',
-  identifiers: TransferIdentifier.array(),
-  resolution: TransferResolution.or('null'),
-  'provenance?': TransferProvenance.or('null'),
-  'comment?': 'string | null',
-})
-const TransferSource = arktype({
-  comparisonProjectId: 'string',
-  comparisonProjectName: 'string',
-  comparisonProjectDescription: 'string | null',
-})
-
-export const comparisonProjectConflictResolutionTransferArtifactSchema = arktype({
-  format: arktype(`"${comparisonProjectConflictResolutionTransferFormat}"`),
-  version: '1 | 2 | 3',
-  exportedAt: 'string',
-  source: TransferSource,
-  rows: TransferRow.array(),
-  'judgmentContexts?': TransferJudgmentContext.array(),
-})
-
-export const comparisonProjectConflictResolutionTransferArtifactV1 =
-  comparisonProjectConflictResolutionTransferArtifactSchema
-
-export type ComparisonProjectConflictResolutionTransferArtifact =
-  typeof comparisonProjectConflictResolutionTransferArtifactSchema.infer
-
-export type ComparisonProjectConflictResolutionTransferArtifactV1 = ComparisonProjectConflictResolutionTransferArtifact
-
-const getTrimmedText = (value: string | null | undefined) => {
-  const trimmedValue = value?.trim() ?? ''
-
-  return trimmedValue.length > 0 ? trimmedValue : null
-}
-
-const getNormalizedText = (value: string | null | undefined) => {
-  const normalizedValue = getTrimmedText(value)?.toLowerCase() ?? ''
-
-  return normalizedValue.length > 0 ? normalizedValue : null
-}
-
-export const normalizeComparisonProjectConflictResolutionTransferDoi = (value: string | null | undefined) => {
-  const normalizedValue = getNormalizedText(value)?.replace(doiPrefixPattern, '').trim() ?? ''
-
-  return normalizedValue.length > 0 ? normalizedValue : null
-}
-
-export const normalizeComparisonProjectConflictResolutionTransferIdentifier = (params: {
-  kind: ComparisonProjectConflictResolutionTransferIdentifierKind
-  value: string | null | undefined
-}) => {
-  return params.kind === 'doi'
-    ? normalizeComparisonProjectConflictResolutionTransferDoi(params.value)
-    : getNormalizedText(params.value)
-}
-
-export const normalizeComparisonProjectConflictResolutionTransferExternalArticleId = (
-  value: string | null | undefined,
-) => {
-  return getNormalizedText(value)
-}
-
-export const normalizeComparisonProjectConflictResolutionTransferTitle = (value: string | null | undefined) => {
-  const normalizedValue = getTrimmedText(value)?.toLowerCase().replace(/\s+/g, ' ') ?? ''
-
-  return normalizedValue.length > 0 ? normalizedValue : null
-}
-
-export const getComparisonProjectConflictResolutionTransferIdTitleKey = (params: {
-  externalArticleId?: string | null
-  title?: string | null
-}) => {
-  const externalArticleId = normalizeComparisonProjectConflictResolutionTransferExternalArticleId(
-    params.externalArticleId,
-  )
-  const title = normalizeComparisonProjectConflictResolutionTransferTitle(params.title)
-
-  return externalArticleId && title ? `${externalArticleId}${idTitleKeySeparator}${title}` : null
-}
-
-export const getComparisonProjectConflictResolutionTransferTitleKey = (params: {title?: string | null}) => {
-  return normalizeComparisonProjectConflictResolutionTransferTitle(params.title)
-}
-
-const getComparisonProjectConflictResolutionTransferIdentifierKind = (value: string | null | undefined) => {
-  const normalizedValue = getNormalizedText(value)
-
-  return normalizedValue
-    && transferIdentifierKinds.has(normalizedValue as ComparisonProjectConflictResolutionTransferIdentifierKind)
-    ? (normalizedValue as ComparisonProjectConflictResolutionTransferIdentifierKind)
-    : null
-}
-
-const getComparisonProjectConflictResolutionTransferIdentifier = (
-  row: ComparisonProjectConflictResolutionTransferSourceRow,
-): ComparisonProjectConflictResolutionTransferIdentifierV1 | null => {
-  const kind = getComparisonProjectConflictResolutionTransferIdentifierKind(row.identifierKind)
-  const normalizedValue = kind
-    ? normalizeComparisonProjectConflictResolutionTransferIdentifier({kind, value: row.identifierNormalizedValue})
-    : null
-  const sourceIdentifierId = getTrimmedText(row.sourceIdentifierId)
-  const source = getTrimmedText(row.identifierSource)
-
-  return kind && normalizedValue && sourceIdentifierId && source
-    ? {sourceIdentifierId, kind, normalizedValue, source, isPrimary: row.identifierIsPrimary === true}
-    : null
-}
-
-const getComparisonProjectConflictResolutionTransferIdentifierKey = (
-  identifier: ComparisonProjectConflictResolutionTransferIdentifierV1,
-) => {
-  return [identifier.sourceIdentifierId, identifier.kind, identifier.normalizedValue, identifier.source].join(
-    idTitleKeySeparator,
-  )
-}
-
-const hasComparisonProjectConflictResolutionTransferSourceField = (
-  row: ComparisonProjectConflictResolutionTransferSourceRow,
-  field: keyof Pick<
-    ComparisonProjectConflictResolutionTransferSourceRow,
-    'arxivId' | 'biorxivId' | 'doi' | 'medrxivId' | 'pubmedId' | 'url'
-  >,
-) => {
-  return Object.prototype.hasOwnProperty.call(row, field)
-}
-
-const getComparisonProjectConflictResolutionTransferIdentityFields = (
-  row: ComparisonProjectConflictResolutionTransferSourceRow,
-) => {
-  return {
-    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'doi') ? {doi: getTrimmedText(row.doi)} : {}),
-    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'pubmedId')
-      ? {pubmedId: getTrimmedText(row.pubmedId)}
-      : {}),
-    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'arxivId')
-      ? {arxivId: getTrimmedText(row.arxivId)}
-      : {}),
-    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'biorxivId')
-      ? {biorxivId: getTrimmedText(row.biorxivId)}
-      : {}),
-    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'medrxivId')
-      ? {medrxivId: getTrimmedText(row.medrxivId)}
-      : {}),
-    ...(hasComparisonProjectConflictResolutionTransferSourceField(row, 'url') ? {url: getTrimmedText(row.url)} : {}),
-  }
-}
-
-const getUniqueComparisonProjectConflictResolutionTransferIdentifiers = (
-  identifiers: readonly ComparisonProjectConflictResolutionTransferIdentifierV1[],
-) => {
-  return Array.from(
-    identifiers
-      .reduce<Map<string, ComparisonProjectConflictResolutionTransferIdentifierV1>>((identifierMap, identifier) => {
-        return identifierMap.has(getComparisonProjectConflictResolutionTransferIdentifierKey(identifier))
-          ? identifierMap
-          : identifierMap.set(getComparisonProjectConflictResolutionTransferIdentifierKey(identifier), identifier)
-      }, new Map<string, ComparisonProjectConflictResolutionTransferIdentifierV1>())
-      .values(),
-  ).sort((left, right) => {
-    return getComparisonProjectConflictResolutionTransferIdentifierKey(left).localeCompare(
-      getComparisonProjectConflictResolutionTransferIdentifierKey(right),
-    )
-  })
-}
-
-const getComparisonProjectConflictResolutionTransferSetAt = (value: Date | string | null | undefined) => {
-  const date = value === null || value === undefined ? null : new Date(value)
-
-  return date && !Number.isNaN(date.getTime()) ? date.toISOString() : null
-}
-
-const getComparisonProjectConflictResolutionTransferProvenance = (
-  row: ComparisonProjectConflictResolutionTransferSourceRow,
-): ComparisonProjectConflictResolutionTransferProvenanceV2 => {
-  return {
-    reviewerDisplayName: getTrimmedText(row.provenanceReviewerDisplayName),
-    contextId: getTrimmedText(row.provenanceContextId),
-    setAt: getComparisonProjectConflictResolutionTransferSetAt(row.provenanceSetAt),
-    origin: getTrimmedText(row.provenanceOrigin),
-  }
-}
-
-const hasComparisonProjectConflictResolutionTransferProvenance = (
-  row: ComparisonProjectConflictResolutionTransferSourceRow,
-) => {
-  return Object.prototype.hasOwnProperty.call(row, 'provenanceSetAt')
-}
-
-const hasComparisonProjectConflictResolutionTransferComment = (
-  row: ComparisonProjectConflictResolutionTransferSourceRow,
-) => {
-  return Object.prototype.hasOwnProperty.call(row, 'comment')
-}
-
-const getComparisonProjectConflictResolutionTransferResolution = (
-  row: ComparisonProjectConflictResolutionTransferSourceRow,
-): ComparisonProjectConflictResolutionTransferResolutionV1 | null => {
-  return row.resolutionValue === null
-    ? null
-    : {
-        mode: row.resolutionMode,
-        value: row.resolutionValue.trim(),
-        label: (row.resolutionLabel ?? row.resolutionValue).trim(),
-      }
-}
-
-const getComparisonProjectConflictResolutionTransferRowBase = (
-  row: ComparisonProjectConflictResolutionTransferSourceRow,
-): ComparisonProjectConflictResolutionTransferRowV3 => {
-  const resolution = getComparisonProjectConflictResolutionTransferResolution(row)
-
-  return {
-    sourceResolutionId: row.sourceResolutionId,
-    sourceArticleRowId: row.sourceArticleRowId,
-    externalArticleId: getTrimmedText(row.externalArticleId),
-    title: getTrimmedText(row.title),
-    ...getComparisonProjectConflictResolutionTransferIdentityFields(row),
-    identifiers: [],
-    resolution,
-    ...(resolution && hasComparisonProjectConflictResolutionTransferProvenance(row)
-      ? {provenance: getComparisonProjectConflictResolutionTransferProvenance(row)}
-      : {}),
-    ...(hasComparisonProjectConflictResolutionTransferComment(row)
-      ? {comment: getNormalizedComparisonProjectConflictComment(row.comment)}
-      : {}),
-  }
-}
+  ComparisonProjectConflictResolutionTransferRowV3,
+  ComparisonProjectConflictResolutionTransferSourceRow,
+  ComparisonProjectConflictResolutionTransferSourceV1,
+} from './comparisonProjectConflictResolutionFileTransfer/comparisonProjectConflictResolutionTransferTypes.ts'
+export {
+  comparisonProjectConflictResolutionTransferJudgmentContextMaxBytes,
+  validateComparisonProjectConflictResolutionTransferArtifact,
+} from './comparisonProjectConflictResolutionFileTransfer/validateComparisonProjectConflictResolutionTransferArtifact.ts'
 
 const getComparisonProjectConflictResolutionTransferSourceRowKey = (
   row: ComparisonProjectConflictResolutionTransferSourceRow,
 ) => {
   return row.sourceResolutionId ?? `comment:${row.sourceArticleRowId}`
-}
-
-const appendComparisonProjectConflictResolutionTransferIdentifier = (
-  currentRow: ComparisonProjectConflictResolutionTransferRowV3,
-  row: ComparisonProjectConflictResolutionTransferSourceRow,
-) => {
-  const identifier = getComparisonProjectConflictResolutionTransferIdentifier(row)
-
-  return identifier
-    ? {
-        ...currentRow,
-        identifiers: getUniqueComparisonProjectConflictResolutionTransferIdentifiers([
-          ...currentRow.identifiers,
-          identifier,
-        ]),
-      }
-    : currentRow
 }
 
 export const getComparisonProjectConflictResolutionTransferRows = (
@@ -435,75 +111,6 @@ export const getComparisonProjectConflictResolutionTransferFilename = (compariso
 
 const getExportedAtDate = (value: Date | string) => {
   return new Date(value).toISOString()
-}
-
-const getUnexpectedRootKeys = (artifact: unknown) => {
-  return artifact && typeof artifact === 'object' && !Array.isArray(artifact)
-    ? Object.keys(artifact).filter((key) => {
-        return !transferArtifactRootKeys.includes(key)
-      })
-    : []
-}
-
-const assertNoUnexpectedRootKeys = (artifact: unknown) => {
-  const unexpectedKeys = getUnexpectedRootKeys(artifact)
-
-  if (unexpectedKeys.length > 0) {
-    throw new Error(`Unexpected conflict resolution transfer artifact root fields: ${unexpectedKeys.join(', ')}`)
-  }
-}
-
-export const comparisonProjectConflictResolutionTransferJudgmentContextMaxBytes = 64 * 1024
-
-const assertJudgmentContextsWithinSizeLimit = (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
-  const oversizedContext = (artifact.judgmentContexts ?? []).find((entry) => {
-    return (
-      Buffer.byteLength(JSON.stringify(entry.context), 'utf8')
-      > comparisonProjectConflictResolutionTransferJudgmentContextMaxBytes
-    )
-  })
-
-  if (oversizedContext) {
-    throw new Error(
-      `Conflict resolution transfer judgment context ${oversizedContext.id.slice(0, 64)} exceeds ${comparisonProjectConflictResolutionTransferJudgmentContextMaxBytes} bytes`,
-    )
-  }
-
-  return artifact
-}
-
-const getIsCommentOnlyTransferRowValid = (
-  artifact: ComparisonProjectConflictResolutionTransferArtifact,
-  row: ComparisonProjectConflictResolutionTransferArtifact['rows'][number],
-) => {
-  return (
-    row.resolution !== null
-    || (artifact.version >= 3 && getNormalizedComparisonProjectConflictComment(row.comment) !== null)
-  )
-}
-
-const assertCommentOnlyRowsAllowed = (artifact: ComparisonProjectConflictResolutionTransferArtifact) => {
-  const invalidRowIndex = artifact.rows.findIndex((row) => {
-    return !getIsCommentOnlyTransferRowValid(artifact, row)
-  })
-
-  if (invalidRowIndex >= 0) {
-    throw new Error(
-      `Conflict resolution transfer row ${invalidRowIndex + 1} has no resolution; only version 3 rows with a comment may omit it`,
-    )
-  }
-
-  return artifact
-}
-
-export const validateComparisonProjectConflictResolutionTransferArtifact = (
-  artifact: unknown,
-): ComparisonProjectConflictResolutionTransferArtifact => {
-  assertNoUnexpectedRootKeys(artifact)
-
-  return assertCommentOnlyRowsAllowed(
-    assertJudgmentContextsWithinSizeLimit(comparisonProjectConflictResolutionTransferArtifactSchema.assert(artifact)),
-  )
 }
 
 export const createComparisonProjectConflictResolutionTransferArtifact = (params: {
