@@ -37,6 +37,22 @@ Every route that creates a project without copying one writes `newProjectSystemP
 
 Routes that copy a project keep the source's variant: clone copies the stored value (`NULL` stays `NULL`), `POST /api/subprojects` keeps the variant when all source projects share one, and project transfer import stores the package's variant (a package without one imports as `legacy`).
 
+### Covidence section prompts
+
+The Covidence create route (`buildCovidencePromptDefinition` in `src/server/services/covidenceImportService.ts`) wraps each "one prompt per section" text, the "one prompt for all sections" text and the plain inclusion/exclusion body like this, in both import modes:
+
+```text
+Question: Does the study meet the Population criteria below?
+
+Inclusion criteria:
+<inclusion lines>
+
+Exclusion criteria:
+<exclusion lines>
+```
+
+The section label is the one imported (the single prompt says `the eligibility criteria`), the Outcome primary/secondary marker line sits between the question and the lists, and a list without text is left out. The text carries no decision rules, no `Answer yes/no/maybe` lines and does not name the next step: the `screening_v4` system prompt holds those rules (any one inclusion line, exclusions only when shown, missing fact means maybe) and frames the question as one part of the criteria. Only the prompt heading (`Covidence title/abstract screening` or `Covidence full-text screening`) depends on the mode, and it is not sent to the model. Prompts are built only when the create route makes a new project, which always gets `newProjectSystemPromptVariant`; re-importing a data source (`POST /api/datasources/import/covidence`) never rebuilds or relinks prompts, so projects created with the earlier wrapper keep their stored prompt texts. "One prompt per field" keeps its own include/exclude wording.
+
 ## How the variant reaches the model
 
 - Judgment jobs copy it into the per-job SQLite `job_info` table at initialization (`system_prompt_variant`), so a running job keeps the variant it started with. Older job databases get the column on open and read as `legacy`. The fifth content flag `use_metadata` is frozen the same way (`job_info.use_metadata INTEGER NOT NULL DEFAULT 0`, older job databases read `0`).
