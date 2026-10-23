@@ -836,7 +836,7 @@ test('explicit PDF bulk ID route maps to mounted PDF job selection without proje
       method: 'POST',
       mounted: true,
       productRoute: '/api/articles/pdf-fetch-bulk',
-      routeFile: 'src/server/routes/ArticlesRoutes.ts',
+      routeFile: 'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchBulk.ts',
       surfaces: ['pdf', 'bulk'],
     },
   ])

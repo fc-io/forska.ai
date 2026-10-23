@@ -139,14 +139,29 @@ const hookInventory: HookInventoryEntry[] = [
     symbol: 'ensureFullText',
   },
   {
-    filePath: 'src/server/routes/ArticleAdminRoutes.ts',
+    filePath: 'src/server/routes/articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts',
     label: 'article admin content update path',
     markers: ['appendArticleReviewServingDeltas'],
   },
   {
-    filePath: 'src/server/routes/ArticlesRoutes.ts',
+    filePath: 'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts',
+    label: 'article admin content update path',
+    markers: ['appendArticleReviewServingDeltas'],
+  },
+  {
+    filePath: 'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert.ts',
+    label: 'article admin content update path',
+    markers: ['appendArticleReviewServingDeltas'],
+  },
+  {
+    filePath: 'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchReset.ts',
     label: 'article upload/reset route updates',
-    markers: ['appendArticleReviewServingDeltasForIds', 'storeImportedArticlesWithTx'],
+    markers: ['appendArticleReviewServingDeltasForIds'],
+  },
+  {
+    filePath: 'src/server/routes/articlesRoutes/articlesRoutesPostBatchUpsert.ts',
+    label: 'article upload/reset route updates',
+    markers: ['storeImportedArticlesWithTx'],
   },
   {
     filePath: 'src/server/cron/judgmentsJobs/judgmentsJobsMarkDirtyWork.ts',
@@ -328,14 +343,36 @@ test('Phase 2 hook inventory uses only known review-serving integration markers'
 
 test('Phase 2 hook inventory keeps product routes on existing read contracts', () => {
   const guardedRoutes = [
-    'src/server/routes/ArticleAdminRoutes.ts',
-    'src/server/routes/ArticlesRoutes.ts',
     'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts',
     'src/server/routes/ProjectArticlesRoutes.ts',
     'src/server/routes/ProjectsAddArticlesRoutes.ts',
     'src/server/routes/ProjectsRoutes.ts',
     'src/server/routes/PromptsRoutes.ts',
     'src/server/routes/SubprojectsRoutes.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesGetAdminInfo.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostCanonicalFullTextRebuild.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert/assertReconvertCandidate.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConvertPdf.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf/storeUploadedPdf.ts',
+    'src/server/routes/articleAdminRoutes/conversionReconvertBody.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesDeleteArticle.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesGetArticle.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesGetArticle/getArticleJudgmentValue.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesGetConversionStats.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesGetLatest.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesGetPdfFetchJob.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesGetSearch.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesPostBatchUpsert.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesPostConversionReset.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchBulk.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchByFilter.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchByProject.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchByProject/dateFilters.ts',
+    'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchReset.ts',
+    'src/server/routes/articlesRoutes/pdfSelectionDetailReadiness.ts',
   ]
   const forbiddenServingSwitchMarkers = guardedRoutes.flatMap((filePath) => {
     const source = getSource(filePath)

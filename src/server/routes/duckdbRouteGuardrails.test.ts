@@ -60,13 +60,19 @@ const retiredOlapImportPatterns = [
 ]
 const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/AdminInvestigateRoutes.ts',
-  'src/server/routes/ArticleAdminRoutes.ts',
-  'src/server/routes/ArticlesRoutes.ts',
   'src/server/routes/ComparisonProjectsRoutes.ts',
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts',
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts',
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostStructuredFileCreate.ts',
-  'src/server/routes/DataSourcesRoutes.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesDeleteDataSource.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetArchived.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetDataSource.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetDataSources.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesPatchDataSource.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesPostDataSource.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesPostTrackingReconcile.ts',
+  'src/server/routes/DataSourcesRoutes/dataSourcesRoutesTypes.ts',
+  'src/server/routes/DataSourcesRoutes/getDataSourcesWorkloadContext.ts',
   'src/server/routes/DuckdbStudioRoutes.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts',
@@ -84,6 +90,20 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/PromptsRoutes.ts',
   'src/server/routes/ProviderModelsRoutes.ts',
   'src/server/routes/SubprojectsRoutes.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesGetAdminInfo.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConvertPdf.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesDeleteArticle.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesGetArticle.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesGetConversionStats.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesGetLatest.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesGetSearch.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesPostBatchUpsert.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesPostConversionReset.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchByProject.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchReset.ts',
   'src/server/routes/projectTransferRoutes.ts',
   'src/server/routes/projectsRoutes/projectAccessGuard.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
@@ -105,8 +125,6 @@ const forbiddenNormalForegroundSqlPatterns = [
 ]
 const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/AdminInvestigateRoutes.ts',
-  'src/server/routes/ArticleAdminRoutes.ts',
-  'src/server/routes/ArticlesRoutes.ts',
   'src/server/routes/ComparisonProjectsRoutes.ts',
   'src/server/routes/PromptsRoutes.ts',
   'src/server/routes/DuckdbStudioRoutes.ts',
@@ -120,6 +138,17 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/ProjectsRoutes.ts',
   'src/server/routes/SubprojectsRoutes.ts',
   'src/server/routes/TokensRoutes.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesGetAdminInfo.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConvertPdf.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesDeleteArticle.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesGetArticle.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesGetConversionStats.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesGetLatest.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesGetSearch.ts',
+  'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchReset.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.ts',
@@ -306,26 +335,15 @@ test('owner-routed diagnostic route DuckDB reads keep explicit workload contexts
 
 test('unpaginated product route lists do not silently truncate with hard SQL limits', () => {
   const routePaths = [
-    'src/server/routes/DataSourcesRoutes.ts',
+    'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetDataSources.ts',
+    'src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetArchived.ts',
     'src/server/routes/ImportRoutes.ts',
     'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts',
   ]
 
   const violations = routePaths.flatMap((routePath) => {
     const fileText = readFileSync(join(workspaceRoot, routePath), 'utf8')
-    const listSqlFragments =
-      routePath === 'src/server/routes/DataSourcesRoutes.ts'
-        ? [
-            fileText.slice(
-              fileText.indexOf("operation: 'listActive'") - 500,
-              fileText.indexOf("operation: 'listActive'") + 120,
-            ),
-            fileText.slice(
-              fileText.indexOf("operation: 'listArchived'") - 500,
-              fileText.indexOf("operation: 'listArchived'") + 120,
-            ),
-          ]
-        : [fileText]
+    const listSqlFragments = [fileText]
 
     return listSqlFragments.flatMap((fragment, index) => {
       return [/\bLIMIT\s+\d+\b/iu, /maxResultRows\s*:/u]
