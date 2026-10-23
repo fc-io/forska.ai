@@ -63,6 +63,20 @@ const metadataMutationEntrypoints = [
   'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/linkProjectPromptTx.ts',
   'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryAllArticlesInScope.ts',
   'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryArticlesWithPromptFilters.ts',
+  'src/server/routes/promptsRoutes/promptRow.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesDeletePrompt.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesDeletePrompt/promptReferenceCounts.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesGetDuplicates.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesGetInvalidJudgments.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesGetOrphans.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesPatchPrompt.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesPostDeleteInvalidJudgments.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesPostMerge.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesPostMerge/promptMergeTransaction.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesPostMerge/resolveJudgmentHumanPromptCollisions.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesPostMerge/resolveJudgmentPromptCollisions.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesPostRegenerateHashes.ts',
+  'src/server/routes/promptsRoutes/promptsRoutesPostRegenerateHashes/promptHashUpdates.ts',
   'src/server/routes/ProviderModelsRoutes.ts',
   'src/server/routes/providerConnectionsRoutes/getEffectiveMaxInflightRequests.ts',
   'src/server/routes/providerConnectionsRoutes/getMaxInflightRequests.ts',
@@ -151,7 +165,7 @@ test('import create paths do not synchronously fan out affected projects after s
 })
 
 test('prompt subproject model and provider mutations use enqueue or delta markers without project-scale scans', () => {
-  const promptsSource = readSource('src/server/routes/PromptsRoutes.ts')
+  const promptsSource = readSource('src/server/routes/promptsRoutes/promptsRoutesPostMerge.ts')
   const subprojectsSource = readSource(
     'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/insertSubproject.ts',
   )
