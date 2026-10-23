@@ -150,7 +150,14 @@ test('retired project mart admin mutation routes are absent from the live route 
   const inventoryPaths = routeSurfaceRoutes.map((route) => {
     return route.path
   })
-  const source = readFileSync(join(projectRoot, 'src/server/routes/routeSurfaceInventory.ts'), 'utf8')
+  const source = [
+    'src/server/routes/routeSurfaceInventory.ts',
+    ...collectSourceFiles('src/server/routes/routeSurfaceInventory'),
+  ]
+    .map((path) => {
+      return readFileSync(join(projectRoot, path), 'utf8')
+    })
+    .join('\n')
 
   for (const routePath of removedProjectMartAdminMutationRoutes) {
     expect(inventoryPaths).not.toContain(routePath)

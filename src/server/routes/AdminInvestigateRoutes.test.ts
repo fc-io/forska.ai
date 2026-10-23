@@ -1,4 +1,4 @@
-import {readFileSync, rmSync} from 'node:fs'
+import {readdirSync, readFileSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -958,7 +958,22 @@ test('admin unexpected answers route counts only judgments with the project meta
 })
 
 test('retired project mart admin mutation routes are removed from admin investigate routes', async () => {
-  const adminSource = readFileSync(`${process.cwd()}/src/server/routes/AdminInvestigateRoutes.ts`, 'utf8')
+  const adminFolder = join(process.cwd(), 'src/server/routes/adminInvestigateRoutes')
+  const adminSource = [
+    join(process.cwd(), 'src/server/routes/AdminInvestigateRoutes.ts'),
+    ...readdirSync(adminFolder, {recursive: true})
+      .map(String)
+      .filter((fileName) => {
+        return fileName.endsWith('.ts') && !fileName.endsWith('.test.ts')
+      })
+      .map((fileName) => {
+        return join(adminFolder, fileName)
+      }),
+  ]
+    .map((filePath) => {
+      return readFileSync(filePath, 'utf8')
+    })
+    .join('\n')
   const removedRoutePaths = [
     '/api/admin/project-mart-large-rebuild-run',
     '/api/admin/project-mart-large-rebuild-pause',

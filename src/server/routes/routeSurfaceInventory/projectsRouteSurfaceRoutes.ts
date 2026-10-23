@@ -1,0 +1,65 @@
+import type {RouteSurfaceRoute} from './routeSurfaceInventoryTypes.ts'
+import {ownerDependentMaintenance, ownerDependentProduct, ownerDependentSensitive} from './routeSurfaceRouteGroups.ts'
+
+export const projectsRouteSurfaceRoutes: RouteSurfaceRoute[] = [
+  ...ownerDependentSensitive(
+    'projectTransferRoutes.ts',
+    'Project export/import packages, uploaded archives, and local runtime assets.',
+    [
+      ['GET', '/api/projects/:id/export-project'],
+      ['POST', '/api/projects/:id/export-project'],
+      ['GET', '/api/projects/export/:exportId'],
+      ['GET', '/api/projects/export/:exportId/download'],
+      ['POST', '/api/projects/import/sessions'],
+      ['PUT', '/api/projects/import/:sessionId/upload'],
+      ['POST', '/api/projects/import/:sessionId/analyze'],
+      ['GET', '/api/projects/import/:sessionId'],
+      ['POST', '/api/projects/import/:sessionId/resolve-dependencies'],
+      ['POST', '/api/projects/import/:sessionId/commit'],
+      ['DELETE', '/api/projects/import/:sessionId'],
+    ],
+  ),
+  ...ownerDependentProduct('ProjectsRoutes.ts', [
+    ['POST', '/api/articlesreviews'],
+    ['POST', '/api/articlesreviewscount'],
+    ['POST', '/api/articlesreviewsboth'],
+    ['POST', '/api/articlesreviewshuman'],
+    ['POST', '/api/articlesreviewsunassessed'],
+    ['GET', '/api/articlesreviewsfilters'],
+    ['GET', '/api/articlesreviewshumanfilters'],
+    ['POST', '/api/projectsreview'],
+    ['POST', '/api/projectsreviewswarnings'],
+    ['GET', '/api/projects-without-jobs'],
+    ['GET', '/api/projects'],
+    ['GET', '/api/projects/archived'],
+    ['GET', '/api/projects/:id/access'],
+    ['GET', '/api/projects/:id'],
+    ['GET', '/api/projects/:id/prompts/:promptId/preview'],
+    ['POST', '/api/projects'],
+    ['POST', '/api/projects/full-text-validation'],
+    ['PATCH', '/api/projects/:id'],
+    ['PATCH', '/api/projects/:id/edit'],
+    ['DELETE', '/api/projects/:id'],
+    ['POST', '/api/projects/:id/unarchive'],
+    ['POST', '/api/projects/:id/clone'],
+  ]),
+  ...ownerDependentMaintenance('ProjectsRoutes.ts', 'Archived project deletion and cleanup.', [
+    ['POST', '/api/projects/delete-archived'],
+  ]),
+  ...ownerDependentSensitive('ProjectExportRoutes.ts', 'Project article, judgment, prompt, and metadata exports.', [
+    ['POST', '/api/projects/:id/export'],
+    ['GET', '/api/projects/:id/export/:jobId'],
+    ['GET', '/api/projects/:id/export/:jobId/download'],
+    ['POST', '/api/projects/:id/export-prompts'],
+  ]),
+  ...ownerDependentProduct('ProjectsAddArticlesRoutes.ts', [
+    ['POST', '/api/projects/add_articles_by_filter'],
+    ['POST', '/api/projects/add_articles_by_ids'],
+    ['GET', '/api/projects/add_articles_jobs'],
+  ]),
+  ...ownerDependentProduct('ProjectArticlesRoutes.ts', [
+    ['GET', '/api/projects/:id/articles'],
+    ['POST', '/api/projects/:id/articles'],
+    ['DELETE', '/api/projects/:id/articles/:articleId'],
+  ]),
+]

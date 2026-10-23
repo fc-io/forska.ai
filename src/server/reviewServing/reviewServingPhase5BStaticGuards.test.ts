@@ -1,4 +1,4 @@
-import {existsSync} from 'node:fs'
+import {existsSync, readdirSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -7,6 +7,20 @@ const projectRoot = process.cwd()
 
 const readText = async (path: string) => {
   return globalThis.Bun.file(join(projectRoot, path)).text()
+}
+
+const readRouteSources = async (routeFile: string, routeFolder: string) => {
+  const folderFiles = readdirSync(join(projectRoot, routeFolder), {recursive: true})
+    .map(String)
+    .filter((fileName) => {
+      return fileName.endsWith('.ts') && !fileName.endsWith('.test.ts')
+    })
+    .map((fileName) => {
+      return join(routeFolder, fileName)
+    })
+  const sources = await Promise.all([routeFile, ...folderFiles].map(readText))
+
+  return sources.join('\n')
 }
 
 test('Phase 5B startup stays cut over to V4 projector work', async () => {
@@ -73,7 +87,9 @@ test('review warnings product route stays separated from legacy mart diagnostics
 })
 
 test('admin maintenance diagnostics do not expose retired large-rebuild runtime metrics', async () => {
-  const adminSource = await readText('src/server/routes/AdminInvestigateRoutes.ts')
+  const adminSource = await readText(
+    'src/server/routes/adminInvestigateRoutes/adminInvestigateRoutesGetMaintenanceRuntimeDiagnostics.ts',
+  )
 
   expect(adminSource).not.toContain('getProjectMartLargeRebuildRuntimeMetrics')
   expect(adminSource).not.toContain('projectMartLargeRebuildRuntimeMetrics')
@@ -325,8 +341,14 @@ test('Phase 5B package commands do not expose normal legacy rebuild workers', as
 })
 
 test('admin legacy mart mutation routes stay retired or removed', async () => {
-  const adminSource = await readText('src/server/routes/AdminInvestigateRoutes.ts')
-  const routeInventorySource = await readText('src/server/routes/routeSurfaceInventory.ts')
+  const adminSource = await readRouteSources(
+    'src/server/routes/AdminInvestigateRoutes.ts',
+    'src/server/routes/adminInvestigateRoutes',
+  )
+  const routeInventorySource = await readRouteSources(
+    'src/server/routes/routeSurfaceInventory.ts',
+    'src/server/routes/routeSurfaceInventory',
+  )
   const navigationSource = await readText('src/components/Navigation.tsx')
   const settingsSource = await readText('src/app/routes/+settings/+index.tsx')
   const removedRoutePaths = [
