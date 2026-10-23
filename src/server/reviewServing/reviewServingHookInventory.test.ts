@@ -260,7 +260,7 @@ const hookInventory: HookInventoryEntry[] = [
     markers: ['createReviewBulkOperationJob'],
   },
   {
-    filePath: 'src/server/routes/SubprojectsRoutes.ts',
+    filePath: 'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/insertSubproject.ts',
     label: 'subproject project-article writes',
     markers: ['appendProjectScopeArticleReviewServingDeltas'],
   },
@@ -366,6 +366,13 @@ test('Phase 2 hook inventory keeps product routes on existing read contracts', (
     'src/server/routes/projectsRoutes/updateProjectTx.ts',
     'src/server/routes/projectsRoutes/upsertProjectPromptTx.ts',
     'src/server/routes/SubprojectsRoutes.ts',
+    'src/server/routes/subprojectsRoutes/subprojectsRoutesGetSources.ts',
+    'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate.ts',
+    'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/collectSubprojectArticleIds.ts',
+    'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/insertSubproject.ts',
+    'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/linkProjectPromptTx.ts',
+    'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryAllArticlesInScope.ts',
+    'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryArticlesWithPromptFilters.ts',
   ]
   const forbiddenServingSwitchMarkers = guardedRoutes.flatMap((filePath) => {
     const source = getSource(filePath)
