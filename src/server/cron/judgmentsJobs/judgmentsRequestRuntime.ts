@@ -601,6 +601,20 @@ const waitForProbeAdmissionRetry = async ({
   })
 }
 
+// The lease store lives on the DuckDB owner. A failed acquire call ("fetch failed", owner request
+// timeout) is an owner outage, not a provider outage, but the raw transport error classified as a
+// provider network failure: it gated the healthy LLM endpoint and fed the job's provider-health
+// backoff. Surface it as a lease error so the prompt is requeued without blaming the provider.
+const acquireProviderAdmissionLeaseOrThrowLeaseError = async (
+  input: Parameters<typeof acquireProviderAdmissionLeasePersisted>[0],
+): ReturnType<typeof acquireProviderAdmissionLeasePersisted> => {
+  try {
+    return await acquireProviderAdmissionLeasePersisted(input)
+  } catch (error) {
+    throw new ProviderAdmissionLeaseLostError(error, 'acquire')
+  }
+}
+
 const acquireProviderRequestAdmissionLease = async ({
   metadata,
   requestAttempt,
@@ -613,7 +627,7 @@ const acquireProviderRequestAdmissionLease = async ({
   const holderToken = getProviderRequestLeaseHolderToken(requestAttempt.requestAttemptId)
   const leaseIdentity = getProviderAdmissionRequestLeaseIdentity(requestAttempt.requestAttemptId)
   const result = await withProviderAdmissionAcquireAttempt(metadata, () => {
-    return acquireProviderAdmissionLeasePersisted({
+    return acquireProviderAdmissionLeaseOrThrowLeaseError({
       holderToken,
       leaseIdentity,
       leaseKind: 'request',
@@ -645,10 +659,21 @@ const releaseProviderRequestAdmissionLease = async (lease: ProviderRequestAdmiss
   notifyProbeAdmissionWaiters()
 }
 
+type ProviderAdmissionLeasePhase = 'acquire' | 'active'
+
+const getProviderAdmissionLeaseLostMessage = (reason: unknown, phase: ProviderAdmissionLeasePhase): string => {
+  return phase === 'acquire'
+    ? `Provider admission lease could not be acquired from the DuckDB owner: ${getErrorMessage(reason)}`
+    : `Provider admission lease lost during active request: ${getErrorMessage(reason)}`
+}
+
 export class ProviderAdmissionLeaseLostError extends Error {
-  constructor(reason: unknown) {
-    super(`Provider admission lease lost during active request: ${getErrorMessage(reason)}`)
+  phase: ProviderAdmissionLeasePhase
+
+  constructor(reason: unknown, phase: ProviderAdmissionLeasePhase = 'active') {
+    super(getProviderAdmissionLeaseLostMessage(reason, phase), {cause: reason})
     this.name = 'ProviderAdmissionLeaseLostError'
+    this.phase = phase
   }
 }
 
@@ -761,7 +786,7 @@ const acquireProviderProbeAdmissionLease = async ({
 }): Promise<ProviderProbeAdmissionLease> => {
   const holderToken = getProviderProbeLeaseHolderToken({endpointAvailabilityKey, probeAttemptId})
   const leaseIdentity = getProviderAdmissionProbeLeaseIdentity({endpointAvailabilityKey, probeAttemptId})
-  const result = await acquireProviderAdmissionLeasePersisted({
+  const result = await acquireProviderAdmissionLeaseOrThrowLeaseError({
     endpointAvailabilityKey,
     holderToken,
     leaseIdentity,
