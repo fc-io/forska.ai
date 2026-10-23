@@ -11,7 +11,9 @@ const judgmentDispatchTelemetrySource = readSource('src/server/cron/judgmentsJob
 const providerConnectionRepositorySource = readSource('src/server/providers/providerConnectionRepository.ts')
 const providerModelRepositorySource = readSource('src/server/providers/providerModelRepository.ts')
 const providerModelRoutesSource = readSource('src/server/routes/ProviderModelsRoutes.ts')
-const routeSurfaceInventorySource = readSource('src/server/routes/routeSurfaceInventory.ts')
+const routeSurfaceInventorySource = readSource(
+  'src/server/routes/routeSurfaceInventory/modelsAndProvidersRouteSurfaceRoutes.ts',
+)
 
 const providerDbSources = [
   providerAdmissionLeaseSource,

@@ -1,4 +1,4 @@
-import {existsSync} from 'node:fs'
+import {existsSync, readdirSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -7,6 +7,22 @@ const projectRoot = process.cwd()
 
 const readText = async (path: string) => {
   return globalThis.Bun.file(join(projectRoot, path)).text()
+}
+
+const routeInventoryFile = 'src/server/routes/routeSurfaceInventory.ts'
+const routeInventoryFolder = 'src/server/routes/routeSurfaceInventory'
+
+const readRouteInventorySource = async () => {
+  const familyFiles = readdirSync(join(projectRoot, routeInventoryFolder))
+    .filter((fileName) => {
+      return fileName.endsWith('.ts') && !fileName.endsWith('.test.ts')
+    })
+    .map((fileName) => {
+      return `${routeInventoryFolder}/${fileName}`
+    })
+  const sources = await Promise.all([routeInventoryFile, ...familyFiles].map(readText))
+
+  return sources.join('\n')
 }
 
 test('Phase 5B startup stays cut over to V4 projector work', async () => {
@@ -328,7 +344,7 @@ test('Phase 5B package commands do not expose normal legacy rebuild workers', as
 
 test('admin legacy mart mutation routes stay retired or removed', async () => {
   const adminSource = await readText('src/server/routes/AdminInvestigateRoutes.ts')
-  const routeInventorySource = await readText('src/server/routes/routeSurfaceInventory.ts')
+  const routeInventorySource = await readRouteInventorySource()
   const navigationSource = await readText('src/components/Navigation.tsx')
   const settingsSource = await readText('src/app/routes/+settings/+index.tsx')
   const removedRoutePaths = [
