@@ -189,25 +189,19 @@ test('deleteCovidencePackageFiles removes the datasource package folder', async 
   expect(existsSync(path.resolve(process.cwd(), firstStoredFile.assetPath))).toBe(false)
 })
 
-test('Covidence prompt definition builds stage-specific text and reuses matching prompts', async () => {
+test('Covidence prompt definition builds section text and reuses matching prompts', async () => {
   expect(
     buildCovidencePromptDefinition({
       answerSet: 'yes|no|maybe',
       exclusionCriteria: 'Case reports\nEditorials',
       inclusionCriteria: 'Adults with confirmed disease',
       mode: 'title_abstract',
+      sectionLabel: null,
     }),
   ).toEqual({
     criteriaDisposition: 'combined',
     originalText: [
-      'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
-      '',
-      'Do not assume every inclusion item must match. Treat inclusion items as possible routes to inclusion unless the criteria text explicitly requires multiple conditions together.',
-      'Treat exclusion items as excluding the study unless the criteria text explicitly narrows them or provides an exception.',
-      'Read the inclusion and exclusion criteria together. If the criteria text contains a more specific condition, exception, carve-out, or dependency, follow that text over any broader rule.',
-      'Answer yes if, after applying the criteria as written, the study should be included and no exclusion criterion excludes it.',
-      'Answer no if, after applying the criteria as written, the study should not be included or any exclusion criterion excludes it.',
-      'Answer maybe if the report does not provide enough information to resolve whether the criteria, as written, are met, so you cannot decide whether the study should be included for full text review.',
+      'Question: Does the study meet the eligibility criteria below?',
       '',
       'Inclusion criteria:',
       'Adults with confirmed disease',
@@ -225,17 +219,12 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       exclusionCriteria: 'Animal studies',
       inclusionCriteria: 'Randomized trials',
       mode: 'full_text',
+      sectionLabel: 'Comparator/Context',
     }),
   ).toEqual({
     criteriaDisposition: 'combined',
     originalText: [
-      'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
-      '',
-      'Do not assume every inclusion item must match. Treat inclusion items as possible routes to inclusion unless the criteria text explicitly requires multiple conditions together.',
-      'Treat exclusion items as excluding the study unless the criteria text explicitly narrows them or provides an exception.',
-      'Read the inclusion and exclusion criteria together. If the criteria text contains a more specific condition, exception, carve-out, or dependency, follow that text over any broader rule.',
-      'Answer yes if, after applying the criteria as written, the study should be included and no exclusion criterion excludes it.',
-      'Answer no if, after applying the criteria as written, the study should not be included or any exclusion criterion excludes it.',
+      'Question: Does the study meet the Comparator/Context criteria below?',
       '',
       'Inclusion criteria:',
       'Randomized trials',
@@ -253,26 +242,54 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       exclusionCriteria: '   ',
       inclusionCriteria: 'Randomized trials\nProspective cohorts',
       mode: 'title_abstract',
+      sectionLabel: 'Study design',
     }),
   ).toEqual({
     criteriaDisposition: 'combined',
     originalText: [
-      'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
-      '',
-      'Do not assume every inclusion item must match. Treat inclusion items as possible routes to inclusion unless the criteria text explicitly requires multiple conditions together.',
-      'Answer yes if, after applying the inclusion criteria as written, the study should be included.',
-      'Answer no if, after applying the inclusion criteria as written, the study should not be included.',
-      'Answer maybe if the report does not provide enough information to resolve whether the criteria, as written, are met, so you cannot decide whether the study should be included for full text review.',
+      'Question: Does the study meet the Study design criteria below?',
       '',
       'Inclusion criteria:',
       'Randomized trials\nProspective cohorts',
-      '',
-      'Exclusion criteria:',
-      '(none provided)',
     ].join('\n'),
     promptHeading: 'Covidence title/abstract screening',
     type: "'yes' | 'no' | 'maybe'",
   })
+
+  expect(
+    buildCovidencePromptDefinition({
+      answerSet: 'yes|no|maybe',
+      exclusionCriteria: ' Case reports ',
+      inclusionCriteria: '',
+      mode: 'full_text',
+      sectionLabel: 'Other',
+    }),
+  ).toEqual({
+    criteriaDisposition: 'combined',
+    originalText: [
+      'Question: Does the study meet the Other criteria below?',
+      '',
+      'Exclusion criteria:',
+      'Case reports',
+    ].join('\n'),
+    promptHeading: 'Covidence full-text screening',
+    type: "'yes' | 'no' | 'maybe'",
+  })
+
+  expect(
+    (['title_abstract', 'full_text'] as const).map((mode) => {
+      return buildCovidencePromptDefinition({
+        answerSet: 'yes|no|maybe',
+        exclusionCriteria: 'Case reports',
+        inclusionCriteria: 'Adults with confirmed disease',
+        mode,
+        sectionLabel: 'Population',
+      }).originalText
+    }),
+  ).toEqual([
+    'Question: Does the study meet the Population criteria below?\n\nInclusion criteria:\nAdults with confirmed disease\n\nExclusion criteria:\nCase reports',
+    'Question: Does the study meet the Population criteria below?\n\nInclusion criteria:\nAdults with confirmed disease\n\nExclusion criteria:\nCase reports',
+  ])
 
   expect(
     buildCovidencePromptDefinitionsForEligibilityFields({
@@ -374,13 +391,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       criteriaSectionKey: 'population',
       criteriaSectionLabel: 'Population',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
-        '',
-        'Do not assume every inclusion item must match. Treat inclusion items as possible routes to inclusion unless the criteria text explicitly requires multiple conditions together.',
-        'Treat exclusion items as excluding the study unless the criteria text explicitly narrows them or provides an exception.',
-        'Read the inclusion and exclusion criteria together. If the criteria text contains a more specific condition, exception, carve-out, or dependency, follow that text over any broader rule.',
-        'Answer yes if, after applying the criteria as written, the study should be included and no exclusion criterion excludes it.',
-        'Answer no if, after applying the criteria as written, the study should not be included or any exclusion criterion excludes it.',
+        'Question: Does the study meet the Population criteria below?',
         '',
         'Inclusion criteria:',
         'Adults with confirmed disease',
@@ -396,14 +407,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       criteriaSectionKey: 'other',
       criteriaSectionLabel: 'Other',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
-        '',
-        'Treat exclusion items as excluding the study unless the criteria text explicitly narrows them or provides an exception.',
-        'Answer yes if, after applying the exclusion criteria as written, the study should not be excluded.',
-        'Answer no if, after applying the exclusion criteria as written, the study should be excluded.',
-        '',
-        'Inclusion criteria:',
-        '(none provided)',
+        'Question: Does the study meet the Other criteria below?',
         '',
         'Exclusion criteria:',
         'Case reports',
@@ -434,13 +438,8 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       criteriaSectionKey: 'outcome',
       criteriaSectionLabel: 'Outcome',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+        'Question: Does the study meet the Outcome criteria below?',
         '',
-        'Do not assume every inclusion item must match. Treat inclusion items as possible routes to inclusion unless the criteria text explicitly requires multiple conditions together.',
-        'Treat exclusion items as excluding the study unless the criteria text explicitly narrows them or provides an exception.',
-        'Read the inclusion and exclusion criteria together. If the criteria text contains a more specific condition, exception, carve-out, or dependency, follow that text over any broader rule.',
-        'Answer yes if, after applying the criteria as written, the study should be included and no exclusion criterion excludes it.',
-        'Answer no if, after applying the criteria as written, the study should not be included or any exclusion criterion excludes it.',
         'For outcome criteria, treat leading 1 markers (1, 1°, 1*, 1-) as primary outcome(s) and leading 2 markers (2, 2°, 2*, 2-) as secondary outcome(s).',
         '',
         'Inclusion criteria:',
@@ -473,14 +472,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     {
       criteriaDisposition: 'combined',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
-        '',
-        'Do not assume every inclusion item must match. Treat inclusion items as possible routes to inclusion unless the criteria text explicitly requires multiple conditions together.',
-        'Treat exclusion items as excluding the study unless the criteria text explicitly narrows them or provides an exception.',
-        'Read the inclusion and exclusion criteria together. If the criteria text contains a more specific condition, exception, carve-out, or dependency, follow that text over any broader rule.',
-        'Answer yes if, after applying the criteria as written, the study should be included and no exclusion criterion excludes it.',
-        'Answer no if, after applying the criteria as written, the study should not be included or any exclusion criterion excludes it.',
-        'Answer maybe if the report does not provide enough information to resolve whether the criteria, as written, are met, so you cannot decide whether the study should be included for full text review.',
+        'Question: Does the study meet the eligibility criteria below?',
         '',
         'Inclusion criteria:',
         'Adults with confirmed disease',
@@ -507,14 +499,8 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     {
       criteriaDisposition: 'combined',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        'Question: Does the study meet the eligibility criteria below?',
         '',
-        'Do not assume every inclusion item must match. Treat inclusion items as possible routes to inclusion unless the criteria text explicitly requires multiple conditions together.',
-        'Treat exclusion items as excluding the study unless the criteria text explicitly narrows them or provides an exception.',
-        'Read the inclusion and exclusion criteria together. If the criteria text contains a more specific condition, exception, carve-out, or dependency, follow that text over any broader rule.',
-        'Answer yes if, after applying the criteria as written, the study should be included and no exclusion criterion excludes it.',
-        'Answer no if, after applying the criteria as written, the study should not be included or any exclusion criterion excludes it.',
-        'Answer maybe if the report does not provide enough information to resolve whether the criteria, as written, are met, so you cannot decide whether the study should be included for full text review.',
         'For outcome criteria, treat leading 1 markers (1, 1°, 1*, 1-) as primary outcome(s) and leading 2 markers (2, 2°, 2*, 2-) as secondary outcome(s).',
         '',
         'Inclusion criteria:',
@@ -554,12 +540,14 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
+          sectionLabel: null,
         })
         const archivedDefinition = covidenceImportService.buildCovidencePromptDefinition({
           answerSet: 'yes|no',
           exclusionCriteria: 'Animal studies',
           inclusionCriteria: 'Randomized trials',
           mode: 'full_text',
+          sectionLabel: null,
         })
         const contentHash = computePromptContentHash(definition.originalText, null, definition.promptHeading, definition.type)
         const archivedContentHash = computePromptContentHash(
@@ -596,18 +584,21 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
+          sectionLabel: null,
         })
         const createdPrompt = await covidenceImportService.getOrCreateCovidencePrompt({
           answerSet: 'yes|no',
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
+          sectionLabel: null,
         })
         const repeatedPrompt = await covidenceImportService.getOrCreateCovidencePrompt({
           answerSet: 'yes|no',
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
+          sectionLabel: null,
         })
         const archivedPrompt = await covidenceImportService.getOrCreateCovidencePrompt({
           promptDefinition: archivedDefinition,
@@ -755,6 +746,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
+          sectionLabel: null,
         })
         const createdProject = await covidenceImportService.getOrCreateCovidenceProject({
           importRoute: 'covidence:ds-1',
@@ -1480,6 +1472,7 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
+          sectionLabel: null,
         })
         const project = await covidenceImportService.getOrCreateCovidenceProject({
           importRoute,
@@ -1707,6 +1700,7 @@ test('seedCovidenceHumanJudgmentsFromConfig rejects ambiguous external article m
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
+          sectionLabel: null,
         })
         const project = await covidenceImportService.getOrCreateCovidenceProject({
           importRoute,
@@ -1838,6 +1832,7 @@ test('seedCovidenceHumanJudgmentsFromConfig treats disjoint screen irrelevant an
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
+          sectionLabel: null,
         })
         const project = await covidenceImportService.getOrCreateCovidenceProject({
           importRoute,
@@ -2421,6 +2416,7 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'full_text',
+          sectionLabel: null,
         })
         const project = await covidenceImportService.getOrCreateCovidenceProject({
           importRoute,
