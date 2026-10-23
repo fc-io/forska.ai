@@ -958,7 +958,7 @@ export const reviewServingReadContractRouteInventory = [
     method: 'POST',
     mounted: true,
     productRoute: '/api/articles/pdf-fetch-by-filter',
-    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    routeFile: 'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchByFilter.ts',
     surfaces: ['bulk', 'pdf', 'filter', 'search'],
   },
   {
@@ -974,7 +974,7 @@ export const reviewServingReadContractRouteInventory = [
     method: 'POST',
     mounted: true,
     productRoute: '/api/articles/pdf-fetch-by-project',
-    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    routeFile: 'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchByProject.ts',
     surfaces: ['pdf', 'bulk', 'filter', 'search'],
   },
   {
@@ -982,7 +982,7 @@ export const reviewServingReadContractRouteInventory = [
     method: 'POST',
     mounted: true,
     productRoute: '/api/articles/pdf-fetch-bulk',
-    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    routeFile: 'src/server/routes/articlesRoutes/articlesRoutesPostPdfFetchBulk.ts',
     surfaces: ['pdf', 'bulk'],
   },
   {

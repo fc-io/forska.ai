@@ -9,7 +9,7 @@ export const reviewServingAdjacentRouteClassifications = [
     method: 'GET',
     reason:
       'Global article catalog recency surface; it does not select project-scoped review rows or make review decisions.',
-    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    routeFile: 'src/server/routes/articlesRoutes/articlesRoutesGetLatest.ts',
     routePath: '/api/articles/latest',
   },
   {
@@ -20,7 +20,7 @@ export const reviewServingAdjacentRouteClassifications = [
     method: 'GET',
     reason:
       'Global article catalog lookup for manual selection; it is not project scoped and has no review decision path.',
-    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    routeFile: 'src/server/routes/articlesRoutes/articlesRoutesGetSearch.ts',
     routePath: '/api/articles/search',
   },
   {
@@ -32,7 +32,7 @@ export const reviewServingAdjacentRouteClassifications = [
     method: 'GET',
     reason:
       'Global source article detail and full judgment history page; it is not project scoped and is not the normal product review detail path.',
-    routeFile: 'src/server/routes/ArticlesRoutes.ts',
+    routeFile: 'src/server/routes/articlesRoutes/articlesRoutesGetArticle.ts',
     routePath: '/api/articles/:id',
   },
   {
