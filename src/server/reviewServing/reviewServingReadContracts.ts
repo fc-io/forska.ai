@@ -990,7 +990,7 @@ export const reviewServingReadContractRouteInventory = [
     method: 'POST',
     mounted: true,
     productRoute: '/api/projects/:id/export',
-    routeFile: 'src/server/routes/ProjectExportRoutes.ts',
+    routeFile: 'src/server/routes/projectExportRoutes/projectExportRoutesPostExport.ts',
     surfaces: ['export', 'bulk', 'filter', 'search', 'detail'],
   },
 ] as const satisfies readonly ReviewServingReadContractRouteInventoryEntry[]

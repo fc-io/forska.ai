@@ -920,14 +920,13 @@ test('project prompt csv export includes a UTF-8 BOM for Chinese spreadsheet tex
 })
 
 test('project export serving queries read prompt and judgment scalars', () => {
-  const routeText = readFileSync('src/server/routes/ProjectExportRoutes.ts', 'utf8')
-  const promptMetadataQuery = routeText.slice(
-    routeText.indexOf('const getExportPromptDetails'),
-    routeText.indexOf('const getExportArticles'),
+  const promptMetadataQuery = readFileSync(
+    'src/server/routes/projectExportRoutes/projectExportRoutesGetExportDownload/buildExportCsvStream/getExportPromptDetails.ts',
+    'utf8',
   )
-  const judgmentExportQuery = routeText.slice(
-    routeText.indexOf('const getExportJudgments'),
-    routeText.indexOf('const getAnswerValue'),
+  const judgmentExportQuery = readFileSync(
+    'src/server/routes/projectExportRoutes/projectExportRoutesGetExportDownload/buildExportCsvStream/getExportJudgments.ts',
+    'utf8',
   )
 
   expect(promptMetadataQuery).toContain('prompt.prompt_heading AS promptHeading')
