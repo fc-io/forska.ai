@@ -86,6 +86,7 @@ const getCovidencePromptDefinitions = (body: {
           exclusionCriteria,
           inclusionCriteria,
           mode: body.mode,
+          sectionLabel: null,
         }),
       ]
     : null
