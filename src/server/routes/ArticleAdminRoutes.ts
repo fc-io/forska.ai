@@ -1,100 +1,13 @@
-import {type as arktype} from 'arktype'
 import {Elysia, t} from 'elysia'
-import {mkdir, writeFile} from 'fs/promises'
-import path from 'path'
 
-import {emptyArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
-import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
-import {
-  canonicalFullTextStoredForm,
-  rebuildCanonicalFullText,
-  storeConvertedFullText,
-} from '../fullText/canonicalFullTextStore.ts'
-import {
-  convertArticlePdf,
-  type FullTextConversionRuntimeConfig,
-  isPermanentConversionFailure,
-} from '../fullText/converters/fullTextConverter.ts'
-import {
-  appendArticleReviewServingDeltas,
-  getArticleReviewServingMutationValueHash,
-} from '../reviewServing/articleReviewServingDeltaService.ts'
-import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {
-  escapeSqlString,
-  getDateValue,
-  getJsonValue,
-  getSqlLiteral,
-  getTimestampLiteral,
-} from '../services/appQueryHelpers.ts'
-import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
-import {getFailedConversionTargetSetSql} from '../utils/ensureFullText.ts'
-import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
-import {resolveRuntimeWritablePath} from '../utils/runtimeWritablePath.ts'
-
-/**
- * Store an uploaded PDF to the local assets folder.
- * Returns the relative path to the stored file, or null on failure.
- */
-const storeUploadedPdf = async (articleId: string, pdfBuffer: Buffer): Promise<string | null> => {
-  const relDir = 'assets/user_uploaded_article_pdfs'
-  const fileName = `${articleId}.pdf`
-  const relPath = `${relDir}/${fileName}`
-  const absDir = resolveRuntimeWritablePath({pathValue: relDir})
-  const absPath = path.join(absDir, fileName)
-
-  try {
-    await mkdir(absDir, {recursive: true})
-    await writeFile(absPath, pdfBuffer)
-    return relPath
-  } catch (error) {
-    console.error('Failed to store uploaded PDF:', error)
-    return null
-  }
-}
-
-const conversionReconvertBody = arktype({articleId: 'string > 0'})
-
-type ReconvertCandidate = {
-  id: string
-  fullTextPDF: string | null
-  fullTextConversionError: string | null
-  fullTextConversionStatus: string | null
-  hasConvertedText: boolean
-  hasFullText: boolean
-}
-
-/**
- * An article with a PDF is reconvertible when it has no full text, its conversion failed, or a conversion error is
- * recorded. The last case covers failures stored before failed was a status (status NULL, error set, no text).
- */
-const isReconvertible = (article: ReconvertCandidate): boolean => {
-  return (
-    !article.hasFullText
-    || article.fullTextConversionStatus === 'failed'
-    || (article.fullTextConversionError ?? '').trim() !== ''
-  )
-}
-
-const assertReconvertCandidate = (articleId: string, article: ReconvertCandidate | undefined): ReconvertCandidate => {
-  if (!article) {
-    throw new HttpError(404, `Article ${articleId} not found`)
-  }
-
-  if (!article.fullTextPDF) {
-    throw new HttpError(409, `Article ${articleId} has no PDF; fetch or upload one before reconverting`)
-  }
-
-  if (!isReconvertible(article)) {
-    throw new HttpError(
-      409,
-      `Article ${articleId} has converted full text (conversion ${article.fullTextConversionStatus ?? 'not started'}) and no recorded conversion error; only articles without full text, with a failed conversion or with a recorded conversion error can be reconverted`,
-    )
-  }
-
-  return article
-}
+import {articleAdminRoutesGetAdminInfo} from './articleAdminRoutes/articleAdminRoutesGetAdminInfo.ts'
+import {articleAdminRoutesPostCanonicalFullTextRebuild} from './articleAdminRoutes/articleAdminRoutesPostCanonicalFullTextRebuild.ts'
+import {articleAdminRoutesPostConversionReconvert} from './articleAdminRoutes/articleAdminRoutesPostConversionReconvert.ts'
+import {articleAdminRoutesPostConvertPdf} from './articleAdminRoutes/articleAdminRoutesPostConvertPdf.ts'
+import {articleAdminRoutesPostFetchPdf} from './articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts'
+import {articleAdminRoutesPostUploadPdf} from './articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts'
+import {conversionReconvertBody} from './articleAdminRoutes/conversionReconvertBody.ts'
 
 export const articleAdminRoutes = new Elysia()
   .use(withErrorHandler())
@@ -102,37 +15,7 @@ export const articleAdminRoutes = new Elysia()
   .get(
     '/api/articles/:id/admin-info',
     async ({params}) => {
-      const {id} = params
-
-      const [article] = await getAppDatabaseService().queryJson<{
-        id: string
-        fullTextFetchedAt: unknown
-        fullTextPDF: string | null
-        fullTextSource: string | null
-        fullTextConversionStatus: string | null
-        fullTextConversionError: string | null
-        fullTextConversionAttempts: number | null
-        fullTextCharCount: number | null
-      }>(`
-        SELECT
-          id,
-          full_text_fetched_at AS fullTextFetchedAt,
-          full_text_pdf AS fullTextPDF,
-          full_text_source AS fullTextSource,
-          full_text_conversion_status AS fullTextConversionStatus,
-          full_text_conversion_error AS fullTextConversionError,
-          full_text_conversion_attempts AS fullTextConversionAttempts,
-          full_text_char_count AS fullTextCharCount
-        FROM app.article
-        WHERE id = '${escapeSqlString(id)}'
-        LIMIT 1
-      `)
-
-      if (!article) {
-        throw new Error('Article not found')
-      }
-
-      return {article: {...article, fullTextFetchedAt: getDateValue(article.fullTextFetchedAt)}}
+      return articleAdminRoutesGetAdminInfo({params})
     },
     {params: t.Object({id: t.String()})},
   )
@@ -140,84 +23,7 @@ export const articleAdminRoutes = new Elysia()
   .post(
     '/api/articles/:id/fetch-pdf',
     async ({params}) => {
-      const {id} = params
-
-      // Get the article to access arxivId and source metadata
-      const [article] = await getAppDatabaseService().queryJson<{
-        id: string
-        arxivId: string | null
-        doi: string | null
-        sourceMetadata: unknown
-      }>(`
-        SELECT id, arxiv_id AS arxivId, doi, TO_JSON(source_metadata) AS sourceMetadata
-        FROM app.article
-        WHERE id = '${escapeSqlString(id)}'
-        LIMIT 1
-      `)
-
-      if (!article) {
-        throw new Error('Article not found')
-      }
-
-      // Fetch the PDF using the same logic as the cron job
-      const sourceMetadata =
-        getArticleSourceMetadataValue(getJsonValue(article.sourceMetadata)) ?? emptyArticleSourceMetadata
-      const result = await fetchPdfForArticle({arxivId: article.arxivId, doi: article.doi, sourceMetadata})
-
-      // Update the article with the fetched PDF info
-      const updateData: Record<string, unknown> = {fullTextFetchedAt: new Date()}
-
-      if (result.fullTextPDF) {
-        updateData.fullTextPDF = result.fullTextPDF
-        updateData.fullTextSource = result.fullTextSource
-        updateData.fullTextOriginalFormat = result.fullTextOriginalFormat
-        // Reset conversion status so it can be reprocessed
-        updateData.fullTextConversionStatus = null
-        updateData.fullTextConversionAttempts = 0
-        updateData.fullTextConversionError = null
-        // Clear existing fullText so conversion will re-run
-        updateData.fullText = null
-        updateData.fullTextHtml = null
-      }
-
-      const updateParts = Object.entries(updateData).map(([key, value]) => {
-        const columnMap: Record<string, string> = {
-          fullTextFetchedAt: 'full_text_fetched_at',
-          fullTextPDF: 'full_text_pdf',
-          fullTextSource: 'full_text_source',
-          fullTextOriginalFormat: 'full_text_original_format',
-          fullTextConversionStatus: 'full_text_conversion_status',
-          fullTextConversionAttempts: 'full_text_conversion_attempts',
-          fullTextConversionError: 'full_text_conversion_error',
-          fullText: 'full_text',
-          fullTextHtml: 'full_text_html',
-        }
-        return `${columnMap[key] ?? key} = ${getSqlLiteral(value)}`
-      })
-      await getAppDatabaseService().transaction(async (tx) => {
-        const sourceUpdatedAt = new Date()
-        await tx.run(`
-          UPDATE app.article
-          SET ${updateParts.join(', ')},
-              updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
-          WHERE id = '${escapeSqlString(id)}'
-        `)
-        await appendArticleReviewServingDeltas(tx, {
-          articleId: id,
-          changedFields: result.fullTextPDF ? ['fullText', 'fullTextHtml', 'fullTextPDF'] : [],
-          sourceMutationKey: `ArticleAdminRoutes.fetchPdf|article|${id}|${sourceUpdatedAt.toISOString()}|${getArticleReviewServingMutationValueHash(result)}`,
-          sourceOperation: 'update',
-          sourceUpdatedAt,
-        })
-      })
-
-      return {
-        success: true,
-        fullTextPDF: result.fullTextPDF,
-        fullTextSource: result.fullTextSource,
-        attempts: result.attempts,
-        fullTextLinks: sourceMetadata.fullTextLinks,
-      }
+      return articleAdminRoutesPostFetchPdf({params})
     },
     {params: t.Object({id: t.String()})},
   )
@@ -225,67 +31,7 @@ export const articleAdminRoutes = new Elysia()
   .post(
     '/api/articles/:id/upload-pdf',
     async ({params, body}) => {
-      const {id} = params
-
-      // Check if article exists
-      const [article] = await getAppDatabaseService().queryJson<{id: string}>(`
-        SELECT id
-        FROM app.article
-        WHERE id = '${escapeSqlString(id)}'
-        LIMIT 1
-      `)
-
-      if (!article) {
-        throw new Error('Article not found')
-      }
-
-      // Get the PDF file from the request body
-      const pdfFile = body.pdf
-      if (!pdfFile || !(pdfFile instanceof Blob)) {
-        throw new Error('No PDF file provided')
-      }
-
-      // Validate that it's a PDF
-      const fileType = pdfFile.type
-      if (!fileType.includes('pdf')) {
-        throw new Error('File must be a PDF')
-      }
-
-      // Convert to buffer and store
-      const arrayBuffer = await pdfFile.arrayBuffer()
-      const pdfBuffer = Buffer.from(arrayBuffer)
-
-      const fullTextPDF = await storeUploadedPdf(id, pdfBuffer)
-
-      if (!fullTextPDF) {
-        throw new Error('Failed to store PDF file')
-      }
-
-      // Update the article with the uploaded PDF info
-      await getAppDatabaseService().transaction(async (tx) => {
-        await tx.run(`
-          UPDATE app.article
-          SET full_text_pdf = ${getSqlLiteral(fullTextPDF)},
-              full_text_source = 'user_upload',
-              full_text_original_format = 'pdf',
-              full_text_fetched_at = ${getTimestampLiteral(new Date())},
-              full_text_conversion_status = NULL,
-              full_text_conversion_attempts = 0,
-              full_text_conversion_error = NULL,
-              full_text = NULL,
-              full_text_html = NULL,
-              updated_at = current_timestamp
-          WHERE id = '${escapeSqlString(id)}'
-        `)
-        await appendArticleReviewServingDeltas(tx, {
-          articleId: id,
-          changedFields: ['fullText', 'fullTextHtml', 'fullTextPDF'],
-          sourceMutationKey: `ArticleAdminRoutes.uploadPdf|article|${id}|${fullTextPDF}|${pdfBuffer.byteLength}|${Date.now()}`,
-          sourceOperation: 'update',
-        })
-      })
-
-      return {success: true, fullTextPDF, message: 'PDF uploaded successfully'}
+      return articleAdminRoutesPostUploadPdf({params, body})
     },
     {params: t.Object({id: t.String()}), body: t.Object({pdf: t.File({type: 'application/pdf'})})},
   )
@@ -293,162 +39,21 @@ export const articleAdminRoutes = new Elysia()
   .post(
     '/api/articles/:id/convert-pdf',
     async ({params}) => {
-      const {id} = params
-      const CONVERSION_TIMEOUT_MS = 600_000
-      const MAX_CONVERSION_ATTEMPTS = 3
-
-      const [article] = await getAppDatabaseService().queryJson<{
-        id: string
-        fullTextPDF: string | null
-        fullTextConversionAttempts: number | null
-      }>(`
-        SELECT
-          id,
-          full_text_pdf AS fullTextPDF,
-          full_text_conversion_attempts AS fullTextConversionAttempts
-        FROM app.article
-        WHERE id = '${escapeSqlString(id)}'
-        LIMIT 1
-      `)
-
-      if (!article) {
-        throw new Error('Article not found')
-      }
-
-      if (!article.fullTextPDF) {
-        throw new Error('No PDF available for this article')
-      }
-
-      const fullTextPDF = article.fullTextPDF
-
-      await getAppDatabaseService().run(`
-        UPDATE app.article
-        SET full_text_conversion_status = 'pending',
-            full_text_conversion_error = NULL,
-            updated_at = current_timestamp
-        WHERE id = '${escapeSqlString(article.id)}'
-      `)
-
-      const runConversion = async () => {
-        const startTime = Date.now()
-        console.log(`[convertPdf] Converting article ${article.id}`)
-
-        const conversionTarget: {runtimeConfig: FullTextConversionRuntimeConfig | null} = {runtimeConfig: null}
-
-        try {
-          const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
-
-          conversionTarget.runtimeConfig = runtimeConfig
-
-          if (!runtimeConfig) {
-            throw new Error('No PDF conversion model configured')
-          }
-
-          const result = await convertArticlePdf({
-            articleId: article.id,
-            pdfPath: fullTextPDF,
-            runtimeConfig,
-            timeoutMs: CONVERSION_TIMEOUT_MS,
-          })
-          const canonical = await storeConvertedFullText({
-            articleId: article.id,
-            attempts: (article.fullTextConversionAttempts ?? 0) + 1,
-            mutationSource: 'ArticleAdminRoutes.convertPdf',
-            result,
-            runtimeConfig,
-          })
-
-          const duration = Date.now() - startTime
-          console.log(`[convertPdf] Success: article ${article.id} (${duration}ms, ${canonical.text.length} chars)`)
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error)
-          const isPerm = isPermanentConversionFailure(error)
-
-          const attempts = (article.fullTextConversionAttempts ?? 0) + 1
-          const isFinalFailure = isPerm || attempts >= MAX_CONVERSION_ATTEMPTS
-
-          await getAppDatabaseService().run(`
-            UPDATE app.article
-            SET full_text_conversion_status = ${isFinalFailure ? `'failed'` : 'NULL'},
-                full_text_conversion_error = ${getSqlLiteral(errorMessage)},
-                ${getFailedConversionTargetSetSql(conversionTarget.runtimeConfig)},
-                full_text_conversion_attempts = ${attempts},
-                updated_at = current_timestamp
-            WHERE id = '${escapeSqlString(article.id)}'
-          `)
-
-          console.log(`[convertPdf] ${isFinalFailure ? 'Failed' : 'Retry'}: article ${article.id} - ${errorMessage}`)
-        }
-      }
-
-      void runConversion()
-
-      return {success: true, message: 'Conversion started', status: 'pending'}
+      return articleAdminRoutesPostConvertPdf({params})
     },
     {params: t.Object({id: t.String()})},
   )
   .post(
     '/api/articles/conversion-reconvert',
     async ({body}) => {
-      return getAppDatabaseService().transaction(async (tx) => {
-        const [found] = await tx.queryJson<ReconvertCandidate>(`
-          SELECT
-            id,
-            full_text_pdf AS fullTextPDF,
-            full_text_conversion_error AS fullTextConversionError,
-            full_text_conversion_status AS fullTextConversionStatus,
-            (full_text IS NOT NULL OR full_text_html IS NOT NULL) AS hasConvertedText,
-            (full_text IS NOT NULL) AS hasFullText
-          FROM app.article
-          WHERE id = '${escapeSqlString(body.articleId)}'
-          LIMIT 1
-        `)
-        const article = assertReconvertCandidate(body.articleId, found)
-        const sourceUpdatedAt = new Date()
-
-        await tx.run(`
-          UPDATE app.article
-          SET full_text_conversion_status = NULL,
-              full_text_conversion_error = NULL,
-              full_text_conversion_attempts = 0,
-              full_text_conversion_model_id = NULL,
-              full_text_conversion_metadata = NULL,
-              full_text = NULL,
-              full_text_html = NULL,
-              full_text_assets = NULL,
-              full_text_canonical_hash = NULL,
-              full_text_canonical_version = NULL,
-              full_text_figure_mode_built = NULL,
-              full_text_char_count = NULL,
-              updated_at = ${getTimestampLiteral(sourceUpdatedAt)}
-          WHERE id = '${escapeSqlString(article.id)}'
-        `)
-        await appendArticleReviewServingDeltas(tx, {
-          articleId: article.id,
-          changedFields: article.hasConvertedText ? ['fullText', 'fullTextHtml'] : [],
-          sourceMutationKey: `ArticleAdminRoutes.conversionReconvert|article|${article.id}|${sourceUpdatedAt.toISOString()}`,
-          sourceOperation: 'update',
-          sourceUpdatedAt,
-        })
-
-        return {articleId: article.id, clearedConvertedText: article.hasConvertedText, success: true}
-      })
+      return articleAdminRoutesPostConversionReconvert({body})
     },
     {body: conversionReconvertBody},
   )
   .post(
     '/api/articles/:id/canonical-fulltext/rebuild',
     async ({body, params}) => {
-      const requestedForm = body?.figureMode ?? canonicalFullTextStoredForm
-
-      if (requestedForm !== canonicalFullTextStoredForm) {
-        throw new HttpError(
-          400,
-          `Canonical full text is always stored with figure markers; figure mode ${requestedForm} is applied when judging. Omit figureMode or send '${canonicalFullTextStoredForm}'.`,
-        )
-      }
-
-      return rebuildCanonicalFullText({articleId: params.id})
+      return articleAdminRoutesPostCanonicalFullTextRebuild({body, params})
     },
     {body: t.Optional(t.Object({figureMode: t.Optional(t.String())})), params: t.Object({id: t.String()})},
   )
