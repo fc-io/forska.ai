@@ -255,10 +255,6 @@ const covidencePromptHeadingByMode = {
   full_text: 'Covidence full-text screening',
   title_abstract: 'Covidence title/abstract screening',
 } as const satisfies Record<CovidenceImportMode, string>
-const covidencePromptQuestionByMode = {
-  full_text: 'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
-  title_abstract: 'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
-} as const satisfies Record<CovidenceImportMode, string>
 const covidenceProjectSettingsByMode = {
   full_text: {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useMetadata: true, useTitle: true},
   title_abstract: {
@@ -365,16 +361,6 @@ const getCovidencePromptAnswerValues = (answerSet: CovidencePromptAnswerSet) => 
   return answerSet === 'yes|no|maybe' || answerSet === 'yes_no_maybe' ? ['yes', 'no', 'maybe'] : ['yes', 'no']
 }
 
-const getCovidencePromptCriteriaText = (criteria: string) => {
-  const trimmedCriteria = criteria.trim()
-
-  return trimmedCriteria === '' ? '(none provided)' : trimmedCriteria
-}
-
-const hasCovidencePromptCriteria = (criteria: string) => {
-  return criteria.trim() !== ''
-}
-
 const normalizeCovidenceEligibilitySectionValue = (sectionValue?: string | null) => {
   return sectionValue?.trim().toLowerCase() ?? ''
 }
@@ -433,75 +419,39 @@ const getCovidencePromptEligibilityCriteriaHeading = (params: {
     : `${params.sectionLabel} exclusion criteria:`
 }
 
-const getCovidenceCombinedPromptDecisionRules = (params: {
-  answerSet: CovidencePromptAnswerSet
-  exclusionCriteria: string
-  inclusionCriteria: string
-  mode: CovidenceImportMode
-}) => {
-  const hasInclusionCriteria = hasCovidencePromptCriteria(params.inclusionCriteria)
-  const hasExclusionCriteria = hasCovidencePromptCriteria(params.exclusionCriteria)
-  const hasAnyCriteria = hasInclusionCriteria || hasExclusionCriteria
-  const decisionRulesKey = hasInclusionCriteria
-    ? hasExclusionCriteria
-      ? 'include_and_exclude'
-      : 'include_only'
-    : hasExclusionCriteria
-      ? 'exclude_only'
-      : 'none'
-  const decisionRulesByKey = {
-    exclude_only: [
-      'Treat exclusion items as excluding the study unless the criteria text explicitly narrows them or provides an exception.',
-      'Answer yes if, after applying the exclusion criteria as written, the study should not be excluded.',
-      'Answer no if, after applying the exclusion criteria as written, the study should be excluded.',
-    ],
-    include_and_exclude: [
-      'Do not assume every inclusion item must match. Treat inclusion items as possible routes to inclusion unless the criteria text explicitly requires multiple conditions together.',
-      'Treat exclusion items as excluding the study unless the criteria text explicitly narrows them or provides an exception.',
-      'Read the inclusion and exclusion criteria together. If the criteria text contains a more specific condition, exception, carve-out, or dependency, follow that text over any broader rule.',
-      'Answer yes if, after applying the criteria as written, the study should be included and no exclusion criterion excludes it.',
-      'Answer no if, after applying the criteria as written, the study should not be included or any exclusion criterion excludes it.',
-    ],
-    include_only: [
-      'Do not assume every inclusion item must match. Treat inclusion items as possible routes to inclusion unless the criteria text explicitly requires multiple conditions together.',
-      'Answer yes if, after applying the inclusion criteria as written, the study should be included.',
-      'Answer no if, after applying the inclusion criteria as written, the study should not be included.',
-    ],
-    none: ['No inclusion or exclusion criteria were provided. Answer yes.'],
-  } as const
-  const maybeRule =
-    hasAnyCriteria && getCovidencePromptAnswerValues(params.answerSet).includes('maybe')
-      ? [
-          `Answer maybe if the report does not provide enough information to resolve whether the criteria, as written, are met, so you cannot decide whether the study should be included ${params.mode === 'full_text' ? 'in the final review' : 'for full text review'}.`,
-        ]
-      : []
-
-  return [...decisionRulesByKey[decisionRulesKey], ...maybeRule].join('\n')
+const getCovidenceCombinedPromptQuestion = (sectionLabel: string | null) => {
+  return sectionLabel
+    ? `Question: Does the study meet the ${sectionLabel} criteria below?`
+    : 'Question: Does the study meet the eligibility criteria below?'
 }
 
-const getCovidenceCombinedPromptCriteriaHeading = (disposition: 'include' | 'exclude') => {
-  return disposition === 'include' ? 'Inclusion criteria:' : 'Exclusion criteria:'
+const getCovidenceCombinedPromptCriteriaBlocks = (params: {exclusionCriteria: string; inclusionCriteria: string}) => {
+  return [
+    {heading: 'Inclusion criteria:', text: params.inclusionCriteria.trim()},
+    {heading: 'Exclusion criteria:', text: params.exclusionCriteria.trim()},
+  ]
+    .filter((criteriaBlock) => {
+      return criteriaBlock.text !== ''
+    })
+    .map((criteriaBlock) => {
+      return `${criteriaBlock.heading}\n${criteriaBlock.text}`
+    })
 }
 
 const getCovidencePromptText = (params: {
-  answerSet: CovidencePromptAnswerSet
   exclusionCriteria: string
   inclusionCriteria: string
-  mode: CovidenceImportMode
+  sectionLabel: string | null
   supplementalGuidance?: string[]
 }) => {
   const supplementalGuidance = params.supplementalGuidance ?? []
+  const supplementalGuidanceBlocks = supplementalGuidance.length === 0 ? [] : [supplementalGuidance.join('\n')]
 
   return [
-    covidencePromptQuestionByMode[params.mode],
-    '',
-    getCovidenceCombinedPromptDecisionRules(params),
-    ...supplementalGuidance,
-    '',
-    `${getCovidenceCombinedPromptCriteriaHeading('include')}\n${getCovidencePromptCriteriaText(params.inclusionCriteria)}`,
-    '',
-    `${getCovidenceCombinedPromptCriteriaHeading('exclude')}\n${getCovidencePromptCriteriaText(params.exclusionCriteria)}`,
-  ].join('\n')
+    getCovidenceCombinedPromptQuestion(params.sectionLabel),
+    ...supplementalGuidanceBlocks,
+    ...getCovidenceCombinedPromptCriteriaBlocks(params),
+  ].join('\n\n')
 }
 
 const getCovidencePromptType = (answerSet: CovidencePromptAnswerSet): CovidencePromptDefinition['type'] => {
@@ -642,6 +592,7 @@ const buildCovidencePromptDefinitionsPerSection = (params: {
       exclusionCriteria: criteriaGroup.exclusionCriteria.join('\n\n'),
       inclusionCriteria: criteriaGroup.inclusionCriteria.join('\n\n'),
       mode: params.mode,
+      sectionLabel: criteriaGroup.sectionLabel,
       supplementalGuidance: getCovidenceOutcomePromptGuidance({
         sectionKey: criteriaGroup.sectionKey,
         sectionLabel: criteriaGroup.sectionLabel,
@@ -679,6 +630,7 @@ const buildCovidencePromptDefinitionsSinglePrompt = (params: {
       exclusionCriteria: criteriaGroup.exclusionCriteria.join('\n\n'),
       inclusionCriteria: criteriaGroup.inclusionCriteria.join('\n\n'),
       mode: params.mode,
+      sectionLabel: null,
       supplementalGuidance: hasOutcomeCriteria ? getCovidenceOutcomePromptGuidance({sectionKey: 'outcome'}) : [],
     })
   })
@@ -2419,6 +2371,7 @@ export const buildCovidencePromptDefinition = (params: {
   exclusionCriteria: string
   inclusionCriteria: string
   mode: CovidenceImportMode
+  sectionLabel: string | null
   supplementalGuidance?: string[]
 }): CovidencePromptDefinition => {
   return {
@@ -2436,6 +2389,7 @@ export const getOrCreateCovidencePrompt = async (
         exclusionCriteria: string
         inclusionCriteria: string
         mode: CovidenceImportMode
+        sectionLabel: string | null
         tx?: CovidencePromptTx
       }
     | {promptDefinition: CovidencePromptDefinition; tx?: CovidencePromptTx},
