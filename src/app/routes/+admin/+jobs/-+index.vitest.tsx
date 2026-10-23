@@ -262,6 +262,38 @@ describe('judgment jobs list provider health banner', () => {
       cleanup()
     }
   })
+
+  test('stays hidden for paused jobs whose failing rows the server reports inactive', async () => {
+    mockState.jobs = [
+      buildJob({
+        id: 'job-paused-limited',
+        projectName: 'cov 7',
+        providerHealth: buildProviderHealth({isActive: false, jobId: 'job-paused-limited'}),
+        status: 'paused',
+      }),
+      buildJob({
+        id: 'job-paused-timeout',
+        projectName: 'cov 6 | original prompt',
+        providerHealth: buildProviderHealth({
+          failureKind: 'timeout',
+          failureMessage: 'thread/start timed out',
+          isActive: false,
+          jobId: 'job-paused-timeout',
+          retryAfterAt: null,
+        }),
+        status: 'paused',
+      }),
+      buildJob({id: 'job-running', projectName: 'cov 8'}),
+    ]
+    const {cleanup, container} = await renderJobsPage()
+
+    try {
+      expect(getProviderBanner(container)).toBeUndefined()
+      expect(container.textContent).not.toContain('LLM provider failing')
+    } finally {
+      cleanup()
+    }
+  })
 })
 
 describe('judgment jobs list stop condition hint', () => {
