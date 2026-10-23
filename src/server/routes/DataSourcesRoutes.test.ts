@@ -361,7 +361,10 @@ const runDataSourcesRoute = async (params: {
 }
 
 test('covidence project link lookup returns one bounded row per import route', () => {
-  const routeText = readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')
+  const routeText = readFileSync(
+    'src/server/routes/DataSourcesRoutes/normalizeDataSourceRows/getCovidenceProjectIdByImportRoute.ts',
+    'utf8',
+  )
 
   expect(routeText).toContain('SELECT DISTINCT ON (ir.route)')
   expect(routeText).toContain('ORDER BY ir.route ASC, pir.project_id ASC')
@@ -371,7 +374,10 @@ test('covidence project link lookup returns one bounded row per import route', (
 })
 
 test('covidence prompt link lookup bounds rows per import route in SQL before budget enforcement', () => {
-  const routeText = readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')
+  const routeText = readFileSync(
+    'src/server/routes/DataSourcesRoutes/normalizeDataSourceRows/getCovidencePromptIdsByImportRoute.ts',
+    'utf8',
+  )
 
   expect(routeText).toContain('INNER JOIN LATERAL (')
   expect(routeText).toContain('WHERE pir.import_route_id = selected_import_route.id')
@@ -380,14 +386,15 @@ test('covidence prompt link lookup bounds rows per import route in SQL before bu
 })
 
 test('datasource lists are not silently truncated by a hard SQL limit', () => {
-  const routeText = readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')
-  const listActiveSql = routeText.slice(
-    routeText.indexOf("operation: 'listActive'") - 500,
-    routeText.indexOf("operation: 'listActive'") + 120,
+  const listActiveText = readFileSync('src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetDataSources.ts', 'utf8')
+  const listArchivedText = readFileSync('src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetArchived.ts', 'utf8')
+  const listActiveSql = listActiveText.slice(
+    listActiveText.indexOf("operation: 'listActive'") - 500,
+    listActiveText.indexOf("operation: 'listActive'") + 120,
   )
-  const listArchivedSql = routeText.slice(
-    routeText.indexOf("operation: 'listArchived'") - 500,
-    routeText.indexOf("operation: 'listArchived'") + 120,
+  const listArchivedSql = listArchivedText.slice(
+    listArchivedText.indexOf("operation: 'listArchived'") - 500,
+    listArchivedText.indexOf("operation: 'listArchived'") + 120,
   )
 
   expect(listActiveSql).not.toContain('LIMIT')
@@ -397,11 +404,7 @@ test('datasource lists are not silently truncated by a hard SQL limit', () => {
 })
 
 test('active datasource list keeps the unpaginated product contract explicit', () => {
-  const routeText = readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')
-  const listActiveRoute = routeText.slice(
-    routeText.indexOf(".get('/api/datasources'"),
-    routeText.indexOf(".get('/api/datasources/archived'"),
-  )
+  const listActiveRoute = readFileSync('src/server/routes/DataSourcesRoutes/dataSourcesRoutesGetDataSources.ts', 'utf8')
 
   expect(listActiveRoute).toContain('ORDER BY data_source.created_at DESC')
   expect(listActiveRoute).toContain("getDataSourcesWorkloadContext({operation: 'listActive'})")
@@ -703,9 +706,9 @@ test('manual tracking reconciliation endpoint schedules full-range work', async 
     runKind: 'manual_full_range',
     status: 'queued',
   })
-  expect(readFileSync('src/server/routes/DataSourcesRoutes.ts', 'utf8')).toContain(
-    'const periodStart = getUtcDayStart(dateFrom)',
-  )
+  expect(
+    readFileSync('src/server/routes/DataSourcesRoutes/dataSourcesRoutesPostTrackingReconcile.ts', 'utf8'),
+  ).toContain('const periodStart = getUtcDayStart(dateFrom)')
 })
 
 test('manual tracking reconciliation endpoint rejects archived data sources', async () => {
