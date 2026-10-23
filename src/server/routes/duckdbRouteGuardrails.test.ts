@@ -75,7 +75,6 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts',
   'src/server/routes/ImportRoutes.ts',
   'src/server/routes/JudgmentsJobsRoutes.ts',
-  'src/server/routes/LlmStatusRoutes.ts',
   'src/server/routes/NvidiaSmiRoutes.ts',
   'src/server/routes/ProjectArticlesRoutes.ts',
   'src/server/routes/ProjectExportRoutes.ts',
@@ -84,6 +83,7 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/PromptsRoutes.ts',
   'src/server/routes/ProviderModelsRoutes.ts',
   'src/server/routes/SubprojectsRoutes.ts',
+  'src/server/routes/llmStatusRoutes/llmStatusRoutesGetLlmStatus/readLlmStatus.ts',
   'src/server/routes/projectTransferRoutes.ts',
   'src/server/routes/projectsRoutes/projectAccessGuard.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
@@ -141,7 +141,7 @@ const ownerRoutedDiagnosticRouteContextRequirements = [
   },
   {
     maxResultRowsMarkers: ['maxResultRows: 1', 'maxResultRows: llmStatusRowsLimit'],
-    path: 'src/server/routes/LlmStatusRoutes.ts',
+    path: 'src/server/routes/llmStatusRoutes/llmStatusRoutesGetLlmStatus/readLlmStatus.ts',
     routeOrJobKeyMarkers: ["routeOrJobKey: 'llmStatus.route'"],
   },
   {
