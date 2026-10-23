@@ -7,7 +7,8 @@ const readSource = (relativePath: string) => {
 }
 
 test('project transfer heavy DuckDB flows carry workload contexts', () => {
-  const routesSource = readSource('../../routes/projectTransferRoutes.ts')
+  const routesSource = readSource('../../routes/projectTransferRoutes/getProjectTransferExportSourceProject.ts')
+  const uploadRouteSource = readSource('../../routes/projectTransferRoutes/projectTransferRoutesPutImportUpload.ts')
   const exportSource = readSource('./projectTransferExport.ts')
   const exportPackageSource = readSource('./projectTransferExportPackage.ts')
   const analyzeSource = readSource('./projectTransferAnalyze.ts')
@@ -20,9 +21,9 @@ test('project transfer heavy DuckDB flows carry workload contexts', () => {
   const commitAppWritesSource = commitSource.slice(commitAppWritesStart, commitAppWritesEnd)
 
   expect(routesSource).toContain('projectTransferRouteLookupWorkloadContext')
-  const uploadStart = routesSource.indexOf('const uploadImportPackage = async')
-  const uploadEnd = routesSource.indexOf('\nconst analyzeImportSession = async', uploadStart)
-  const uploadSource = routesSource.slice(uploadStart, uploadEnd)
+  const uploadStart = uploadRouteSource.indexOf('export const uploadImportPackage = async')
+  const uploadEnd = uploadRouteSource.length
+  const uploadSource = uploadRouteSource.slice(uploadStart, uploadEnd)
 
   expect(uploadStart).toBeGreaterThanOrEqual(0)
   expect(uploadEnd).toBeGreaterThan(uploadStart)
@@ -138,5 +139,7 @@ test('project transfer keeps source workflows owner-routed and not API-role raw 
   const routeGuardSource = readSource('../../routes/duckdbRouteGuardrails.test.ts')
 
   expect(routeInventorySource).toContain("ownerDependentSensitive(\n    'projectTransferRoutes.ts'")
-  expect(routeGuardSource).toContain("'src/server/routes/projectTransferRoutes.ts'")
+  expect(routeGuardSource).toContain(
+    "'src/server/routes/projectTransferRoutes/getProjectTransferExportSourceProject.ts'",
+  )
 })
