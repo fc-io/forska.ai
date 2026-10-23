@@ -13,6 +13,10 @@ import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV4.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV5.ts'
 import type {SystemPromptVariant} from './systemPromptVariant.ts'
 
 const article = {
@@ -243,6 +247,30 @@ test('screening_v4 differs from screening_v3 only in the system prompt, with use
       expect(v4.titleAbstractSystemPrompt).not.toBe(v3.titleAbstractSystemPrompt)
       return expect({...v4, fullTextSystemPrompt: null, titleAbstractSystemPrompt: null}).toEqual({
         ...v3,
+        fullTextSystemPrompt: null,
+        titleAbstractSystemPrompt: null,
+      })
+    })
+  })
+})
+
+test('screening_v5 differs from screening_v4 only in the system prompt, with use_metadata on or off', () => {
+  const v5SystemPromptByProvider: Record<string, string> = {
+    anthropic: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+    openai: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5,
+  }
+  const providers = ['anthropic', 'openai']
+
+  providers.flatMap((provider) => {
+    return [false, true].map((useMetadata) => {
+      const v4 = getVariantPromptStrings({provider, systemPromptVariant: 'screening_v4', useMetadata})
+      const v5 = getVariantPromptStrings({provider, systemPromptVariant: 'screening_v5', useMetadata})
+
+      expect(v5.titleAbstractSystemPrompt).toBe(v5SystemPromptByProvider[provider] ?? '')
+      expect(v5.fullTextSystemPrompt).toBe(v5SystemPromptByProvider[provider] ?? '')
+      expect(v5.titleAbstractSystemPrompt).not.toBe(v4.titleAbstractSystemPrompt)
+      return expect({...v5, fullTextSystemPrompt: null, titleAbstractSystemPrompt: null}).toEqual({
+        ...v4,
         fullTextSystemPrompt: null,
         titleAbstractSystemPrompt: null,
       })

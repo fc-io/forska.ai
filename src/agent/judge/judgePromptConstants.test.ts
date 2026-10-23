@@ -16,6 +16,10 @@ import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV4.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV5.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 describe('judge prompt constants', () => {
@@ -611,5 +615,62 @@ describe('screening_v4 prompt constants', () => {
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC).not.toContain('the user is a researcher')
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain('medical doctor')
     expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).not.toContain('harmless literature-review')
+  })
+})
+
+const screeningV4FilteringStepSentence =
+  'This is a filtering step: records you include go on to the next step, where the full text is read; records you exclude stop here.'
+
+const screeningV5FilteringStepSentence =
+  'This is a filtering step: records you include go on to the next step of the review; records you exclude stop here.'
+
+describe('screening_v5 prompt constants', () => {
+  test('keeps both screening_v5 texts byte-identical to the frozen versions', () => {
+    expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5)).toBe(
+      '3a06783fbb6fa9ccf91f89e4c61362ebc3ad10b871e24d97c273a3be4d78c4be',
+    )
+    expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC)).toBe(
+      '888cdc70ebc760dde4fb91f18fb26f514f627bd2ee0d3709ab48e616d98a27cd',
+    )
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5.endsWith('}\n')).toBe(true)
+  })
+
+  test('keeps both screening_v4 opening paragraphs', () => {
+    expect(getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5).intro).toBe(
+      getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4).intro,
+    )
+    expect(getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC).intro).toBe(
+      getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC).intro,
+    )
+  })
+
+  test('differs from screening_v4 only in the filtering-step sentence', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4.split(screeningV4FilteringStepSentence)).toHaveLength(2)
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5.split(screeningV5FilteringStepSentence)).toHaveLength(2)
+    expect(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4.replace(
+        screeningV4FilteringStepSentence,
+        screeningV5FilteringStepSentence,
+      ),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5)
+    expect(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC.replace(
+        screeningV4FilteringStepSentence,
+        screeningV5FilteringStepSentence,
+      ),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC)
+  })
+
+  test('does not say what the next step of the review is', () => {
+    expect(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5).toContain(
+      '\n\nThis is a filtering step: records you include go on to the next step of the review; records you exclude stop here. A wrong exclusion loses the study for good; a wrong inclusion costs one more look. When the record does not settle the question, pass it on.\n\n',
+    )
+    for (const prompt of [
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5,
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+    ]) {
+      expect(prompt).not.toContain('full text is read')
+      expect(prompt).not.toContain('full text review')
+    }
   })
 })
