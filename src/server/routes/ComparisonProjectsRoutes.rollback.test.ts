@@ -31,6 +31,10 @@ const comparisonProjectServingGenerationServiceModulePath = new URL(
 ).href
 const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).href
 const userConfigQueryServiceModulePath = new URL('../services/userConfigQueryService.ts', import.meta.url).href
+const comparisonProjectRouteServicesModulePath = new URL(
+  './comparisonProjectsRoutes/comparisonProjectRouteServices.ts',
+  import.meta.url,
+).href
 
 type MockServingStatus = {
   activeContentDimensions?: Array<{systemPromptVariant: string; useMetadata: boolean}>
@@ -2452,6 +2456,377 @@ const queryJson = async (
   throw new Error(`Unhandled query: ${statement}`)
 }
 
+const getMockComparisonProjectServingRebuildService = () => {
+  return {
+    getComparisonProjectServingStatus: async () => {
+      return getMockDatabaseState().servingStatus
+    },
+    markComparisonProjectServingStale: async (comparisonProjectId: string) => {
+      const state = getMockDatabaseState()
+      state.staleServingIds.push(comparisonProjectId)
+      state.servingStatus = {
+        ...state.servingStatus,
+        generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
+        servingCompletedAt: null,
+        servingError: null,
+        servingFailedAt: null,
+        servingGeneration: null,
+        servingStartedAt: null,
+        servingStatus: 'stale',
+      }
+
+      return state.servingStatus
+    },
+    rebuildComparisonProjectServing: async (comparisonProjectId: string) => {
+      const state = getMockDatabaseState()
+
+      state.queuedServingRebuildIds.push(comparisonProjectId)
+      await state.servingRebuildGate
+
+      return {cleanupResult: {deletedRowCount: 0, tables: []}, generation: 1, status: state.servingStatus}
+    },
+  }
+}
+
+const getMockComparisonProjectServingGenerationService = () => {
+  return {
+    cleanupComparisonProjectServing: async (comparisonProjectId: string) => {
+      const state = getMockDatabaseState()
+
+      if (state.failServingCleanup) {
+        throw new Error('serving cleanup failed')
+      }
+
+      state.cleanedServingProjectIds.push(comparisonProjectId)
+
+      return {deletedRowCount: 0, tables: []}
+    },
+  }
+}
+
+const getMockAppDatabaseService = () => {
+  return {
+    queryJson: async <T>(statement: string) => {
+      const state = getMockDatabaseState()
+
+      state.queryStatements.push(statement)
+
+      if (state.isInTransaction) {
+        state.rootQueryStatementsDuringTransaction.push(statement)
+      }
+
+      return (await queryJson(statement, state)) as T[]
+    },
+    run: async (statement: string) => {
+      const state = getMockDatabaseState()
+      state.runStatements.push(statement)
+      state.rootRunStatements.push(statement)
+
+      if (statement.includes('DELETE FROM app.comparison_project_prompt')) {
+        state.promptLinks.splice(0, state.promptLinks.length)
+      }
+
+      if (statement.includes('DELETE FROM app.comparison_project_import_route')) {
+        state.routeLinks.splice(0, state.routeLinks.length)
+      }
+
+      if (statement.includes('DELETE FROM app.comparison_project_source_project')) {
+        state.sourceProjectLinks.splice(0, state.sourceProjectLinks.length)
+      }
+    },
+    maintenance: async (command: string) => {
+      const state = getMockDatabaseState()
+      state.maintenanceCommands.push(command)
+
+      if (state.failMaintenanceCheckpoint) {
+        throw new Error('comparison project checkpoint failed')
+      }
+    },
+    transaction: async <T>(
+      work: (runner: {
+        queryJson: <R>(statement: string) => Promise<R[]>
+        run: (statement: string) => Promise<void>
+      }) => Promise<T>,
+    ) => {
+      const state = getMockDatabaseState()
+      const pendingComparisonProject = {...state.comparisonProject}
+      const pendingCreatedComparisonProjectIds = [...state.createdComparisonProjectIds]
+      const pendingDeletedComparisonProjectIds = [...state.deletedComparisonProjectIds]
+      const pendingConflictResolutionRows = state.conflictResolutionRows.map((row) => {
+        return {...row}
+      })
+      const pendingPromptLinks = state.promptLinks.map((link) => {
+        return {...link}
+      })
+      const pendingRouteLinks = state.routeLinks.map((link) => {
+        return {...link}
+      })
+      const pendingSourceProjectLinks = state.sourceProjectLinks.map((link) => {
+        return {...link}
+      })
+
+      state.transactionCalls += 1
+      state.isInTransaction = true
+
+      const result = await work({
+        queryJson: async <R>(statement: string) => {
+          getMockDatabaseState().queryStatements.push(statement)
+          if (statement.includes('DELETE FROM app.comparison_project_conflict_comment')) {
+            return deleteMockConflictCommentRows(statement) as R[]
+          }
+
+          if (statement.includes('INSERT INTO app.comparison_project_conflict_comment')) {
+            return insertMockConflictCommentRows(statement) as R[]
+          }
+
+          if (
+            statement.includes('DELETE FROM app.comparison_project')
+            && !statement.includes('DELETE FROM app.comparison_project_conflict_resolution')
+          ) {
+            if (
+              pendingComparisonProject.archived
+              && !pendingDeletedComparisonProjectIds.includes(pendingComparisonProject.id)
+            ) {
+              pendingDeletedComparisonProjectIds.push(pendingComparisonProject.id)
+              return [{id: pendingComparisonProject.id}] as R[]
+            }
+
+            return [] as R[]
+          }
+
+          if (statement.includes('DELETE FROM app.comparison_project_conflict_resolution')) {
+            const deletedTargetRows = getMockConflictResolutionTargetRows(statement, {
+              conflictResolutionRows: pendingConflictResolutionRows,
+            })
+            const deletedRows = deletedTargetRows.map((row) => {
+              return {articleId: row.articleId}
+            })
+            const deletedTargetRowSet = new Set(deletedTargetRows)
+
+            pendingConflictResolutionRows.splice(
+              0,
+              pendingConflictResolutionRows.length,
+              ...pendingConflictResolutionRows.filter((row) => {
+                return !deletedTargetRowSet.has(row)
+              }),
+            )
+
+            return deletedRows as R[]
+          }
+
+          if (statement.includes('INSERT INTO app.comparison_project_conflict_resolution')) {
+            state.lastConflictResolutionInsertStatement = statement
+            const insertedRows = getMockConflictResolutionInsertRows(statement)
+
+            if (insertedRows.length === 0) {
+              throw new Error(`Unhandled conflict resolution insert: ${statement}`)
+            }
+
+            pendingConflictResolutionRows.push(...insertedRows)
+
+            return insertedRows.map((row) => {
+              return {articleId: row.articleId, reviewerDisplayName: 'Test User', reviewerUserId: row.reviewerUserId}
+            }) as R[]
+          }
+
+          return (await queryJson(statement, {
+            comparisonProject: pendingComparisonProject,
+            createdComparisonProjectIds: pendingCreatedComparisonProjectIds,
+            deletedComparisonProjectIds: pendingDeletedComparisonProjectIds,
+            conflictResolutionImportSourceRows: state.conflictResolutionImportSourceRows,
+            conflictResolutionRows: pendingConflictResolutionRows,
+            extraLlmRows: state.extraLlmRows,
+            includeSingleAnswerArticle: state.includeSingleAnswerArticle,
+            promptLinks: pendingPromptLinks,
+            routeLinks: pendingRouteLinks,
+            sourceProjectLinks: pendingSourceProjectLinks,
+          })) as R[]
+        },
+        run: async (statement: string) => {
+          state.runStatements.push(statement)
+
+          if (statement.includes('UPDATE app.comparison_project')) {
+            state.lastUpdateStatement = statement
+            if (statement.includes("human_judgment_mode = 'summary'")) {
+              pendingComparisonProject.humanJudgmentMode = 'summary'
+            }
+
+            if (statement.includes('allow_conflict_resolution = TRUE')) {
+              pendingComparisonProject.allowConflictResolution = true
+            }
+
+            if (statement.includes('allow_conflict_resolution = FALSE')) {
+              pendingComparisonProject.allowConflictResolution = false
+            }
+
+            if (statement.includes('archived = TRUE')) {
+              pendingComparisonProject.archived = true
+            }
+
+            if (statement.includes('archived = FALSE')) {
+              pendingComparisonProject.archived = false
+            }
+
+            if (statement.includes("human_judgment_mode = 'prompt'")) {
+              pendingComparisonProject.humanJudgmentMode = 'prompt'
+            }
+
+            if (statement.includes("summary_source_project_id = 'source-project-1'")) {
+              pendingComparisonProject.summarySourceProjectId = 'source-project-1'
+            }
+
+            if (statement.includes('summary_source_project_id = NULL')) {
+              pendingComparisonProject.summarySourceProjectId = null
+            }
+
+            if (statement.includes('model-2')) {
+              pendingComparisonProject.modelIds = ['model-2']
+            }
+
+            return
+          }
+
+          if (statement.includes('DELETE FROM app.comparison_project_prompt')) {
+            pendingPromptLinks.splice(0, pendingPromptLinks.length)
+            return
+          }
+
+          if (statement.includes('DELETE FROM app.comparison_project_serving_generation')) {
+            return
+          }
+
+          if (statement.includes('DELETE FROM app.comparison_project_conflict_comment')) {
+            deleteMockConflictCommentRows(statement)
+            return
+          }
+
+          if (statement.includes('DELETE FROM app.comparison_project_import_route')) {
+            pendingRouteLinks.splice(0, pendingRouteLinks.length)
+            return
+          }
+
+          if (statement.includes('DELETE FROM app.comparison_project_source_project')) {
+            pendingSourceProjectLinks.splice(0, pendingSourceProjectLinks.length)
+            return
+          }
+
+          if (statement.includes('DELETE FROM app.comparison_project_conflict_resolution')) {
+            const deletedTargetRows = getMockConflictResolutionTargetRows(statement, {
+              conflictResolutionRows: pendingConflictResolutionRows,
+            })
+            const deletedTargetRowSet = new Set(deletedTargetRows)
+            pendingConflictResolutionRows.splice(
+              0,
+              pendingConflictResolutionRows.length,
+              ...pendingConflictResolutionRows.filter((row) => {
+                return !deletedTargetRowSet.has(row)
+              }),
+            )
+            return
+          }
+
+          if (statement.includes('INSERT INTO app.comparison_project_import_route')) {
+            const importRouteId = ['import-route-1', 'import-route-2', 'import-route-3'].find((routeId) => {
+              return statement.includes(`'${routeId}'`)
+            })
+
+            if (!importRouteId) {
+              throw new Error(`Unhandled route relink insert: ${statement}`)
+            }
+
+            const matchingRouteLink = state.routeLinks.find((routeLink) => {
+              return routeLink.importRouteId === importRouteId
+            })
+
+            pendingRouteLinks.push({
+              id:
+                matchingRouteLink && statement.includes(`'${matchingRouteLink.id}'`)
+                  ? matchingRouteLink.id
+                  : 'comparison-project-route-created',
+              importRouteId,
+            })
+            return
+          }
+
+          if (statement.includes('INSERT INTO app.comparison_project_prompt')) {
+            if (state.failPromptInsert) {
+              throw new Error('comparison project prompt insert failed')
+            }
+
+            state.lastPromptInsertStatement = statement
+            const promptId = statement.includes("'prompt-1'") ? 'prompt-1' : 'prompt-2'
+            pendingPromptLinks.push({
+              criteriaDisposition: statement.includes("'exclude'")
+                ? 'exclude'
+                : statement.includes("'include'")
+                  ? 'include'
+                  : null,
+              criteriaSectionKey: statement.includes("'outcome'")
+                ? 'outcome'
+                : statement.includes("'population'")
+                  ? 'population'
+                  : null,
+              criteriaSectionLabel: statement.includes("'Outcome'")
+                ? 'Outcome'
+                : statement.includes("'Population'")
+                  ? 'Population'
+                  : null,
+              id: `comparison-project-prompt-${pendingPromptLinks.length + 1}`,
+              order: statement.includes("'prompt-2'") ? 1 : 0,
+              promptId,
+            })
+            return
+          }
+
+          if (statement.includes('INSERT INTO app.comparison_project_source_project')) {
+            const sourceProjectId = statement.includes("'source-project-2'")
+              ? 'source-project-2'
+              : statement.includes("'source-project-mismatch'")
+                ? 'source-project-mismatch'
+                : statement.includes("'prompt-project-1'")
+                  ? 'prompt-project-1'
+                  : 'source-project-1'
+
+            pendingSourceProjectLinks.push({
+              id: `comparison-project-source-${pendingSourceProjectLinks.length + 1}`,
+              sourceProjectId,
+            })
+            return
+          }
+
+          if (statement.includes('INSERT INTO app.comparison_project_conflict_resolution')) {
+            state.lastConflictResolutionInsertStatement = statement
+            const insertedRows = getMockConflictResolutionInsertRows(statement)
+
+            if (insertedRows.length === 0) {
+              throw new Error(`Unhandled conflict resolution insert: ${statement}`)
+            }
+
+            insertedRows.reduce((rows, row) => {
+              rows.push(row)
+              return rows
+            }, pendingConflictResolutionRows)
+            return
+          }
+
+          throw new Error(`Unhandled run: ${statement}`)
+        },
+      })
+
+      state.comparisonProject = pendingComparisonProject
+      state.createdComparisonProjectIds = pendingCreatedComparisonProjectIds
+      state.deletedComparisonProjectIds = pendingDeletedComparisonProjectIds
+      state.conflictResolutionRows = pendingConflictResolutionRows
+      state.isInTransaction = false
+      state.promptLinks = pendingPromptLinks
+      state.routeLinks = pendingRouteLinks
+      state.sourceProjectLinks = pendingSourceProjectLinks
+
+      return result
+    },
+  }
+}
+
 const registerModuleMocks = () => {
   void mock.module(providerModelRepositoryModulePath, () => {
     return {
@@ -2491,389 +2866,22 @@ const registerModuleMocks = () => {
   })
 
   void mock.module(comparisonProjectServingRebuildServiceModulePath, () => {
-    return {
-      getComparisonProjectServingRebuildService: () => {
-        return {
-          getComparisonProjectServingStatus: async () => {
-            return getMockDatabaseState().servingStatus
-          },
-          markComparisonProjectServingStale: async (comparisonProjectId: string) => {
-            const state = getMockDatabaseState()
-            state.staleServingIds.push(comparisonProjectId)
-            state.servingStatus = {
-              ...state.servingStatus,
-              generationUpdatedAt: new Date('2026-04-03T00:00:00.000Z'),
-              servingCompletedAt: null,
-              servingError: null,
-              servingFailedAt: null,
-              servingGeneration: null,
-              servingStartedAt: null,
-              servingStatus: 'stale',
-            }
-
-            return state.servingStatus
-          },
-          rebuildComparisonProjectServing: async (comparisonProjectId: string) => {
-            const state = getMockDatabaseState()
-
-            state.queuedServingRebuildIds.push(comparisonProjectId)
-            await state.servingRebuildGate
-
-            return {cleanupResult: {deletedRowCount: 0, tables: []}, generation: 1, status: state.servingStatus}
-          },
-        }
-      },
-    }
+    return {getComparisonProjectServingRebuildService: getMockComparisonProjectServingRebuildService}
   })
 
   void mock.module(comparisonProjectServingGenerationServiceModulePath, () => {
-    return {
-      getComparisonProjectServingGenerationService: () => {
-        return {
-          cleanupComparisonProjectServing: async (comparisonProjectId: string) => {
-            const state = getMockDatabaseState()
-
-            if (state.failServingCleanup) {
-              throw new Error('serving cleanup failed')
-            }
-
-            state.cleanedServingProjectIds.push(comparisonProjectId)
-
-            return {deletedRowCount: 0, tables: []}
-          },
-        }
-      },
-    }
+    return {getComparisonProjectServingGenerationService: getMockComparisonProjectServingGenerationService}
   })
 
   void mock.module(appDatabaseServiceModulePath, () => {
+    return {getAppDatabaseService: getMockAppDatabaseService}
+  })
+
+  void mock.module(comparisonProjectRouteServicesModulePath, () => {
     return {
-      getAppDatabaseService: () => {
-        return {
-          queryJson: async <T>(statement: string) => {
-            const state = getMockDatabaseState()
-
-            state.queryStatements.push(statement)
-
-            if (state.isInTransaction) {
-              state.rootQueryStatementsDuringTransaction.push(statement)
-            }
-
-            return (await queryJson(statement, state)) as T[]
-          },
-          run: async (statement: string) => {
-            const state = getMockDatabaseState()
-            state.runStatements.push(statement)
-            state.rootRunStatements.push(statement)
-
-            if (statement.includes('DELETE FROM app.comparison_project_prompt')) {
-              state.promptLinks.splice(0, state.promptLinks.length)
-            }
-
-            if (statement.includes('DELETE FROM app.comparison_project_import_route')) {
-              state.routeLinks.splice(0, state.routeLinks.length)
-            }
-
-            if (statement.includes('DELETE FROM app.comparison_project_source_project')) {
-              state.sourceProjectLinks.splice(0, state.sourceProjectLinks.length)
-            }
-          },
-          maintenance: async (command: string) => {
-            const state = getMockDatabaseState()
-            state.maintenanceCommands.push(command)
-
-            if (state.failMaintenanceCheckpoint) {
-              throw new Error('comparison project checkpoint failed')
-            }
-          },
-          transaction: async <T>(
-            work: (runner: {
-              queryJson: <R>(statement: string) => Promise<R[]>
-              run: (statement: string) => Promise<void>
-            }) => Promise<T>,
-          ) => {
-            const state = getMockDatabaseState()
-            const pendingComparisonProject = {...state.comparisonProject}
-            const pendingCreatedComparisonProjectIds = [...state.createdComparisonProjectIds]
-            const pendingDeletedComparisonProjectIds = [...state.deletedComparisonProjectIds]
-            const pendingConflictResolutionRows = state.conflictResolutionRows.map((row) => {
-              return {...row}
-            })
-            const pendingPromptLinks = state.promptLinks.map((link) => {
-              return {...link}
-            })
-            const pendingRouteLinks = state.routeLinks.map((link) => {
-              return {...link}
-            })
-            const pendingSourceProjectLinks = state.sourceProjectLinks.map((link) => {
-              return {...link}
-            })
-
-            state.transactionCalls += 1
-            state.isInTransaction = true
-
-            const result = await work({
-              queryJson: async <R>(statement: string) => {
-                getMockDatabaseState().queryStatements.push(statement)
-                if (statement.includes('DELETE FROM app.comparison_project_conflict_comment')) {
-                  return deleteMockConflictCommentRows(statement) as R[]
-                }
-
-                if (statement.includes('INSERT INTO app.comparison_project_conflict_comment')) {
-                  return insertMockConflictCommentRows(statement) as R[]
-                }
-
-                if (
-                  statement.includes('DELETE FROM app.comparison_project')
-                  && !statement.includes('DELETE FROM app.comparison_project_conflict_resolution')
-                ) {
-                  if (
-                    pendingComparisonProject.archived
-                    && !pendingDeletedComparisonProjectIds.includes(pendingComparisonProject.id)
-                  ) {
-                    pendingDeletedComparisonProjectIds.push(pendingComparisonProject.id)
-                    return [{id: pendingComparisonProject.id}] as R[]
-                  }
-
-                  return [] as R[]
-                }
-
-                if (statement.includes('DELETE FROM app.comparison_project_conflict_resolution')) {
-                  const deletedTargetRows = getMockConflictResolutionTargetRows(statement, {
-                    conflictResolutionRows: pendingConflictResolutionRows,
-                  })
-                  const deletedRows = deletedTargetRows.map((row) => {
-                    return {articleId: row.articleId}
-                  })
-                  const deletedTargetRowSet = new Set(deletedTargetRows)
-
-                  pendingConflictResolutionRows.splice(
-                    0,
-                    pendingConflictResolutionRows.length,
-                    ...pendingConflictResolutionRows.filter((row) => {
-                      return !deletedTargetRowSet.has(row)
-                    }),
-                  )
-
-                  return deletedRows as R[]
-                }
-
-                if (statement.includes('INSERT INTO app.comparison_project_conflict_resolution')) {
-                  state.lastConflictResolutionInsertStatement = statement
-                  const insertedRows = getMockConflictResolutionInsertRows(statement)
-
-                  if (insertedRows.length === 0) {
-                    throw new Error(`Unhandled conflict resolution insert: ${statement}`)
-                  }
-
-                  pendingConflictResolutionRows.push(...insertedRows)
-
-                  return insertedRows.map((row) => {
-                    return {
-                      articleId: row.articleId,
-                      reviewerDisplayName: 'Test User',
-                      reviewerUserId: row.reviewerUserId,
-                    }
-                  }) as R[]
-                }
-
-                return (await queryJson(statement, {
-                  comparisonProject: pendingComparisonProject,
-                  createdComparisonProjectIds: pendingCreatedComparisonProjectIds,
-                  deletedComparisonProjectIds: pendingDeletedComparisonProjectIds,
-                  conflictResolutionImportSourceRows: state.conflictResolutionImportSourceRows,
-                  conflictResolutionRows: pendingConflictResolutionRows,
-                  extraLlmRows: state.extraLlmRows,
-                  includeSingleAnswerArticle: state.includeSingleAnswerArticle,
-                  promptLinks: pendingPromptLinks,
-                  routeLinks: pendingRouteLinks,
-                  sourceProjectLinks: pendingSourceProjectLinks,
-                })) as R[]
-              },
-              run: async (statement: string) => {
-                state.runStatements.push(statement)
-
-                if (statement.includes('UPDATE app.comparison_project')) {
-                  state.lastUpdateStatement = statement
-                  if (statement.includes("human_judgment_mode = 'summary'")) {
-                    pendingComparisonProject.humanJudgmentMode = 'summary'
-                  }
-
-                  if (statement.includes('allow_conflict_resolution = TRUE')) {
-                    pendingComparisonProject.allowConflictResolution = true
-                  }
-
-                  if (statement.includes('allow_conflict_resolution = FALSE')) {
-                    pendingComparisonProject.allowConflictResolution = false
-                  }
-
-                  if (statement.includes('archived = TRUE')) {
-                    pendingComparisonProject.archived = true
-                  }
-
-                  if (statement.includes('archived = FALSE')) {
-                    pendingComparisonProject.archived = false
-                  }
-
-                  if (statement.includes("human_judgment_mode = 'prompt'")) {
-                    pendingComparisonProject.humanJudgmentMode = 'prompt'
-                  }
-
-                  if (statement.includes("summary_source_project_id = 'source-project-1'")) {
-                    pendingComparisonProject.summarySourceProjectId = 'source-project-1'
-                  }
-
-                  if (statement.includes('summary_source_project_id = NULL')) {
-                    pendingComparisonProject.summarySourceProjectId = null
-                  }
-
-                  if (statement.includes('model-2')) {
-                    pendingComparisonProject.modelIds = ['model-2']
-                  }
-
-                  return
-                }
-
-                if (statement.includes('DELETE FROM app.comparison_project_prompt')) {
-                  pendingPromptLinks.splice(0, pendingPromptLinks.length)
-                  return
-                }
-
-                if (statement.includes('DELETE FROM app.comparison_project_serving_generation')) {
-                  return
-                }
-
-                if (statement.includes('DELETE FROM app.comparison_project_conflict_comment')) {
-                  deleteMockConflictCommentRows(statement)
-                  return
-                }
-
-                if (statement.includes('DELETE FROM app.comparison_project_import_route')) {
-                  pendingRouteLinks.splice(0, pendingRouteLinks.length)
-                  return
-                }
-
-                if (statement.includes('DELETE FROM app.comparison_project_source_project')) {
-                  pendingSourceProjectLinks.splice(0, pendingSourceProjectLinks.length)
-                  return
-                }
-
-                if (statement.includes('DELETE FROM app.comparison_project_conflict_resolution')) {
-                  const deletedTargetRows = getMockConflictResolutionTargetRows(statement, {
-                    conflictResolutionRows: pendingConflictResolutionRows,
-                  })
-                  const deletedTargetRowSet = new Set(deletedTargetRows)
-                  pendingConflictResolutionRows.splice(
-                    0,
-                    pendingConflictResolutionRows.length,
-                    ...pendingConflictResolutionRows.filter((row) => {
-                      return !deletedTargetRowSet.has(row)
-                    }),
-                  )
-                  return
-                }
-
-                if (statement.includes('INSERT INTO app.comparison_project_import_route')) {
-                  const importRouteId = ['import-route-1', 'import-route-2', 'import-route-3'].find((routeId) => {
-                    return statement.includes(`'${routeId}'`)
-                  })
-
-                  if (!importRouteId) {
-                    throw new Error(`Unhandled route relink insert: ${statement}`)
-                  }
-
-                  const matchingRouteLink = state.routeLinks.find((routeLink) => {
-                    return routeLink.importRouteId === importRouteId
-                  })
-
-                  pendingRouteLinks.push({
-                    id:
-                      matchingRouteLink && statement.includes(`'${matchingRouteLink.id}'`)
-                        ? matchingRouteLink.id
-                        : 'comparison-project-route-created',
-                    importRouteId,
-                  })
-                  return
-                }
-
-                if (statement.includes('INSERT INTO app.comparison_project_prompt')) {
-                  if (state.failPromptInsert) {
-                    throw new Error('comparison project prompt insert failed')
-                  }
-
-                  state.lastPromptInsertStatement = statement
-                  const promptId = statement.includes("'prompt-1'") ? 'prompt-1' : 'prompt-2'
-                  pendingPromptLinks.push({
-                    criteriaDisposition: statement.includes("'exclude'")
-                      ? 'exclude'
-                      : statement.includes("'include'")
-                        ? 'include'
-                        : null,
-                    criteriaSectionKey: statement.includes("'outcome'")
-                      ? 'outcome'
-                      : statement.includes("'population'")
-                        ? 'population'
-                        : null,
-                    criteriaSectionLabel: statement.includes("'Outcome'")
-                      ? 'Outcome'
-                      : statement.includes("'Population'")
-                        ? 'Population'
-                        : null,
-                    id: `comparison-project-prompt-${pendingPromptLinks.length + 1}`,
-                    order: statement.includes("'prompt-2'") ? 1 : 0,
-                    promptId,
-                  })
-                  return
-                }
-
-                if (statement.includes('INSERT INTO app.comparison_project_source_project')) {
-                  const sourceProjectId = statement.includes("'source-project-2'")
-                    ? 'source-project-2'
-                    : statement.includes("'source-project-mismatch'")
-                      ? 'source-project-mismatch'
-                      : statement.includes("'prompt-project-1'")
-                        ? 'prompt-project-1'
-                        : 'source-project-1'
-
-                  pendingSourceProjectLinks.push({
-                    id: `comparison-project-source-${pendingSourceProjectLinks.length + 1}`,
-                    sourceProjectId,
-                  })
-                  return
-                }
-
-                if (statement.includes('INSERT INTO app.comparison_project_conflict_resolution')) {
-                  state.lastConflictResolutionInsertStatement = statement
-                  const insertedRows = getMockConflictResolutionInsertRows(statement)
-
-                  if (insertedRows.length === 0) {
-                    throw new Error(`Unhandled conflict resolution insert: ${statement}`)
-                  }
-
-                  insertedRows.reduce((rows, row) => {
-                    rows.push(row)
-                    return rows
-                  }, pendingConflictResolutionRows)
-                  return
-                }
-
-                throw new Error(`Unhandled run: ${statement}`)
-              },
-            })
-
-            state.comparisonProject = pendingComparisonProject
-            state.createdComparisonProjectIds = pendingCreatedComparisonProjectIds
-            state.deletedComparisonProjectIds = pendingDeletedComparisonProjectIds
-            state.conflictResolutionRows = pendingConflictResolutionRows
-            state.isInTransaction = false
-            state.promptLinks = pendingPromptLinks
-            state.routeLinks = pendingRouteLinks
-            state.sourceProjectLinks = pendingSourceProjectLinks
-
-            return result
-          },
-        }
-      },
+      appDatabaseService: getMockAppDatabaseService(),
+      comparisonProjectServingGenerationService: getMockComparisonProjectServingGenerationService(),
+      comparisonProjectServingRebuildService: getMockComparisonProjectServingRebuildService(),
     }
   })
 }
