@@ -6412,7 +6412,7 @@ test('editing a cloned project model leaves the source project model unchanged',
   await flushMartRefreshes()
 })
 
-test('create route stores the requested system prompt variant and defaults to screening_v4', async () => {
+test('create route stores the requested system prompt variant and defaults to screening_v5', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -6457,7 +6457,7 @@ test('create route stores the requested system prompt variant and defaults to sc
   expect(screeningResponse.status).toBe(200)
   expect(screeningBody.data.systemPromptVariant).toBe('screening_v1')
   expect(defaultResponse.status).toBe(200)
-  expect(defaultBody.data.systemPromptVariant).toBe('screening_v4')
+  expect(defaultBody.data.systemPromptVariant).toBe('screening_v5')
   expect(legacyResponse.status).toBe(200)
   expect(legacyBody.data.systemPromptVariant).toBe('legacy')
 
@@ -6471,7 +6471,7 @@ test('create route stores the requested system prompt variant and defaults to sc
   expect(projectRows).toEqual(
     [
       {id: screeningBody.data.id, systemPromptVariant: 'screening_v1'},
-      {id: defaultBody.data.id, systemPromptVariant: 'screening_v4'},
+      {id: defaultBody.data.id, systemPromptVariant: 'screening_v5'},
       {id: legacyBody.data.id, systemPromptVariant: 'legacy'},
     ].sort((left, right) => {
       return left.id.localeCompare(right.id)

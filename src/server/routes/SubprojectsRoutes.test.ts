@@ -306,7 +306,7 @@ test('subproject prompt filters only match source judgments with the source syst
   expect(configDelta?.configFieldSet.split(',')).toContain('systemPromptVariant')
 })
 
-test('subproject route uses screening_v4 when the sources do not share one system prompt variant', async () => {
+test('subproject route uses screening_v5 when the sources do not share one system prompt variant', async () => {
   if (!app || !queryDatabase || !runDatabase) {
     throw new Error('Test app not initialized')
   }
@@ -358,8 +358,8 @@ test('subproject route uses screening_v4 when the sources do not share one syste
     })?.systemPromptVariant
   }
 
-  expect(getStoredVariant(mixedSubprojectId)).toBe('screening_v4')
-  expect(getStoredVariant(sourcelessSubprojectId)).toBe('screening_v4')
+  expect(getStoredVariant(mixedSubprojectId)).toBe('screening_v5')
+  expect(getStoredVariant(sourcelessSubprojectId)).toBe('screening_v5')
   expect(getStoredVariant(legacySubprojectId)).toBe('legacy')
 })
 
