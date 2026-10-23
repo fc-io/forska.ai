@@ -1,4 +1,4 @@
-import {existsSync} from 'node:fs'
+import {existsSync, readdirSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
@@ -7,6 +7,22 @@ const projectRoot = process.cwd()
 
 const readText = async (path: string) => {
   return globalThis.Bun.file(join(projectRoot, path)).text()
+}
+
+const reviewWarningsRouteFile = 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts'
+const reviewWarningsRouteFolder = 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings'
+
+const readReviewWarningsSource = async () => {
+  const helperFiles = readdirSync(join(projectRoot, reviewWarningsRouteFolder))
+    .filter((fileName) => {
+      return fileName.endsWith('.ts') && !fileName.endsWith('.test.ts')
+    })
+    .map((fileName) => {
+      return `${reviewWarningsRouteFolder}/${fileName}`
+    })
+  const sources = await Promise.all([reviewWarningsRouteFile, ...helperFiles].map(readText))
+
+  return sources.join('\n')
 }
 
 test('Phase 5B startup stays cut over to V4 projector work', async () => {
@@ -38,7 +54,7 @@ test('Phase 5B startup stays cut over to V4 projector work', async () => {
 })
 
 test('Phase 5B warning and recovery reads stay side-effect free for legacy rebuild paths', async () => {
-  const warningsSource = await readText('src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts')
+  const warningsSource = await readReviewWarningsSource()
   const recoverySource = await readText('scripts/recoverDirtyRefreshClaims.ts')
 
   expect(warningsSource).not.toContain('mart.judgment_fact')
@@ -51,7 +67,7 @@ test('Phase 5B warning and recovery reads stay side-effect free for legacy rebui
 })
 
 test('review warnings product route stays separated from legacy mart diagnostics', async () => {
-  const warningsSource = await readText('src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts')
+  const warningsSource = await readReviewWarningsSource()
   const forbiddenMarkers = [
     'getDuckdbMartMaintenanceService',
     'getProjectMartDirtyRefreshStateService',
