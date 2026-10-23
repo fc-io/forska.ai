@@ -122,6 +122,7 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/TokensRoutes.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts',
+  'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows/getComparisonProjectScopedArticleBatch.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.ts',
   'src/server/routes/projectTransferRoutes.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
