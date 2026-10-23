@@ -56,7 +56,13 @@ const agentStoreEntrypoints = [
 
 const metadataMutationEntrypoints = [
   'src/server/routes/PromptsRoutes.ts',
-  'src/server/routes/SubprojectsRoutes.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesGetSources.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/collectSubprojectArticleIds.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/insertSubproject.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/linkProjectPromptTx.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryAllArticlesInScope.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryArticlesWithPromptFilters.ts',
   'src/server/routes/ProviderModelsRoutes.ts',
   'src/server/routes/ProviderConnectionsRoutes.ts',
   'src/server/providers/providerModelRepository.ts',
@@ -133,7 +139,9 @@ test('import create paths do not synchronously fan out affected projects after s
 
 test('prompt subproject model and provider mutations use enqueue or delta markers without project-scale scans', () => {
   const promptsSource = readSource('src/server/routes/PromptsRoutes.ts')
-  const subprojectsSource = readSource('src/server/routes/SubprojectsRoutes.ts')
+  const subprojectsSource = readSource(
+    'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/insertSubproject.ts',
+  )
   const providerModelSource = readSource('src/server/providers/providerModelRepository.ts')
   const providerConnectionSource = readSource('src/server/providers/providerConnectionRepository.ts')
 

@@ -82,7 +82,6 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/ProjectsAddArticlesRoutes.ts',
   'src/server/routes/PromptsRoutes.ts',
   'src/server/routes/ProviderModelsRoutes.ts',
-  'src/server/routes/SubprojectsRoutes.ts',
   'src/server/routes/projectTransferRoutes.ts',
   'src/server/routes/projectsRoutes/projectAccessGuard.ts',
   'src/server/routes/projectsRoutes/projectsRoutesDeleteProject.ts',
@@ -120,6 +119,13 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/projectsRoutes/projectsRoutesPostCreate.ts',
   'src/server/routes/projectsRoutes/projectsRoutesPostUnarchive.ts',
   'src/server/routes/promptsRoutes/promptsRoutesReadOnly.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesGetSources.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/collectSubprojectArticleIds.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/insertSubproject.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/linkProjectPromptTx.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryAllArticlesInScope.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryArticlesWithPromptFilters.ts',
 ])
 const forbiddenNormalForegroundSqlPatterns = [
   {label: 'selected scoped import', pattern: /selected_scoped_article_import/iu},
@@ -144,7 +150,6 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/JudgmentsJobsRoutes.ts',
   'src/server/routes/ProjectArticlesRoutes.ts',
   'src/server/routes/ProjectExportRoutes.ts',
-  'src/server/routes/SubprojectsRoutes.ts',
   'src/server/routes/TokensRoutes.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts',
@@ -162,6 +167,8 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getAppArticleDetailRow.ts',
   'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getArticleJudgmentRows.ts',
   'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getCovidenceRelatedRecords.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryAllArticlesInScope.ts',
+  'src/server/routes/subprojectsRoutes/subprojectsRoutesPostCreate/queryArticlesWithPromptFilters.ts',
   'src/server/routes/tokensRoutes/tokensRoutesGetFailedRequests.ts',
   'src/server/routes/tokensRoutes/tokensRoutesTimelineUtils.ts',
 ])
