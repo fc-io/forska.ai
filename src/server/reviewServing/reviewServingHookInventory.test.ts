@@ -139,7 +139,17 @@ const hookInventory: HookInventoryEntry[] = [
     symbol: 'ensureFullText',
   },
   {
-    filePath: 'src/server/routes/ArticleAdminRoutes.ts',
+    filePath: 'src/server/routes/articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts',
+    label: 'article admin content update path',
+    markers: ['appendArticleReviewServingDeltas'],
+  },
+  {
+    filePath: 'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts',
+    label: 'article admin content update path',
+    markers: ['appendArticleReviewServingDeltas'],
+  },
+  {
+    filePath: 'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert.ts',
     label: 'article admin content update path',
     markers: ['appendArticleReviewServingDeltas'],
   },
@@ -333,13 +343,21 @@ test('Phase 2 hook inventory uses only known review-serving integration markers'
 
 test('Phase 2 hook inventory keeps product routes on existing read contracts', () => {
   const guardedRoutes = [
-    'src/server/routes/ArticleAdminRoutes.ts',
     'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts',
     'src/server/routes/ProjectArticlesRoutes.ts',
     'src/server/routes/ProjectsAddArticlesRoutes.ts',
     'src/server/routes/ProjectsRoutes.ts',
     'src/server/routes/PromptsRoutes.ts',
     'src/server/routes/SubprojectsRoutes.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesGetAdminInfo.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostCanonicalFullTextRebuild.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert/assertReconvertCandidate.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConvertPdf.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts',
+    'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf/storeUploadedPdf.ts',
+    'src/server/routes/articleAdminRoutes/conversionReconvertBody.ts',
     'src/server/routes/articlesRoutes/articlesRoutesDeleteArticle.ts',
     'src/server/routes/articlesRoutes/articlesRoutesGetArticle.ts',
     'src/server/routes/articlesRoutes/articlesRoutesGetArticle/getArticleJudgmentValue.ts',

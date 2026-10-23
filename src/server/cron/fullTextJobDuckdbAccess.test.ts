@@ -64,7 +64,8 @@ test('article full_text_pdf update paths append review serving deltas', () => {
   const sources = [
     readSource('./fullTextJobs.ts'),
     readSource('../services/pdfFetchJobs.ts'),
-    readSource('../routes/ArticleAdminRoutes.ts'),
+    readSource('../routes/articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts'),
+    readSource('../routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts'),
     readSource('../routes/articlesRoutes/articlesRoutesPostPdfFetchReset.ts'),
   ]
 
