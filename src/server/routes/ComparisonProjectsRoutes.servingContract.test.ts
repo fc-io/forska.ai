@@ -2,31 +2,32 @@ import {readFileSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
-const routeSource = readFileSync(new URL('./ComparisonProjectsRoutes.ts', import.meta.url), 'utf8').replace(
-  /\r\n?/gu,
-  '\n',
-)
+const getRouteSource = (routeFile: string) => {
+  return readFileSync(new URL(routeFile, import.meta.url), 'utf8').replace(/\r\n?/gu, '\n')
+}
 
-const getFunctionBody = (functionName: string) => {
-  const start = routeSource.indexOf(`const ${functionName} =`)
-  const nextFunction = routeSource.indexOf('\nconst ', start + 1)
+const routeSource = getRouteSource('./ComparisonProjectsRoutes.ts')
 
-  if (start === -1 || nextFunction === -1) {
+const getFunctionBody = (functionName: string, source = routeSource) => {
+  const start = source.indexOf(`const ${functionName} =`)
+  const nextFunction = source.slice(start + 1).search(/\n(?:export )?const /u)
+
+  if (start === -1) {
     throw new Error(`Missing function ${functionName}`)
   }
 
-  return routeSource.slice(start, nextFunction)
+  return source.slice(start, nextFunction === -1 ? undefined : start + 1 + nextFunction)
 }
 
-const getRouteBody = (routeAnchor: string) => {
-  const start = routeSource.indexOf(routeAnchor)
-  const nextRoute = routeSource.indexOf('\n  .', start + 1)
+const getRouteBody = (routeAnchor: string, source = routeSource) => {
+  const start = source.indexOf(routeAnchor)
+  const nextRoute = source.indexOf('\n  .', start + 1)
 
   if (start === -1) {
     throw new Error(`Missing route ${routeAnchor}`)
   }
 
-  return routeSource.slice(start, nextRoute === -1 ? undefined : nextRoute)
+  return source.slice(start, nextRoute === -1 ? undefined : nextRoute)
 }
 
 const expectInOrder = (source: string, before: string, after: string) => {
@@ -40,12 +41,23 @@ const expectInOrder = (source: string, before: string, after: string) => {
 
 test('comparison product reads are admitted through bounded serving helpers', () => {
   const judgmentPageBody = getFunctionBody('getComparisonProjectJudgmentsPage')
-  const judgmentCountBody = getFunctionBody('getComparisonProjectJudgmentsCount')
+  const judgmentCountBody = getFunctionBody(
+    'getComparisonProjectJudgmentsCount',
+    getRouteSource('./comparisonProjectsRoutes/getComparisonProjectJudgmentsCount.ts'),
+  )
   const statsBody = getFunctionBody('getComparisonProjectStatsResponse')
   const exportBody = getFunctionBody('getComparisonProjectExportResponse')
   const conflictResolutionExportBody = getFunctionBody('getComparisonProjectConflictResolutionExportSourceRows')
-  const conflictResolutionImportTargetBody = getFunctionBody('getConflictResolutionImportServingCandidateTargetRows')
-  const conflictResolutionImportValidationBody = getFunctionBody('validateConflictResolutionImportAnalyzeTarget')
+  const conflictResolutionImportTargetBody = getFunctionBody(
+    'getConflictResolutionImportServingCandidateTargetRows',
+    getRouteSource(
+      './comparisonProjectsRoutes/getConflictResolutionImportTargetArticles/getConflictResolutionImportCandidateTargetRows.ts',
+    ),
+  )
+  const conflictResolutionImportValidationBody = getFunctionBody(
+    'validateConflictResolutionImportAnalyzeTarget',
+    getRouteSource('./comparisonProjectsRoutes/comparisonProjectConflictResolutionImportRequests.ts'),
+  )
 
   expect(judgmentPageBody).toContain('scope.activeGeneration === null')
   expect(judgmentPageBody).toContain('getComparisonProjectServingJudgmentRowsPage')
