@@ -152,6 +152,12 @@ export const reviewServingResidualReadAllowlist = [
         purpose: 'diagnose whether import-route scoped articles exist for warning status',
         workloadClass: 'foreground-diagnostic',
       }),
+    ],
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getReviewWarningsScopeState.ts',
+  },
+  {
+    classification: 'boundedReviewWarningDiagnostics',
+    sourceReads: [
       sourceRead({
         cap: 'project-scoped V4 diagnostic summary repository call',
         marker: '?? (await getReviewServingDiagnostics({',
@@ -160,7 +166,7 @@ export const reviewServingResidualReadAllowlist = [
         workloadClass: 'foreground-diagnostic',
       }),
     ],
-    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts',
+    routeFile: 'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings/getReviewsWarningsPayload.ts',
   },
   {
     classification: 'boundedReviewDetailMetadata',

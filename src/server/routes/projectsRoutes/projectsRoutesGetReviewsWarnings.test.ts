@@ -3904,7 +3904,9 @@ test('reviews warnings memo entries are keyed by the project row update time', a
 })
 
 test('reviews warnings route reuses reader diagnostics instead of duplicate current-db fanout', async () => {
-  const source = await globalThis.Bun.file(new URL('./projectsRoutesGetReviewsWarnings.ts', import.meta.url)).text()
+  const source = await globalThis.Bun.file(
+    new URL('./projectsRoutesGetReviewsWarnings/getReviewsWarningsPayload.ts', import.meta.url),
+  ).text()
 
   expect(source).toContain('warningSnapshot.diagnostics.diagnostics')
   expect(source).toContain('metadataOnly: true')
