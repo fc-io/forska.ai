@@ -66,7 +66,6 @@ const retiredOlapImportPatterns = [
 ]
 const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/AdminInvestigateRoutes.ts',
-  'src/server/routes/ArticleAdminRoutes.ts',
 
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts',
   'src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts',
@@ -121,6 +120,11 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/projectExportRoutes/projectExportRoutesPostExport/getProjectReviewConfig.ts',
   'src/server/routes/projectExportRoutes/projectExportRoutesPostExportPrompts.ts',
   'src/server/routes/projectTransferRoutes/getProjectTransferExportSourceProject.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesGetAdminInfo.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConvertPdf.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts',
   'src/server/routes/articlesRoutes/articlesRoutesDeleteArticle.ts',
   'src/server/routes/articlesRoutes/articlesRoutesGetArticle.ts',
   'src/server/routes/articlesRoutes/articlesRoutesGetConversionStats.ts',
@@ -185,7 +189,6 @@ const forbiddenNormalForegroundSqlPatterns = [
 ]
 const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/AdminInvestigateRoutes.ts',
-  'src/server/routes/ArticleAdminRoutes.ts',
 
   'src/server/routes/PromptsRoutes.ts',
   'src/server/routes/DuckdbStudioRoutes.ts',
@@ -208,6 +211,11 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceRowsSql.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourcesSql.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportTitleTargetArticlesSql.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesGetAdminInfo.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConversionReconvert.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostConvertPdf.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostFetchPdf.ts',
+  'src/server/routes/articleAdminRoutes/articleAdminRoutesPostUploadPdf.ts',
   'src/server/routes/articlesRoutes/articlesRoutesDeleteArticle.ts',
   'src/server/routes/articlesRoutes/articlesRoutesGetArticle.ts',
   'src/server/routes/articlesRoutes/articlesRoutesGetConversionStats.ts',
