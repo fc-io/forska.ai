@@ -509,7 +509,10 @@ test('project review details builds prompt placeholders from project prompt meta
 })
 
 test('project review details reads migrated V4 judgment fields from scalar columns', () => {
-  const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
+  const routeText = readFileSync(
+    'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getProjectReviewDetailJudgmentRows.ts',
+    'utf8',
+  )
   const detailJudgmentHydration = routeText.slice(
     routeText.indexOf('const getProjectReviewDetailJudgmentRows'),
     routeText.indexOf('const getProjectReviewDetailHumanRows'),
@@ -542,7 +545,10 @@ test('project review details reads migrated V4 judgment fields from scalar colum
 })
 
 test('project review details reads human answer and comment from scalar detail columns', () => {
-  const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
+  const routeText = readFileSync(
+    'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/projectReviewDetailHumanRows.ts',
+    'utf8',
+  )
   const detailHumanHydration = routeText.slice(
     routeText.indexOf('const getProjectReviewDetailHumanRows'),
     routeText.indexOf('const getArticleJudgmentRows'),
@@ -857,7 +863,10 @@ test('project review details does not request repair when V4 detail state serves
 })
 
 test('legacy judgment fallback does not cap visible project judgment history', () => {
-  const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
+  const routeText = readFileSync(
+    'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getArticleJudgmentRows.ts',
+    'utf8',
+  )
   const legacyQuery = routeText.slice(
     routeText.indexOf('const getArticleJudgmentRows'),
     routeText.indexOf('const getProjectReviewDetailJudgmentValue'),
@@ -873,7 +882,10 @@ test('legacy judgment fallback does not cap visible project judgment history', (
 })
 
 test('covidence related records expose an overflow sentinel instead of silently truncating', () => {
-  const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
+  const routeText = readFileSync(
+    'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getCovidenceRelatedRecords.ts',
+    'utf8',
+  )
   const covidenceRelatedRecordRead = routeText.slice(
     routeText.indexOf('const getCovidenceRelatedRecords'),
     routeText.indexOf('const getUnavailableReviewDetail'),
@@ -890,7 +902,10 @@ test('covidence related records expose an overflow sentinel instead of silently 
 })
 
 test('covidence related record cap reserves the reviewed article before sorting by title', () => {
-  const routeText = readFileSync('src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts', 'utf8')
+  const routeText = readFileSync(
+    'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getCovidenceRelatedRecords.ts',
+    'utf8',
+  )
   const covidenceRelatedRecordRead = routeText.slice(
     routeText.indexOf('const getCovidenceRelatedRecords'),
     routeText.indexOf('const getUnavailableReviewDetail'),
