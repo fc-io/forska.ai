@@ -382,10 +382,22 @@ Job API field sources are intentionally separate:
 | Detail `status`, `storageState`, import timestamps/errors, quarantine fields, model/content configuration | DuckDB `app.judgment_job`, project/model records, and persisted import metadata                                                        |
 | Detail `promptStats`, `storageHealth`, queue/claim/running/outbox/retention counters                      | Per-job SQLite, published through the fresh SQLite health projection when the API process is not the SQLite owner                      |
 | Detail request/provider telemetry, completion closeouts, and token totals                                 | Live request/dispatch telemetry plus persisted `app.token_use`, `app.request_attempt_closeout`, and provider telemetry                 |
-| List and detail `providerHealth` (and the `Provider Failing` badge)                                       | DuckDB `app.judgment_job_provider_health`, written only by the owner (maintenance-worker or dev-single) on prompt completion           |
+| List and detail `providerHealth` (and the `Provider Failing` badge)                                       | DuckDB `app.judgment_job_provider_health`, written only by the owner (maintenance-worker or dev-single) on prompt completion or resume |
 | Health `liveSqlite`, `runningWork`, and `importWork`                                                      | The same SQLite health snapshot combined with owner-backed import work leases                                                          |
 | Health `storagePolicy`, `recommendedNextAction`, `progressState`, and blocked/recovery fields             | Derived from `storageState`, SQLite health, import availability/leases, endpoint diagnostics, and persisted import/quarantine metadata |
 | Review-serving freshness and visible result                                                               | DuckDB dirty/materialization state and V4 serving tables; canonical `app.judgment` durability precedes serving visibility              |
+
+Provider health is per job. A failing row counts as active (`providerHealth.isActive`
+on the list, detail and health routes, the `Provider Failing` badge, the
+`/admin/jobs` banner and the detail-page failure banner) only while the job's
+status is `running`: a stopped job sends no requests, so its row cannot recover
+on its own. Resuming a job (`PATCH /api/judgmentsjobs/:id` with
+`status: 'running'` from any other status, proxied to the owner) marks the row
+`recovered`, sets `consecutive_failure_count` to 0, leaves `last_success_at`
+untouched and drops the job from the owner's in-memory claim-gate cache, so
+claims start at once; the next real failure opens a new backoff window. The
+detail page shows "Provider recovered" only when `last_success_at` is at or
+after `recovered_at`, so a resume reset never reads as a provider success.
 
 The topology and browser gates use test-owned durable app-data roots for DuckDB
 and judge journals, separate spill/temp directories, unique ports and worker
