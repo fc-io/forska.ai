@@ -66,7 +66,7 @@ test('judgment job freshness treats earlier incomplete dirty materialization as 
   }>(`
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
-    const {getProjectMartFreshnessState} = await import('./src/server/routes/JudgmentsJobsRoutes.ts')
+    const {getProjectMartFreshnessState} = await import('./src/server/routes/judgmentsJobsRoutes/projectMartFreshness.ts')
 
     await migrateDuckdb()
 
@@ -158,7 +158,7 @@ test('judgment job freshness treats unresolved quarantine barriers as stale', ()
   }>(`
     const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
     const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
-    const {getProjectMartFreshnessState} = await import('./src/server/routes/JudgmentsJobsRoutes.ts')
+    const {getProjectMartFreshnessState} = await import('./src/server/routes/judgmentsJobsRoutes/projectMartFreshness.ts')
 
     await migrateDuckdb()
 

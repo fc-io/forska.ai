@@ -8,7 +8,13 @@ const workspaceRoot = process.cwd()
 const srcRoot = join(workspaceRoot, 'src')
 const routesRoot = join(workspaceRoot, 'src/server/routes')
 const serverMainPath = join(workspaceRoot, 'src/server/serverMain.ts')
-const testOnlyRouteFiles = new Set(['src/server/routes/judgmentWorkflowTopologyTestRoutes.ts'])
+const testOnlyRouteFiles = new Set([
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/getTopologyVisibleProjectionCount.ts',
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/judgmentWorkflowTopologyTestRoutesPostCleanupStale.ts',
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/judgmentWorkflowTopologyTestRoutesPostEvidence.ts',
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/judgmentWorkflowTopologyTestRoutesPostRealCodexEvidence.ts',
+  'src/server/routes/judgmentWorkflowTopologyTestRoutes/judgmentWorkflowTopologyTestRoutesPostSeed.ts',
+])
 
 const getSourceFiles = (directory: string): string[] => {
   return readdirSync(directory, {withFileTypes: true}).flatMap((entry) => {
@@ -74,8 +80,6 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts',
   'src/server/routes/ImportRoutes.ts',
-  'src/server/routes/JudgmentsJobsRoutes.ts',
-  'src/server/routes/LlmStatusRoutes.ts',
   'src/server/routes/NvidiaSmiRoutes.ts',
   'src/server/routes/ProjectArticlesRoutes.ts',
   'src/server/routes/ProjectExportRoutes.ts',
@@ -84,6 +88,18 @@ const routeDuckdbImportAllowlist = new Set([
   'src/server/routes/PromptsRoutes.ts',
   'src/server/routes/ProviderModelsRoutes.ts',
   'src/server/routes/SubprojectsRoutes.ts',
+  'src/server/routes/judgmentsJobsRoutes/assertJudgmentJobStopConditionsAllowResume.ts',
+  'src/server/routes/judgmentsJobsRoutes/getJobContext.ts',
+  'src/server/routes/judgmentsJobsRoutes/getJudgmentJobsReadDatabase.ts',
+  'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesDeleteJob.ts',
+  'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesGetJobRuntime.ts',
+  'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesGetRunning.ts',
+  'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesGetTotalTokenUsage.ts',
+  'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesPatchJob.ts',
+  'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesPostJob.ts',
+  'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesPostStartClean.ts',
+  'src/server/routes/judgmentsJobsRoutes/projectMartFreshness.ts',
+  'src/server/routes/llmStatusRoutes/llmStatusRoutesGetLlmStatus/readLlmStatus.ts',
   'src/server/routes/projectTransferRoutes.ts',
   'src/server/routes/projectsRoutes/projectAccessGuard.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
@@ -114,7 +130,6 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothProjects.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts',
-  'src/server/routes/JudgmentsJobsRoutes.ts',
   'src/server/routes/ProjectArticlesRoutes.ts',
   'src/server/routes/ProjectExportRoutes.ts',
   'src/server/routes/ProjectsRoutes.ts',
@@ -123,6 +138,7 @@ const normalForegroundSqlAllowlist = new Set([
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectConflictResolutionImport.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts',
   'src/server/routes/comparisonProjectsRoutes/comparisonProjectStats.ts',
+  'src/server/routes/judgmentsJobsRoutes/judgmentsJobsRoutesGetJob/getFailedRequestSummaryFromDatabase.ts',
   'src/server/routes/projectTransferRoutes.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts',
@@ -141,7 +157,7 @@ const ownerRoutedDiagnosticRouteContextRequirements = [
   },
   {
     maxResultRowsMarkers: ['maxResultRows: 1', 'maxResultRows: llmStatusRowsLimit'],
-    path: 'src/server/routes/LlmStatusRoutes.ts',
+    path: 'src/server/routes/llmStatusRoutes/llmStatusRoutesGetLlmStatus/readLlmStatus.ts',
     routeOrJobKeyMarkers: ["routeOrJobKey: 'llmStatus.route'"],
   },
   {
@@ -392,7 +408,14 @@ test('normal foreground route SQL cannot add unallowlisted raw OOM-prone shapes'
 
 test('test-only topology routes are token gated and absent from normal product API composition', () => {
   const productRoutesText = readFileSync(join(routesRoot, 'productApiRoutes.ts'), 'utf8')
-  const topologyRoutesText = readFileSync(join(routesRoot, 'judgmentWorkflowTopologyTestRoutes.ts'), 'utf8')
+  const topologyRoutesText = [
+    join(routesRoot, 'judgmentWorkflowTopologyTestRoutes.ts'),
+    ...getSourceFiles(join(routesRoot, 'judgmentWorkflowTopologyTestRoutes')),
+  ]
+    .map((filePath) => {
+      return readFileSync(filePath, 'utf8')
+    })
+    .join('\n')
   const sqliteServiceText = readFileSync(
     join(process.cwd(), 'src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'),
     'utf8',
