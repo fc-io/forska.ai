@@ -135,7 +135,7 @@ test('project transfer production commit streams full judgments into compact sou
 })
 
 test('project transfer keeps source workflows owner-routed and not API-role raw serving', () => {
-  const routeInventorySource = readSource('../../routes/routeSurfaceInventory.ts')
+  const routeInventorySource = readSource('../../routes/routeSurfaceInventory/projectsRouteSurfaceRoutes.ts')
   const routeGuardSource = readSource('../../routes/duckdbRouteGuardrails.test.ts')
 
   expect(routeInventorySource).toContain("ownerDependentSensitive(\n    'projectTransferRoutes.ts'")

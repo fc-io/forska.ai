@@ -25,6 +25,22 @@ const readReviewWarningsSource = async () => {
   return sources.join('\n')
 }
 
+const routeInventoryFile = 'src/server/routes/routeSurfaceInventory.ts'
+const routeInventoryFolder = 'src/server/routes/routeSurfaceInventory'
+
+const readRouteInventorySource = async () => {
+  const familyFiles = readdirSync(join(projectRoot, routeInventoryFolder))
+    .filter((fileName) => {
+      return fileName.endsWith('.ts') && !fileName.endsWith('.test.ts')
+    })
+    .map((fileName) => {
+      return `${routeInventoryFolder}/${fileName}`
+    })
+  const sources = await Promise.all([routeInventoryFile, ...familyFiles].map(readText))
+
+  return sources.join('\n')
+}
+
 test('Phase 5B startup stays cut over to V4 projector work', async () => {
   const source = await readText('src/server/utils/startBackgroundWork.ts')
   const retiredHeartbeatFiles = [
@@ -344,7 +360,7 @@ test('Phase 5B package commands do not expose normal legacy rebuild workers', as
 
 test('admin legacy mart mutation routes stay retired or removed', async () => {
   const adminSource = await readText('src/server/routes/AdminInvestigateRoutes.ts')
-  const routeInventorySource = await readText('src/server/routes/routeSurfaceInventory.ts')
+  const routeInventorySource = await readRouteInventorySource()
   const navigationSource = await readText('src/components/Navigation.tsx')
   const settingsSource = await readText('src/app/routes/+settings/+index.tsx')
   const removedRoutePaths = [
