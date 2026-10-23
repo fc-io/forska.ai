@@ -507,7 +507,7 @@ const getValidatedMetadataQuotes = (request: ReturnType<typeof getMetadataQuoteR
   return result.kind === 'valid' ? result.judgment.quotes : result.kind
 }
 
-test('only screening_v2, screening_v3 and screening_v4 with use_metadata on keep a quote copied from the article_metadata block', () => {
+test('only screening_v2 to screening_v5 with use_metadata on keep a quote copied from the article_metadata block', () => {
   const quotes = ['Journal of Antimicrobial Chemotherapy', 'year: 2019', 'fell from 62 to 41']
 
   expect(
@@ -530,6 +530,8 @@ test('only screening_v2, screening_v3 and screening_v4 with use_metadata on keep
     ['screening_v3:metadata', quotes],
     ['screening_v4:no-metadata', 'retry'],
     ['screening_v4:metadata', quotes],
+    ['screening_v5:no-metadata', 'retry'],
+    ['screening_v5:metadata', quotes],
   ])
 })
 
