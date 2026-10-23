@@ -317,13 +317,18 @@ export const formatProviderFailureMeta = (
 }
 
 export const isRecentProviderRecovery = (
-  health: Pick<JudgmentJobProviderHealth, 'isActive' | 'recoveredAt'> | null | undefined,
+  health: Pick<JudgmentJobProviderHealth, 'isActive' | 'lastSuccessAt' | 'recoveredAt'> | null | undefined,
   now = Date.now(),
 ): boolean => {
   const recoveredAtMs = health?.recoveredAt ? Date.parse(health.recoveredAt) : Number.NaN
+  const lastSuccessAtMs = health?.lastSuccessAt ? Date.parse(health.lastSuccessAt) : Number.NaN
 
+  // A resume also marks the row recovered without a provider success; only a success may claim a recovery.
   return (
-    health?.isActive === false && Number.isFinite(recoveredAtMs) && now - recoveredAtMs <= providerRecoveryNoteWindowMs
+    health?.isActive === false
+    && Number.isFinite(recoveredAtMs)
+    && lastSuccessAtMs >= recoveredAtMs
+    && now - recoveredAtMs <= providerRecoveryNoteWindowMs
   )
 }
 

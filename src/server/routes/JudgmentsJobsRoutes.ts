@@ -137,12 +137,13 @@ import {
   getJudgmentJobProviderHealth,
   getJudgmentJobProviderHealthMap,
   getProviderFailureRetryDelayMs,
-  isJudgmentJobProviderHealthActive,
+  isJudgmentJobProviderHealthActiveForJob,
   type JudgmentJobProviderHealth,
   type JudgmentJobProviderHealthApi,
   markJudgmentJobProviderProbeClaimed,
   recordJudgmentJobProviderFailure,
   recordJudgmentJobProviderSuccess,
+  resetJudgmentJobProviderHealthForResume,
   toJudgmentJobProviderHealthApi,
 } from '../services/judgmentJobProviderHealthService.ts'
 import {
@@ -1262,6 +1263,12 @@ const recordCompletionProviderSuccess = async (jobId: string): Promise<void> => 
   })
 }
 
+const resetResumedJobProviderHealth = async (jobId: string): Promise<void> => {
+  await resetJudgmentJobProviderHealthForResume({jobId}).catch((error: unknown) => {
+    return logProviderHealthWriteFailure(jobId, error)
+  })
+}
+
 const getProviderHealthRetryAfterMs = (providerHealth: JudgmentJobProviderHealth | null): number | null => {
   return providerHealth ? getProviderFailureRetryDelayMs(providerHealth) : null
 }
@@ -2146,10 +2153,14 @@ const getProviderHealthForReadableRoute = async ({
   })
 }
 
-const getProviderHealthApi = (
-  providerHealth: JudgmentJobProviderHealth | null | undefined,
-): JudgmentJobProviderHealthApi | null => {
-  return providerHealth ? toJudgmentJobProviderHealthApi(providerHealth) : null
+const getProviderHealthApi = ({
+  jobStatus,
+  providerHealth,
+}: {
+  jobStatus: string
+  providerHealth: JudgmentJobProviderHealth | null | undefined
+}): JudgmentJobProviderHealthApi | null => {
+  return providerHealth ? toJudgmentJobProviderHealthApi(providerHealth, {jobStatus}) : null
 }
 
 const getJobHealthBadges = ({
@@ -2168,7 +2179,7 @@ const getJobHealthBadges = ({
     badges.push('Offline Repair')
   }
 
-  if (providerHealth && isJudgmentJobProviderHealthActive(providerHealth)) {
+  if (providerHealth && isJudgmentJobProviderHealthActiveForJob({health: providerHealth, jobStatus: job.status})) {
     badges.push('Provider Failing')
   }
 
@@ -3320,7 +3331,7 @@ export const judgmentsJobsRoutes = new Elysia()
             recommendedNextAction,
             endpointAvailability: endpointHealth.diagnostics,
             providerDiagnostics: endpointHealth.providerDiagnostics,
-            providerHealth: getProviderHealthApi(providerHealth),
+            providerHealth: getProviderHealthApi({jobStatus: job.status, providerHealth}),
             controlPlane,
             importMetadata: {
               importFailureCount: job.importFailureCount,
@@ -3564,7 +3575,7 @@ export const judgmentsJobsRoutes = new Elysia()
             fullTextStrategyLabel: getJobFullTextStrategyLabel(job, fullTextStrategyLabelsById),
             leaseMetadata,
             promptStats,
-            providerHealth: getProviderHealthApi(providerHealth),
+            providerHealth: getProviderHealthApi({jobStatus: job.status, providerHealth}),
             storagePolicy,
             storageHealth,
             judgingRuntime,
@@ -3846,7 +3857,7 @@ export const judgmentsJobsRoutes = new Elysia()
           return {
             ...normalizedJob,
             health: {badges, isHealthy: badges.length === 1 && badges[0] === 'Healthy'},
-            providerHealth: getProviderHealthApi(providerHealth),
+            providerHealth: getProviderHealthApi({jobStatus: normalizedJob.status, providerHealth}),
           }
         })
 
@@ -3985,7 +3996,10 @@ export const judgmentsJobsRoutes = new Elysia()
               job: normalizedJob,
               jobId: job.id,
               providerDiagnostics,
-              providerHealth: getProviderHealthApi(providerHealthByJobId.get(job.id)),
+              providerHealth: getProviderHealthApi({
+                jobStatus: job.status,
+                providerHealth: providerHealthByJobId.get(job.id),
+              }),
               sqliteHealth,
             }
           },
@@ -4058,6 +4072,7 @@ export const judgmentsJobsRoutes = new Elysia()
       const sqliteService = getJudgmentJobSqliteService()
       const stopConditionUpdate = getJudgmentJobStopConditionUpdate(body)
       let clearTransientQuarantine = false
+      let isResume = false
 
       if (body.status === 'running') {
         await assertJudgmentJobStopConditionsAllowResume({jobId: params.id, update: stopConditionUpdate})
@@ -4098,6 +4113,7 @@ export const judgmentsJobsRoutes = new Elysia()
         })
 
         clearTransientQuarantine = clearTransientQuarantine || preflightResult.clearTransientQuarantine
+        isResume = repairedJob.status !== 'running'
         await assertJudgmentJobFullTextStrategyCanResume({jobId: params.id, projectFullTextStrategyId})
         await sqliteService.fillMissingFullTextStrategyId(params.id, projectFullTextStrategyId)
         await setJudgmentJobFullTextStrategyId(params.id, projectFullTextStrategyId)
@@ -4113,6 +4129,10 @@ export const judgmentsJobsRoutes = new Elysia()
 
       if (!updatedJob) {
         throw new Error('Job not found')
+      }
+
+      if (isResume && updatedJob.status === 'running') {
+        await resetResumedJobProviderHealth(params.id)
       }
 
       return {data: getJudgmentJobMutationResponse(updatedJob), error: null}

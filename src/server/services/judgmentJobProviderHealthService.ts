@@ -82,6 +82,8 @@ type FailingJobCacheEntry = Pick<
 
 type JudgmentJobProviderClaimGate = {backoffUntil: Date | null; claimsAllowed: boolean; maxClaims: number | null}
 
+type ProviderHealthRecoveryCause = 'job_resumed' | 'provider_success'
+
 const providerHealthTableName = 'app.judgment_job_provider_health'
 const providerFailureMessageMaxLength = 1000
 const providerFailureCodeMaxLength = 200
@@ -700,7 +702,27 @@ const restoreFailingJobCacheEntry = (jobId: string, entry: FailingJobCacheEntry 
   }
 }
 
-const markJobRecovered = async ({jobId, now}: {jobId: string; now: Date}) => {
+const getRecoveryAssignments = ({cause, nowLiteral}: {cause: ProviderHealthRecoveryCause; nowLiteral: string}) => {
+  return [
+    "status = 'recovered'",
+    `recovered_at = ${nowLiteral}`,
+    cause === 'provider_success' ? `last_success_at = ${nowLiteral}` : null,
+    'consecutive_failure_count = 0',
+    `updated_at = ${nowLiteral}`,
+  ].filter((assignment): assignment is string => {
+    return assignment !== null
+  })
+}
+
+const markJobRecovered = async ({
+  cause,
+  jobId,
+  now,
+}: {
+  cause: ProviderHealthRecoveryCause
+  jobId: string
+  now: Date
+}) => {
   const nowLiteral = getTimestampLiteral(now)
   const previousEntry = failingJobs.get(jobId)
 
@@ -710,12 +732,7 @@ const markJobRecovered = async ({jobId, now}: {jobId: string; now: Date}) => {
   try {
     await getAppDatabaseService().run(`
       UPDATE ${providerHealthTableName}
-      SET
-        status = 'recovered',
-        recovered_at = ${nowLiteral},
-        last_success_at = ${nowLiteral},
-        consecutive_failure_count = 0,
-        updated_at = ${nowLiteral}
+      SET ${getRecoveryAssignments({cause, nowLiteral}).join(', ')}
       WHERE job_id = ${getSqlLiteral(jobId)}
         AND status = 'failing'
     `)
@@ -732,7 +749,13 @@ export const recordJudgmentJobProviderSuccess = async (input: {jobId: string; no
     return
   }
 
-  await markJobRecovered({jobId: input.jobId, now: input.now ?? new Date()})
+  await markJobRecovered({cause: 'provider_success', jobId: input.jobId, now: input.now ?? new Date()})
+}
+
+// A stopped job sends no requests, so its failing row never recovers on its own. A resume is not a provider
+// success, so last_success_at stays untouched; the next real failure opens a new window.
+export const resetJudgmentJobProviderHealthForResume = async (input: {jobId: string; now?: Date}): Promise<void> => {
+  await markJobRecovered({cause: 'job_resumed', jobId: input.jobId, now: input.now ?? new Date()})
 }
 
 const getProviderHealthRows = async ({
@@ -789,11 +812,24 @@ const getIsoStringOrNull = (value: Date | null) => {
   return value ? value.toISOString() : null
 }
 
-export const toJudgmentJobProviderHealthApi = (row: JudgmentJobProviderHealth): JudgmentJobProviderHealthApi => {
+export const isJudgmentJobProviderHealthActiveForJob = ({
+  health,
+  jobStatus,
+}: {
+  health: Pick<JudgmentJobProviderHealth, 'consecutiveFailureCount' | 'failureKind' | 'status'>
+  jobStatus: string
+}): boolean => {
+  return jobStatus === 'running' && isJudgmentJobProviderHealthActive(health)
+}
+
+export const toJudgmentJobProviderHealthApi = (
+  row: JudgmentJobProviderHealth,
+  {jobStatus}: {jobStatus: string},
+): JudgmentJobProviderHealthApi => {
   return {
     ...row,
     firstFailedAt: row.firstFailedAt.toISOString(),
-    isActive: isJudgmentJobProviderHealthActive(row),
+    isActive: isJudgmentJobProviderHealthActiveForJob({health: row, jobStatus}),
     lastFailedAt: row.lastFailedAt.toISOString(),
     lastSuccessAt: getIsoStringOrNull(row.lastSuccessAt),
     recoveredAt: getIsoStringOrNull(row.recoveredAt),
