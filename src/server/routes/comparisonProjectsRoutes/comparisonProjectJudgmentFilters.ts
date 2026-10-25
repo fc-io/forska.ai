@@ -5,6 +5,7 @@ import {
   getNormalizedComparisonProjectArticleCategoryFilters,
 } from '../../../utils/comparisonProjectArticleCategoryFilter.ts'
 import {
+  type ComparisonProjectConflictResolutionFilter,
   getNormalizedComparisonProjectConflictResolutionFilters,
   getNormalizedComparisonProjectConflictResolutionProvenanceFilters,
 } from '../../../utils/comparisonProjectConflictResolutionFilter.ts'
@@ -20,7 +21,6 @@ import {
 import {getNormalizedComparisonProjectSearchText} from '../../../utils/comparisonProjectSearchText.ts'
 import {getComparisonProjectConflictResolutionOptionByValue} from './comparisonProjectConflictResolutionOptions.ts'
 import type {ComparisonProjectConflictResolutionProvenanceFilter} from './comparisonProjectConflictResolutionProvenance.ts'
-import type {ComparisonProjectConflictResolutionFilter} from './comparisonProjectJudgmentRows.ts'
 import type {ComparisonProjectScope} from './comparisonProjectScopeTypes.ts'
 import {getIsSummaryMode} from './getIsSummaryMode.ts'
 

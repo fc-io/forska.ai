@@ -6,12 +6,12 @@ import type {
 } from '../../../db/schemaTypes.ts'
 import type {FullTextStrategyInputs} from '../../fullText/fullTextStrategy.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import type {ComparisonProjectConflictResolutionImportMode} from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportMode} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 import type {
   ComparisonProjectConflictResolutionProvenance,
   ComparisonProjectConflictResolutionReviewer,
 } from './comparisonProjectConflictResolutionProvenance.ts'
-import type {ComparisonProjectJudgmentLlmRow} from './comparisonProjectJudgmentRows.ts'
+import type {ComparisonProjectJudgmentLlmRow} from './comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsTypes.ts'
 
 export type PromptSelection = {
   promptId: string

@@ -7,10 +7,8 @@ import {
 } from '../../services/comparisonJudgmentContext.ts'
 import {writeComparisonProjectConflictCommentImportChanges} from './comparisonProjectConflictComment.ts'
 import type {ComparisonProjectConflictResolutionTransferArtifact} from './comparisonProjectConflictResolutionFileTransfer.ts'
-import {
-  type ComparisonProjectConflictResolutionImportSourceRow,
-  getComparisonProjectConflictResolutionImportCommitResult,
-} from './comparisonProjectConflictResolutionImport.ts'
+import {getComparisonProjectConflictResolutionImportCommitResult} from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportSourceRow} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 import {
   type ComparisonProjectConflictResolutionImportCandidate,
   getComparisonProjectConflictResolutionImportCandidateSourceRow,

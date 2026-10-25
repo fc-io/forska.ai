@@ -7,10 +7,10 @@ import {
   writeComparisonProjectConflictCommentImportChanges,
 } from './comparisonProjectConflictComment.ts'
 import {
-  type ComparisonProjectConflictResolutionImportCommentChange,
   getComparisonProjectConflictResolutionImportCommitResult,
   getComparisonProjectConflictResolutionImportPlan,
 } from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportCommentChange} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 import {getComparisonProjectConflictResolutionImportResolutionCandidates} from './comparisonProjectConflictResolutionImportCandidates.ts'
 import {
   type ComparisonProjectConflictResolutionPdfImportBody,

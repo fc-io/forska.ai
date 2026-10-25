@@ -2,7 +2,7 @@ import {HttpError} from '../../utils/httpError.ts'
 import type {
   ComparisonProjectConflictResolutionImportMode,
   ComparisonProjectConflictResolutionImportOverwriteMode,
-} from './comparisonProjectConflictResolutionImport.ts'
+} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 
 export const getConflictResolutionImportRejectedError = (message: string) => {
   return new HttpError(400, message)

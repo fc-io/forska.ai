@@ -2,7 +2,7 @@ import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import type {
   ComparisonProjectConflictResolutionImportSourceRow,
   ComparisonProjectConflictResolutionImportTargetArticle,
-} from './comparisonProjectConflictResolutionImport.ts'
+} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 import {comparisonProjectConflictResolutionTable} from './comparisonProjectRouteConstants.ts'
 import type {AppQueryRunner} from './comparisonProjectRouteTypes.ts'
 import type {ComparisonProjectScope} from './comparisonProjectScopeTypes.ts'

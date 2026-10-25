@@ -26,37 +26,6 @@ import {getComparisonProjectStatsComparisonGroups} from './comparisonProjectStat
 import {getComparisonProjectStatsFromAggregates} from './comparisonProjectStats/getComparisonProjectStatsFromAggregates.ts'
 import {getComparisonProjectStatsResolvedTruthAggregatesSql} from './comparisonProjectStats/getComparisonProjectStatsResolvedTruthAggregatesSql.ts'
 
-export type {
-  ComparisonProjectAdditionalStats,
-  ComparisonProjectStatsAggregateRow,
-  ComparisonProjectStatsAnswerFilterKind,
-  ComparisonProjectStatsAnswerFilterValue,
-  ComparisonProjectStatsArticleCategory,
-  ComparisonProjectStatsArticleCategoryCountRow,
-  ComparisonProjectStatsCategoryBreakdown,
-  ComparisonProjectStatsCellRow,
-  ComparisonProjectStatsColumn,
-  ComparisonProjectStatsComparison,
-  ComparisonProjectStatsComparisonGroup,
-  ComparisonProjectStatsComparisonKind,
-  ComparisonProjectStatsConflictResolutionAnswerComparison,
-  ComparisonProjectStatsConflictResolutionProvenance,
-  ComparisonProjectStatsConflictResolutionRow,
-  ComparisonProjectStatsResolvedTruthAggregateRow,
-  ComparisonProjectStatsResolvedTruthComparison,
-  ComparisonProjectStatsTruthConfusionMetrics,
-  ComparisonProjectStatsTruthWinner,
-} from './comparisonProjectStats/comparisonProjectStatsTypes.ts'
-export {getComparisonProjectAdditionalStatsFromCells} from './comparisonProjectStats/getComparisonProjectAdditionalStatsFromCells.ts'
-export {getComparisonProjectAdditionalStatsGroups} from './comparisonProjectStats/getComparisonProjectAdditionalStatsGroups.ts'
-export {getComparisonProjectConflictResolutionAnswerStatsGroups} from './comparisonProjectStats/getComparisonProjectConflictResolutionAnswerStatsGroups.ts'
-export {getComparisonProjectStatsActiveGenerationSql} from './comparisonProjectStats/getComparisonProjectStatsActiveGeneration.ts'
-export {getComparisonProjectStatsAggregatesSql} from './comparisonProjectStats/getComparisonProjectStatsAggregatesSql.ts'
-export {getComparisonProjectStatsArticleCategoryCountsSql} from './comparisonProjectStats/getComparisonProjectStatsArticleCategoryCountsSql.ts'
-export {getComparisonProjectStatsComparisonGroups} from './comparisonProjectStats/getComparisonProjectStatsComparisonGroups.ts'
-export {getComparisonProjectStatsFromCells} from './comparisonProjectStats/getComparisonProjectStatsFromCells.ts'
-export {getComparisonProjectStatsResolvedTruthAggregatesSql} from './comparisonProjectStats/getComparisonProjectStatsResolvedTruthAggregatesSql.ts'
-
 type ComparisonProjectStatsParams = ComparisonProjectStatsConflictResolutionProvenanceParams & {
   allowConflictResolution?: boolean
   columns: readonly ComparisonProjectStatsColumn[]

@@ -1,10 +1,10 @@
 import {Elysia} from 'elysia'
 
+import {getComparisonProjectConflictResolutionImportSourcesSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourcesSql.ts'
 import {
   type ComparisonProjectConflictResolutionImportSourceQueryRow,
-  getComparisonProjectConflictResolutionImportSourcesSql,
   getComparisonProjectConflictResolutionImportSourceValue,
-} from './comparisonProjectConflictResolutionImport.ts'
+} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceValue.ts'
 import {comparisonProjectConflictResolutionTable, comparisonProjectTable} from './comparisonProjectRouteConstants.ts'
 import {appDatabaseService} from './comparisonProjectRouteServices.ts'
 

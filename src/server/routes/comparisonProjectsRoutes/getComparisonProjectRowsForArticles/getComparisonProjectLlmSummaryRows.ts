@@ -1,7 +1,7 @@
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
 import {getEffectiveFullTextStrategyId} from '../../../fullText/fullTextStrategy.ts'
 import {deriveStrictSummaryAnswer, getNormalizedSummaryAnswer} from '../../../utils/judgmentAnswers.ts'
-import {getComparisonProjectContentKey} from '../comparisonProjectJudgmentRows.ts'
+import {getComparisonProjectContentKey} from '../comparisonProjectJudgmentRows/getComparisonProjectContentKey.ts'
 import {summaryPromptId} from '../comparisonProjectRouteConstants.ts'
 import type {ComparisonProjectLlmRow} from '../comparisonProjectRouteTypes.ts'
 import type {ComparisonProjectPromptConfig, ComparisonProjectScope} from '../comparisonProjectScopeTypes.ts'

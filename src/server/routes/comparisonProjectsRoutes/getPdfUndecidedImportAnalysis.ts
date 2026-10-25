@@ -1,9 +1,9 @@
 import {
-  type ComparisonProjectConflictResolutionImportMode,
   getComparisonProjectConflictResolutionImportAnalyzeResult,
   getComparisonProjectConflictResolutionImportPlan,
-  getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact,
 } from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportMode} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
+import {getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact.ts'
 import {
   getComparisonProjectConflictResolutionTransferArtifactFromPdfImport,
   type ParsedPdfConflictResolutionImport,

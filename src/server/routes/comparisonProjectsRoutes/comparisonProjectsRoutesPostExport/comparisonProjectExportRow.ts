@@ -1,5 +1,5 @@
 import type {ComparisonProjectConflictComment} from '../comparisonProjectConflictComment.ts'
-import type {ComparisonProjectJudgmentRow} from '../comparisonProjectJudgmentRows.ts'
+import type {ComparisonProjectJudgmentRow} from '../comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsTypes.ts'
 import type {ComparisonProjectConflictResolution} from '../comparisonProjectRouteTypes.ts'
 
 export type ComparisonProjectExportRow = ComparisonProjectJudgmentRow & {

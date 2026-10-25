@@ -1,8 +1,8 @@
 import {
   getComparisonProjectConflictResolutionImportAnalyzeResult,
   getComparisonProjectConflictResolutionImportPlan,
-  getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact,
 } from './comparisonProjectConflictResolutionImport.ts'
+import {getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceRowsFromTransferArtifact.ts'
 import {getConflictResolutionImportCommentChanges} from './comparisonProjectConflictResolutionImportCandidates.ts'
 import {
   getComparisonProjectConflictResolutionArtifactImportRequest,
