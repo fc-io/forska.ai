@@ -201,7 +201,6 @@ const forbiddenNormalForegroundSqlPatterns = [
   {label: 'json extraction', pattern: /\bjson_(?:extract|extract_string|array|object|valid|type)\s*\(/iu},
 ]
 const normalForegroundSqlAllowlist = new Set([
-
   'src/server/routes/DuckdbStudioRoutes.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentPendingJudgments.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts',
