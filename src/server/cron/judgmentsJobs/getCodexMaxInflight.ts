@@ -1,5 +1,9 @@
 import {getInferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
 
+const codexDefaultMaxInflight = 35
+
 export const getCodexMaxInflight = (): number => {
-  return Math.max(1, getInferenceRuntimeConfig().codexMaxInflight)
+  const configured = getInferenceRuntimeConfig().codexMaxInflight
+
+  return Number.isFinite(configured) && configured >= 1 ? Math.trunc(configured) : codexDefaultMaxInflight
 }

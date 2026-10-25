@@ -176,12 +176,12 @@ const getMaxInflightRequestsHelpText = (providerKind: string | null | undefined)
   const isRuntimeBacked = ['ollama', 'llmstudio', 'llamacpp', 'sglang', 'vllm'].includes(normalizedProviderKind)
 
   return isCodex
-    ? 'Leave empty to use the provider-family default. Codex App falls back to `CODEX_MAX_INFLIGHT`.'
+    ? 'Leave empty to use the provider-family default. Codex App falls back to `CODEX_MAX_INFLIGHT` (default 35).'
     : normalizedProviderKind === 'claude-code'
       ? 'Leave empty to use the provider-family default. Claude Code falls back to `FORSKA_CLAUDE_CODE_MAX_INFLIGHT` (default 4).'
       : isRuntimeBacked
         ? "Leave empty to use the provider-family default. Runtime-backed providers fall back to the current runtime capacity when available, or Forska's global capacity when no runtime-backed limit is active."
-        : "Leave empty to use the provider-family default. Codex App falls back to `CODEX_MAX_INFLIGHT`, and runtime-backed providers fall back to the current runtime capacity when available or Forska's global capacity."
+        : "Leave empty to use the provider-family default. Codex App falls back to `CODEX_MAX_INFLIGHT` (default 35), and runtime-backed providers fall back to the current runtime capacity when available or Forska's global capacity."
 }
 
 const getProviderPageModelKey = ({
