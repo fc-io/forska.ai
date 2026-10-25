@@ -264,6 +264,7 @@ const CompareProjectExportPage = () => {
             ...(isSummaryMode() ? getCompareProjectCovidenceExportSearchParams(covidenceExportSelection()) : {}),
           } as never,
           replace: true,
+          resetScroll: false,
         })
       },
     ),
