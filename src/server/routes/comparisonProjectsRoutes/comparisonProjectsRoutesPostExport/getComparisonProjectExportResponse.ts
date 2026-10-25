@@ -1,3 +1,4 @@
+import {getComparisonProjectColumnHeader} from '../../../../utils/comparisonProjectColumnHeader.ts'
 import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
 import {getNormalizedComparisonProjectDifferenceFilters} from '../../../../utils/comparisonProjectDifferenceFilter.ts'
 import {csvUtf8Bom, getCsvDownloadHeaders} from '../../../utils/csvResponse.ts'
@@ -10,33 +11,11 @@ import {comparisonProjectJudgmentArticleBatchSize} from '../comparisonProjectRou
 import {appDatabaseService} from '../comparisonProjectRouteServices.ts'
 import type {ComparisonProjectJudgmentsColumn, ComparisonProjectScope} from '../comparisonProjectScopeTypes.ts'
 import {getComparisonProjectRowsWithConflictResolutions} from '../getComparisonProjectRowsWithConflictResolutions.ts'
+import {getComparisonProjectCsvLine} from './comparisonProjectCsvLine.ts'
 import {type ComparisonProjectExportRow, getComparisonProjectExportCellValue} from './comparisonProjectExportRow.ts'
-
-const escapeComparisonProjectCsvValue = (value: string) => {
-  return value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')
-    ? `"${value.replace(/"/g, '""')}"`
-    : value
-}
-
-const getComparisonProjectCsvLine = (values: string[]) => {
-  return `${values.map(escapeComparisonProjectCsvValue).join(',')}\n`
-}
 
 const getComparisonProjectExportDateValue = (value: Date | string | null) => {
   return value ? new Date(value).toISOString() : ''
-}
-
-const getComparisonProjectExportColumnHeader = (column: ComparisonProjectJudgmentsColumn) => {
-  const answerSourceLabel = column.kind === 'human' ? 'Human answer' : `LLM - ${column.modelLabel}`
-
-  return [column.sourceProjectName, column.promptLabel, answerSourceLabel, column.contentLabel]
-    .map((part) => {
-      return part?.trim() ?? ''
-    })
-    .filter((part) => {
-      return part !== ''
-    })
-    .join(' - ')
 }
 
 const getComparisonProjectExportHeaders = (
@@ -49,7 +28,7 @@ const getComparisonProjectExportHeaders = (
     'Date added',
     ...(includeConflictResolution ? ['Conflict Handling', 'Conflict comment'] : []),
     ...columns.map((column) => {
-      return getComparisonProjectExportColumnHeader(column)
+      return getComparisonProjectColumnHeader(column)
     }),
   ]
 }
