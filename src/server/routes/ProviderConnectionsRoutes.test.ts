@@ -707,7 +707,7 @@ test('provider connections route exposes the Claude Code inflight default when n
     const body = (await response.json()) as {data: {connections: Array<{effectiveMaxInflightRequests: number}>}}
 
     expect(response.status).toBe(200)
-    expect(body.data.connections[0]?.effectiveMaxInflightRequests).toBe(4)
+    expect(body.data.connections[0]?.effectiveMaxInflightRequests).toBe(24)
   } finally {
     if (previousMaxInflight !== undefined) {
       process.env.FORSKA_CLAUDE_CODE_MAX_INFLIGHT = previousMaxInflight
