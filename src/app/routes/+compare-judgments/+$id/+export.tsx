@@ -403,17 +403,17 @@ const CompareProjectExportPage = () => {
                 onRowFiltersChange={updateRowFilters}
                 rowFilters={rowFilters()}
               />
-              <CompareProjectCovidenceExportSection
-                comparisonProject={comparisonProject()}
-                comparisonProjectId={comparisonProjectId()}
-                selection={covidenceExportSelection()}
-                onSelectionChange={setCovidenceExportSelection}
-              />
               <CompareProjectResolutionExportSection
                 allowConflictResolution={comparisonProject().allowConflictResolution}
                 comparisonProjectId={comparisonProjectId()}
                 exportRequest={getCompareProjectExportRequestBody(urlState())}
                 resolutionCount={comparisonProject().resolutionCount}
+              />
+              <CompareProjectCovidenceExportSection
+                comparisonProject={comparisonProject()}
+                comparisonProjectId={comparisonProjectId()}
+                selection={covidenceExportSelection()}
+                onSelectionChange={setCovidenceExportSelection}
               />
             </div>
           )

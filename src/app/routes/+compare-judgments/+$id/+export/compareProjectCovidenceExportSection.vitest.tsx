@@ -165,11 +165,15 @@ describe('CompareProjectCovidenceExportSection', () => {
       expect(container.querySelector('h2')?.textContent).toBe('Export to Covidence')
       expect(container.textContent).toContain('This export ignores the filters above.')
       expect(getLabels(container)).toEqual([
-        'Source A - Summary - LLM - GPT 5.5 - Title + Abstract:',
-        'Source A - Summary - LLM - Opus 5.5 - Title + Abstract:',
+        'Summary - LLM - GPT 5.5 - Title + Abstract:',
+        'Summary - LLM - Opus 5.5 - Title + Abstract:',
         'Summary - Human answer:',
         'Conflict resolution:',
       ])
+      Array.from(container.querySelectorAll('label')).forEach((label) => {
+        expect(label.classList.contains('truncate')).toBe(false)
+        expect(label.getAttribute('title')).toBeNull()
+      })
       expect(container.querySelector('[aria-label="Summary - Human answer"]')?.textContent).toContain('None')
       expect(container.querySelector('[aria-label="Conflict resolution"]')).not.toBeNull()
     } finally {

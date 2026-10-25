@@ -1,3 +1,12 @@
+import {
+  type ComparisonProjectColumnHeaderColumn,
+  getComparisonProjectColumnHeader,
+} from '../../../../../utils/comparisonProjectColumnHeader.ts'
+
+export const getCompareProjectCovidenceExportColumnLabel = (column: ComparisonProjectColumnHeaderColumn) => {
+  return getComparisonProjectColumnHeader({...column, sourceProjectName: null})
+}
+
 const getArticleCountText = (count: number) => {
   return count === 1 ? '1 article' : `${count.toLocaleString()} articles`
 }

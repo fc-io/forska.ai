@@ -8,7 +8,6 @@ import {
   fetchComparisonProjectCovidenceExportCount,
   getComparisonProjectCovidenceExportPath,
 } from '../../../../../services/comparisonProjectsService.ts'
-import {getComparisonProjectColumnHeader} from '../../../../../utils/comparisonProjectColumnHeader.ts'
 import {getOrderedComparisonProjectColumns} from '../../../../../utils/comparisonProjectColumnOrder.ts'
 import {getComparisonProjectSummaryConflictResolutionOptions} from '../../../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import {
@@ -18,6 +17,7 @@ import {
 import {downloadFileFromPost} from '../../../../utils/downloadCsv.ts'
 import {
   getCompareProjectCovidenceExportButtonLabel,
+  getCompareProjectCovidenceExportColumnLabel,
   getCompareProjectCovidenceExportHint,
 } from './compareProjectCovidenceExportLabels.ts'
 import {
@@ -129,15 +129,13 @@ const CompareProjectCovidenceExportPanel = (props: CompareProjectCovidenceExport
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <For each={orderedColumns()}>
             {(column) => {
-              const header = getComparisonProjectColumnHeader(column)
+              const label = getCompareProjectCovidenceExportColumnLabel(column)
 
               return (
                 <div class="flex min-w-0 flex-col gap-2">
-                  <label class="font-medium text-sm truncate" title={header}>
-                    {header}:
-                  </label>
+                  <label class="font-medium text-sm break-words">{label}:</label>
                   <MultiSelect
-                    ariaLabel={header}
+                    ariaLabel={label}
                     options={answerOptions}
                     placeholder="None"
                     values={props.selection.columnValues[column.id] ?? []}
@@ -153,7 +151,7 @@ const CompareProjectCovidenceExportPanel = (props: CompareProjectCovidenceExport
           </For>
           <Show when={props.comparisonProject.allowConflictResolution}>
             <div class="flex min-w-0 flex-col gap-2">
-              <label class="font-medium text-sm truncate">Conflict resolution:</label>
+              <label class="font-medium text-sm break-words">Conflict resolution:</label>
               <MultiSelect
                 ariaLabel="Conflict resolution"
                 options={conflictResolutionOptions()}
