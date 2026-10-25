@@ -20,6 +20,8 @@ import {comparisonProjectsRoutesPostConflictResolutionsImportAnalyze} from './co
 import {comparisonProjectsRoutesPostConflictResolutionsImportCommit} from './comparisonProjectsRoutes/comparisonProjectsRoutesPostConflictResolutionsImportCommit.ts'
 import {comparisonProjectsRoutesPostConflictResolutionsImportPdfAnalyze} from './comparisonProjectsRoutes/comparisonProjectsRoutesPostConflictResolutionsImportPdfAnalyze.ts'
 import {comparisonProjectsRoutesPostConflictResolutionsImportPdfCommit} from './comparisonProjectsRoutes/comparisonProjectsRoutesPostConflictResolutionsImportPdfCommit.ts'
+import {comparisonProjectsRoutesPostCovidenceExport} from './comparisonProjectsRoutes/comparisonProjectsRoutesPostCovidenceExport.ts'
+import {comparisonProjectsRoutesPostCovidenceExportCount} from './comparisonProjectsRoutes/comparisonProjectsRoutesPostCovidenceExportCount.ts'
 import {comparisonProjectsRoutesPostCreate} from './comparisonProjectsRoutes/comparisonProjectsRoutesPostCreate.ts'
 import {comparisonProjectsRoutesPostExport} from './comparisonProjectsRoutes/comparisonProjectsRoutesPostExport.ts'
 import {comparisonProjectsRoutesPostFromProject} from './comparisonProjectsRoutes/comparisonProjectsRoutesPostFromProject.ts'
@@ -52,6 +54,8 @@ export const comparisonProjectsRoutes = new Elysia()
     comparisonProjectsRoutesPostConflictResolutionsImportCommit,
     comparisonProjectsRoutesPostConflictResolutionsImportPdfCommit,
     comparisonProjectsRoutesPostExport,
+    comparisonProjectsRoutesPostCovidenceExportCount,
+    comparisonProjectsRoutesPostCovidenceExport,
     comparisonProjectsRoutesPostCreate,
     comparisonProjectsRoutesPatchUpdate,
     comparisonProjectsRoutesDeletePurge,

@@ -118,6 +118,29 @@ test('comparison product reads are admitted through bounded serving helpers', ()
   )
 })
 
+test('Covidence export count and CSV read the same bounded serving row batches', () => {
+  const covidenceExportFolder = './comparisonProjectsRoutes/comparisonProjectsRoutesPostCovidenceExport'
+  const rowBatchBody = getFunctionBody(
+    'forEachComparisonProjectCovidenceExportRowBatch',
+    getRouteSource(`${covidenceExportFolder}/forEachComparisonProjectCovidenceExportRowBatch.ts`),
+  )
+  const countBody = getFunctionBody(
+    'getComparisonProjectCovidenceExportCount',
+    getRouteSource(`${covidenceExportFolder}/getComparisonProjectCovidenceExportCount.ts`),
+  )
+  const csvBody = getFunctionBody(
+    'getComparisonProjectCovidenceExportResponse',
+    getRouteSource(`${covidenceExportFolder}/getComparisonProjectCovidenceExportResponse.ts`),
+  )
+
+  expect(rowBatchBody).toContain('forEachComparisonProjectServingJudgmentRowBatch')
+  expect(rowBatchBody).toContain('getComparisonProjectCovidenceExportSelectedRows')
+  expect(rowBatchBody).not.toContain('forEachComparisonProjectJudgmentRowBatch')
+  expect(rowBatchBody).not.toContain(' OFFSET ')
+  expect(countBody).toContain('forEachComparisonProjectCovidenceExportRowBatch')
+  expect(csvBody).toContain('forEachComparisonProjectCovidenceExportRowBatch')
+})
+
 test('comparison source writes stay owner routed and queue serving rebuilds', () => {
   const createBody = getRouteBody(
     ".post(\n  '/api/comparison-projects'",
