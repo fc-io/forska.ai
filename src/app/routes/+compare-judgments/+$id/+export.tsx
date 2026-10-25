@@ -35,6 +35,12 @@ import {
   getSelectableComparisonProjectRowFilters,
 } from '../../../../utils/comparisonProjectRowFilter.ts'
 import {downloadFileFromPost} from '../../../utils/downloadCsv.ts'
+import {CompareProjectCovidenceExportSection} from './+export/compareProjectCovidenceExportSection.tsx'
+import {
+  type CompareProjectCovidenceExportUrlSelection,
+  getCompareProjectCovidenceExportSearchParams,
+  getInitialCompareProjectCovidenceExportSelection,
+} from './+export/compareProjectCovidenceExportUrlState.ts'
 import {CompareProjectExportFilters} from './+export/compareProjectExportFilters.tsx'
 import {CompareProjectExportMetadata} from './+export/compareProjectExportMetadata.tsx'
 import {
@@ -65,6 +71,10 @@ const CompareProjectExportPage = () => {
   const search = Route.useSearch()
   const navigate = useNavigate()
   const initialUrlState = getInitialCompareProjectExportUrlState(search() as Record<string, unknown>)
+  const [covidenceExportSelection, setCovidenceExportSelection] =
+    createSignal<CompareProjectCovidenceExportUrlSelection>(
+      getInitialCompareProjectCovidenceExportSelection(search() as Record<string, unknown>),
+    )
   const comparisonProjectId = () => {
     return getComparisonProjectId(params() as Record<string, string> | undefined)
   }
@@ -237,6 +247,8 @@ const CompareProjectExportPage = () => {
         conflictResolutionFilters,
         conflictResolutionProvenanceFilters,
         showConflictResolutionFilter,
+        covidenceExportSelection,
+        isSummaryMode,
         isMounted,
       ],
       () => {
@@ -247,7 +259,10 @@ const CompareProjectExportPage = () => {
         void navigate({
           to: '/compare-judgments/$id/export',
           params: {id: comparisonProjectId()} as never,
-          search: getCompareProjectExportSearchParams(urlState()) as never,
+          search: {
+            ...getCompareProjectExportSearchParams(urlState()),
+            ...(isSummaryMode() ? getCompareProjectCovidenceExportSearchParams(covidenceExportSelection()) : {}),
+          } as never,
           replace: true,
         })
       },
@@ -387,6 +402,12 @@ const CompareProjectExportPage = () => {
                 onExportPdf={handlePdfExport}
                 onRowFiltersChange={updateRowFilters}
                 rowFilters={rowFilters()}
+              />
+              <CompareProjectCovidenceExportSection
+                comparisonProject={comparisonProject()}
+                comparisonProjectId={comparisonProjectId()}
+                selection={covidenceExportSelection()}
+                onSelectionChange={setCovidenceExportSelection}
               />
               <CompareProjectResolutionExportSection
                 allowConflictResolution={comparisonProject().allowConflictResolution}
