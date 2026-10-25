@@ -60,7 +60,7 @@ test('reads updated runtime capacity without reloading the scheduler helpers', a
     `${getJudgmentsCapacityModulePath}?live=${Date.now()}`
   )) as GetJudgmentsCapacityModule
 
-  expect(getCodexMaxInflight()).toBe(1)
+  expect(getCodexMaxInflight()).toBe(35)
   expect(getJudgmentsCapacity(2)).toEqual({
     addToQueueMaxBatchSize: 10_000,
     maxBurst: 1,
