@@ -3,11 +3,11 @@ import {expect, test} from 'bun:test'
 import {getClaudeCodeMaxInflight} from './getClaudeCodeMaxInflight.ts'
 import {getProviderBucketSnapshot} from './providerAdmissionLease.ts'
 
-test('getClaudeCodeMaxInflight defaults to 4 and honors FORSKA_CLAUDE_CODE_MAX_INFLIGHT', () => {
-  expect(getClaudeCodeMaxInflight({})).toBe(4)
+test('getClaudeCodeMaxInflight defaults to 24 and honors FORSKA_CLAUDE_CODE_MAX_INFLIGHT', () => {
+  expect(getClaudeCodeMaxInflight({})).toBe(24)
   expect(getClaudeCodeMaxInflight({FORSKA_CLAUDE_CODE_MAX_INFLIGHT: '2'})).toBe(2)
-  expect(getClaudeCodeMaxInflight({FORSKA_CLAUDE_CODE_MAX_INFLIGHT: '0'})).toBe(4)
-  expect(getClaudeCodeMaxInflight({FORSKA_CLAUDE_CODE_MAX_INFLIGHT: 'many'})).toBe(4)
+  expect(getClaudeCodeMaxInflight({FORSKA_CLAUDE_CODE_MAX_INFLIGHT: '0'})).toBe(24)
+  expect(getClaudeCodeMaxInflight({FORSKA_CLAUDE_CODE_MAX_INFLIGHT: 'many'})).toBe(24)
 })
 
 test('Claude Code connections without a saved limit use the Claude Code family default', () => {

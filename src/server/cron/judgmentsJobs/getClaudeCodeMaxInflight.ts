@@ -1,4 +1,4 @@
-const claudeCodeDefaultMaxInflight = 4
+const claudeCodeDefaultMaxInflight = 24
 
 export const getClaudeCodeMaxInflight = (envValues: Record<string, string | undefined> = process.env): number => {
   const configured = Number(String(envValues.FORSKA_CLAUDE_CODE_MAX_INFLIGHT ?? '').trim() || Number.NaN)
