@@ -10,6 +10,7 @@ import type {
   ComparisonProjectConflictResolutionFilter,
   ComparisonProjectConflictResolutionProvenanceFilter,
 } from '../utils/comparisonProjectConflictResolutionFilter.ts'
+import type {ComparisonProjectCovidenceExportRequest} from '../utils/comparisonProjectCovidenceExportSelection.ts'
 import type {
   ComparisonProjectDifferenceColumn,
   ComparisonProjectDifferenceFilter,
@@ -1044,6 +1045,21 @@ export const getComparisonProjectServingRefetchInterval = (
   servingStatus: ComparisonProjectServingStatus | undefined,
 ) => {
   return servingStatus === undefined ? false : (comparisonProjectServingRefetchIntervals[servingStatus] ?? false)
+}
+
+export const getComparisonProjectCovidenceExportPath = (comparisonProjectId: string) => {
+  return `/api/comparison-projects/${encodeURIComponent(comparisonProjectId)}/covidence-export`
+}
+
+export const fetchComparisonProjectCovidenceExportCount = async (
+  comparisonProjectId: string,
+  request: ComparisonProjectCovidenceExportRequest,
+) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})['covidence-export'].count.post(
+    request,
+  )
+
+  return getResponseData<{totalCount: number}>(response, 'Failed to count articles for the Covidence export')
 }
 
 export const getComparisonProjectConflictResolutionExportRequestPath = (comparisonProjectId: string) => {
