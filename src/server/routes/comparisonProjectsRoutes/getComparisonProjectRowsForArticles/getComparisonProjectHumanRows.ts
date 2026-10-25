@@ -1,6 +1,6 @@
 import {getDateValue, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import {normalizeSummaryAnswerValue} from '../../../utils/judgmentAnswers.ts'
-import type {ComparisonProjectJudgmentHumanRow} from '../comparisonProjectJudgmentRows.ts'
+import type {ComparisonProjectJudgmentHumanRow} from '../comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsTypes.ts'
 import {summaryPromptId} from '../comparisonProjectRouteConstants.ts'
 import {appDatabaseService} from '../comparisonProjectRouteServices.ts'
 import type {AppQueryRunner} from '../comparisonProjectRouteTypes.ts'

@@ -2,11 +2,11 @@ import {Elysia, t} from 'elysia'
 
 import {rejectLegacyFullTextNoImagesBody} from '../../utils/rejectLegacyFullTextNoImagesBody.ts'
 import {writeComparisonProjectConflictCommentImportChanges} from './comparisonProjectConflictComment.ts'
+import type {ComparisonProjectConflictResolutionImportSummary} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportAnalyzeTypes.ts'
 import type {
   ComparisonProjectConflictResolutionImportMode,
   ComparisonProjectConflictResolutionImportSourceRow,
-  ComparisonProjectConflictResolutionImportSummary,
-} from './comparisonProjectConflictResolutionImport.ts'
+} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 import {getConflictResolutionImportCommentChanges} from './comparisonProjectConflictResolutionImportCandidates.ts'
 import {getConflictResolutionImportRejectedError} from './comparisonProjectConflictResolutionImportValidation.ts'
 import {checkpointComparisonProjectMutation} from './comparisonProjectMutationCheckpoint.ts'

@@ -1,6 +1,7 @@
 import {getJsonValue} from '../../../../../services/appQueryHelpers.ts'
 import {SimplePdfDocument} from '../../../../../utils/simplePdf.ts'
-import {getComparisonProjectColumnId, getComparisonProjectContentKey} from '../../../comparisonProjectJudgmentRows.ts'
+import {getComparisonProjectColumnId} from '../../../comparisonProjectJudgmentRows/getComparisonProjectColumnId.ts'
+import {getComparisonProjectContentKey} from '../../../comparisonProjectJudgmentRows/getComparisonProjectContentKey.ts'
 import {summaryPromptId} from '../../../comparisonProjectRouteConstants.ts'
 import type {ComparisonProjectLlmRow} from '../../../comparisonProjectRouteTypes.ts'
 import type {

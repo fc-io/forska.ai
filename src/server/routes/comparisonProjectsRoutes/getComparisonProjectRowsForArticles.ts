@@ -1,8 +1,6 @@
-import {
-  getComparisonProjectBatchRows,
-  getComparisonProjectRequiredColumnIds,
-  getComparisonProjectScopedArticleBatch,
-} from './comparisonProjectJudgmentRows.ts'
+import {getComparisonProjectBatchRows} from './comparisonProjectJudgmentRows/getComparisonProjectBatchRows.ts'
+import {getComparisonProjectRequiredColumnIds} from './comparisonProjectJudgmentRows/getComparisonProjectRequiredColumnIds.ts'
+import {getComparisonProjectScopedArticleBatch} from './comparisonProjectJudgmentRows/getComparisonProjectScopedArticleBatch.ts'
 import {articleTable} from './comparisonProjectRouteConstants.ts'
 import {appDatabaseService} from './comparisonProjectRouteServices.ts'
 import type {AppQueryRunner} from './comparisonProjectRouteTypes.ts'

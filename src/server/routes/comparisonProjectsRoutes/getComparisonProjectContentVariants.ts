@@ -6,7 +6,7 @@ import {
   getComparisonProjectContentLabel,
   getUniqueComparisonProjectContentDimensions,
 } from './comparisonProjectContentDimensions.ts'
-import {getComparisonProjectContentKey} from './comparisonProjectJudgmentRows.ts'
+import {getComparisonProjectContentKey} from './comparisonProjectJudgmentRows/getComparisonProjectContentKey.ts'
 import type {
   ComparisonProjectContentDimension,
   ComparisonProjectContentFlags,

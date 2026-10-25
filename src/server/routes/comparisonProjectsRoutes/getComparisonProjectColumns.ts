@@ -6,7 +6,7 @@ import {
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {getJsonValue} from '../../services/appQueryHelpers.ts'
 import {getComparisonProjectContentLabel} from './comparisonProjectContentDimensions.ts'
-import {getComparisonProjectColumnId} from './comparisonProjectJudgmentRows.ts'
+import {getComparisonProjectColumnId} from './comparisonProjectJudgmentRows/getComparisonProjectColumnId.ts'
 import {summaryPromptId} from './comparisonProjectRouteConstants.ts'
 import type {
   ComparisonProjectContentVariant,

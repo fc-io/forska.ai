@@ -1,9 +1,7 @@
 import {Elysia, t} from 'elysia'
 
-import type {
-  ComparisonProjectConflictResolutionImportMode,
-  ComparisonProjectConflictResolutionImportSummary,
-} from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportSummary} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportAnalyzeTypes.ts'
+import type {ComparisonProjectConflictResolutionImportMode} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 import {getConflictResolutionImportRejectedError} from './comparisonProjectConflictResolutionImportValidation.ts'
 import {getComparisonProjectRecordValue} from './comparisonProjectRecord.ts'
 import {appDatabaseService} from './comparisonProjectRouteServices.ts'

@@ -3,13 +3,13 @@ import {Elysia, t} from 'elysia'
 import type {ComparisonProjectServingStatus} from '../../../db/schemaTypes.ts'
 import {appDatabaseService} from './comparisonProjectRouteServices.ts'
 import type {ComparisonProjectScope} from './comparisonProjectScopeTypes.ts'
-import {
-  type ComparisonProjectAdditionalStats,
-  type ComparisonProjectStatsCategoryBreakdown,
-  type ComparisonProjectStatsComparison,
-  type ComparisonProjectStatsConflictResolutionProvenance,
-  getComparisonProjectStatsWithCategoryBreakdowns,
-} from './comparisonProjectStats.ts'
+import {getComparisonProjectStatsWithCategoryBreakdowns} from './comparisonProjectStats.ts'
+import type {
+  ComparisonProjectAdditionalStats,
+  ComparisonProjectStatsCategoryBreakdown,
+  ComparisonProjectStatsComparison,
+  ComparisonProjectStatsConflictResolutionProvenance,
+} from './comparisonProjectStats/comparisonProjectStatsTypes.ts'
 import {getComparisonProjectScope} from './getComparisonProjectScope.ts'
 import {getIsSummaryMode} from './getIsSummaryMode.ts'
 

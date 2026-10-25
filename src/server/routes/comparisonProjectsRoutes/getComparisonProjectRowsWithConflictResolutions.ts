@@ -12,7 +12,7 @@ import {
   getComparisonProjectConflictResolutionProvenanceMatchesCurrent,
   getComparisonProjectConflictResolutionReviewer,
 } from './comparisonProjectConflictResolutionProvenance.ts'
-import type {ComparisonProjectJudgmentRow} from './comparisonProjectJudgmentRows.ts'
+import type {ComparisonProjectJudgmentRow} from './comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsTypes.ts'
 import {comparisonProjectConflictResolutionTable} from './comparisonProjectRouteConstants.ts'
 import {appDatabaseService} from './comparisonProjectRouteServices.ts'
 import type {ComparisonProjectConflictResolution} from './comparisonProjectRouteTypes.ts'

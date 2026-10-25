@@ -1,10 +1,10 @@
 import {getComparisonProjectConflictCommentTextsByArticleId} from './comparisonProjectConflictComment.ts'
-import {
-  type ComparisonProjectConflictResolutionImportOverwriteMode,
-  type ComparisonProjectConflictResolutionImportSourceRow,
-  getComparisonProjectConflictResolutionImportCommentChanges,
-  getComparisonProjectConflictResolutionImportPlan,
-} from './comparisonProjectConflictResolutionImport.ts'
+import {getComparisonProjectConflictResolutionImportPlan} from './comparisonProjectConflictResolutionImport.ts'
+import {getComparisonProjectConflictResolutionImportCommentChanges} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportCommentChanges.ts'
+import type {
+  ComparisonProjectConflictResolutionImportOverwriteMode,
+  ComparisonProjectConflictResolutionImportSourceRow,
+} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 import type {AppQueryRunner} from './comparisonProjectRouteTypes.ts'
 
 export type ComparisonProjectConflictResolutionImportCandidate = ReturnType<

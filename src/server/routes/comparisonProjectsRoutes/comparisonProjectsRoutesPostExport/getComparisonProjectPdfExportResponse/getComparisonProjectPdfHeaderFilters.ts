@@ -2,12 +2,12 @@ import {
   getComparisonProjectArticleCategoryFiltersLabel,
   getNormalizedComparisonProjectArticleCategoryFilters,
 } from '../../../../../utils/comparisonProjectArticleCategoryFilter.ts'
+import type {ComparisonProjectConflictResolutionFilter} from '../../../../../utils/comparisonProjectConflictResolutionFilter.ts'
 import {getComparisonProjectDifferenceFiltersLabel} from '../../../../../utils/comparisonProjectDifferenceFilter.ts'
 import {getComparisonProjectRowFiltersLabel} from '../../../../../utils/comparisonProjectRowFilter.ts'
 import {getComparisonProjectConflictResolutionOptionByValue} from '../../comparisonProjectConflictResolutionOptions.ts'
 import type {ComparisonProjectConflictResolutionProvenanceFilter} from '../../comparisonProjectConflictResolutionProvenance.ts'
 import type {ComparisonProjectJudgmentFilters} from '../../comparisonProjectJudgmentFilters.ts'
-import type {ComparisonProjectConflictResolutionFilter} from '../../comparisonProjectJudgmentRows.ts'
 import type {ComparisonProjectScope} from '../../comparisonProjectScopeTypes.ts'
 import {getIsSummaryMode} from '../../getIsSummaryMode.ts'
 

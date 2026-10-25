@@ -1,7 +1,5 @@
-import {
-  type ComparisonProjectConflictResolutionImportSummary,
-  getComparisonProjectConflictResolutionImportPlan,
-} from './comparisonProjectConflictResolutionImport.ts'
+import {getComparisonProjectConflictResolutionImportPlan} from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportSummary} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportAnalyzeTypes.ts'
 
 export const getConflictResolutionImportSummary = (params: {
   importedCount: number

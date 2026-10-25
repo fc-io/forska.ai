@@ -1,4 +1,4 @@
-import type {ComparisonProjectConflictResolutionImportSourceRow} from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportSourceRow} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 import {
   type ComparisonProjectConflictResolutionImportCandidate,
   getComparisonProjectConflictResolutionImportCandidateSourceRow,

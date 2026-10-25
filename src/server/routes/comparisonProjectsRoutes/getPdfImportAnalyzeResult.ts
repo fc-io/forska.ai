@@ -1,7 +1,5 @@
-import type {
-  ComparisonProjectConflictResolutionImportAnalyzeResult,
-  ComparisonProjectConflictResolutionImportMode,
-} from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportAnalyzeResult} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportAnalyzeTypes.ts'
+import type {ComparisonProjectConflictResolutionImportMode} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 import {
   getParsedPdfConflictResolutionImportArticleCount,
   type ParsedPdfConflictResolutionImport,

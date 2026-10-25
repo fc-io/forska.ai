@@ -5,7 +5,7 @@ import {
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import type {DuckdbTransactionRunner} from '../../utils/duckdbService.ts'
 import {HttpError} from '../../utils/httpError.ts'
-import type {ComparisonProjectConflictResolutionImportCommentChange} from './comparisonProjectConflictResolutionImport.ts'
+import type {ComparisonProjectConflictResolutionImportCommentChange} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
 
 export const comparisonProjectConflictCommentTable = 'app.comparison_project_conflict_comment'
 

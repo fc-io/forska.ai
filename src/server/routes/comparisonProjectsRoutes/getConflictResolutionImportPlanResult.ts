@@ -1,12 +1,14 @@
 import {comparisonProjectConflictCommentTable} from './comparisonProjectConflictComment.ts'
+import {getComparisonProjectConflictResolutionImportPlan} from './comparisonProjectConflictResolutionImport.ts'
+import type {
+  ComparisonProjectConflictResolutionImportMode,
+  ComparisonProjectConflictResolutionImportSourceRow,
+} from './comparisonProjectConflictResolutionImport/comparisonProjectConflictResolutionImportTypes.ts'
+import {getComparisonProjectConflictResolutionImportSourceRowsSql} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceRowsSql.ts'
 import {
-  type ComparisonProjectConflictResolutionImportMode,
-  type ComparisonProjectConflictResolutionImportSourceRow,
   type ComparisonProjectConflictResolutionImportSourceRowQueryRow,
-  getComparisonProjectConflictResolutionImportPlan,
-  getComparisonProjectConflictResolutionImportSourceRowsSql,
   getComparisonProjectConflictResolutionImportSourceRowValue,
-} from './comparisonProjectConflictResolutionImport.ts'
+} from './comparisonProjectConflictResolutionImport/getComparisonProjectConflictResolutionImportSourceRowValue.ts'
 import {getConflictResolutionImportRejectedError} from './comparisonProjectConflictResolutionImportValidation.ts'
 import {getComparisonProjectPromptTypeOptions} from './comparisonProjectConflictResolutionOptions.ts'
 import {

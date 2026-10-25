@@ -35,40 +35,6 @@ import {getComparisonProjectServingJudgmentRows} from './comparisonProjectJudgme
 import {getComparisonProjectServingMemberSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingMemberSql.ts'
 import {getComparisonProjectSearchQuery} from './comparisonProjectJudgmentSearch.ts'
 
-export type {ComparisonProjectConflictResolutionFilter} from '../../../utils/comparisonProjectConflictResolutionFilter.ts'
-export type {
-  ComparisonProjectArticleCategoryFilterSelection,
-  ComparisonProjectConflictResolutionFilterSelection,
-  ComparisonProjectDifferenceFilterSelection,
-  ComparisonProjectJudgmentHumanRow,
-  ComparisonProjectJudgmentLlmRow,
-  ComparisonProjectJudgmentRow,
-  ComparisonProjectRowFilterSelection,
-  ComparisonProjectScopedArticle,
-} from './comparisonProjectJudgmentRows/comparisonProjectJudgmentRowsTypes.ts'
-export {getComparisonProjectFilterSelectionList} from './comparisonProjectJudgmentRows/comparisonProjectServingFilterSql.ts'
-export {getComparisonProjectBatchRows} from './comparisonProjectJudgmentRows/getComparisonProjectBatchRows.ts'
-export {
-  getComparisonProjectBatchCellsByArticle,
-  getComparisonProjectHumanCells,
-  getComparisonProjectLlmCells,
-} from './comparisonProjectJudgmentRows/getComparisonProjectBatchRows/getComparisonProjectBatchCellsByArticle.ts'
-export {getComparisonProjectColumnId} from './comparisonProjectJudgmentRows/getComparisonProjectColumnId.ts'
-export {
-  comparisonProjectContentKeyFullTextStrategySeparator,
-  getComparisonProjectContentKey,
-} from './comparisonProjectJudgmentRows/getComparisonProjectContentKey.ts'
-export {getComparisonProjectRequiredColumnIds} from './comparisonProjectJudgmentRows/getComparisonProjectRequiredColumnIds.ts'
-export {
-  getComparisonProjectScopedArticleBatch,
-  getComparisonProjectScopedArticleBatchSql,
-} from './comparisonProjectJudgmentRows/getComparisonProjectScopedArticleBatch.ts'
-export {getComparisonProjectServingArticlesSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingArticlesSql.ts'
-export {getComparisonProjectServingCellsSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingCellsSql.ts'
-export {getComparisonProjectServingJudgmentCountSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentCountSql.ts'
-export {getComparisonProjectServingJudgmentFilteredCountSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingJudgmentFilteredCountSql.ts'
-export {getComparisonProjectServingMemberSql} from './comparisonProjectJudgmentRows/getComparisonProjectServingMemberSql.ts'
-
 export type ComparisonProjectScopedArticleBatchRequest = {limit: number; offset: number}
 
 type ForEachComparisonProjectJudgmentRowBatchParams = {
