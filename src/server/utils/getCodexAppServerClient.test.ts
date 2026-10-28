@@ -6,6 +6,7 @@ import {join} from 'node:path'
 import {afterEach, expect, mock, test} from 'bun:test'
 
 import {prepareCodexAppServerSpawnHome, removeCodexAppServerSpawnHome} from './codexAppServerHome.ts'
+import {getCodexTurnErrorEvents} from './codexTurnErrors.ts'
 import {
   type CodexAppServerClient,
   createCodexAppServerClient,
@@ -14,6 +15,7 @@ import {
   getCodexAppServerSingletonForTests,
   getCodexThreadTokenUsageUpdate,
   getCodexTurnAgentMessageText,
+  getCodexTurnErrorNotificationEvent,
   getCodexTurnInput,
   type PrepareCodexAppServerHome,
   resetCodexStderrLogRateLimitForTests,
@@ -33,6 +35,7 @@ type MockJsonRpcRequest = {
 
 type MockNotification =
   | {inputText: string; kind: 'item'; text: string}
+  | {error: unknown; inputText: string; kind: 'error'; willRetry: boolean}
   | {error?: unknown; inputText: string; kind: 'complete'; status: 'completed' | 'failed'}
 
 type MockCodexProcess = EventEmitter & {
@@ -169,6 +172,7 @@ const createMockConcurrentCodexClient = ({
   const inputTextByThreadId = new Map<string, string>()
   const turnIdByInputText = new Map<string, string>()
   const threadReadInputs: string[] = []
+  const requests: MockJsonRpcRequest[] = []
 
   const stdout = new EventEmitter()
   const stderr = new EventEmitter()
@@ -207,6 +211,19 @@ const createMockConcurrentCodexClient = ({
           return
         }
 
+        if (notification.kind === 'error') {
+          send({
+            method: 'error',
+            params: {
+              error: notification.error,
+              threadId: 'thread-1',
+              turnId: turnIdByInputText.get(notification.inputText),
+              willRetry: notification.willRetry,
+            },
+          })
+          return
+        }
+
         send({
           method: 'turn/completed',
           params: {
@@ -239,6 +256,7 @@ const createMockConcurrentCodexClient = ({
         })
         .forEach((line) => {
           const message = JSON.parse(line) as MockJsonRpcRequest
+          requests.push(message)
 
           if (message.method === 'initialize') {
             send({id: message.id, result: {}})
@@ -318,6 +336,7 @@ const createMockConcurrentCodexClient = ({
     getKillCount: () => {
       return killCount
     },
+    requests,
     threadReadInputs,
   }
 }
@@ -889,6 +908,128 @@ test('runJsonTurn recycles the app-server after a turn timeout', async () => {
   expect(result instanceof Error ? result.message : '').toBe('codex app-server: turn timeout')
   await waitForCodexRecycleTimer()
   expect(getKillCount()).toBe(1)
+})
+
+test('runJsonTurn interrupts a timed-out turn so the app-server stops retrying it', async () => {
+  const {client, requests} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    notifications: [],
+    threadReadTextByInputText: {},
+  })
+
+  await client
+    .runJsonTurn({model: 'gpt-5.4', inputText: 'timeout request', outputSchema: {type: 'object'}, timeoutMs: 1})
+    .catch(() => {
+      return null
+    })
+
+  expect(
+    requests
+      .filter((request) => {
+        return request.method === 'turn/interrupt'
+      })
+      .map((request) => {
+        return request.params
+      }),
+  ).toEqual([{threadId: 'thread-1', turnId: 'turn-1'}])
+})
+
+test('runJsonTurn attaches the app-server 429 error notifications to a turn timeout', async () => {
+  const rateLimitError = {
+    additionalDetails: null,
+    codexErrorInfo: {responseTooManyFailedAttempts: {httpStatusCode: 429}},
+    message: 'exceeded retry limit, last status: 429 Too Many Requests, request id: 935f6f8d-850a-4fb8',
+  }
+  const {client} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    notifications: [{error: rateLimitError, inputText: 'throttled request', kind: 'error', willRetry: true}],
+    threadReadTextByInputText: {},
+  })
+
+  const error = await client
+    .runJsonTurn({model: 'gpt-5.4', inputText: 'throttled request', outputSchema: {type: 'object'}, timeoutMs: 50})
+    .then(
+      () => {
+        return null
+      },
+      (caught: unknown) => {
+        return caught
+      },
+    )
+
+  expect(error instanceof Error ? error.message : '').toBe('codex app-server: turn timeout')
+  expect(getCodexTurnErrorEvents(error)).toEqual([
+    {
+      additionalDetails: null,
+      codexErrorInfo: 'responseTooManyFailedAttempts',
+      httpStatusCode: 429,
+      message: rateLimitError.message,
+      willRetry: true,
+    },
+  ])
+})
+
+test('runJsonTurn attaches the structured turn error to a failed turn', async () => {
+  const {client} = createMockConcurrentCodexClient({
+    expectedTurnCount: 1,
+    notifications: [
+      {
+        error: {codexErrorInfo: 'rateLimitExceeded', message: 'Rate limit reached for gpt-6-astra'},
+        inputText: 'failed request',
+        kind: 'complete',
+        status: 'failed',
+      },
+    ],
+    threadReadTextByInputText: {'failed request': ''},
+  })
+
+  const error = await client
+    .runJsonTurn({model: 'gpt-5.4', inputText: 'failed request', outputSchema: {type: 'object'}})
+    .then(
+      () => {
+        return null
+      },
+      (caught: unknown) => {
+        return caught
+      },
+    )
+
+  expect(error instanceof Error ? error.message : '').toBe(
+    'codex app-server: turn failed: Rate limit reached for gpt-6-astra',
+  )
+  expect(getCodexTurnErrorEvents(error)).toEqual([
+    {
+      additionalDetails: null,
+      codexErrorInfo: 'rateLimitExceeded',
+      httpStatusCode: null,
+      message: 'Rate limit reached for gpt-6-astra',
+      willRetry: false,
+    },
+  ])
+})
+
+test('getCodexTurnErrorNotificationEvent only reads error notifications for the requested turn', () => {
+  const notification = {
+    method: 'error',
+    params: {
+      error: {codexErrorInfo: {responseStreamDisconnected: {httpStatusCode: 429}}, message: 'Reconnecting... 2/5'},
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      willRetry: true,
+    },
+  }
+
+  expect(getCodexTurnErrorNotificationEvent(notification, 'turn-1')).toEqual({
+    additionalDetails: null,
+    codexErrorInfo: 'responseStreamDisconnected',
+    httpStatusCode: 429,
+    message: 'Reconnecting... 2/5',
+    willRetry: true,
+  })
+  expect(getCodexTurnErrorNotificationEvent(notification, 'turn-2')).toBeNull()
+  expect(
+    getCodexTurnErrorNotificationEvent({method: 'turn/completed', params: {turnId: 'turn-1'}}, 'turn-1'),
+  ).toBeNull()
 })
 
 test('runJsonTurn recycles after max completed turns only once active turns drain', async () => {
