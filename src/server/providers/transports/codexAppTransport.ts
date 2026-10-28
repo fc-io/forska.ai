@@ -5,11 +5,13 @@ import {
   getCurrentCodexDeviceAuthLoginJob,
   startCodexDeviceAuthLogin,
 } from '../../utils/codexCliAuth.ts'
+import {type CodexTurnErrorEvent, getCodexTurnErrorEvents} from '../../utils/codexTurnErrors.ts'
 import {
   type CodexThreadTokenUsage,
   getCodexAppServerClient,
   getCodexBinPath,
 } from '../../utils/getCodexAppServerClient.ts'
+import {codexRateLimitedFailureCode, getCodexConnectionTurnTimeoutMs} from '../codexRateLimitBackoff.ts'
 import {
   getProviderImageDataUrl,
   getProviderPromptParts,
@@ -24,6 +26,7 @@ import {
   type ProviderListedModel,
   type ProviderUsageSnapshot,
 } from '../providerTypes.ts'
+import {providerUsageLimitPattern} from '../providerUsageLimitPattern.ts'
 
 export type CodexRuntimeStatus = {
   appServerReady: boolean
@@ -136,6 +139,93 @@ const getCodexTransientTurnError = (error: unknown): ProviderInvocationError => 
   })
 }
 
+const codexRateLimitTextPattern = /\b429 too many requests\b|\bstatus:?\s*429\b|\bhttp(?: error)?:?\s*429\b/i
+const codexRequestIdPattern = /\brequest[ _-]?id:?\s*([0-9a-z][0-9a-z-]{7,})/i
+
+const isCodexRateLimitEvent = (event: CodexTurnErrorEvent): boolean => {
+  return (
+    event.httpStatusCode === 429
+    || event.codexErrorInfo === 'rateLimitExceeded'
+    || codexRateLimitTextPattern.test(event.message)
+  )
+}
+
+const getCodexTurnErrorTexts = (error: unknown): string[] => {
+  return [
+    getCodexInvocationErrorMessage(error),
+    ...getCodexTurnErrorEvents(error).flatMap((event) => {
+      return event.additionalDetails === null ? [event.message] : [event.message, event.additionalDetails]
+    }),
+  ]
+}
+
+const isCodexUsageLimitTurnError = (error: unknown): boolean => {
+  return (
+    getCodexTurnErrorEvents(error).some((event) => {
+      return event.codexErrorInfo === 'usageLimitExceeded'
+    })
+    || getCodexTurnErrorTexts(error).some((text) => {
+      return providerUsageLimitPattern.test(text)
+    })
+  )
+}
+
+const getCodexRateLimitEvent = (error: unknown): CodexTurnErrorEvent | null => {
+  return getCodexTurnErrorEvents(error).findLast(isCodexRateLimitEvent) ?? null
+}
+
+const isCodexRateLimitedTurnError = (error: unknown): boolean => {
+  return (
+    isTransientCodexTurnError(error)
+    && !isCodexUsageLimitTurnError(error)
+    && (codexRateLimitTextPattern.test(getCodexInvocationErrorMessage(error)) || getCodexRateLimitEvent(error) !== null)
+  )
+}
+
+const getCodexRequestId = (error: unknown): string | null => {
+  return (
+    getCodexTurnErrorTexts(error).reduce<string | null>((requestId, text) => {
+      return requestId ?? codexRequestIdPattern.exec(text)?.[1] ?? null
+    }, null) ?? null
+  )
+}
+
+const getCodexRateLimitedMessage = (error: unknown): string => {
+  const turnMessage = getCodexInvocationErrorMessage(error)
+  const rateLimitEvent = getCodexRateLimitEvent(error)
+
+  return codexRateLimitTextPattern.test(turnMessage) || rateLimitEvent === null
+    ? `Codex backend rate limited (429): ${turnMessage}`
+    : `Codex backend rate limited (429): ${turnMessage}; app-server reported: ${rateLimitEvent.message}`
+}
+
+const getCodexRateLimitedTurnError = (error: unknown): ProviderInvocationError => {
+  const message = getCodexRateLimitedMessage(error)
+  const rateLimitEvent = getCodexRateLimitEvent(error)
+
+  return new ProviderInvocationError(message, {
+    cause: error,
+    code: codexRateLimitedFailureCode,
+    diagnostics: {
+      codexErrorInfo: rateLimitEvent?.codexErrorInfo ?? null,
+      httpStatusCode: 429,
+      message,
+      requestId: getCodexRequestId(error),
+      turnError: getCodexInvocationErrorMessage(error),
+      willRetry: rateLimitEvent?.willRetry ?? null,
+    },
+    providerKind: 'codex',
+  })
+}
+
+const getCodexTurnInvocationError = (error: unknown): unknown => {
+  return isCodexRateLimitedTurnError(error)
+    ? getCodexRateLimitedTurnError(error)
+    : isTransientCodexTurnError(error)
+      ? getCodexTransientTurnError(error)
+      : error
+}
+
 export const getCodexAppTurnImageUrls = (prompt: ProviderInvokePrompt): string[] => {
   return getProviderTransportImages(getProviderPromptParts(prompt).images).map(getProviderImageDataUrl)
 }
@@ -145,6 +235,7 @@ const getCodexAppTurnImageParams = (prompt: ProviderInvokePrompt): {inputImageUr
 }
 
 export const invokeCodexAppModel = async ({
+  connectionId,
   modelName,
   outputSchema,
   prompt,
@@ -152,6 +243,7 @@ export const invokeCodexAppModel = async ({
   systemPrompt,
   version,
 }: {
+  connectionId: string
   modelName: string
   outputSchema: unknown
   prompt: ProviderInvokePrompt
@@ -168,14 +260,10 @@ export const invokeCodexAppModel = async ({
       model: modelName,
       outputSchema,
       signal,
-      timeoutMs: 900_000,
+      timeoutMs: getCodexConnectionTurnTimeoutMs(connectionId),
     })
-    .catch((error) => {
-      if (isTransientCodexTurnError(error)) {
-        throw getCodexTransientTurnError(error)
-      }
-
-      throw error
+    .catch((error: unknown) => {
+      throw getCodexTurnInvocationError(error)
     })
 
   return {text: result.text, usage: getProviderUsageFromCodexThreadTokenUsage(result.usage)}

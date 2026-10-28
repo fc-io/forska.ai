@@ -1,4 +1,5 @@
 import {isClaudeCodeFailureCode} from '../../providers/claudeCodeFailureCodes.ts'
+import {codexRateLimitedFailureCode} from '../../providers/codexRateLimitBackoff.ts'
 import {
   getJudgmentEndpointAvailability,
   recordJudgmentEndpointFailure,
@@ -203,10 +204,12 @@ const isCodexTransientPromptError = ({
   const isCodexContext =
     providerKind === 'codex'
     || code === 'codex_transient_turn_failure'
+    || code === codexRateLimitedFailureCode
     || message.includes('codex app-server')
     || message.includes('rmcp::transport::worker')
   const isPromptScopedTurnFailure =
     code === 'codex_transient_turn_failure'
+    || code === codexRateLimitedFailureCode
     || message.includes('codex app-server: turn failed')
     || message.includes('codex app-server: turn timeout')
     || message.includes('codex app-server timeout:')
