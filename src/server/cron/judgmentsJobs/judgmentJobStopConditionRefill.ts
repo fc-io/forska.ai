@@ -528,6 +528,36 @@ export const finishAdmittedArticlesForJob = async ({
   return insertedCount
 }
 
+export const withdrawReadyPromptsWhenRefillStopped = async ({
+  job,
+  plan,
+  sqliteService,
+}: {
+  job: StopConditionJob
+  plan: JudgmentJobStopPlan
+  sqliteService: SqliteService
+}): Promise<number> => {
+  const readyCount = plan.refill === 'none' ? await sqliteService.getReadyCount(job.id) : 0
+  const withdrawnCount = readyCount > 0 ? await sqliteService.clearActiveQueue(job.id) : 0
+
+  if (withdrawnCount > 0) {
+    stopConditionLogger.log(
+      `${getStopConditionLogKey(job.id)}.withdrawReady`,
+      '[judgmentsJobs] stop condition reached; withdrew unclaimed ready prompts so only claimed work finishes',
+      {
+        component: stopConditionComponent,
+        event: 'stopConditionWithdrewReadyPrompts',
+        jobId: job.id,
+        projectId: job.projectId,
+        stopReason: plan.stopReason,
+        withdrawnCount,
+      },
+    )
+  }
+
+  return withdrawnCount
+}
+
 export const pauseJudgmentJobWhenStopped = async ({
   job,
   plan,

@@ -573,6 +573,77 @@ describe('soft stop', () => {
     expect(await getJobStopState(fixture.jobId)).toMatchObject({status: 'paused', stopReason: 'deadline'})
   })
 
+  test('a passed deadline withdraws unclaimed ready prompts and pauses once claimed work finishes', async () => {
+    const fixture = await createStopJobFixture('deadline-withdraw', 2, 2)
+    const [article1, article2] = fixture.articleIds as [string, string]
+    const [prompt1, prompt2] = fixture.promptIds as [string, string]
+    const service = getSqliteService()
+    const job = {id: fixture.jobId, projectId: fixture.projectId}
+    const now = new Date()
+
+    await service.addReadyPrompts(
+      fixture.jobId,
+      [
+        {articleId: article1, promptId: prompt1},
+        {articleId: article1, promptId: prompt2},
+        {articleId: article2, promptId: prompt1},
+        {articleId: article2, promptId: prompt2},
+      ],
+      'server-stop',
+    )
+
+    const [claimedPrompt] = await service.claimReadyPrompts(fixture.jobId, 'server-stop', 1)
+
+    if (!claimedPrompt) {
+      throw new Error('Failed to claim a ready prompt for the deadline withdraw test')
+    }
+
+    const plan = await getPlan(fixture, {...noConditions, stopAt: now}, now)
+
+    expect(plan).toMatchObject({readyToPause: true, refill: 'none', stopReason: 'deadline'})
+    expect(await getRefill().withdrawReadyPromptsWhenRefillStopped({job, plan, sqliteService: service})).toBe(3)
+    expect(await service.getReadyCount(fixture.jobId)).toBe(0)
+    expect(await service.getClaimedCount(fixture.jobId)).toBe(1)
+    expect(await getRefill().pauseJudgmentJobWhenStopped({job, plan, sqliteService: service})).toBe(false)
+    expect((await getJobStopState(fixture.jobId))?.status).toBe('running')
+
+    await service.markPromptAsJudged(fixture.jobId, claimedPrompt.recordId)
+
+    expect(await getRefill().withdrawReadyPromptsWhenRefillStopped({job, plan, sqliteService: service})).toBe(0)
+    expect(await getRefill().pauseJudgmentJobWhenStopped({job, plan, sqliteService: service})).toBe(true)
+    expect(await getJobStopState(fixture.jobId)).toMatchObject({status: 'paused', stopReason: 'deadline'})
+  })
+
+  test('only a deadline or token budget withdraws ready prompts', async () => {
+    const fixture = await createStopJobFixture('cap-keeps-ready', 1, 2)
+    const [article1] = fixture.articleIds as [string]
+    const [prompt1, prompt2] = fixture.promptIds as [string, string]
+    const service = getSqliteService()
+    const job = {id: fixture.jobId, projectId: fixture.projectId}
+
+    await service.addReadyPrompts(
+      fixture.jobId,
+      [
+        {articleId: article1, promptId: prompt1},
+        {articleId: article1, promptId: prompt2},
+      ],
+      'server-stop',
+    )
+
+    const capPlan = await getPlan(fixture, {...noConditions, stopAfterArticles: 1})
+    const openPlan = await getPlan(fixture, {...noConditions, stopAt: new Date(Date.now() + 60_000)})
+
+    expect(capPlan).toMatchObject({refill: 'finishAdmitted', stopReason: 'article_cap'})
+    expect(openPlan).toMatchObject({refill: 'normal', stopReason: null})
+    expect(await getRefill().withdrawReadyPromptsWhenRefillStopped({job, plan: capPlan, sqliteService: service})).toBe(
+      0,
+    )
+    expect(await getRefill().withdrawReadyPromptsWhenRefillStopped({job, plan: openPlan, sqliteService: service})).toBe(
+      0,
+    )
+    expect(await service.getReadyCount(fixture.jobId)).toBe(2)
+  })
+
   test('the token budget compares against the job total token usage', async () => {
     const fixture = await createStopJobFixture('tokens', 1, 1)
 
