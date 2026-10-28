@@ -9,6 +9,12 @@ import {
   prepareCodexAppServerSpawnHome,
   removeCodexAppServerSpawnHome,
 } from './codexAppServerHome.ts'
+import {
+  appendCodexTurnErrorEvent,
+  attachCodexTurnErrorEvents,
+  type CodexTurnErrorEvent,
+  getCodexTurnErrorEvent,
+} from './codexTurnErrors.ts'
 import {readLocalAppSettings} from './localAppSettings.ts'
 import {writeRuntimeLogEvent} from './runtimeLogger.ts'
 
@@ -336,6 +342,17 @@ export const getCodexThreadTokenUsageUpdate = (
   const tokenUsage = getCodexThreadTokenUsage(msg.params.tokenUsage)
 
   return threadId === null || turnId === null || tokenUsage === null ? null : {threadId, tokenUsage, turnId}
+}
+
+export const getCodexTurnErrorNotificationEvent = (msg: JsonRpcMessage, turnId: string): CodexTurnErrorEvent | null => {
+  const params = isNotification(msg) && msg.method === 'error' && isRecord(msg.params) ? msg.params : null
+
+  return params && params.turnId === turnId
+    ? getCodexTurnErrorEvent({
+        error: params.error,
+        willRetry: typeof params.willRetry === 'boolean' ? params.willRetry : null,
+      })
+    : null
 }
 
 const appendDebug = (current: string, chunk: string): string => {
@@ -1001,15 +1018,20 @@ export const createCodexAppServerClient = ({
           recycleAfterTurn = true
           reject(error)
         }
-        const onAbort = () => {
-          const reason: unknown = params.signal?.reason
-          fail(reason instanceof Error ? reason : new Error('codex app-server: turn aborted'))
+        const interruptTurn = (): void => {
           void request('turn/interrupt', {threadId, turnId}, 5_000).catch(() => {
             return undefined
           })
         }
+        const onAbort = () => {
+          const reason: unknown = params.signal?.reason
+          fail(reason instanceof Error ? reason : new Error('codex app-server: turn aborted'))
+          interruptTurn()
+        }
+        let turnErrorEvents: CodexTurnErrorEvent[] = []
         const timeout = setTimeout(() => {
-          fail(new Error('codex app-server: turn timeout'))
+          fail(attachCodexTurnErrorEvents(new Error('codex app-server: turn timeout'), turnErrorEvents))
+          interruptTurn()
         }, params.timeoutMs ?? CODEx_DEFAULT_TIMEOUT_MS)
 
         let turnUsage: CodexThreadTokenUsage | null = null
@@ -1018,6 +1040,12 @@ export const createCodexAppServerClient = ({
           const tokenUsageUpdate = getCodexThreadTokenUsageUpdate(msg)
           if (tokenUsageUpdate && tokenUsageUpdate.turnId === turnId) {
             turnUsage = tokenUsageUpdate.tokenUsage
+            return undefined
+          }
+
+          const turnErrorEvent = getCodexTurnErrorNotificationEvent(msg, turnId)
+          if (turnErrorEvent) {
+            turnErrorEvents = appendCodexTurnErrorEvent(turnErrorEvents, turnErrorEvent)
             return undefined
           }
 
@@ -1033,8 +1061,17 @@ export const createCodexAppServerClient = ({
             cleanup({removeAbort: false})
 
             if (status === 'failed') {
+              const turnError = completionParams?.turn?.error ?? completionParams?.error
               recycleAfterTurn = true
-              reject(getCodexTurnFailedError(completionParams?.turn?.error ?? completionParams?.error))
+              reject(
+                attachCodexTurnErrorEvents(
+                  getCodexTurnFailedError(turnError),
+                  appendCodexTurnErrorEvent(
+                    turnErrorEvents,
+                    getCodexTurnErrorEvent({error: turnError, willRetry: false}),
+                  ),
+                ),
+              )
               return undefined
             }
 
