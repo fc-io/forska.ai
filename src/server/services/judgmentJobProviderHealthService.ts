@@ -1,3 +1,4 @@
+import {providerUsageLimitPattern} from '../providers/providerUsageLimitPattern.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 
@@ -95,7 +96,8 @@ const dayMs = 24 * hourMs
 const usageLimitMinDelayMs = minuteMs
 const usageLimitMaxDelayMs = 30 * minuteMs
 const usageLimitDefaultDelayMs = 5 * minuteMs
-const rateLimitedDelayMs = minuteMs
+const rateLimitedMinDelayMs = minuteMs
+const rateLimitedMaxDelayMs = 10 * minuteMs
 const authDelayMs = 5 * minuteMs
 const transportBackoffBaseMs = 30 * secondMs
 const transportBackoffMaxExponent = 5
@@ -115,7 +117,7 @@ const providerFailureKinds = new Set<JudgmentJobProviderFailureKind>([
   'usage_limit',
 ])
 
-const usageLimitPattern = /usage limit|quota|insufficient[_ ]credits|purchase more credits|out of credits|billing/i
+const usageLimitPattern = providerUsageLimitPattern
 const rateLimitedPattern = /rate limit|too many requests/i
 const authPattern = /unauthori[sz]ed|forbidden|invalid api key|authentication/i
 const timeoutPattern = /timed out|timeout/i
@@ -443,6 +445,14 @@ const getUsageLimitRetryDelayMs = ({now, retryAfterAt}: {now: Date; retryAfterAt
     : usageLimitDefaultDelayMs
 }
 
+const getRateLimitedRetryDelayMs = ({now, retryAfterAt}: {now: Date; retryAfterAt: Date | null}) => {
+  const retryAfterMs = retryAfterAt ? retryAfterAt.getTime() - now.getTime() : Number.NaN
+
+  return Number.isFinite(retryAfterMs)
+    ? clampNumber(retryAfterMs, rateLimitedMinDelayMs, rateLimitedMaxDelayMs)
+    : rateLimitedMinDelayMs
+}
+
 const getTransportRetryDelayMs = (consecutiveFailureCount: number) => {
   const exponent = Math.min(getFailureCount(consecutiveFailureCount), transportBackoffMaxExponent) - 1
 
@@ -477,7 +487,7 @@ export const getProviderFailureRetryDelayMs = (input: {
       return getOtherRetryDelayMs(input.consecutiveFailureCount)
     },
     rate_limited: () => {
-      return rateLimitedDelayMs
+      return getRateLimitedRetryDelayMs({now: input.now ?? new Date(), retryAfterAt: input.retryAfterAt})
     },
     timeout: () => {
       return getTransportRetryDelayMs(input.consecutiveFailureCount)
@@ -630,6 +640,7 @@ export const recordJudgmentJobProviderFailure = async (input: {
   message?: string | null
   modelId?: string | null
   now?: Date
+  retryAfterAt?: Date | null
   statusCode?: number | null
 }): Promise<JudgmentJobProviderHealth> => {
   const now = input.now ?? new Date()
@@ -641,7 +652,7 @@ export const recordJudgmentJobProviderFailure = async (input: {
     jobId: input.jobId,
     modelId: getNonEmptyText(input.modelId),
     now,
-    retryAfterAt: parseProviderRetryAfterAt(input.message, now),
+    retryAfterAt: input.retryAfterAt ?? parseProviderRetryAfterAt(input.message, now),
   })
   const [row] = await getAppDatabaseService().transaction((runner) => {
     return runner.queryJson<JudgmentJobProviderHealthRow>(sql)

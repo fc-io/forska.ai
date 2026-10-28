@@ -1,6 +1,11 @@
-import {afterEach, expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, setSystemTime, test} from 'bun:test'
 import {Effect, Fiber} from 'effect'
 
+import {
+  getCodexConnectionRateLimitCooldownRemainingMs,
+  recordCodexConnectionRateLimit,
+} from '../../providers/codexRateLimitBackoff.ts'
+import {ProviderInvocationError} from '../../providers/providerTypes.ts'
 import * as realReadOnlyDatabaseModule from '../../services/appReadOnlyDatabaseService.ts'
 import * as realReadOnlyQueryModule from '../../services/getAppReadOnlyQueryService.ts'
 import * as realProviderHealthModule from '../../services/judgmentJobProviderHealthService.ts'
@@ -1135,6 +1140,160 @@ test('codex requests enforce saved provider caps per connection', async () => {
   await thirdRequest
 
   expect(secondStarted).toBe(true)
+})
+
+const createCodexRateLimitedError = (): ProviderInvocationError => {
+  const message =
+    'Codex backend rate limited (429): codex app-server: turn failed: exceeded retry limit, last status: 429 Too Many Requests, request id: 935f6f8d-850a-4fb8-895e-2c2ef8027110'
+
+  return new ProviderInvocationError(message, {
+    code: 'codex_rate_limited',
+    diagnostics: {message},
+    providerKind: 'codex',
+  })
+}
+
+const settleRequests = async (): Promise<void> => {
+  await Array.from({length: 8}).reduce<Promise<void>>((previous) => {
+    return previous.then(flush)
+  }, Promise.resolve())
+}
+
+test('codex 429s halve in-flight turns per connection and ramp back to the configured limit', async () => {
+  const {getJudgmentProviderAdaptiveInflight, resetJudgmentRequestRuntimeForTests, withJudgmentRequest} =
+    await loadRuntime()
+  const clock = {nowMs: Date.parse('2026-10-28T10:47:00.000Z')}
+  const live = new Map<number, (outcome: 'rateLimited' | 'success') => void>()
+  const settled: Array<Promise<unknown>> = []
+  const codexScope = {
+    fallbackBaseURL: 'codex://app-server',
+    judgmentsJobId: 'job-codex-throttled',
+    provider: 'codex',
+    providerConnectionId: 'connection-codex-throttled',
+    providerMaxInflightRequests: 35,
+    providerUsesFamilyDefault: false,
+    workerUrls: [],
+  }
+  const requestCount = {next: 0}
+  const setClock = (offsetMs: number): void => {
+    setSystemTime(new Date(clock.nowMs + offsetMs))
+  }
+  const startRequests = (count: number): void => {
+    Array.from({length: count}).map(() => {
+      const requestId = requestCount.next
+      requestCount.next += 1
+      const request = withJudgmentRequest(codexScope, async () => {
+        const outcome = await new Promise<'rateLimited' | 'success'>((resolve) => {
+          live.set(requestId, resolve)
+        })
+
+        live.delete(requestId)
+
+        if (outcome === 'rateLimited') {
+          throw createCodexRateLimitedError()
+        }
+
+        return 'judged'
+      })
+
+      settled.push(
+        request.catch(() => {
+          return null
+        }),
+      )
+      return requestId
+    })
+  }
+  const finishLive = (outcome: 'rateLimited' | 'success', count = live.size): void => {
+    Array.from(live.values())
+      .slice(0, count)
+      .map((finish) => {
+        finish(outcome)
+        return finish
+      })
+  }
+  const getAdaptiveInflight = () => {
+    return getJudgmentProviderAdaptiveInflight({
+      modelProvider: 'codex',
+      providerConnectionId: 'connection-codex-throttled',
+      providerMaxInflightRequests: 35,
+    })
+  }
+
+  try {
+    setClock(0)
+    startRequests(40)
+    await settleRequests()
+    expect(live.size).toBe(35)
+
+    finishLive('rateLimited')
+    await settleRequests()
+    setClock(1_000)
+    startRequests(30)
+    await settleRequests()
+    expect(live.size).toBeLessThanOrEqual(17)
+    expect(live.size).toBe(17)
+    expect(getAdaptiveInflight()).toMatchObject({decreaseCount: 1, effectiveLimit: 17, rateLimitBackoffActive: true})
+
+    setClock(10_000)
+    finishLive('rateLimited')
+    await settleRequests()
+    expect(live.size).toBeLessThanOrEqual(8)
+    expect(live.size).toBe(8)
+    expect(getAdaptiveInflight()).toMatchObject({
+      cooldownUntil: new Date(clock.nowMs + 130_000).toISOString(),
+      decreaseCount: 2,
+      effectiveLimit: 8,
+    })
+
+    setClock(30_000)
+    startRequests(120)
+    finishLive('success', 1)
+    await settleRequests()
+    expect(live.size).toBe(8)
+
+    const rampLimits = await Array.from({length: 14}).reduce<Promise<number[]>>(async (previous, _value, minute) => {
+      const limits = await previous
+      setClock(130_000 + minute * 60_000)
+      finishLive('success', 1)
+      await settleRequests()
+      return [...limits, live.size]
+    }, Promise.resolve([]))
+
+    expect(rampLimits).toEqual([10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 35])
+    expect(getAdaptiveInflight()).toMatchObject({effectiveLimit: 35, rateLimitBackoffActive: false})
+  } finally {
+    resetJudgmentRequestRuntimeForTests()
+    finishLive('success')
+    await Promise.all(settled)
+    setSystemTime()
+  }
+})
+
+test('codex 429s on one connection leave other codex connections at their configured limit', async () => {
+  const {getJudgmentProviderAdaptiveInflight} = await loadRuntime()
+
+  recordCodexConnectionRateLimit({
+    configuredLimit: 35,
+    key: 'connection-codex-throttled',
+    requestStartedAtMs: Date.now(),
+    retryAfterAt: null,
+  })
+
+  expect(
+    getJudgmentProviderAdaptiveInflight({
+      modelProvider: 'codex',
+      providerConnectionId: 'connection-codex-other',
+      providerMaxInflightRequests: 35,
+    }),
+  ).toMatchObject({effectiveLimit: 35, rateLimitBackoffActive: false})
+  expect(
+    getJudgmentProviderAdaptiveInflight({
+      modelProvider: 'openai',
+      providerConnectionId: 'connection-codex-throttled',
+      providerMaxInflightRequests: 35,
+    }),
+  ).toBeNull()
 })
 
 test('provider admission request leases gate starts before local provider slots', async () => {
@@ -2613,6 +2772,104 @@ test('local provider health write failure keeps the immediate retry', async () =
   expect(String(caughtError)).toContain('RecoverableJudgeError')
   expect(sqliteStateTransitions).toEqual(['running', 'ready'])
   expect(sqliteServiceMock.markPromptAsRetry).toHaveBeenCalledWith('job-a', 'record-a', null)
+})
+
+const codexRateLimitedMessage =
+  'Codex backend rate limited (429): codex app-server: turn failed: exceeded retry limit, last status: 429 Too Many Requests, request id: 935f6f8d-850a-4fb8-895e-2c2ef8027110'
+
+const throwCodexRateLimitedJudgeError = async (): Promise<never> => {
+  throw new RecoverableJudgeError(`Request failed: ${codexRateLimitedMessage}`, {
+    failureCode: 'codex_rate_limited',
+    providerDiagnostics: {httpStatusCode: 429, message: codexRateLimitedMessage},
+  })
+}
+
+test('a codex 429 requeues the prompt behind the connection cooldown without using its extra retry', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  const nowMs = Date.parse('2026-10-28T10:47:32.000Z')
+
+  setSystemTime(new Date(nowMs))
+
+  try {
+    recordCodexConnectionRateLimit({
+      configuredLimit: 35,
+      key: 'connection-a',
+      requestStartedAtMs: nowMs,
+      retryAfterAt: null,
+    })
+    judgeSinglePrompt.mockImplementationOnce(throwCodexRateLimitedJudgeError)
+
+    await processPromptWithLLM(createPromptToProcess()).catch(() => {
+      return undefined
+    })
+
+    expect(getCodexConnectionRateLimitCooldownRemainingMs('connection-a', nowMs)).toBe(60_000)
+    expect(sqliteServiceMock.consumePromptExtraRetry).not.toHaveBeenCalled()
+    expect(recordJudgmentJobProviderFailure).toHaveBeenCalledWith({
+      failureCode: 'codex_rate_limited',
+      jobId: 'job-a',
+      message: codexRateLimitedMessage,
+      modelId: 'model-a',
+      retryAfterAt: new Date(nowMs + 60_000),
+    })
+    expect(sqliteStateTransitions).toEqual(['running', 'ready'])
+    expect(sqliteServiceMock.markPromptAsRetry).toHaveBeenCalledWith('job-a', 'record-a', 60_000)
+    expect(sqliteServiceMock.markPromptAsClosed).not.toHaveBeenCalled()
+  } finally {
+    setSystemTime()
+  }
+})
+
+test('repeated codex 429s never close the prompt as an exhausted recoverable failure', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  sqliteServiceMock.consumePromptExtraRetry.mockImplementation(async () => {
+    return false
+  })
+  judgeSinglePrompt.mockImplementation(throwCodexRateLimitedJudgeError)
+
+  await processPromptWithLLM(createPromptToProcess()).catch(() => {
+    return undefined
+  })
+  await processPromptWithLLM(createPromptToProcess()).catch(() => {
+    return undefined
+  })
+  await processPromptWithLLM(createPromptToProcess()).catch(() => {
+    return undefined
+  })
+
+  expect(sqliteStateTransitions).toEqual(['running', 'ready', 'running', 'ready', 'running', 'ready'])
+  expect(sqliteServiceMock.consumePromptExtraRetry).not.toHaveBeenCalled()
+  expect(sqliteServiceMock.markPromptAsClosed).not.toHaveBeenCalled()
+})
+
+test('judge-worker codex 429 hands the connection cooldown to the owner as the retry delay', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  const nowMs = Date.parse('2026-10-28T10:50:37.000Z')
+
+  setSystemTime(new Date(nowMs))
+
+  try {
+    recordCodexConnectionRateLimit({
+      configuredLimit: 35,
+      key: 'connection-a',
+      requestStartedAtMs: nowMs,
+      retryAfterAt: null,
+    })
+    judgeSinglePrompt.mockImplementationOnce(throwCodexRateLimitedJudgeError)
+
+    await processPromptWithLLM(createPromptToProcess()).catch(() => {
+      return undefined
+    })
+
+    expect(recordJudgmentJobProviderFailure).not.toHaveBeenCalled()
+    expect(enqueueJudgeWorkerCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({claimId: 'claim-a', retryAfterMs: 60_000, status: 'retry'}),
+    )
+  } finally {
+    setSystemTime()
+  }
 })
 
 test('judge-worker recoverable provider failure leaves provider health to the owner', async () => {

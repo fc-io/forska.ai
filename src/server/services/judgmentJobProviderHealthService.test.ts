@@ -249,6 +249,72 @@ test('getProviderFailureRetryDelayMs uses fixed delays for rate limits and auth 
   )
 })
 
+test('getProviderFailureRetryDelayMs holds rate limits until the explicit retry time, 60 s to 10 min', () => {
+  const {getProviderFailureRetryDelayMs} = getService()
+  const now = new Date('2026-10-28T10:47:32.000Z')
+  const getRateLimitedDelay = (retryAfterAt: Date | null) => {
+    return getProviderFailureRetryDelayMs({consecutiveFailureCount: 35, failureKind: 'rate_limited', now, retryAfterAt})
+  }
+
+  expect(getRateLimitedDelay(null)).toBe(60_000)
+  expect(getRateLimitedDelay(new Date('2026-10-28T10:47:42.000Z'))).toBe(60_000)
+  expect(getRateLimitedDelay(new Date('2026-10-28T10:49:32.000Z'))).toBe(120_000)
+  expect(getRateLimitedDelay(new Date('2026-10-28T10:57:32.000Z'))).toBe(600_000)
+  expect(getRateLimitedDelay(new Date('2026-10-28T12:47:32.000Z'))).toBe(600_000)
+})
+
+test('a Codex 429 records a rate_limited health row whose claim gate follows the connection cooldown', async () => {
+  const {getJudgmentJobProviderClaimGate, recordJudgmentJobProviderFailure, toJudgmentJobProviderHealthApi} =
+    getService()
+  const jobId = getJobId('codex-rate-limited')
+  const failedAt = new Date('2026-10-28T10:47:32.000Z')
+  const cooldownUntil = new Date('2026-10-28T10:49:32.000Z')
+  const message =
+    'Codex backend rate limited (429): codex app-server: turn failed: exceeded retry limit, last status: 429 Too Many Requests, request id: 935f6f8d-850a-4fb8-895e-2c2ef8027110'
+
+  const row = await recordJudgmentJobProviderFailure({
+    failureCode: 'codex_rate_limited',
+    jobId,
+    message,
+    modelId: 'model-gpt-6-astra',
+    now: failedAt,
+    retryAfterAt: cooldownUntil,
+  })
+
+  expect(toJudgmentJobProviderHealthApi(row, {jobStatus: 'running'})).toMatchObject({
+    failureCode: 'codex_rate_limited',
+    failureKind: 'rate_limited',
+    failureMessage: message,
+    isActive: true,
+    retryAfterAt: cooldownUntil.toISOString(),
+  })
+  expect(await getJudgmentJobProviderClaimGate(jobId, new Date('2026-10-28T10:49:31.000Z'))).toEqual({
+    backoffUntil: cooldownUntil,
+    claimsAllowed: false,
+    maxClaims: 0,
+  })
+  expect(await getJudgmentJobProviderClaimGate(jobId, cooldownUntil)).toEqual({
+    backoffUntil: cooldownUntil,
+    claimsAllowed: true,
+    maxClaims: 1,
+  })
+})
+
+test('a Codex usage-limit 429 still records usage_limit with the provider reset time', async () => {
+  const {recordJudgmentJobProviderFailure} = getService()
+  const failedAt = getLocalDate(2026, 9, 3, 5, 17)
+
+  expect(
+    await recordJudgmentJobProviderFailure({
+      failureCode: 'codex_transient_turn_failure',
+      jobId: getJobId('codex-usage-limit-429'),
+      message: liveCodexUsageLimitMessage,
+      now: failedAt,
+      statusCode: 429,
+    }),
+  ).toMatchObject({failureKind: 'usage_limit', retryAfterAt: getLocalDate(2026, 9, 3, 21, 33)})
+})
+
 test.each<[JudgmentJobProviderFailureKind, number, number | null]>([
   ['endpoint_unavailable', 1, 30_000],
   ['endpoint_unavailable', 2, 60_000],
