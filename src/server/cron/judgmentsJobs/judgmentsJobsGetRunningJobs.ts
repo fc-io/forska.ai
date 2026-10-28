@@ -4,6 +4,7 @@ import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOn
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {
   getAcceptedJudgeWorkerClaimRunningJobs,
+  getOwnerBackedJudgmentJobInfo,
   getOwnerBackedRunningJudgmentJobs,
   shouldUseJudgeWorkerOwnerHandoff,
 } from './judgeWorkerCompletionJournal.ts'
@@ -121,6 +122,14 @@ const getRunningJobFromDatabase = async (jobId: string): Promise<RunningJudgment
   `)
 
   return row ? attachProviderBucketSnapshotToRunningJob(row) : null
+}
+
+// The running list can be empty for reasons other than a stopped job (owner unreachable, exclusive
+// DuckDB work), so stopping dispatch needs this explicit per-job answer. A failed lookup rejects.
+export const isJudgmentJobDispatchable = async (jobId: string): Promise<boolean> => {
+  return shouldUseJudgeWorkerOwnerHandoff()
+    ? (await getOwnerBackedJudgmentJobInfo(jobId)) !== null
+    : (await getRunningJobFromDatabase(jobId)) !== null
 }
 
 const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {

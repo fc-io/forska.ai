@@ -13,6 +13,7 @@ import {
   getEffectiveProviderCap,
   getJudgeClaimBufferPrompts,
   getJudgmentsJobsSendToLLMRunState,
+  getOwnerBackedWorkerHeartbeatJobIds,
   getPromptClaimChunkLimits,
   getPromptClaimDispatchChunkLimits,
   getPromptClaimDispatchRequestedCount,
@@ -24,6 +25,7 @@ import {
   resetJudgmentsJobsSendToLLMRunStateForTests,
   setJudgmentsJobsSendToLLMRunTimeoutMsForTests,
   shouldWarnPromptClaimCountMismatch,
+  stopDispatchForNonRunningJobs,
 } from './judgmentsJobsSendToLLM.ts'
 
 type PromptToProcess = import('./judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts').PromptToProcess
@@ -979,6 +981,75 @@ test('judge claim buffer covers ~45 s of measured completions within burst and m
   expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 2})).toBe(200)
   expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 12})).toBe(540)
   expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 100})).toBe(1200)
+})
+
+const getDispatchJobStatesForStopTest = async () => {
+  return [
+    {activePromptCount: 2, dispatchStopped: false, jobId: 'job-paused', queuedPromptCount: 3},
+    {activePromptCount: 1, dispatchStopped: false, jobId: 'job-running', queuedPromptCount: 4},
+    {activePromptCount: 2, dispatchStopped: false, jobId: 'job-paused-active-only', queuedPromptCount: 0},
+    {activePromptCount: 1, dispatchStopped: true, jobId: 'job-already-stopped', queuedPromptCount: 2},
+  ]
+}
+
+test('stops dispatch only for non-running jobs with queued prompts that the owner reports as not dispatchable', async () => {
+  const isJobDispatchable = mock(async (_jobId: string) => {
+    return false
+  })
+  const stopJobDispatch = mock(async (_input: {jobId: string; reason: string}) => {
+    return {releasedCount: 3}
+  })
+
+  const stops = await stopDispatchForNonRunningJobs({
+    getDispatchJobStates: getDispatchJobStatesForStopTest,
+    isJobDispatchable,
+    runningJobIds: ['job-running'],
+    stopJobDispatch,
+  })
+
+  expect(stops).toEqual([{jobId: 'job-paused', releasedCount: 3}])
+  expect(isJobDispatchable.mock.calls).toEqual([['job-paused']])
+  expect(stopJobDispatch.mock.calls).toEqual([[{jobId: 'job-paused', reason: 'job-not-dispatchable'}]])
+})
+
+test('keeps dispatching a job outside the running list while the owner reports it dispatchable or cannot answer', async () => {
+  const stopJobDispatch = mock(async (_input: {jobId: string; reason: string}) => {
+    return {releasedCount: 3}
+  })
+
+  const dispatchableStops = await stopDispatchForNonRunningJobs({
+    getDispatchJobStates: getDispatchJobStatesForStopTest,
+    isJobDispatchable: async () => {
+      return true
+    },
+    runningJobIds: [],
+    stopJobDispatch,
+  })
+  const unavailableStops = await stopDispatchForNonRunningJobs({
+    getDispatchJobStates: getDispatchJobStatesForStopTest,
+    isJobDispatchable: async () => {
+      throw new Error('owner-backed judgment request failed (503): maintenance unavailable')
+    },
+    runningJobIds: [],
+    stopJobDispatch,
+  })
+
+  expect(dispatchableStops).toEqual([])
+  expect(unavailableStops).toEqual([])
+  expect(stopJobDispatch).not.toHaveBeenCalled()
+})
+
+test('heartbeats jobs that left the running list while the worker still holds their prompts or completions', () => {
+  expect(
+    getOwnerBackedWorkerHeartbeatJobIds({
+      dispatchJobStates: [
+        {activePromptCount: 2, dispatchStopped: true, jobId: 'job-paused', queuedPromptCount: 0},
+        {activePromptCount: 1, dispatchStopped: false, jobId: 'job-running', queuedPromptCount: 0},
+      ],
+      heldJobIds: ['job-paused', 'job-unacked-completion'],
+      runningJobIds: ['job-running', 'job-idle'],
+    }),
+  ).toEqual(['job-running', 'job-idle', 'job-paused', 'job-unacked-completion'])
 })
 type ProviderClaimGateResult = {backoffUntil: Date | null; claimsAllowed: boolean; maxClaims: number | null}
 

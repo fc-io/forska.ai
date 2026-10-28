@@ -2565,6 +2565,49 @@ export const flushJudgeWorkerCompletionOutboxForClaim = async (claimId: string):
   return replay
 }
 
+// A claim the judge hands back without an LLM result: the owner requeues the prompt as ready.
+export const getJudgeWorkerClaimReleasePayload = (prompt: PromptToProcess): JudgeWorkerCompletionPayload => {
+  return {
+    articleId: prompt.articleId,
+    claimId: prompt.claimId,
+    executionSnapshotHash: prompt.executionSnapshotHash,
+    executionSnapshotId: prompt.executionSnapshotId,
+    fullTextStrategyId: prompt.fullTextStrategyId,
+    jobId: prompt.jobId,
+    modelId: prompt.modelId,
+    projectId: prompt.projectId,
+    promptId: prompt.promptId,
+    queueRecordId: prompt.recordId,
+    status: 'retry',
+    useAbstract: prompt.useAbstract,
+    useFulltext: prompt.useFulltext,
+    useFulltextNoImages: prompt.useFulltextNoImages,
+    useMetadata: prompt.useMetadata,
+    useTitle: prompt.useTitle,
+  }
+}
+
+// Jobs this worker still holds owner claims for in its journal. It heartbeats them even after the
+// job leaves the running list, so the owner keeps those claims valid until they are acked.
+export const getJudgeWorkerHeldJobIds = (): string[] => {
+  const rows = openJournalDatabase()
+    .query(
+      `
+        SELECT job_id AS jobId
+        FROM completion_outbox INDEXED BY idx_completion_outbox_unacked
+        WHERE acked_at IS NULL
+        UNION
+        SELECT job_id AS jobId
+        FROM accepted_claim
+      `,
+    )
+    .all() as Array<{jobId: string}>
+
+  return rows.map((row) => {
+    return row.jobId
+  })
+}
+
 // Queue records this worker still owns outside the dispatch runtime: accepted claims waiting for
 // dispatch and completions the owner has not acked yet. Owner claim recovery must not requeue
 // them, or the pending completion is discarded as stale and the LLM work is lost.
