@@ -2,7 +2,7 @@ import type {SystemPromptVariant} from '../../../agent/judge/systemPromptVariant
 import {getJudgmentJobStopConditions, hasJudgmentJobStopCondition} from '../../../utils/judgmentJobStopConditions.ts'
 import {getProjectFullTextStrategyIdSql} from '../../fullText/fullTextStrategy.ts'
 import type {JudgmentJobHumanAnsweredMode} from '../../reviewServing/reviewServingJudgmentJobQueueService.ts'
-import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
@@ -21,6 +21,7 @@ import {
   pruneJudgmentJobStopConditionState,
   recordHumanAnsweredPassResult,
   selectEntriesForArticleAdmission,
+  withdrawReadyPromptsWhenRefillStopped,
 } from './judgmentJobStopConditionRefill.ts'
 import {
   getJudgeWorkerReadOnlyAppDatabaseService,
@@ -36,6 +37,7 @@ import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>[number]
 
 type JobConfig = {
+  jobId: string
   humanJudgmentMode: JudgmentJobHumanAnsweredMode
   modelId: string
   useTitle: boolean
@@ -687,7 +689,7 @@ const prepareReadyPromptsForJob = async ({
 }
 
 const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
-  const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
+  const {job, jobConfig, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
   const sqliteService = getJudgmentJobSqliteService()
 
   if (!sqliteService.hasJob(job.id)) {
@@ -709,6 +711,24 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     throw error
   }
 
+  if (!jobConfig) {
+    addToQueueWarningLogger.error(
+      `judgmentQueue.addToQueue.missingJobConfig.${job.id}`,
+      '[addToQueue] Job config not found for jobId',
+      {component: addToQueueComponent, event: 'missingJobConfig', jobId: job.id, projectId: job.projectId},
+    )
+    return
+  }
+
+  const stopConditions = getJudgmentJobStopConditions(jobConfig)
+  const stopPlan = hasJudgmentJobStopCondition(stopConditions)
+    ? await getJudgmentJobStopPlan({conditions: stopConditions, job, serverJobId, sqliteService})
+    : null
+
+  if (stopPlan && (await isRefillStoppedByStopPlan({job, plan: stopPlan, sqliteService}))) {
+    return
+  }
+
   await prepareReadyPromptsForJob({job, serverJobId, sqliteService})
 
   const countOfReadyPrompts = await sqliteService.getReadyCount(job.id)
@@ -723,24 +743,11 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     return
   }
 
-  const jobConfig = await getJobConfig(job.id)
-
-  if (!jobConfig) {
-    addToQueueWarningLogger.error(
-      `judgmentQueue.addToQueue.missingJobConfig.${job.id}`,
-      '[addToQueue] Job config not found for jobId',
-      {component: addToQueueComponent, event: 'missingJobConfig', jobId: job.id, projectId: job.projectId},
-    )
-    return
-  }
-
   const readyDeficit = Math.max(0, readyTargetPerJob - countOfReadyPrompts)
-  const stopConditions = getJudgmentJobStopConditions(jobConfig)
-  const stopPlan = hasJudgmentJobStopCondition(stopConditions)
-    ? await getJudgmentJobStopPlan({conditions: stopConditions, job, serverJobId, sqliteService})
-    : null
 
-  if (stopPlan && (await runStopConditionRefill({job, plan: stopPlan, readyDeficit, serverJobId, sqliteService}))) {
+  if (stopPlan?.refill === 'finishAdmitted') {
+    await finishAdmittedArticlesForJob({job, readyDeficit, serverJobId, sqliteService})
+    await prepareReadyPromptsForJob({job, serverJobId, sqliteService})
     return
   }
 
@@ -882,32 +889,29 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   })
 }
 
-const runStopConditionRefill = async ({
+const isRefillStoppedByStopPlan = async ({
   job,
   plan,
-  readyDeficit,
-  serverJobId,
   sqliteService,
 }: {
   job: Job
   plan: Awaited<ReturnType<typeof getJudgmentJobStopPlan>>
-  readyDeficit: number
-  serverJobId: string
   sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
 }): Promise<boolean> => {
+  await withdrawReadyPromptsWhenRefillStopped({job, plan, sqliteService})
+
   const paused = await pauseJudgmentJobWhenStopped({job, plan, sqliteService})
 
-  if (!paused && plan.refill === 'finishAdmitted') {
-    await finishAdmittedArticlesForJob({job, readyDeficit, serverJobId, sqliteService})
-    await prepareReadyPromptsForJob({job, serverJobId, sqliteService})
-  }
-
-  return paused || plan.refill !== 'normal'
+  return paused || plan.refill === 'none'
 }
 
-const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
-  const [config] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<JobConfig>(`
+const getJobConfigsByJobId = async (jobIds: string[]): Promise<Map<string, JobConfig>> => {
+  const configs =
+    jobIds.length === 0
+      ? []
+      : await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<JobConfig>(`
     SELECT
+      jj.id AS jobId,
       COALESCE(p.human_judgment_mode, 'prompt') AS humanJudgmentMode,
       p.model_id AS modelId,
       p.use_title AS useTitle,
@@ -923,15 +927,31 @@ const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
       COALESCE(jj.stop_when_human_answered_done, FALSE) AS stopWhenHumanAnsweredDone
     FROM app.judgment_job jj
     INNER JOIN app.project p ON p.id = jj.project_id
-    WHERE jj.id = '${escapeSqlString(jobId)}'
-    LIMIT 1
+    WHERE jj.id IN (${jobIds
+      .map((jobId) => {
+        return getSqlLiteral(jobId)
+      })
+      .join(', ')})
   `)
 
-  if (!config?.modelId) return null
-  return config
+  return new Map(
+    configs
+      .filter((config) => {
+        return Boolean(config.modelId)
+      })
+      .map((config) => {
+        return [config.jobId, config]
+      }),
+  )
 }
 
-type AddToQueueJobParams = {job: Job; readyTargetPerJob: number; addToQueueMaxBatchSize: number; serverJobId: string}
+type AddToQueueJobParams = {
+  job: Job
+  jobConfig: JobConfig | null
+  readyTargetPerJob: number
+  addToQueueMaxBatchSize: number
+  serverJobId: string
+}
 
 const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   try {
@@ -987,10 +1007,22 @@ export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void
     jobCount: runningJobs.length,
   })
 
+  const jobConfigsByJobId = await getJobConfigsByJobId(
+    runningJobs.map((job) => {
+      return job.id
+    }),
+  )
+
   const addForJobs = async (jobs: Job[], readyTargetPerJob: number, addToQueueMaxBatchSize: number) => {
     await jobs.reduce(async (prev, job) => {
       await prev
-      await addToQueueForJob({job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId})
+      await addToQueueForJob({
+        addToQueueMaxBatchSize,
+        job,
+        jobConfig: jobConfigsByJobId.get(job.id) ?? null,
+        readyTargetPerJob,
+        serverJobId,
+      })
     }, Promise.resolve())
   }
 

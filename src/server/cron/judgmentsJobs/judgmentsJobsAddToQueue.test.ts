@@ -247,7 +247,9 @@ const registerSharedMocks = (
               : statement.includes('app.judgment j')
                 ? (existingJudgmentRows as T[])
                 : statement.includes('FROM app.judgment_job jj')
-                  ? [jobConfigRow as T]
+                  ? runningJobs.map((job) => {
+                      return {...jobConfigRow, jobId: job.id} as T
+                    })
                   : []
           },
         )
@@ -2268,7 +2270,7 @@ const registerStopConditionMocks = ({
   projectId: string
   regularPromptEntries: Array<{articleId: string; promptId: string}>
   regularReadCalls: {count: number}
-  sqliteService: StopConditionMockSqliteService
+  sqliteService: StopConditionMockSqliteService | ReturnType<NonNullable<typeof getRealSqliteService>>
 }) => {
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
@@ -2348,6 +2350,146 @@ test('the human-answered stop condition skips the regular scan and pauses the id
 
   expect(regularReadCalls.count).toBe(0)
   expect(job).toEqual({status: 'paused', stopReason: 'human_answered_done', storageState: 'draining'})
+})
+
+const readyAboveLowWatermarkCount = 80
+
+const getReadyEntriesAboveLowWatermark = (jobId: string) => {
+  return Array.from({length: readyAboveLowWatermarkCount}, (_value, index) => {
+    return {articleId: `${jobId}-article-${index + 1}`, promptId: `${jobId}-prompt`}
+  })
+}
+
+const getStoredStopState = async (dbQuery: MockReadOnlyQuery, jobId: string) => {
+  const [job] = await dbQuery<{status: string; stopReason: string | null; storageState: string}>(`
+    SELECT status, storage_state AS storageState, stop_reason AS stopReason
+    FROM app.judgment_job
+    WHERE id = '${jobId}'
+  `)
+
+  return job
+}
+
+test('a passed deadline pauses a job whose ready prompts stay above the refill watermark on the next tick', async () => {
+  if (!queryDatabase || !runDatabase || !getRealSqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {resetJudgmentJobStopConditionStateForTests} = await import('./judgmentJobStopConditionRefill.ts')
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
+  const regularReadCalls = {count: 0}
+  const sqliteService = getRealSqliteService()
+  const {jobId, projectId} = await insertStopConditionJobFixture({
+    dbRun,
+    stopAssignments: "stop_at = current_timestamp + INTERVAL '1 hour'",
+    suffix: `stop-deadline-full-${Date.now()}`,
+  })
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, getReadyEntriesAboveLowWatermark(jobId), 'server-1')
+
+  resetJudgmentJobStopConditionStateForTests()
+  registerStopConditionMocks({
+    dbQuery,
+    dbRun,
+    jobId,
+    projectId,
+    regularPromptEntries: [],
+    regularReadCalls,
+    sqliteService,
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?stop-deadline-full=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(regularReadCalls.count).toBe(0)
+  expect(await sqliteService.getReadyCount(jobId)).toBe(readyAboveLowWatermarkCount)
+  expect(await getStoredStopState(dbQuery, jobId)).toEqual({
+    status: 'running',
+    stopReason: null,
+    storageState: 'active',
+  })
+
+  await dbRun(`UPDATE app.judgment_job SET stop_at = current_timestamp - INTERVAL '1 second' WHERE id = '${jobId}'`)
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(regularReadCalls.count).toBe(0)
+  expect(await sqliteService.getReadyCount(jobId)).toBe(0)
+  expect(await getStoredStopState(dbQuery, jobId)).toEqual({
+    status: 'paused',
+    stopReason: 'deadline',
+    storageState: 'draining',
+  })
+})
+
+test('a used-up token budget withdraws ready prompts above the watermark and pauses once claimed work finishes', async () => {
+  if (!queryDatabase || !runDatabase || !getRealSqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {resetJudgmentJobStopConditionStateForTests} = await import('./judgmentJobStopConditionRefill.ts')
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
+  const regularReadCalls = {count: 0}
+  const sqliteService = getRealSqliteService()
+  const {jobId, projectId} = await insertStopConditionJobFixture({
+    dbRun,
+    stopAssignments: 'stop_after_total_tokens = 100',
+    suffix: `stop-tokens-full-${Date.now()}`,
+  })
+
+  await dbRun(`
+    INSERT INTO app.token_use (id, judgment_job_id, requests, total_prompt_tokens, total_completion_tokens, total_tokens)
+    VALUES ('${jobId}-token', '${jobId}', 1, 70, 30, 100)
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, getReadyEntriesAboveLowWatermark(jobId), 'server-1')
+
+  const [claimedPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-1', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim a ready prompt for the token budget tick test')
+  }
+
+  resetJudgmentJobStopConditionStateForTests()
+  registerStopConditionMocks({
+    dbQuery,
+    dbRun,
+    jobId,
+    projectId,
+    regularPromptEntries: [],
+    regularReadCalls,
+    sqliteService,
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?stop-tokens-full=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(regularReadCalls.count).toBe(0)
+  expect(await sqliteService.getReadyCount(jobId)).toBe(0)
+  expect(await sqliteService.getClaimedCount(jobId)).toBe(1)
+  expect(await getStoredStopState(dbQuery, jobId)).toEqual({
+    status: 'running',
+    stopReason: null,
+    storageState: 'active',
+  })
+
+  await sqliteService.markPromptAsJudged(jobId, claimedPrompt.recordId)
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(regularReadCalls.count).toBe(0)
+  expect(await getStoredStopState(dbQuery, jobId)).toEqual({
+    status: 'paused',
+    stopReason: 'token_budget',
+    storageState: 'draining',
+  })
 })
 
 test('the article stop condition admits new articles only up to the cap during the regular scan', async () => {
