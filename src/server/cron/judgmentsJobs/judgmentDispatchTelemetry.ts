@@ -1,4 +1,5 @@
 import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
+import type {CodexAdaptiveInflight} from '../../providers/codexRateLimitBackoff.ts'
 import {
   type DuckdbOwnerConnectionRecord,
   getDuckdbOwnerConnectionsOverview,
@@ -38,6 +39,7 @@ import {
   stringifyRequestAttempts,
 } from './judgmentRequestAttemptManifest.ts'
 import {
+  getJudgmentProviderAdaptiveInflight,
   getJudgmentProviderRequestStats,
   getJudgmentRequestLifecycleRecords,
   getJudgmentRequestStats,
@@ -128,6 +130,7 @@ export type JudgmentBottleneckSubreason = (typeof judgmentBottleneckSubreasonVal
 export type JudgmentDispatchPromptTelemetry = {
   jobActivePrompts: number
   jobQueuedPrompts: number
+  providerAdaptiveInflight: CodexAdaptiveInflight | null
   providerDispatchActivePromptFillPct: number | null
   providerDispatchActivePromptLimit: number
   providerDispatchActivePrompts: number
@@ -383,6 +386,7 @@ const getZeroDispatchStats = (): JudgmentDispatchPromptTelemetry => {
   return {
     jobActivePrompts: 0,
     jobQueuedPrompts: 0,
+    providerAdaptiveInflight: null,
     providerDispatchActivePromptFillPct: null,
     providerDispatchActivePromptLimit: 0,
     providerDispatchActivePrompts: 0,
@@ -392,10 +396,14 @@ const getZeroDispatchStats = (): JudgmentDispatchPromptTelemetry => {
   }
 }
 
-const getDispatchTelemetryFromStats = (stats: JudgmentDispatchProviderStats): JudgmentDispatchPromptTelemetry => {
+const getDispatchTelemetryFromStats = (
+  stats: JudgmentDispatchProviderStats,
+  providerAdaptiveInflight: CodexAdaptiveInflight | null,
+): JudgmentDispatchPromptTelemetry => {
   return {
     jobActivePrompts: stats.jobActivePromptCount,
     jobQueuedPrompts: stats.jobQueuedPromptCount,
+    providerAdaptiveInflight,
     providerDispatchActivePromptFillPct: getFillPct(stats.providerActivePromptCount, stats.providerActiveLimit),
     providerDispatchActivePromptLimit: stats.providerActiveLimit,
     providerDispatchActivePrompts: stats.providerActivePromptCount,
@@ -599,6 +607,36 @@ const getNumberValue = (value: unknown): number | null => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+const getNullableStringValue = (value: unknown): string | null | undefined => {
+  return value === null ? null : typeof value === 'string' ? value : undefined
+}
+
+const getAdaptiveInflightFromRecord = (value: unknown): CodexAdaptiveInflight | null => {
+  const record = isRecord(value) ? value : null
+  const configuredLimit = getNumberValue(record?.configuredLimit)
+  const cooldownUntil = getNullableStringValue(record?.cooldownUntil)
+  const decreaseCount = getNumberValue(record?.decreaseCount)
+  const effectiveLimit = getNumberValue(record?.effectiveLimit)
+  const lastRateLimitedAt = getNullableStringValue(record?.lastRateLimitedAt)
+  const rateLimitBackoffActive = record?.rateLimitBackoffActive
+
+  return configuredLimit === null
+    || cooldownUntil === undefined
+    || decreaseCount === null
+    || effectiveLimit === null
+    || lastRateLimitedAt === undefined
+    || typeof rateLimitBackoffActive !== 'boolean'
+    ? null
+    : {configuredLimit, cooldownUntil, decreaseCount, effectiveLimit, lastRateLimitedAt, rateLimitBackoffActive}
+}
+
+const getMoreConstrainedAdaptiveInflight = (
+  left: CodexAdaptiveInflight | null,
+  right: CodexAdaptiveInflight | null,
+): CodexAdaptiveInflight | null => {
+  return left === null || (right !== null && right.effectiveLimit < left.effectiveLimit) ? right : left
+}
+
 const getDispatchTelemetryFromRecord = (value: unknown): JudgmentDispatchPromptTelemetry | null => {
   if (!isRecord(value)) {
     return null
@@ -625,6 +663,7 @@ const getDispatchTelemetryFromRecord = (value: unknown): JudgmentDispatchPromptT
     : {
         jobActivePrompts,
         jobQueuedPrompts,
+        providerAdaptiveInflight: getAdaptiveInflightFromRecord(value.providerAdaptiveInflight),
         providerDispatchActivePromptFillPct:
           getNumberValue(value.providerDispatchActivePromptFillPct)
           ?? getFillPct(providerDispatchActivePrompts, providerDispatchActivePromptLimit),
@@ -1855,7 +1894,7 @@ export const getLocalJudgmentDispatchTelemetry = async (
     getJudgmentDispatchProviderStats(input),
     getLocalLifecycleTelemetry(input),
   ])
-  const dispatch = getDispatchTelemetryFromStats(dispatchStats)
+  const dispatch = getDispatchTelemetryFromStats(dispatchStats, getJudgmentProviderAdaptiveInflight(input))
   const request = getJudgmentRequestStats(input.jobId)
   const provider = await getLocalProviderTelemetry({dispatch, input, lifecycle, request})
   const source = getTelemetrySourceMetadata({
@@ -2066,6 +2105,10 @@ const mergeJudgmentDispatchTelemetrySnapshots = (
       dispatch: {
         jobActivePrompts: merged.dispatch.jobActivePrompts + snapshot.dispatch.jobActivePrompts,
         jobQueuedPrompts: merged.dispatch.jobQueuedPrompts + snapshot.dispatch.jobQueuedPrompts,
+        providerAdaptiveInflight: getMoreConstrainedAdaptiveInflight(
+          merged.dispatch.providerAdaptiveInflight,
+          snapshot.dispatch.providerAdaptiveInflight,
+        ),
         providerDispatchActivePromptFillPct: getFillPct(
           merged.dispatch.providerDispatchActivePrompts + snapshot.dispatch.providerDispatchActivePrompts,
           merged.dispatch.providerDispatchActivePromptLimit + snapshot.dispatch.providerDispatchActivePromptLimit,

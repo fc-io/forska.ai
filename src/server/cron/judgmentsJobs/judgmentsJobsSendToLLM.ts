@@ -51,7 +51,7 @@ import {
   type PromptToProcess,
 } from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
-import {getJudgmentRequestStats} from './judgmentsRequestRuntime.ts'
+import {getJudgmentProviderAdaptiveInflight, getJudgmentRequestStats} from './judgmentsRequestRuntime.ts'
 import {getProviderBucketSnapshot} from './providerAdmissionLease.ts'
 import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts'
 import {requeueAbandonedSentPrompts} from './requeueAbandonedSentPrompts.ts'
@@ -385,6 +385,33 @@ export const getJudgeClaimBufferPrompts = ({
     Math.max(capacity.maxBurst, capacity.maxInflight * judgeClaimBufferMaximumMaxInflightMultiplier),
     Math.max(capacity.maxBurst, rateBuffer),
   )
+}
+
+const getProviderAdaptiveInflightByConnection = (jobs: RunningJudgmentJob[]) => {
+  return getProviderQueueInputsByConnection(jobs).flatMap(([providerKey, input]) => {
+    const adaptiveInflight = getJudgmentProviderAdaptiveInflight(input)
+
+    return adaptiveInflight ? [{...adaptiveInflight, providerKey}] : []
+  })
+}
+
+export const getAdaptiveDispatchCapacity = (
+  capacity: Capacity,
+  providerAdaptiveInflight: ReturnType<typeof getProviderAdaptiveInflightByConnection>,
+): Capacity => {
+  const effectiveLimit = providerAdaptiveInflight
+    .filter((adaptiveInflight) => {
+      return adaptiveInflight.rateLimitBackoffActive
+    })
+    .reduce((limit, adaptiveInflight) => {
+      return Math.min(limit, adaptiveInflight.effectiveLimit)
+    }, capacity.maxInflight)
+
+  return {
+    maxBurst: Math.min(capacity.maxBurst, effectiveLimit),
+    maxInflight: effectiveLimit,
+    workerCount: capacity.workerCount,
+  }
 }
 
 const getTargetReservedPrompts = (jobs: RunningJudgmentJob[], capacity: Capacity): number => {
@@ -1634,7 +1661,7 @@ export const requeueAndFilterRunningJobs = async ({
 const sendToLLMForJobs = async (
   jobs: RunningJudgmentJob[],
   serverJobId: string,
-  capacity: Capacity,
+  configuredCapacity: Capacity,
   label: string,
 ): Promise<void> => {
   if (jobs.length === 0) return
@@ -1642,6 +1669,8 @@ const sendToLLMForJobs = async (
   const jobIds = jobs.map((job) => {
     return job.id
   })
+  const providerAdaptiveInflight = getProviderAdaptiveInflightByConnection(jobs)
+  const capacity = getAdaptiveDispatchCapacity(configuredCapacity, providerAdaptiveInflight)
   const runtimeInFlightCounts = getRuntimeInFlightCountsByJob(jobIds)
   const targetReservedPrompts = getTargetReservedPrompts(jobs, capacity)
   const providerQueueCapacities = await getDispatchQueueCapacityByConnection(jobs)
@@ -1663,6 +1692,8 @@ const sendToLLMForJobs = async (
       requestsToSend,
       promptsInFlight,
       maxInflight: capacity.maxInflight,
+      configuredMaxInflight: configuredCapacity.maxInflight,
+      providerAdaptiveInflight,
       maxBurst: capacity.maxBurst,
       workerCount: capacity.workerCount,
       deficit,

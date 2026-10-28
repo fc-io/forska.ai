@@ -2753,6 +2753,7 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
       dispatch: {
         jobActivePrompts: number
         jobQueuedPrompts: number
+        providerAdaptiveInflight: unknown
         providerDispatchActivePromptFillPct: number | null
         providerDispatchActivePromptLimit: number
         providerDispatchActivePrompts: number
@@ -2799,6 +2800,7 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   expect(body.requestStats.dispatch).toEqual({
     jobActivePrompts: 0,
     jobQueuedPrompts: 0,
+    providerAdaptiveInflight: null,
     providerDispatchActivePromptFillPct: 0,
     providerDispatchActivePromptLimit: 1,
     providerDispatchActivePrompts: 0,
@@ -3199,6 +3201,54 @@ test('job details expose shared endpoint availability diagnostics', async () => 
   expect(healthBody.retryAfterAt).not.toBeNull()
 })
 
+test('job details expose the adaptive in-flight limit of a codex connection in rate-limit backoff', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {recordCodexConnectionRateLimit, resetCodexRateLimitBackoffForTests} =
+    await import('../providers/codexRateLimitBackoff.ts')
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const projectId = `codex-adaptive-project-${suffix}`
+  const modelId = `codex-adaptive-model-${suffix}`
+  const connectionId = `codex-adaptive-connection-${suffix}`
+  const jobId = `codex-adaptive-job-${suffix}`
+
+  await insertProjectFixture({connectionId, modelId, projectId, providerKind: 'codex'})
+  await runDatabase(`
+    UPDATE app.provider_connection
+    SET max_inflight_requests = 35
+    WHERE id = '${connectionId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  try {
+    const {adaptiveInflight} = recordCodexConnectionRateLimit({
+      configuredLimit: 35,
+      key: connectionId,
+      requestStartedAtMs: Date.now(),
+      retryAfterAt: null,
+    })
+    const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+    const body = (await response.json()) as {requestStats: {dispatch: {providerAdaptiveInflight: unknown}}}
+
+    expect(response.status).toBe(200)
+    expect(body.requestStats.dispatch.providerAdaptiveInflight).toEqual({
+      configuredLimit: 35,
+      cooldownUntil: adaptiveInflight.cooldownUntil,
+      decreaseCount: 1,
+      effectiveLimit: 17,
+      lastRateLimitedAt: adaptiveInflight.lastRateLimitedAt,
+      rateLimitBackoffActive: true,
+    })
+  } finally {
+    resetCodexRateLimitBackoffForTests()
+  }
+})
+
 test('job details expose provider dispatch saturation stats', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
@@ -3237,6 +3287,7 @@ test('job details expose provider dispatch saturation stats', async () => {
       dispatch: {
         jobActivePrompts: number
         jobQueuedPrompts: number
+        providerAdaptiveInflight: unknown
         providerDispatchActivePromptFillPct: number | null
         providerDispatchActivePromptLimit: number
         providerDispatchActivePrompts: number
@@ -3252,6 +3303,7 @@ test('job details expose provider dispatch saturation stats', async () => {
   expect(body.requestStats.dispatch).toEqual({
     jobActivePrompts: 12,
     jobQueuedPrompts: 18,
+    providerAdaptiveInflight: null,
     providerDispatchActivePromptFillPct: 80,
     providerDispatchActivePromptLimit: 80,
     providerDispatchActivePrompts: 64,
@@ -4638,6 +4690,78 @@ test('owner-backed retry completion records provider usage-limit health and back
       totalFailureCount: 1,
     })
     expect(providerHealth?.retryAfterAt?.toISOString()).toBe(new Date(2026, 9, 3, 21, 33).toISOString())
+  } finally {
+    markPromptAsRetrySpy.mockRestore()
+    await sqliteService.closeAll()
+  }
+})
+
+const codexRateLimitedMessage =
+  'Codex backend rate limited (429): codex app-server: turn failed: exceeded retry limit, last status: 429 Too Many Requests, request id: 935f6f8d-850a-4fb8-895e-2c2ef8027110'
+
+const getCodexRateLimitedRetryCompletionBody = (jobId: string, claim: OwnerBackedClaimFixture) => {
+  const usageLimitBody = getUsageLimitRetryCompletionBody(jobId, claim)
+  const [failedRequestDetail] = usageLimitBody.tokenUse.failedRequestsDetails
+
+  return {
+    ...usageLimitBody,
+    retryAfterMs: 120_000,
+    tokenUse: {
+      ...usageLimitBody.tokenUse,
+      failedRequestsDetails: [
+        {
+          ...failedRequestDetail,
+          error: `Request failed: ${codexRateLimitedMessage}`,
+          failureCode: 'codex_rate_limited',
+          providerDiagnostics: {httpStatusCode: 429, message: codexRateLimitedMessage},
+        },
+      ],
+    },
+  }
+}
+
+test('owner-backed codex 429 retry shows rate_limited health with the 429 message and gates claims for the worker cooldown', async () => {
+  const {getJudgmentJobProviderClaimGate, getJudgmentJobProviderHealth} =
+    await import('../services/judgmentJobProviderHealthService.ts')
+  const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
+    prefix: 'provider-health-codex-429',
+    promptCount: 1,
+  })
+  const [claim] = claims
+
+  if (!claim) {
+    throw new Error('Expected owner-backed claim')
+  }
+
+  const markPromptAsRetrySpy = spyOn(sqliteService, 'markPromptAsRetry')
+
+  try {
+    const completedAtMs = Date.now()
+    const completion = await postOwnerBackedCompletion(jobId, getCodexRateLimitedRetryCompletionBody(jobId, claim))
+    const providerHealth = await getJudgmentJobProviderHealth(jobId)
+    const detail = await getJobDetailWithProviderHealth(jobId)
+    const retryAfterAtMs = providerHealth?.retryAfterAt?.getTime() ?? 0
+    const claimGate = await getJudgmentJobProviderClaimGate(jobId, new Date(retryAfterAtMs - 1_000))
+
+    expect(completion.status).toBe(200)
+    expect(completion.body.data.status).toBe('retry')
+    expect(markPromptAsRetrySpy.mock.calls[0]?.[2]).toBe(120_000)
+    expect(providerHealth).toMatchObject({
+      failureCode: 'codex_rate_limited',
+      failureKind: 'rate_limited',
+      failureMessage: codexRateLimitedMessage,
+      status: 'failing',
+    })
+    expect(retryAfterAtMs - completedAtMs).toBeGreaterThanOrEqual(120_000)
+    expect(retryAfterAtMs - completedAtMs).toBeLessThan(130_000)
+    expect(detail.body.providerHealth).toMatchObject({
+      failureKind: 'rate_limited',
+      failureMessage: codexRateLimitedMessage,
+      isActive: true,
+      retryAfterAt: providerHealth?.retryAfterAt?.toISOString(),
+    })
+    expect(claimGate).toMatchObject({claimsAllowed: false, maxClaims: 0})
+    expect(claimGate.backoffUntil?.getTime()).toBe(retryAfterAtMs)
   } finally {
     markPromptAsRetrySpy.mockRestore()
     await sqliteService.closeAll()

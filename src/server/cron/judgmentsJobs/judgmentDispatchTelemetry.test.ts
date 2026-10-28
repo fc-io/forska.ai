@@ -88,6 +88,7 @@ const createSnapshot = (
     dispatch: {
       jobActivePrompts: 0,
       jobQueuedPrompts: 0,
+      providerAdaptiveInflight: null,
       providerDispatchActivePromptFillPct: 0,
       providerDispatchActivePromptLimit: 20,
       providerDispatchActivePrompts: 0,
@@ -295,6 +296,64 @@ test('fetches judge-worker telemetry through the runtime-private route', async (
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('carries the judge-worker codex adaptive in-flight limit through the runtime-private route', async () => {
+  const originalFetch = globalThis.fetch
+  const adaptiveInflight = {
+    configuredLimit: 35,
+    cooldownUntil: '2026-10-28T10:49:32.000Z',
+    decreaseCount: 2,
+    effectiveLimit: 8,
+    lastRateLimitedAt: '2026-10-28T10:47:32.000Z',
+    rateLimitBackoffActive: true,
+  }
+  const fetchMock = mock(async (_request: RequestInfo | URL) => {
+    return Response.json({data: createSnapshot({dispatch: {providerAdaptiveInflight: adaptiveInflight}}), error: null})
+  })
+
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  try {
+    const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+      getJudgingWorkerRecords: async () => {
+        return [createJudgingRecord()]
+      },
+      getLocalTelemetry: async () => {
+        return createSnapshot({
+          dispatch: {
+            providerAdaptiveInflight: {...adaptiveInflight, effectiveLimit: 35, rateLimitBackoffActive: false},
+          },
+        })
+      },
+      shouldUseLocalTelemetryOnly: () => {
+        return false
+      },
+    })
+
+    expect(telemetry.dispatch.providerAdaptiveInflight).toEqual(adaptiveInflight)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('reports no adaptive in-flight limit when no judge worker runs a codex connection', async () => {
+  const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+    fetchWorkerTelemetry: async () => {
+      return createSnapshot()
+    },
+    getJudgingWorkerRecords: async () => {
+      return [createJudgingRecord()]
+    },
+    getLocalTelemetry: async () => {
+      return createSnapshot()
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return false
+    },
+  })
+
+  expect(telemetry.dispatch.providerAdaptiveInflight).toBeNull()
 })
 
 test('uses fresh worker local lease telemetry when owner authority reports no live leases', async () => {
