@@ -5,6 +5,7 @@ import {ConnectionError} from './connectionHealth.ts'
 import {
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
+  getJudgeWorkerClaimReleasePayload,
   shouldUseJudgeWorkerOwnerHandoff,
 } from './judgeWorkerCompletionJournal.ts'
 import {getJudgmentPromptQueueTargetFromProviderLimit} from './judgmentBacklogController.ts'
@@ -46,11 +47,23 @@ export type JudgmentDispatchProviderStats = {
   providerQueuedPromptCount: number
 }
 
+export type JudgmentDispatchJobState = {
+  activePromptCount: number
+  dispatchStopped: boolean
+  jobId: string
+  queuedPromptCount: number
+}
+
+export type JudgmentDispatchPromptRef = {jobId: string; queueRecordId: string}
+
 type JudgmentDispatchRuntimeService = {
+  allowJobDispatch: (jobIds: string[]) => Effect.Effect<void>
   enqueueClaimedPrompts: (input: {
     label: string
     prompts: PromptToProcess[]
   }) => Effect.Effect<{acceptedCount: number; rejectedPrompts: PromptToProcess[]}>
+  getDispatchJobStates: () => Effect.Effect<JudgmentDispatchJobState[]>
+  getDispatchPromptRefs: () => Effect.Effect<JudgmentDispatchPromptRef[]>
   getJobDispatchPromptIds: (jobId: string) => Effect.Effect<string[]>
   getPromptLifecycleRecords: (
     input: ProviderQueueInput & {jobId: string},
@@ -59,19 +72,25 @@ type JudgmentDispatchRuntimeService = {
     input: ProviderQueueInput & {jobId: string},
   ) => Effect.Effect<JudgmentDispatchProviderStats>
   getProviderQueueCapacity: (input: ProviderQueueInput) => Effect.Effect<number>
+  stopJobDispatch: (jobId: string) => Effect.Effect<PromptToProcess[]>
 }
+
+type RecoverPrompts = (prompts: PromptToProcess[], reason: string) => Promise<void>
 
 type JudgmentDispatchRuntimeOptions = {
   processPrompt?: (input: {label: string; prompt: PromptToProcess}) => Promise<void>
   processPromptBatch?: (input: {label: string; prompts: PromptToProcess[]}) => Promise<void>
-  recoverPrompts?: (prompts: PromptToProcess[], reason: string) => Promise<void>
+  recoverPrompts?: RecoverPrompts
 }
 
 type JudgmentDispatchRuntimeHandle = {
+  allowJobDispatch: (jobIds: string[]) => Promise<void>
   enqueueClaimedPrompts: (input: {
     label: string
     prompts: PromptToProcess[]
   }) => Promise<{acceptedCount: number; rejectedPrompts: PromptToProcess[]}>
+  getDispatchJobStates: () => Promise<JudgmentDispatchJobState[]>
+  getDispatchPromptRefs: () => Promise<JudgmentDispatchPromptRef[]>
   getJobDispatchPromptIds: (jobId: string) => Promise<string[]>
   getPromptLifecycleRecords: (
     input: ProviderQueueInput & {jobId: string},
@@ -79,6 +98,7 @@ type JudgmentDispatchRuntimeHandle = {
   getProviderDispatchStats: (input: ProviderQueueInput & {jobId: string}) => Promise<JudgmentDispatchProviderStats>
   getProviderQueueCapacity: (input: ProviderQueueInput) => Promise<number>
   shutdown: (reason?: string) => Promise<void>
+  stopJobDispatch: (input: {jobId: string; reason: string}) => Promise<{releasedCount: number}>
 }
 
 const JudgmentDispatchRuntime = Context.GenericTag<JudgmentDispatchRuntimeService>('JudgmentDispatchRuntime')
@@ -87,24 +107,7 @@ const defaultRecoverPrompts = async (prompts: PromptToProcess[], _reason: string
   if (shouldUseJudgeWorkerOwnerHandoff()) {
     await Promise.all(
       prompts.map(async (prompt) => {
-        await enqueueJudgeWorkerCompletion({
-          articleId: prompt.articleId,
-          claimId: prompt.claimId,
-          executionSnapshotHash: prompt.executionSnapshotHash,
-          executionSnapshotId: prompt.executionSnapshotId,
-          fullTextStrategyId: prompt.fullTextStrategyId,
-          jobId: prompt.jobId,
-          modelId: prompt.modelId,
-          projectId: prompt.projectId,
-          promptId: prompt.promptId,
-          queueRecordId: prompt.recordId,
-          status: 'retry',
-          useAbstract: prompt.useAbstract,
-          useFulltext: prompt.useFulltext,
-          useFulltextNoImages: prompt.useFulltextNoImages,
-          useMetadata: prompt.useMetadata,
-          useTitle: prompt.useTitle,
-        })
+        await enqueueJudgeWorkerCompletion(getJudgeWorkerClaimReleasePayload(prompt))
         await flushJudgeWorkerCompletionOutboxForClaim(prompt.claimId)
       }),
     )
@@ -205,6 +208,7 @@ const logDispatchWorkerError = (key: string, error: unknown) => {
 
 const createJudgmentDispatchRuntimeLayer = (
   options: JudgmentDispatchRuntimeOptions,
+  recoverPrompts: RecoverPrompts,
   getShutdownReason: () => string,
 ) => {
   const processPrompt =
@@ -216,18 +220,33 @@ const createJudgmentDispatchRuntimeLayer = (
       : async ({prompt}: {label: string; prompt: PromptToProcess}) => {
           await processPromptWithLLM(prompt)
         })
-  const recoverPrompts = options.recoverPrompts ?? defaultRecoverPrompts
 
   return Layer.scoped(
     JudgmentDispatchRuntime,
     Effect.gen(function* () {
       const providerStates = new Map<string, ProviderDispatchState>()
+      const stoppedJobIds = new Set<string>()
       const scope = yield* Effect.scope
       let isShuttingDown = false
 
       const removeActivePrompt = (state: ProviderDispatchState, recordId: string): void => {
         state.activePrompts = state.activePrompts.filter((entry) => {
           return entry.prompt.recordId !== recordId
+        })
+      }
+
+      const takeQueuedJobPrompts = (jobId: string): PromptToProcess[] => {
+        return Array.from(providerStates.values()).flatMap((state) => {
+          const jobPrompts = state.queuedPrompts.filter((entry) => {
+            return entry.prompt.jobId === jobId
+          })
+          state.queuedPrompts = state.queuedPrompts.filter((entry) => {
+            return entry.prompt.jobId !== jobId
+          })
+
+          return jobPrompts.map((entry) => {
+            return entry.prompt
+          })
         })
       }
 
@@ -370,6 +389,45 @@ const createJudgmentDispatchRuntimeLayer = (
         }
       }
 
+      const getDispatchPromptEntries = (): Array<{entry: DispatchPrompt; isActive: boolean}> => {
+        return Array.from(providerStates.values()).flatMap((state) => {
+          return [
+            ...state.activePrompts.map((entry) => {
+              return {entry, isActive: true}
+            }),
+            ...state.queuedPrompts.map((entry) => {
+              return {entry, isActive: false}
+            }),
+          ]
+        })
+      }
+
+      const getDispatchJobStates = (): JudgmentDispatchJobState[] => {
+        const jobStates = getDispatchPromptEntries().reduce((states, {entry, isActive}) => {
+          const jobId = entry.prompt.jobId
+          const current = states.get(jobId) ?? {
+            activePromptCount: 0,
+            dispatchStopped: stoppedJobIds.has(jobId),
+            jobId,
+            queuedPromptCount: 0,
+          }
+
+          return states.set(jobId, {
+            ...current,
+            activePromptCount: current.activePromptCount + (isActive ? 1 : 0),
+            queuedPromptCount: current.queuedPromptCount + (isActive ? 0 : 1),
+          })
+        }, new Map<string, JudgmentDispatchJobState>())
+
+        return Array.from(jobStates.values())
+      }
+
+      const getDispatchPromptRefs = (): JudgmentDispatchPromptRef[] => {
+        return getDispatchPromptEntries().map(({entry}) => {
+          return {jobId: entry.prompt.jobId, queueRecordId: entry.prompt.recordId}
+        })
+      }
+
       const getJobDispatchPromptIds = (jobId: string): string[] => {
         return Array.from(providerStates.values()).flatMap((state) => {
           return [...state.activePrompts, ...state.queuedPrompts]
@@ -449,19 +507,32 @@ const createJudgmentDispatchRuntimeLayer = (
       }
 
       const service: JudgmentDispatchRuntimeService = {
+        allowJobDispatch: (jobIds) => {
+          return Effect.sync(() => {
+            jobIds.forEach((jobId) => {
+              stoppedJobIds.delete(jobId)
+            })
+          })
+        },
         enqueueClaimedPrompts: ({label, prompts}) => {
           if (prompts.length === 0 || isShuttingDown) {
             return Effect.succeed({acceptedCount: 0, rejectedPrompts: prompts})
           }
 
           return Effect.gen(function* () {
-            const groupedPrompts = prompts.reduce((state, prompt) => {
-              const key = getProviderDispatchKey(getPromptProviderQueueInput(prompt))
-              return new Map(state).set(key, [...(state.get(key) ?? []), prompt])
-            }, new Map<string, PromptToProcess[]>())
+            const groupedPrompts = prompts
+              .filter((prompt) => {
+                return !stoppedJobIds.has(prompt.jobId)
+              })
+              .reduce((state, prompt) => {
+                const key = getProviderDispatchKey(getPromptProviderQueueInput(prompt))
+                return new Map(state).set(key, [...(state.get(key) ?? []), prompt])
+              }, new Map<string, PromptToProcess[]>())
 
             let acceptedCount = 0
-            let rejectedPrompts: PromptToProcess[] = []
+            let rejectedPrompts: PromptToProcess[] = prompts.filter((prompt) => {
+              return stoppedJobIds.has(prompt.jobId)
+            })
 
             for (const providerPrompts of groupedPrompts.values()) {
               const [firstPrompt] = providerPrompts
@@ -504,6 +575,16 @@ const createJudgmentDispatchRuntimeLayer = (
             return {acceptedCount, rejectedPrompts}
           })
         },
+        getDispatchJobStates: () => {
+          return Effect.sync(() => {
+            return getDispatchJobStates()
+          })
+        },
+        getDispatchPromptRefs: () => {
+          return Effect.sync(() => {
+            return getDispatchPromptRefs()
+          })
+        },
         getProviderDispatchStats: (input) => {
           return Effect.sync(() => {
             return getProviderDispatchStats(input)
@@ -523,6 +604,12 @@ const createJudgmentDispatchRuntimeLayer = (
           return Effect.gen(function* () {
             const state = yield* getOrCreateProviderState(input)
             return getProviderAvailablePromptCapacity(state)
+          })
+        },
+        stopJobDispatch: (jobId) => {
+          return Effect.sync(() => {
+            stoppedJobIds.add(jobId)
+            return takeQueuedJobPrompts(jobId)
           })
         },
       }
@@ -546,10 +633,11 @@ export const createJudgmentDispatchRuntime = (
 ): JudgmentDispatchRuntimeHandle => {
   let shutdownReason = 'shutdown'
   let runtime: ManagedRuntime.ManagedRuntime<JudgmentDispatchRuntimeService, never> | null = null
+  const recoverPrompts = options.recoverPrompts ?? defaultRecoverPrompts
 
   const getRuntime = () => {
     runtime ??= ManagedRuntime.make(
-      createJudgmentDispatchRuntimeLayer(options, () => {
+      createJudgmentDispatchRuntimeLayer(options, recoverPrompts, () => {
         return shutdownReason
       }),
     )
@@ -566,9 +654,24 @@ export const createJudgmentDispatchRuntime = (
   }
 
   return {
+    allowJobDispatch: (jobIds) => {
+      return withService((service) => {
+        return service.allowJobDispatch(jobIds)
+      })
+    },
     enqueueClaimedPrompts: ({label, prompts}) => {
       return withService((service) => {
         return service.enqueueClaimedPrompts({label, prompts})
+      })
+    },
+    getDispatchJobStates: () => {
+      return withService((service) => {
+        return service.getDispatchJobStates()
+      })
+    },
+    getDispatchPromptRefs: () => {
+      return withService((service) => {
+        return service.getDispatchPromptRefs()
       })
     },
     getProviderDispatchStats: (input) => {
@@ -600,6 +703,17 @@ export const createJudgmentDispatchRuntime = (
         await currentRuntime.dispose()
       }
     },
+    stopJobDispatch: async ({jobId, reason}) => {
+      const releasedPrompts = await withService((service) => {
+        return service.stopJobDispatch(jobId)
+      })
+
+      if (releasedPrompts.length > 0) {
+        await recoverPrompts(releasedPrompts, reason)
+      }
+
+      return {releasedCount: releasedPrompts.length}
+    },
   }
 }
 
@@ -627,6 +741,24 @@ export const getJudgmentDispatchJobPromptIds = (jobId: string) => {
 
 export const getJudgmentDispatchPromptLifecycleRecords = (input: ProviderQueueInput & {jobId: string}) => {
   return judgmentDispatchRuntime.getPromptLifecycleRecords(input)
+}
+
+export const getJudgmentDispatchJobStates = () => {
+  return judgmentDispatchRuntime.getDispatchJobStates()
+}
+
+export const getJudgmentDispatchPromptRefs = () => {
+  return judgmentDispatchRuntime.getDispatchPromptRefs()
+}
+
+// Stopping a job's dispatch releases its queued prompts to the owner and keeps it from starting
+// new LLM calls; prompts already running finish and are acked under their still-valid claims.
+export const stopJudgmentDispatchForJob = (input: {jobId: string; reason: string}) => {
+  return judgmentDispatchRuntime.stopJobDispatch(input)
+}
+
+export const allowJudgmentDispatchForJobs = (jobIds: string[]) => {
+  return judgmentDispatchRuntime.allowJobDispatch(jobIds)
 }
 
 export const shutdownJudgmentDispatchRuntime = async (reason = 'shutdown') => {

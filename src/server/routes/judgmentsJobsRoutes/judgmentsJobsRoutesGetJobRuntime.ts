@@ -139,6 +139,9 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     WHERE jj.id = ${getSqlLiteral(jobId)}
       AND jj.status = 'running'
       AND jj.storage_state = 'active'
+      AND p.archived = FALSE
+      AND COALESCE(m.enabled, TRUE) = TRUE
+      AND COALESCE(pc.enabled, TRUE) = TRUE
     LIMIT 1
   `)
 

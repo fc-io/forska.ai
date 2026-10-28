@@ -74,6 +74,7 @@ test('judge-worker running jobs come from the owner-backed API without local run
               resolvedDefaultCapacity: 6,
               storageState: 'active',
             }],
+            getOwnerBackedJudgmentJobInfo: async () => null,
             shouldUseJudgeWorkerOwnerHandoff: () => true,
           }
         })
@@ -168,6 +169,7 @@ test('judge-worker running jobs fall back to local accepted claims when the owne
             getOwnerBackedRunningJudgmentJobs: async () => {
               throw new Error('owner timed out')
             },
+            getOwnerBackedJudgmentJobInfo: async () => null,
             shouldUseJudgeWorkerOwnerHandoff: () => true,
           }
         })
@@ -218,6 +220,7 @@ test('judge-worker running jobs skip a dispatch tick when the owner is unavailab
             getOwnerBackedRunningJudgmentJobs: async () => {
               throw new Error('owner returned empty data')
             },
+            getOwnerBackedJudgmentJobInfo: async () => null,
             shouldUseJudgeWorkerOwnerHandoff: () => true,
           }
         })
@@ -273,6 +276,7 @@ test('judge-worker running jobs classify owner startup timeout as owner not read
             getOwnerBackedRunningJudgmentJobs: async () => {
               throw new Error('The operation timed out.')
             },
+            getOwnerBackedJudgmentJobInfo: async () => null,
             shouldUseJudgeWorkerOwnerHandoff: () => true,
           }
         })

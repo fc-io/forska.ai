@@ -13,6 +13,8 @@ import {
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
   getAcceptedJudgeWorkerClaimPrompts,
+  getJudgeWorkerClaimReleasePayload,
+  getJudgeWorkerHeldJobIds,
   getJudgeWorkerHeldQueueRecordIds,
   heartbeatOwnerBackedJudgmentWorker,
   pruneAckedJudgeWorkerCompletions,
@@ -22,17 +24,26 @@ import {
 } from './judgeWorkerCompletionJournal.ts'
 import {isJudgeWorkerLeaseLossTestBarrierActive} from './judgeWorkerLeaseLossTestBarrier.ts'
 import {
+  allowJudgmentDispatchForJobs,
   enqueueClaimedJudgmentPrompts,
   getJudgmentDispatchCompletionRatePerSecond,
   getJudgmentDispatchJobPromptIds,
+  getJudgmentDispatchJobStates,
+  getJudgmentDispatchPromptRefs,
   getJudgmentDispatchQueueCapacity,
+  type JudgmentDispatchJobState,
   type ProviderQueueInput,
   setJudgmentDispatchProviderPromptBacklogTarget,
+  stopJudgmentDispatchForJob,
 } from './judgmentDispatchRuntime.ts'
 import {getJudgmentEndpointAvailability} from './judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {recordJudgmentReadyWorkClaimResult} from './judgmentReadyWorkSignal.ts'
-import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
+import {
+  filterRunningJobsByRuntimeMatch,
+  isJudgmentJobDispatchable,
+  type RunningJudgmentJob,
+} from './judgmentsJobsGetRunningJobs.ts'
 import {
   getAndUpdateReadyPrompts,
   getReadyPromptRuntime,
@@ -107,6 +118,7 @@ let ownerBackedAcceptedClaimRecoveryStartedAt = 0
 let ownerBackedCompletionReplayPromise: Promise<void> | null = null
 let ownerBackedCompletionReplayStartedAt = 0
 let ownerBackedHeartbeatPromise: Promise<void> | null = null
+let judgmentDispatchStopPromise: Promise<void> | null = null
 let activeSendToLLMRun: SendToLLMRunState | null = null
 let sendToLLMRunSequence = 0
 let configuredSendToLLMRunTimeoutMs = sendToLLMRunTimeoutMs
@@ -116,6 +128,7 @@ export type SendToLLMRunStage =
   | 'ackedCompletionPrune'
   | 'capacityDispatch'
   | 'completionReplay'
+  | 'dispatchStop'
   | 'filterRunningJobs'
   | 'localCompletionApply'
   | 'starting'
@@ -392,24 +405,7 @@ const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
   if (shouldUseJudgeWorkerOwnerHandoff()) {
     await Promise.all(
       prompts.map(async (prompt) => {
-        await enqueueJudgeWorkerCompletion({
-          articleId: prompt.articleId,
-          claimId: prompt.claimId,
-          executionSnapshotHash: prompt.executionSnapshotHash,
-          executionSnapshotId: prompt.executionSnapshotId,
-          fullTextStrategyId: prompt.fullTextStrategyId,
-          jobId: prompt.jobId,
-          modelId: prompt.modelId,
-          projectId: prompt.projectId,
-          promptId: prompt.promptId,
-          queueRecordId: prompt.recordId,
-          status: 'retry',
-          useAbstract: prompt.useAbstract,
-          useFulltext: prompt.useFulltext,
-          useFulltextNoImages: prompt.useFulltextNoImages,
-          useMetadata: prompt.useMetadata,
-          useTitle: prompt.useTitle,
-        })
+        await enqueueJudgeWorkerCompletion(getJudgeWorkerClaimReleasePayload(prompt))
         await flushJudgeWorkerCompletionOutboxForClaim(prompt.claimId)
       }),
     )
@@ -1262,32 +1258,17 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
   })
 }
 
-const getProtectedJudgeWorkerAcceptedClaimPrompts = async (
-  jobs: RunningJudgmentJob[],
-): Promise<Array<{jobId: string; queueRecordId: string}>> => {
-  const protectedPrompts = await Promise.all(
-    jobs.map(async (job) => {
-      const recordIds = await getJudgmentDispatchJobPromptIds(job.id)
-
-      return recordIds.map((recordId) => {
-        return {jobId: job.id, queueRecordId: recordId}
-      })
-    }),
-  )
-
-  return protectedPrompts.flat()
-}
-
-const recoverAbandonedAcceptedClaimsForJobs = async (jobs: RunningJudgmentJob[]): Promise<void> => {
+// Every prompt in the dispatch runtime is protected, not only those of running jobs: after a pause
+// the job leaves the running list while its prompts are still in flight, and closing their claims
+// out here would make the owner reject the paid completions as stale.
+const recoverAbandonedAcceptedClaims = async (): Promise<void> => {
   if (!shouldUseJudgeWorkerOwnerHandoff()) {
     return undefined
   }
 
   const recovery = await recoverAbandonedJudgeWorkerAcceptedClaims({
     acceptedBefore: new Date(Date.now() - ownerBackedAcceptedClaimRecoveryMinAgeMs),
-    getProtectedPrompts: () => {
-      return getProtectedJudgeWorkerAcceptedClaimPrompts(jobs)
-    },
+    getProtectedPrompts: getJudgmentDispatchPromptRefs,
     limit: ownerBackedAcceptedClaimRecoveryReplayLimit,
   })
   const recoveredCount = recovery.acceptedClaimsDeleted + recovery.closeoutIntentsInserted
@@ -1441,17 +1422,47 @@ const startOwnerBackedCompletionReplay = (): void => {
     })
 }
 
-const startOwnerBackedWorkerHeartbeat = (serverJobId: string, jobs: RunningJudgmentJob[]): void => {
-  if (ownerBackedHeartbeatPromise || jobs.length === 0 || isJudgeWorkerLeaseLossTestBarrierActive()) {
-    return
-  }
+// The owner requeues a worker's claims once its heartbeat for the job goes stale. A paused job is
+// still heartbeated while this worker holds prompts or unacked completions for it, so the claims
+// stay valid until the in-flight work is acked or explicitly released.
+export const getOwnerBackedWorkerHeartbeatJobIds = ({
+  dispatchJobStates,
+  heldJobIds,
+  runningJobIds,
+}: {
+  dispatchJobStates: JudgmentDispatchJobState[]
+  heldJobIds: string[]
+  runningJobIds: string[]
+}): string[] => {
+  return Array.from(
+    new Set([
+      ...runningJobIds,
+      ...dispatchJobStates.map((state) => {
+        return state.jobId
+      }),
+      ...heldJobIds,
+    ]),
+  )
+}
 
-  ownerBackedHeartbeatPromise = heartbeatOwnerBackedJudgmentWorker({
-    claimedBy: serverJobId,
-    jobIds: jobs.map((job) => {
+const heartbeatOwnerBackedWorkerJobs = async (serverJobId: string, jobs: RunningJudgmentJob[]): Promise<void> => {
+  const jobIds = getOwnerBackedWorkerHeartbeatJobIds({
+    dispatchJobStates: await getJudgmentDispatchJobStates(),
+    heldJobIds: getJudgeWorkerHeldJobIds(),
+    runningJobIds: jobs.map((job) => {
       return job.id
     }),
   })
+
+  await heartbeatOwnerBackedJudgmentWorker({claimedBy: serverJobId, jobIds})
+}
+
+const startOwnerBackedWorkerHeartbeat = (serverJobId: string, jobs: RunningJudgmentJob[]): void => {
+  if (ownerBackedHeartbeatPromise || isJudgeWorkerLeaseLossTestBarrierActive()) {
+    return
+  }
+
+  ownerBackedHeartbeatPromise = heartbeatOwnerBackedWorkerJobs(serverJobId, jobs)
     .catch((error) => {
       logOwnerBackedBackgroundFailure(
         'ownerBackedWorkerHeartbeatFailed',
@@ -1464,7 +1475,7 @@ const startOwnerBackedWorkerHeartbeat = (serverJobId: string, jobs: RunningJudgm
     })
 }
 
-const startOwnerBackedAcceptedClaimRecovery = (jobs: RunningJudgmentJob[]): void => {
+const startOwnerBackedAcceptedClaimRecovery = (): void => {
   const now = Date.now()
 
   if (
@@ -1476,7 +1487,7 @@ const startOwnerBackedAcceptedClaimRecovery = (jobs: RunningJudgmentJob[]): void
   }
 
   ownerBackedAcceptedClaimRecoveryStartedAt = now
-  ownerBackedAcceptedClaimRecoveryPromise = recoverAbandonedAcceptedClaimsForJobs(jobs)
+  ownerBackedAcceptedClaimRecoveryPromise = recoverAbandonedAcceptedClaims()
     .catch((error) => {
       logOwnerBackedBackgroundFailure(
         'ownerBackedAcceptedClaimRecoveryFailed',
@@ -1486,6 +1497,112 @@ const startOwnerBackedAcceptedClaimRecovery = (jobs: RunningJudgmentJob[]): void
     })
     .finally(() => {
       ownerBackedAcceptedClaimRecoveryPromise = null
+    })
+}
+
+type JudgmentDispatchStop = {jobId: string; releasedCount: number}
+
+const judgmentDispatchStopReason = 'job-not-dispatchable'
+
+const getDispatchStopCandidateJobIds = ({
+  dispatchJobStates,
+  runningJobIds,
+}: {
+  dispatchJobStates: JudgmentDispatchJobState[]
+  runningJobIds: string[]
+}): string[] => {
+  const runningJobIdSet = new Set(runningJobIds)
+
+  return dispatchJobStates
+    .filter((state) => {
+      return state.queuedPromptCount > 0 && !state.dispatchStopped && !runningJobIdSet.has(state.jobId)
+    })
+    .map((state) => {
+      return state.jobId
+    })
+}
+
+const stopDispatchUnlessJobIsDispatchable = async ({
+  isJobDispatchable,
+  jobId,
+  stopJobDispatch,
+}: {
+  isJobDispatchable: (jobId: string) => Promise<boolean>
+  jobId: string
+  stopJobDispatch: (input: {jobId: string; reason: string}) => Promise<{releasedCount: number}>
+}): Promise<JudgmentDispatchStop | null> => {
+  if (await isJobDispatchable(jobId)) {
+    return null
+  }
+
+  const {releasedCount} = await stopJobDispatch({jobId, reason: judgmentDispatchStopReason})
+
+  return {jobId, releasedCount}
+}
+
+// A job with queued prompts that left the running list (paused, soft-stopped, drained) stops
+// dispatch only when the owner explicitly reports it as not dispatchable. Its queued prompts are
+// released to the owner; prompts already running finish. A failed lookup decides nothing and is
+// retried on the next tick.
+export const stopDispatchForNonRunningJobs = async ({
+  getDispatchJobStates = getJudgmentDispatchJobStates,
+  isJobDispatchable = isJudgmentJobDispatchable,
+  runningJobIds,
+  stopJobDispatch = stopJudgmentDispatchForJob,
+}: {
+  getDispatchJobStates?: () => Promise<JudgmentDispatchJobState[]>
+  isJobDispatchable?: (jobId: string) => Promise<boolean>
+  runningJobIds: string[]
+  stopJobDispatch?: (input: {jobId: string; reason: string}) => Promise<{releasedCount: number}>
+}): Promise<JudgmentDispatchStop[]> => {
+  const candidateJobIds = getDispatchStopCandidateJobIds({
+    dispatchJobStates: await getDispatchJobStates(),
+    runningJobIds,
+  })
+  const stops = await Promise.all(
+    candidateJobIds.map((jobId) => {
+      return stopDispatchUnlessJobIsDispatchable({isJobDispatchable, jobId, stopJobDispatch}).catch(
+        (error: unknown) => {
+          schedulerFailureLogger.warn(
+            `scheduler:dispatch-stop-failed:${jobId}`,
+            '[capacity] dispatch stop for a job outside the running list failed',
+            {component: sendToLLMComponent, error: getBackgroundError(error), event: 'dispatchStopFailed', jobId},
+          )
+          return null
+        },
+      )
+    }),
+  )
+
+  return stops.filter((stop): stop is JudgmentDispatchStop => {
+    return stop !== null
+  })
+}
+
+const startJudgmentDispatchStop = (runningJobIds: string[]): void => {
+  if (judgmentDispatchStopPromise) {
+    return
+  }
+
+  judgmentDispatchStopPromise = stopDispatchForNonRunningJobs({runningJobIds})
+    .then((stops) => {
+      stops.forEach((stop) => {
+        schedulerFailureLogger.log(
+          `scheduler:dispatch-stopped:${stop.jobId}`,
+          '[capacity] stopped dispatch for a job outside the running list',
+          {component: sendToLLMComponent, event: 'dispatchStopped', ...stop},
+        )
+      })
+    })
+    .catch((error: unknown) => {
+      schedulerFailureLogger.warn('scheduler:dispatch-stop-pass-failed', '[capacity] dispatch stop pass failed', {
+        component: sendToLLMComponent,
+        error: getBackgroundError(error),
+        event: 'dispatchStopPassFailed',
+      })
+    })
+    .finally(() => {
+      judgmentDispatchStopPromise = null
     })
 }
 
@@ -1627,10 +1744,16 @@ const runJudgmentsJobsSendToLLM = async (
     pruneAckedJudgeWorkerCompletionsIfDue()
   }
 
+  setActiveSendToLLMRunStage(runId, 'dispatchStop')
+  const runningJobIds = allJobs.map((job) => {
+    return job.id
+  })
+  await allowJudgmentDispatchForJobs(runningJobIds)
+  startJudgmentDispatchStop(runningJobIds)
   setActiveSendToLLMRunStage(runId, 'filterRunningJobs')
   const sendableJobs = await requeueAndFilterRunningJobs({allJobs, filterJobs, serverJobId})
   setActiveSendToLLMRunStage(runId, 'acceptedClaimRecovery')
-  startOwnerBackedAcceptedClaimRecovery(sendableJobs)
+  startOwnerBackedAcceptedClaimRecovery()
   setActiveSendToLLMRunStage(runId, 'capacityDispatch')
   const capacityBuckets = getCapacityBuckets({jobs: sendableJobs})
 

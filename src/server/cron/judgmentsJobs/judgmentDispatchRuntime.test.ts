@@ -459,3 +459,110 @@ test('reports provider completion rate over the last minute', async () => {
   await runtime.shutdown('test-complete')
   await resetJudgmentDispatchRuntimeForTests()
 })
+
+const createStopTestPrompt = (jobId: string, recordId: string) => {
+  return createPrompt({
+    claimId: `claim-${recordId}`,
+    jobId,
+    providerConnectionId: 'connection-stop',
+    providerMaxInflightRequests: 1,
+    providerPromptBacklogTarget: 8,
+    recordId,
+  })
+}
+
+const getRecordIds = (prompts: PromptToProcess[]) => {
+  return prompts.map((prompt) => {
+    return prompt.recordId
+  })
+}
+
+test('stopping a job releases its queued prompts, lets running prompts finish, and starts no new call for it', async () => {
+  const releases = new Map(
+    ['record-a1', 'record-a2', 'record-b1'].map((recordId) => {
+      return [recordId, createSignal()] as const
+    }),
+  )
+  const started: string[] = []
+  const processPrompt = mock(async ({prompt}: {label: string; prompt: PromptToProcess}) => {
+    started.push(prompt.recordId)
+    await releases.get(prompt.recordId)?.promise
+  })
+  const recoverPrompts = mock(async (_prompts: PromptToProcess[], _reason: string) => {})
+  const runtime = createJudgmentDispatchRuntime({processPrompt, recoverPrompts})
+
+  const enqueueResult = await runtime.enqueueClaimedPrompts({
+    label: 'stop-job',
+    prompts: [
+      createStopTestPrompt('job-a', 'record-a1'),
+      createStopTestPrompt('job-a', 'record-a2'),
+      createStopTestPrompt('job-a', 'record-a3'),
+      createStopTestPrompt('job-a', 'record-a4'),
+      createStopTestPrompt('job-b', 'record-b1'),
+    ],
+  })
+  await flush()
+
+  expect(enqueueResult.rejectedPrompts).toEqual([])
+  expect(started).toEqual(['record-a1', 'record-a2'])
+
+  expect(await runtime.stopJobDispatch({jobId: 'job-a', reason: 'job-not-dispatchable'})).toEqual({releasedCount: 2})
+  expect(recoverPrompts).toHaveBeenCalledTimes(1)
+  expect(getRecordIds(recoverPrompts.mock.calls[0]?.[0] ?? [])).toEqual(['record-a3', 'record-a4'])
+  expect(recoverPrompts.mock.calls[0]?.[1]).toBe('job-not-dispatchable')
+  expect(await runtime.getDispatchJobStates()).toEqual([
+    {activePromptCount: 2, dispatchStopped: true, jobId: 'job-a', queuedPromptCount: 0},
+    {activePromptCount: 0, dispatchStopped: false, jobId: 'job-b', queuedPromptCount: 1},
+  ])
+
+  const stoppedEnqueue = await runtime.enqueueClaimedPrompts({
+    label: 'stop-job',
+    prompts: [createStopTestPrompt('job-a', 'record-a5')],
+  })
+
+  expect(stoppedEnqueue.acceptedCount).toBe(0)
+  expect(getRecordIds(stoppedEnqueue.rejectedPrompts)).toEqual(['record-a5'])
+
+  releases.get('record-a1')?.resolve()
+  await flush()
+  releases.get('record-a2')?.resolve()
+  await flush()
+
+  expect(started).toEqual(['record-a1', 'record-a2', 'record-b1'])
+  expect(await runtime.getDispatchPromptRefs()).toEqual([{jobId: 'job-b', queueRecordId: 'record-b1'}])
+
+  await runtime.allowJobDispatch(['job-a'])
+  const resumedEnqueue = await runtime.enqueueClaimedPrompts({
+    label: 'stop-job',
+    prompts: [createStopTestPrompt('job-a', 'record-a6')],
+  })
+
+  expect(resumedEnqueue).toEqual({acceptedCount: 1, rejectedPrompts: []})
+  expect(recoverPrompts).toHaveBeenCalledTimes(1)
+
+  releases.get('record-b1')?.resolve()
+  await flush()
+
+  expect(started).toEqual(['record-a1', 'record-a2', 'record-b1', 'record-a6'])
+
+  await runtime.shutdown('test-complete')
+})
+
+test('stopping a job without queued prompts marks it stopped without a release', async () => {
+  const release = createSignal()
+  const processPrompt = mock(async () => {
+    await release.promise
+  })
+  const recoverPrompts = mock(async (_prompts: PromptToProcess[], _reason: string) => {})
+  const runtime = createJudgmentDispatchRuntime({processPrompt, recoverPrompts})
+
+  await runtime.enqueueClaimedPrompts({label: 'stop-idle', prompts: [createStopTestPrompt('job-a', 'record-a1')]})
+  await flush()
+
+  expect(await runtime.stopJobDispatch({jobId: 'job-a', reason: 'job-not-dispatchable'})).toEqual({releasedCount: 0})
+  expect(recoverPrompts).not.toHaveBeenCalled()
+  expect(await runtime.getDispatchPromptRefs()).toEqual([{jobId: 'job-a', queueRecordId: 'record-a1'}])
+
+  release.resolve()
+  await runtime.shutdown('test-complete')
+})
