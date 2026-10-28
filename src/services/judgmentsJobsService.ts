@@ -230,6 +230,14 @@ export type JudgmentJobRequestStats = {
   dispatch?: {
     jobActivePrompts: number
     jobQueuedPrompts: number
+    providerAdaptiveInflight?: {
+      configuredLimit: number
+      cooldownUntil: string | null
+      decreaseCount: number
+      effectiveLimit: number
+      lastRateLimitedAt: string | null
+      rateLimitBackoffActive: boolean
+    } | null
     providerDispatchActivePromptFillPct: number | null
     providerDispatchActivePromptLimit: number
     providerDispatchActivePrompts: number

@@ -77,6 +77,7 @@ const createSnapshot = ({
     dispatch: {
       jobActivePrompts: localProviderLiveRequests,
       jobQueuedPrompts: 0,
+      providerAdaptiveInflight: null,
       providerDispatchActivePromptFillPct: null,
       providerDispatchActivePromptLimit: 11,
       providerDispatchActivePrompts: localProviderLiveRequests,

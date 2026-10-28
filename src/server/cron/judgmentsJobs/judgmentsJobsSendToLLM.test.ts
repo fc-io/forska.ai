@@ -7,6 +7,7 @@ import {
   resetJudgmentEndpointAvailabilityForTests,
 } from './judgmentEndpointAvailability.ts'
 import {
+  getAdaptiveDispatchCapacity,
   getCapacityBuckets,
   getDispatchAvailability,
   getEffectiveDispatchProviderCap,
@@ -981,6 +982,31 @@ test('judge claim buffer covers ~45 s of measured completions within burst and m
   expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 2})).toBe(200)
   expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 12})).toBe(540)
   expect(getJudgeClaimBufferPrompts({capacity, completionRatePerSecond: 100})).toBe(1200)
+})
+
+test('claim capacity follows the codex adaptive in-flight limit only while the connection backs off', () => {
+  const capacity = {maxBurst: 35, maxInflight: 35, workerCount: 35}
+  const adaptiveInflight = {
+    configuredLimit: 35,
+    cooldownUntil: '2026-10-28T10:49:32.000Z',
+    decreaseCount: 2,
+    effectiveLimit: 8,
+    lastRateLimitedAt: '2026-10-28T10:47:32.000Z',
+    providerKey: 'connection-codex',
+    rateLimitBackoffActive: true,
+  }
+
+  expect(getAdaptiveDispatchCapacity(capacity, [])).toEqual(capacity)
+  expect(getAdaptiveDispatchCapacity(capacity, [adaptiveInflight])).toEqual({
+    maxBurst: 8,
+    maxInflight: 8,
+    workerCount: 35,
+  })
+  expect(
+    getAdaptiveDispatchCapacity(capacity, [
+      {...adaptiveInflight, cooldownUntil: null, effectiveLimit: 35, rateLimitBackoffActive: false},
+    ]),
+  ).toEqual(capacity)
 })
 
 const getDispatchJobStatesForStopTest = async () => {

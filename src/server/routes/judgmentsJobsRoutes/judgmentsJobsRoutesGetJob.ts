@@ -143,6 +143,7 @@ export const judgmentsJobsRoutesGetJob = async ({params, request}: {params: {id:
           dispatch: {
             jobActivePrompts: dispatchStats.jobActivePrompts,
             jobQueuedPrompts: dispatchStats.jobQueuedPrompts,
+            providerAdaptiveInflight: dispatchStats.providerAdaptiveInflight,
             providerDispatchActivePromptFillPct: dispatchStats.providerDispatchActivePromptFillPct,
             providerDispatchActivePromptLimit: dispatchStats.providerDispatchActivePromptLimit,
             providerDispatchActivePrompts: dispatchStats.providerDispatchActivePrompts,
