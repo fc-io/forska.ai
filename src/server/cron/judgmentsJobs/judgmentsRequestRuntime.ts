@@ -1,9 +1,20 @@
 import {randomUUID} from 'node:crypto'
 
 import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
+import {
+  type CodexAdaptiveInflight,
+  getCodexConnectionAdaptiveInflight,
+  getCodexConnectionNextLimitIncreaseAtMs,
+  isCodexRateLimitedError,
+  recordCodexConnectionRateLimit,
+  recordCodexConnectionSuccess,
+  resetCodexRateLimitBackoffForTests,
+} from '../../providers/codexRateLimitBackoff.ts'
 import {getProviderConnection} from '../../providers/providerConnectionRepository.ts'
 import {testProviderConnectionHealth} from '../../providers/providerHealthService.ts'
 import type {ProviderConnectionRecord} from '../../providers/providerTypes.ts'
+import {parseProviderRetryAfterAt} from '../../services/judgmentJobProviderHealthService.ts'
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
 import {
@@ -136,6 +147,8 @@ const jobRequestStates = new Map<string, JobRequestState>()
 const providerRequestStates = new Map<string, ProviderRequestState>()
 const fallbackInFlightByProviderKey = new Map<string, number>()
 const localEndpointProbePermits = new Set<string>()
+const codexAdaptiveInflightDrainTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const codexRateLimitBackoffLogger = createRateLimitedLogger({sink: 'both', windowMs: 10_000})
 
 let codexInFlight = 0
 const providerAdmissionLeaseRetryDelayMs = 250
@@ -219,9 +232,37 @@ const recordCurrentProviderSnapshot = (snapshot: ProviderBucketSnapshot): void =
   }
 }
 
+const getCodexConnectionKey = (providerScope: Pick<ProviderRequestScope, 'modelProvider' | 'providerConnectionId'>) => {
+  return normalizeProvider(providerScope.modelProvider) === 'codex'
+    ? getTrimmedValue(providerScope.providerConnectionId)
+    : null
+}
+
+const getCodexConnectionConfiguredMaxInflight = (providerScope: ProviderRequestScope): number => {
+  return getProviderRequestMaxInflight(providerScope) ?? getCodexMaxInflight()
+}
+
+const getCodexConnectionAdaptiveInflightForScope = (
+  providerScope: ProviderRequestScope,
+  codexConnectionKey: string,
+): CodexAdaptiveInflight => {
+  return getCodexConnectionAdaptiveInflight({
+    configuredLimit: getCodexConnectionConfiguredMaxInflight(providerScope),
+    key: codexConnectionKey,
+  })
+}
+
+const getProviderRequestInflightLimit = (providerScope: ProviderRequestScope): number | null => {
+  const codexConnectionKey = getCodexConnectionKey(providerScope)
+
+  return codexConnectionKey === null
+    ? getProviderRequestMaxInflight(providerScope)
+    : getCodexConnectionAdaptiveInflightForScope(providerScope, codexConnectionKey).effectiveLimit
+}
+
 const acquireProviderRequestRelease = (providerScope: ProviderRequestScope): (() => void) | null => {
   const providerKey = getProviderRequestKey(providerScope)
-  const maxInflight = getProviderRequestMaxInflight(providerScope)
+  const maxInflight = getProviderRequestInflightLimit(providerScope)
 
   if (maxInflight == null) {
     return () => {
@@ -1258,6 +1299,101 @@ const drainProviderScopedWaiters = (): void => {
   drainFallbackWaiters()
 }
 
+const scheduleCodexAdaptiveInflightDrain = (codexConnectionKey: string): void => {
+  const nextIncreaseAtMs = getCodexConnectionNextLimitIncreaseAtMs(codexConnectionKey)
+
+  if (nextIncreaseAtMs === null || codexAdaptiveInflightDrainTimers.has(codexConnectionKey)) {
+    return
+  }
+
+  const timer = setTimeout(
+    () => {
+      codexAdaptiveInflightDrainTimers.delete(codexConnectionKey)
+      drainProviderScopedWaiters()
+      scheduleCodexAdaptiveInflightDrain(codexConnectionKey)
+    },
+    Math.max(0, nextIncreaseAtMs - Date.now()),
+  )
+
+  timer.unref?.()
+  codexAdaptiveInflightDrainTimers.set(codexConnectionKey, timer)
+}
+
+const recordCodexConnectionRequestSuccess = (providerScope: ProviderRequestScope): void => {
+  const codexConnectionKey = getCodexConnectionKey(providerScope)
+
+  if (codexConnectionKey !== null) {
+    recordCodexConnectionSuccess({key: codexConnectionKey})
+    scheduleCodexAdaptiveInflightDrain(codexConnectionKey)
+  }
+}
+
+const logCodexConnectionRateLimit = ({
+  adaptiveInflight,
+  codexConnectionKey,
+  decreased,
+  error,
+}: {
+  adaptiveInflight: CodexAdaptiveInflight
+  codexConnectionKey: string
+  decreased: boolean
+  error: unknown
+}): void => {
+  codexRateLimitBackoffLogger.warn(
+    `codex.rateLimitBackoff.${decreased ? 'decreased' : 'unchanged'}.${codexConnectionKey}`,
+    decreased
+      ? '[codex] Codex backend rate limited (429); halved in-flight turns for this connection'
+      : '[codex] Codex backend rate limited (429) on a turn started before the last decrease; limit unchanged',
+    {
+      ...adaptiveInflight,
+      decreased,
+      error: getErrorMessage(error),
+      event: 'codexRateLimitBackoff',
+      providerConnectionId: codexConnectionKey,
+    },
+  )
+}
+
+const recordCodexConnectionRequestRateLimit = ({
+  error,
+  providerScope,
+  requestStartedAt,
+}: {
+  error: unknown
+  providerScope: ProviderRequestScope
+  requestStartedAt: string
+}): void => {
+  const codexConnectionKey = getCodexConnectionKey(providerScope)
+
+  if (codexConnectionKey === null || !isCodexRateLimitedError(error)) {
+    return
+  }
+
+  const {adaptiveInflight, decreased} = recordCodexConnectionRateLimit({
+    configuredLimit: getCodexConnectionConfiguredMaxInflight(providerScope),
+    key: codexConnectionKey,
+    requestStartedAtMs: Date.parse(requestStartedAt),
+    retryAfterAt: parseProviderRetryAfterAt(getErrorMessage(error)),
+  })
+
+  logCodexConnectionRateLimit({adaptiveInflight, codexConnectionKey, decreased, error})
+  scheduleCodexAdaptiveInflightDrain(codexConnectionKey)
+}
+
+export const getJudgmentProviderAdaptiveInflight = (
+  input: Pick<
+    ProviderRequestScope,
+    'modelId' | 'modelProvider' | 'providerConnectionId' | 'providerKey' | 'providerMaxInflightRequests'
+  >,
+): CodexAdaptiveInflight | null => {
+  const providerScope = {...input, providerUsesFamilyDefault: false}
+  const codexConnectionKey = getCodexConnectionKey(providerScope)
+
+  return codexConnectionKey === null
+    ? null
+    : getCodexConnectionAdaptiveInflightForScope(providerScope, codexConnectionKey)
+}
+
 const buildWorkerSlot = ({
   releaseProviderRequest,
   requiresProbe,
@@ -1993,7 +2129,16 @@ export const withJudgmentRequest = async <T>(
       startedAt: requestAttempt.startedAt,
     })
 
-    const providerRequest = run(slot.baseURL, requestAttempt)
+    const providerRequest = run(slot.baseURL, requestAttempt).then(
+      (result) => {
+        recordCodexConnectionRequestSuccess(providerScope)
+        return result
+      },
+      (error: unknown) => {
+        recordCodexConnectionRequestRateLimit({error, providerScope, requestStartedAt: requestAttempt.startedAt})
+        throw error
+      },
+    )
 
     try {
       const result = await Promise.race([providerRequest, providerAdmissionHeartbeat.leaseLoss])
@@ -2052,6 +2197,12 @@ export const resetJudgmentRequestRuntimeForTests = (): void => {
   fallbackInFlightByProviderKey.clear()
   providerAdmissionAcquireAttempts.splice(0, providerAdmissionAcquireAttempts.length)
   localEndpointProbePermits.clear()
+  Array.from(codexAdaptiveInflightDrainTimers.values()).map((timer) => {
+    clearTimeout(timer)
+    return timer
+  })
+  codexAdaptiveInflightDrainTimers.clear()
+  resetCodexRateLimitBackoffForTests()
   codexInFlight = 0
   resetJudgmentEndpointAvailabilityForTests()
   resetProviderAdmissionLeaseForTests()

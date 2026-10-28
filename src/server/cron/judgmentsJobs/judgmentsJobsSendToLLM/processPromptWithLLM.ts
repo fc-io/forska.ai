@@ -13,6 +13,10 @@ import {JudgePromptTooLargeError} from '../../../../agent/judge/judgePromptTooLa
 import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromptJudgment.ts'
 import {getSystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
 import type {ArticleRecord, JudgmentsJobsPromptsSkipReason, PublicationStatus} from '../../../../db/schemaTypes.ts'
+import {
+  codexRateLimitedFailureCode,
+  getCodexConnectionRateLimitCooldownRemainingMs,
+} from '../../../providers/codexRateLimitBackoff.ts'
 import type {StoredProviderInvocationContext} from '../../../providers/providerInvocationService.ts'
 import {getModelContext, getModelContextWindowMissingError} from '../../../providers/providerModelCapabilities.ts'
 import {escapeSqlString} from '../../../services/appQueryHelpers.ts'
@@ -118,6 +122,7 @@ type LocalProviderFailure = {
   connectionFailureKind?: string | null
   failureCode?: string | null
   message: string | null
+  retryAfterAt?: Date | null
   statusCode?: number | null
 }
 
@@ -966,6 +971,47 @@ const getProviderHealthRetryAfterMs = (providerHealth: JudgmentJobProviderHealth
   return providerHealth ? getProviderFailureRetryDelayMs(providerHealth) : null
 }
 
+const isCodexRateLimitedJudgeError = (error: unknown): error is RecoverableJudgeError => {
+  return error instanceof RecoverableJudgeError && error.failureCode === codexRateLimitedFailureCode
+}
+
+const getPromptCodexRateLimitCooldownRemainingMs = (promptToProcess: PromptToProcess): number => {
+  return promptToProcess.providerConnectionId
+    ? getCodexConnectionRateLimitCooldownRemainingMs(promptToProcess.providerConnectionId)
+    : 0
+}
+
+const requeueCodexRateLimitedPrompt = async (
+  promptToProcess: PromptToProcess,
+  error: RecoverableJudgeError,
+): Promise<PromptTerminalState> => {
+  const cooldownRemainingMs = getPromptCodexRateLimitCooldownRemainingMs(promptToProcess)
+  const providerHealth = await recordLocalProviderFailure(promptToProcess, {
+    failureCode: error.failureCode,
+    message: getProviderDiagnosticsMessage(error.providerDiagnostics) ?? error.message,
+    retryAfterAt: cooldownRemainingMs > 0 ? new Date(Date.now() + cooldownRemainingMs) : null,
+  })
+  const retryAfterMs = cooldownRemainingMs > 0 ? cooldownRemainingMs : getProviderHealthRetryAfterMs(providerHealth)
+
+  processPromptFailureLogger.warn(
+    'llm.prompt.codexRateLimitedRequeued',
+    '[llm] Requeued prompt after Codex backend rate limit (429) without using its extra retry',
+    {
+      articleId: promptToProcess.articleId,
+      component: processPromptComponent,
+      diagnostics: error.providerDiagnostics,
+      event: 'codexRateLimitedRequeued',
+      failureCode: error.failureCode,
+      jobId: promptToProcess.jobId,
+      promptId: promptToProcess.promptId,
+      recordId: promptToProcess.recordId,
+      retryAfterMs,
+    },
+  )
+
+  return {kind: 'ready', retryAfterMs}
+}
+
 const getPromptPreparationCloseoutReason = (error: unknown): PromptCloseoutReason => {
   const message = error instanceof Error ? error.message : String(error)
 
@@ -1168,6 +1214,11 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
                   recordId: promptToProcess.recordId,
                 },
               )
+              throw error
+            }
+
+            if (isCodexRateLimitedJudgeError(error)) {
+              terminalState = await requeueCodexRateLimitedPrompt(promptToProcess, error)
               throw error
             }
 

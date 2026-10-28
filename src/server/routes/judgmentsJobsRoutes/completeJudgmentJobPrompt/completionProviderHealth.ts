@@ -1,4 +1,5 @@
 import {parseConnectionFailureMessage} from '../../../cron/judgmentsJobs/connectionHealth.ts'
+import {codexRateLimitedFailureCode} from '../../../providers/codexRateLimitBackoff.ts'
 import {
   getProviderFailureRetryDelayMs,
   type JudgmentJobProviderHealth,
@@ -42,6 +43,17 @@ const getCompletionConnectionFailure = (message: string | null) => {
   return message ? parseConnectionFailureMessage(message.replace(/^Connection error:\s*/, '')) : null
 }
 
+const getCompletionCodexRateLimitRetryAfterAt = (
+  body: JudgmentCompletionBody,
+  failureDetail: ProviderFailureDetail,
+): Date | null => {
+  const retryAfterMs = body.retryAfterMs ?? 0
+
+  return failureDetail.failureCode === codexRateLimitedFailureCode && retryAfterMs > 0
+    ? new Date(Date.now() + retryAfterMs)
+    : null
+}
+
 export const recordCompletionProviderFailure = async (
   jobId: string,
   body: JudgmentCompletionBody,
@@ -56,6 +68,7 @@ export const recordCompletionProviderFailure = async (
         jobId,
         message: failureDetail.message,
         modelId: body.modelId,
+        retryAfterAt: getCompletionCodexRateLimitRetryAfterAt(body, failureDetail),
         statusCode: connectionFailure?.statusCode ?? null,
       }).catch((error: unknown) => {
         return logProviderHealthWriteFailure(jobId, error)
