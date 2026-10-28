@@ -141,10 +141,11 @@ export const createCodexAdapter = (catalog: ProviderCatalogEntry): ProviderDefin
     health: async () => {
       return getHealth()
     },
-    invoke: async ({model, request}) => {
+    invoke: async ({connection, model, request}) => {
       assertProviderModelAcceptsPromptImages({model, prompt: request.prompt, providerKind: catalog.kind})
 
       return invokeCodexAppModel({
+        connectionId: connection.id,
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         outputSchema: request.outputSchema,
         prompt: request.prompt,

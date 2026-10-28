@@ -214,6 +214,24 @@ test('keeps Codex transient turn timeouts out of the outage path', () => {
   ).toBe('healthy')
 })
 
+test('keeps Codex 429 rate limits prompt-scoped so the adaptive limit handles them instead of an outage pause', () => {
+  const error = Object.assign(
+    new Error(
+      'Codex backend rate limited (429): codex app-server: turn failed: exceeded retry limit, last status: 429 Too Many Requests, request id: 935f6f8d-850a-4fb8-895e-2c2ef8027110',
+    ),
+    {code: 'codex_rate_limited'},
+  )
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: 'codex://app-server', endpointPath: null, providerKind: 'codex'},
+    error,
+  })
+
+  expect(failure.kind).toBe('other')
+  expect(failure.shouldPauseConnection).toBe(false)
+  expect(failure.statusCode).toBeNull()
+  expect(isConnectionError(error)).toBe(false)
+})
+
 test('classifies Codex initialize timeouts as connection failures', () => {
   const error = Object.assign(new Error('codex app-server timeout: initialize'), {code: 'codex_transient_turn_failure'})
   const failure = classifyConnectionFailure({

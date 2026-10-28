@@ -271,7 +271,7 @@ test('codex adapter composes health from runtime status and model listing', asyn
     runtimeCredentials: {apiKey: null, baseURL: null, headers: {}, secretRef: null},
   })
   const result = await adapter.invoke({
-    connection: null as never,
+    connection: {id: 'codex-connection'} as never,
     model: {modelName: 'codex-mini', name: 'codex-mini', remoteModelId: 'codex-mini', version: 'medium'} as never,
     request: {
       maxCompletionTokens: 100,
@@ -289,6 +289,7 @@ test('codex adapter composes health from runtime status and model listing', asyn
   expect(codexState.health).toHaveBeenCalledTimes(1)
   expect(codexState.list).toHaveBeenCalledTimes(1)
   expect(codexState.invoke).toHaveBeenCalledTimes(1)
+  expect(codexState.invoke.mock.calls[0]?.[0]).toMatchObject({connectionId: 'codex-connection'})
 })
 
 test('openai adapter begin/finish auth lifecycle handles API key flow', async () => {

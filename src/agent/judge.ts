@@ -23,6 +23,7 @@ import {
 } from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {type FullTextTokenCounter, loadFullTextTokenCounter} from '../server/fullText/fullTextTokenizer.ts'
 import {claudeCodeRecoverableFailureCodes} from '../server/providers/claudeCodeFailureCodes.ts'
+import {codexRateLimitedFailureCode} from '../server/providers/codexRateLimitBackoff.ts'
 import {
   invokeStoredProviderModel,
   type StoredProviderInvocationContext,
@@ -637,6 +638,7 @@ const isRecoverableProviderFailureCode = (failureCode: string | null): boolean =
   return (
     isAnthropicEmptyResponseFailureCode(failureCode)
     || failureCode === 'codex_transient_turn_failure'
+    || failureCode === codexRateLimitedFailureCode
     || claudeCodeRecoverableFailureCodes.includes(failureCode ?? '')
   )
 }
