@@ -163,7 +163,9 @@ describe('CompareProjectCovidenceExportSection', () => {
 
     try {
       expect(container.querySelector('h2')?.textContent).toBe('Export to Covidence')
-      expect(container.textContent).toContain('This export ignores the filters above.')
+      expect(container.querySelector('section p')?.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
+        "Downloads a Covidence RIS file (full-text review set) with every article that has a selected answer in at least one column, each article once. Import it in Covidence with 'Import into: Full text review'. This export ignores the filters above.",
+      )
       expect(getLabels(container)).toEqual([
         'Summary - LLM - GPT 5.5 - Title + Abstract:',
         'Summary - LLM - Opus 5.5 - Title + Abstract:',
@@ -242,7 +244,7 @@ describe('CompareProjectCovidenceExportSection', () => {
         expect(mockState.downloadFileFromPost).toHaveBeenCalledWith({
           body: expectedBody,
           errorMessage: 'Covidence export failed',
-          fallbackFilename: 'covidence-export-comparison-project-1.csv',
+          fallbackFilename: 'covidence-export-comparison-project-1.ris',
           path: '/api/comparison-projects/comparison-project-1/covidence-export',
         })
       })

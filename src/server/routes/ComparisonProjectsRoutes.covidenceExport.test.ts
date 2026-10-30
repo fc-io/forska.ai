@@ -4,7 +4,6 @@ import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
-import {getComparisonProjectCsvLine} from './comparisonProjectsRoutes/comparisonProjectsRoutesPostExport/comparisonProjectCsvLine.ts'
 
 setDefaultTimeout(180_000)
 
@@ -21,7 +20,7 @@ const fullTextReviewCsv = readFileSync(
   new URL('../../../assets/covidence_study/full_text_review.csv', import.meta.url),
   'utf8',
 )
-const [covidenceHeaderLine = '', covidenceFirstRecordLine = ''] = fullTextReviewCsv.split('\n')
+const covidenceFirstRecordLine = fullTextReviewCsv.split('\n')[1] ?? ''
 
 const getCsvLineFields = (line: string) => {
   const matches = Array.from(line.matchAll(/("(?:[^"]|"")*"|[^,"]*)(,|$)/gu))
@@ -34,8 +33,38 @@ const getCsvLineFields = (line: string) => {
   })
 }
 
-const covidenceFirstRecordFields = getCsvLineFields(covidenceFirstRecordLine)
-const exportedCovidenceFirstRecordLine = getComparisonProjectCsvLine(covidenceFirstRecordFields).slice(0, -1)
+const [
+  covidenceTitle = '',
+  covidenceAuthors = '',
+  covidenceAbstract = '',
+  covidenceYear = '',
+  ,
+  covidenceJournal = '',
+  covidenceVolume = '',
+  covidenceIssue = '',
+  covidencePages = '',
+] = getCsvLineFields(covidenceFirstRecordLine)
+
+const getRisRecord = (lines: string[]) => {
+  return [...lines, 'ER  - '].join('\r\n')
+}
+
+const exportedCovidenceFirstRecord = getRisRecord([
+  'TY  - JOUR',
+  `TI  - ${covidenceTitle}`,
+  ...covidenceAuthors.split('; ').map((author) => {
+    return `AU  - ${author}`
+  }),
+  `AB  - ${covidenceAbstract.replace(/\s+/gu, ' ').trim()}`,
+  `PY  - ${covidenceYear}`,
+  `JO  - ${covidenceJournal}`,
+  `VL  - ${covidenceVolume}`,
+  `IS  - ${covidenceIssue}`,
+  `SP  - ${covidencePages}`,
+  'DO  - 10.1017/ash.2025.2',
+  'KW  - Not RCT',
+  'ID  - #5011',
+])
 
 type ComparisonProjectColumn = {id: string; kind: 'human' | 'llm'}
 type CovidenceExportRequest = {
@@ -97,14 +126,10 @@ const postCovidenceExportCount = async (request: CovidenceExportRequest, id = co
   return {body: (await response.json()) as {data: {totalCount: number} | null; error?: string}, response}
 }
 
-const getCsvDataLines = (csvText: string) => {
-  return csvText
-    .replace(/^\uFEFF/u, '')
-    .split('\n')
-    .slice(1)
-    .filter((line) => {
-      return line !== ''
-    })
+const getRisRecords = (risText: string) => {
+  return risText.split('\r\n\r\n').filter((record) => {
+    return record !== ''
+  })
 }
 
 const getSqlString = (value: string) => {
@@ -322,29 +347,53 @@ test('Covidence export routes return 404 for unknown projects and 409 for prompt
   expect(promptModeCount.body.data).toBeNull()
 })
 
-test('the CSV starts with a UTF-8 BOM and the exact Covidence full-text review header', async () => {
+test('the RIS download has the RIS content type, a .ris filename, no BOM and CRLF record lines', async () => {
   const {response, text} = await postCovidenceExport(getUnionRequest())
+  const lines = text.slice(0, -'\r\n'.length).split('\r\n')
 
   expect(response.status).toBe(200)
-  expect(response.headers.get('content-type')).toBe('text/csv; charset=utf-8')
+  expect(response.headers.get('content-type')).toBe('application/x-research-info-systems; charset=utf-8')
   expect(response.headers.get('content-disposition')).toMatch(
-    /^attachment; filename="Covidence_export_covidence_full_text_export_\d{4}-\d{2}-\d{2}\.csv"$/u,
+    /^attachment; filename="Covidence_export_covidence_full_text_export_\d{4}-\d{2}-\d{2}\.ris"$/u,
   )
-  expect(text.startsWith('\uFEFF')).toBe(true)
-  expect(text.slice(1).split('\n')[0]).toBe(covidenceHeaderLine)
+  expect(text.startsWith('TY  - JOUR\r\n')).toBe(true)
+  expect(text.endsWith('\r\nER  - \r\n\r\n')).toBe(true)
+  expect(text.replaceAll('\r\n', '')).not.toMatch(/[\r\n\uFEFF]/u)
+  lines.forEach((line) => {
+    expect(line).toMatch(/^$|^ER {2}- $|^[A-Z][A-Z0-9] {2}- \S(?:.*\S)?$/u)
+  })
+  expect(
+    lines.filter((line) => {
+      return line === ''
+    }),
+  ).toHaveLength(getRisRecords(text).length)
 })
 
 test('articles are the union of human, LLM and conflict resolution matches, each exported once', async () => {
   const {text} = await postCovidenceExport(getUnionRequest())
-  const lines = getCsvDataLines(text)
+  const records = getRisRecords(text)
 
-  expect(lines).toHaveLength(4)
-  expect([...lines].sort()).toEqual(
+  expect(records).toHaveLength(4)
+  expect([...records].sort()).toEqual(
     [
-      exportedCovidenceFirstRecordLine,
-      'Fallback article two,"Lapitan, Marie-Carmela; Buckley, Brian S",Summary two,2021,Mar,Journal of tests,7,2,10-20,,https://dx.doi.org/10.1000/test.2,30000002,,Lapitan 2021,,',
-      'Resolved article three,,Summary three,,,,,,,,,,,,,',
-      'Matching article four,,"Summary, ""four""",,,,,,,,,,,,,',
+      exportedCovidenceFirstRecord,
+      getRisRecord([
+        'TY  - JOUR',
+        'TI  - Fallback article two',
+        'AU  - Lapitan, Marie-Carmela',
+        'AU  - Buckley, Brian S',
+        'AB  - Summary two',
+        'PY  - 2021',
+        'JO  - Journal of tests',
+        'VL  - 7',
+        'IS  - 2',
+        'SP  - 10',
+        'EP  - 20',
+        'DO  - 10.1000/test.2',
+        'AN  - 30000002',
+      ]),
+      getRisRecord(['TY  - JOUR', 'TI  - Resolved article three', 'AB  - Summary three']),
+      getRisRecord(['TY  - JOUR', 'TI  - Matching article four', 'AB  - Summary, "four"']),
     ].sort(),
   )
 })
@@ -356,26 +405,21 @@ test('the Covidence citation of an in-scope import wins and an out-of-scope Covi
       {columnId: getColumnId('human'), values: ['maybe']},
     ],
   })
-  const exportedCovidenceLine = getCsvDataLines(text).find((line) => {
-    return line.startsWith('Examining the impact of treatment guidelines')
+  const exportedCovidenceRecord = getRisRecords(text).find((record) => {
+    return record.startsWith('TY  - JOUR\r\nTI  - Examining the impact of treatment guidelines')
   })
 
-  expect(getCsvLineFields(exportedCovidenceLine ?? '')).toEqual(covidenceFirstRecordFields)
-  expect(covidenceFirstRecordFields.slice(10)).toEqual([
-    'https://dx.doi.org/10.1017/ash.2025.2',
-    '40026775',
-    '#5011',
-    'Abbas 2025',
-    '',
-    'Not RCT',
-  ])
-  expect(exportedCovidenceLine).toBe(covidenceFirstRecordLine.replace(',"",Not RCT', ',,Not RCT'))
+  expect(covidenceFirstRecordLine).toContain(
+    ',https://dx.doi.org/10.1017/ash.2025.2,40026775,#5011,Abbas 2025,"",Not RCT',
+  )
+  expect(exportedCovidenceRecord).toBe(exportedCovidenceFirstRecord)
   expect(text).not.toContain('Canonical title one')
+  expect(text).not.toContain('10.9999/not-the-citation')
   expect(text).not.toContain('#9999')
   expect(text).not.toContain('Other review citation')
 })
 
-test('the count endpoint returns the number of CSV rows for the same selection', async () => {
+test('the count endpoint returns the number of RIS records for the same selection', async () => {
   const llmColumnId = getColumnId('llm')
   const humanColumnId = getColumnId('human')
   const requests: CovidenceExportRequest[] = [
@@ -388,19 +432,19 @@ test('the count endpoint returns the number of CSV rows for the same selection',
   ]
   const results = await Promise.all(
     requests.map(async (request) => {
-      const [count, csv] = await Promise.all([postCovidenceExportCount(request), postCovidenceExport(request)])
+      const [count, ris] = await Promise.all([postCovidenceExportCount(request), postCovidenceExport(request)])
 
-      return {count: count.body.data?.totalCount, csvRows: getCsvDataLines(csv.text).length}
+      return {count: count.body.data?.totalCount, risRecords: getRisRecords(ris.text).length}
     }),
   )
 
   expect(results).toEqual([
-    {count: 4, csvRows: 4},
-    {count: 2, csvRows: 2},
-    {count: 4, csvRows: 4},
-    {count: 1, csvRows: 1},
-    {count: 0, csvRows: 0},
-    {count: 0, csvRows: 0},
+    {count: 4, risRecords: 4},
+    {count: 2, risRecords: 2},
+    {count: 4, risRecords: 4},
+    {count: 1, risRecords: 1},
+    {count: 0, risRecords: 0},
+    {count: 0, risRecords: 0},
   ])
 })
 

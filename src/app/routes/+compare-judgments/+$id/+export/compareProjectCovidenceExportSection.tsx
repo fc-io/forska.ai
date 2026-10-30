@@ -103,7 +103,7 @@ const CompareProjectCovidenceExportPanel = (props: CompareProjectCovidenceExport
         return downloadFileFromPost({
           body: requestBody(),
           errorMessage: 'Covidence export failed',
-          fallbackFilename: `covidence-export-${props.comparisonProjectId}.csv`,
+          fallbackFilename: `covidence-export-${props.comparisonProjectId}.ris`,
           path: getComparisonProjectCovidenceExportPath(props.comparisonProjectId),
         })
       },
@@ -121,8 +121,9 @@ const CompareProjectCovidenceExportPanel = (props: CompareProjectCovidenceExport
       <div class="mb-4 max-w-3xl">
         <h2 class="text-lg font-semibold text-gray-900">Export to Covidence</h2>
         <p class="mt-2 text-sm text-gray-600">
-          Downloads a Covidence full-text review CSV with every article that has a selected answer in at least one
-          column, each article once. This export ignores the filters above.
+          Downloads a Covidence RIS file (full-text review set) with every article that has a selected answer in at
+          least one column, each article once. Import it in Covidence with 'Import into: Full text review'. This export
+          ignores the filters above.
         </p>
       </div>
       <div class="space-y-4">
