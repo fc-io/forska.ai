@@ -106,6 +106,7 @@ test('a Covidence citation from the full-text review CSV keeps every value of th
 
   expect(covidence.citation.doi).toBe('https://dx.doi.org/10.1017/ash.2025.2')
   expect(covidence.citation.published_month).toBe('/')
+  expect(covidence.citation).toMatchObject({accession_number: null, ref: '40026775'})
   expect(authors).toHaveLength(15)
   expect(getRecordLines(record)).toEqual([
     'TY  - JOUR',
@@ -120,6 +121,7 @@ test('a Covidence citation from the full-text review CSV keeps every value of th
     'IS  - 1',
     'SP  - e51',
     'DO  - 10.1017/ash.2025.2',
+    'AN  - 40026775',
     'KW  - Not RCT',
     'ID  - #5011',
     'ER  - ',
@@ -180,7 +182,7 @@ test('a Covidence citation from a Covidence RIS export reads the RIS field names
   ])
 })
 
-test('Covidence citation keys fall back in alias order and the Covidence # wins over Ref', () => {
+test('Covidence citation keys fall back in alias order, the Covidence # wins over Ref and a PMID-shaped Ref fills AN', () => {
   const record = getCitationRecord({
     accession_number: null,
     covidence: '#5011',
@@ -201,6 +203,12 @@ test('Covidence citation keys fall back in alias order and the Covidence # wins 
   expect(getTagValues(record, 'AN')).toEqual(['19000001'])
   expect(getTagValues(record, 'ID')).toEqual(['#5011'])
   expect(getTagValues(getCitationRecord({accession_number: '189697998', pmid: '1'}), 'AN')).toEqual(['189697998'])
+  expect(getTagValues(getCitationRecord({accession_number: ' ', ref: '40026775'}), 'AN')).toEqual(['40026775'])
+  expect(getTagValues(getCitationRecord({ref: ' 1 '}), 'AN')).toEqual(['1'])
+  expect(getTagValues(getCitationRecord({reference_id: '40026775'}), 'AN')).toEqual(['40026775'])
+  expect(getTagValues(getCitationRecord({ref: '189697998'}), 'AN')).toEqual([])
+  expect(getTagValues(getCitationRecord({ref: 'rayyan-12'}), 'AN')).toEqual([])
+  expect(getTagValues(getCitationRecord({reference_id: '#77'}), 'AN')).toEqual([])
   expect(getTagValues(getCitationRecord({covidence_id: '#1', ref: '40026775'}), 'ID')).toEqual(['#1'])
   expect(getTagValues(getCitationRecord({ref: '40026775', reference_id: '2'}), 'ID')).toEqual(['40026775'])
   expect(getTagValues(getCitationRecord({reference_id: '2'}), 'ID')).toEqual(['2'])

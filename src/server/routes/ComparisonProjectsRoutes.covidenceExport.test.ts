@@ -43,6 +43,9 @@ const [
   covidenceVolume = '',
   covidenceIssue = '',
   covidencePages = '',
+  covidenceAccessionNumber = '',
+  ,
+  covidenceRef = '',
 ] = getCsvLineFields(covidenceFirstRecordLine)
 
 const getRisRecord = (lines: string[]) => {
@@ -62,6 +65,8 @@ const exportedCovidenceFirstRecord = getRisRecord([
   `IS  - ${covidenceIssue}`,
   `SP  - ${covidencePages}`,
   'DO  - 10.1017/ash.2025.2',
+  // Covidence exported the PubMed import's PMID as Ref with an empty Accession Number.
+  `AN  - ${covidenceAccessionNumber || covidenceRef}`,
   'KW  - Not RCT',
   'ID  - #5011',
 ])
