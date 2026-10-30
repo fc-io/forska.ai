@@ -1,21 +1,17 @@
 import type {ComparisonProjectCovidenceExportSelection} from '../../../../utils/comparisonProjectCovidenceExportSelection.ts'
 import {readComparisonProjectCovidenceExportArticles} from '../../../services/comparisonProjectCovidenceExportArticleRepository.ts'
-import {csvUtf8Bom, getCsvDownloadHeaders} from '../../../utils/csvResponse.ts'
 import {appDatabaseService} from '../comparisonProjectRouteServices.ts'
 import type {ComparisonProjectScope} from '../comparisonProjectScopeTypes.ts'
-import {getComparisonProjectCsvLine} from '../comparisonProjectsRoutesPostExport/comparisonProjectCsvLine.ts'
 import type {ComparisonProjectExportRow} from '../comparisonProjectsRoutesPostExport/comparisonProjectExportRow.ts'
 import {
   type ComparisonProjectCovidenceExportArticle,
   getComparisonProjectCovidenceExportArticle,
 } from './comparisonProjectCovidenceExportArticle.ts'
-import {
-  comparisonProjectCovidenceExportHeaders,
-  getComparisonProjectCovidenceExportCsvValues,
-} from './comparisonProjectCovidenceExportCsvRow.ts'
+import {getComparisonProjectCovidenceExportRisRecord} from './comparisonProjectCovidenceExportRisRecord.ts'
 import {forEachComparisonProjectCovidenceExportRowBatch} from './forEachComparisonProjectCovidenceExportRowBatch.ts'
 
 const comparisonProjectCovidenceExportArticleChunkSize = 500
+const comparisonProjectCovidenceExportRisContentType = 'application/x-research-info-systems; charset=utf-8'
 
 const getComparisonProjectCovidenceExportRowChunks = (
   rows: readonly ComparisonProjectExportRow[],
@@ -47,7 +43,7 @@ const getComparisonProjectCovidenceExportArticlesById = async (
   )
 }
 
-const getComparisonProjectCovidenceExportCsvChunk = async (
+const getComparisonProjectCovidenceExportRisChunk = async (
   scope: ComparisonProjectScope,
   rows: readonly ComparisonProjectExportRow[],
 ) => {
@@ -55,9 +51,7 @@ const getComparisonProjectCovidenceExportCsvChunk = async (
 
   return rows
     .map((row) => {
-      return getComparisonProjectCsvLine(
-        getComparisonProjectCovidenceExportCsvValues(row, articlesById.get(row.canonicalArticleId) ?? null),
-      )
+      return getComparisonProjectCovidenceExportRisRecord(row, articlesById.get(row.canonicalArticleId) ?? null)
     })
     .join('')
 }
@@ -69,23 +63,28 @@ const enqueueComparisonProjectCovidenceExportRows = async (
 ) => {
   await getComparisonProjectCovidenceExportRowChunks(rows).reduce(async (previousChunk, rowChunk) => {
     await previousChunk
-    controller.enqueue(await getComparisonProjectCovidenceExportCsvChunk(scope, rowChunk))
+    controller.enqueue(await getComparisonProjectCovidenceExportRisChunk(scope, rowChunk))
   }, Promise.resolve())
 }
 
 const getComparisonProjectCovidenceExportFilename = (scope: ComparisonProjectScope) => {
-  return `${scope.name.replace(/[^a-zA-Z0-9]/g, '_')}_covidence_full_text_export_${new Date().toISOString().slice(0, 10)}.csv`
+  return `${scope.name.replace(/[^a-zA-Z0-9]/g, '_')}_covidence_full_text_export_${new Date().toISOString().slice(0, 10)}.ris`
+}
+
+const getComparisonProjectCovidenceExportResponseHeaders = (scope: ComparisonProjectScope) => {
+  return {
+    'Content-Disposition': `attachment; filename="${getComparisonProjectCovidenceExportFilename(scope)}"`,
+    'Content-Type': comparisonProjectCovidenceExportRisContentType,
+  }
 }
 
 export const getComparisonProjectCovidenceExportResponse = (
   scope: ComparisonProjectScope,
   selection: ComparisonProjectCovidenceExportSelection,
 ) => {
-  const responseHeaders = getCsvDownloadHeaders(getComparisonProjectCovidenceExportFilename(scope))
   const stream = new ReadableStream<string>({
     async start(controller) {
       try {
-        controller.enqueue(csvUtf8Bom + getComparisonProjectCsvLine([...comparisonProjectCovidenceExportHeaders]))
         await forEachComparisonProjectCovidenceExportRowBatch({
           onRows: (rows) => {
             return enqueueComparisonProjectCovidenceExportRows(controller, scope, rows)
@@ -100,5 +99,5 @@ export const getComparisonProjectCovidenceExportResponse = (
     },
   })
 
-  return new Response(stream, {headers: responseHeaders})
+  return new Response(stream, {headers: getComparisonProjectCovidenceExportResponseHeaders(scope)})
 }

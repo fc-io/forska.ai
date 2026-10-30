@@ -118,7 +118,7 @@ test('comparison product reads are admitted through bounded serving helpers', ()
   )
 })
 
-test('Covidence export count and CSV read the same bounded serving row batches', () => {
+test('Covidence export count and RIS read the same bounded serving row batches', () => {
   const covidenceExportFolder = './comparisonProjectsRoutes/comparisonProjectsRoutesPostCovidenceExport'
   const rowBatchBody = getFunctionBody(
     'forEachComparisonProjectCovidenceExportRowBatch',
@@ -128,7 +128,7 @@ test('Covidence export count and CSV read the same bounded serving row batches',
     'getComparisonProjectCovidenceExportCount',
     getRouteSource(`${covidenceExportFolder}/getComparisonProjectCovidenceExportCount.ts`),
   )
-  const csvBody = getFunctionBody(
+  const risBody = getFunctionBody(
     'getComparisonProjectCovidenceExportResponse',
     getRouteSource(`${covidenceExportFolder}/getComparisonProjectCovidenceExportResponse.ts`),
   )
@@ -138,7 +138,7 @@ test('Covidence export count and CSV read the same bounded serving row batches',
   expect(rowBatchBody).not.toContain('forEachComparisonProjectJudgmentRowBatch')
   expect(rowBatchBody).not.toContain(' OFFSET ')
   expect(countBody).toContain('forEachComparisonProjectCovidenceExportRowBatch')
-  expect(csvBody).toContain('forEachComparisonProjectCovidenceExportRowBatch')
+  expect(risBody).toContain('forEachComparisonProjectCovidenceExportRowBatch')
 })
 
 test('comparison source writes stay owner routed and queue serving rebuilds', () => {
