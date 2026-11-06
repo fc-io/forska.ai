@@ -36,7 +36,7 @@ jobs:
         include:
           - {platform: linux, arch: x64, runner: ubuntu-24.04, container: 'quay.io/pypa/manylinux_2_28_x86_64@sha256:53390351aeb4688114b02c36a23b3e6ce1166ee9b7afc5df1a4f776354fc764c', cache: ccache}
           - {platform: linux, arch: arm64, runner: ubuntu-24.04-arm, container: 'quay.io/pypa/manylinux_2_28_aarch64@sha256:ad74e53b713f3b07d8c889c526dc0c6500da9827b45e38739570875fef52e28f', cache: ccache}
-          - {platform: darwin, arch: arm64, runner: macos-14, container: null, cache: ccache}
+          - {platform: darwin, arch: arm64, runner: macos-15, container: null, cache: ccache}
           - {platform: darwin, arch: x64, runner: macos-15-intel, container: null, cache: ccache}
           - {platform: win32, arch: x64, runner: windows-2025, container: null, cache: ''}
           - {platform: win32, arch: arm64, runner: windows-11-arm, container: null, cache: ''}
