@@ -24,6 +24,7 @@ import {
 import {type FullTextTokenCounter, loadFullTextTokenCounter} from '../server/fullText/fullTextTokenizer.ts'
 import {claudeCodeRecoverableFailureCodes} from '../server/providers/claudeCodeFailureCodes.ts'
 import {codexRateLimitedFailureCode} from '../server/providers/codexRateLimitBackoff.ts'
+import {isProviderContentRefusalFailureCode} from '../server/providers/providerContentRefusal.ts'
 import {
   invokeStoredProviderModel,
   type StoredProviderInvocationContext,
@@ -64,6 +65,7 @@ import {
   type SinglePromptJudgmentResult,
   tryParseJsonWithSanitization,
 } from './judge/parseSinglePromptJudgment.ts'
+import {ProviderContentRefusalError} from './judge/providerContentRefusalError.ts'
 import {JudgmentPersistenceError, storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
 import type {SystemPromptVariant} from './judge/systemPromptVariant.ts'
 
@@ -627,11 +629,7 @@ export class RecoverableJudgeError extends Error {
 }
 
 const isAnthropicEmptyResponseFailureCode = (failureCode: string | null): boolean => {
-  return (
-    failureCode === 'anthropic_empty_response'
-    || failureCode === 'anthropic_refusal_empty_response'
-    || failureCode === 'anthropic_thinking_only_empty_response'
-  )
+  return failureCode === 'anthropic_empty_response' || failureCode === 'anthropic_thinking_only_empty_response'
 }
 
 const isRecoverableProviderFailureCode = (failureCode: string | null): boolean => {
@@ -664,6 +662,27 @@ const getRecoverableJudgeError = ({adjustedErrorMessage, error}: {adjustedErrorM
         failureCode: error.code,
         providerDiagnostics: error.diagnostics,
       })
+    : null
+}
+
+const getProviderContentRefusalError = ({
+  context,
+  error,
+}: {
+  context: JudgeCallContext
+  error: unknown
+}): ProviderContentRefusalError | null => {
+  return error instanceof ProviderInvocationError && isProviderContentRefusalFailureCode(error.code)
+    ? new ProviderContentRefusalError(
+        {
+          failureCode: error.code,
+          modelName: context.modelConfig.modelName,
+          providerKind: error.providerKind ?? context.modelConfig.provider,
+          reason: error.message,
+          refusedAt: new Date().toISOString(),
+        },
+        {cause: error},
+      )
     : null
 }
 
@@ -1387,6 +1406,16 @@ const getNextJudgeCallStateAfterError = <T>({
   if (isProviderAdmissionLeaseLostError(error)) {
     abortCount += 1
     return {error, kind: 'fatal'}
+  }
+
+  const contentRefusalError = getProviderContentRefusalError({context: input.context, error})
+
+  if (contentRefusalError) {
+    abortCount += 1
+    console.error(
+      `${article.id} | Prompt ${input.context.promptId} | Provider refused ${input.label}; not retrying. ${adjustedErrorMessage}`,
+    )
+    return {error: contentRefusalError, kind: 'fatal'}
   }
 
   if (state.attempt >= MAX_RETRIES) {

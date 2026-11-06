@@ -336,7 +336,7 @@ const filterAlreadyJudged = async (
   for (let i = 0; i < promptEntries.length; i += sqliteBatchSize) {
     const batch = promptEntries.slice(i, i + sqliteBatchSize)
 
-    // Find which pairs already have judgments
+    // Find which pairs already have judgments or a terminal provider refusal
     const existingJudgments = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{
       articleId: string
       promptId: string
@@ -389,6 +389,25 @@ const filterAlreadyJudged = async (
         projectScopeAlias: 'scope_article',
       })}
         AND j.deleted_at IS NULL
+      UNION
+      SELECT DISTINCT refusal.article_id AS articleId, refusal.prompt_id AS promptId
+      FROM pairs p
+      INNER JOIN app.project project ON project.id = ${getSqlLiteral(projectId)}
+      INNER JOIN project_scope_article scope_article
+        ON scope_article.project_id = project.id
+       AND scope_article.article_id = p.article_id
+      INNER JOIN app.project_prompt project_prompt
+        ON project_prompt.project_id = project.id
+       AND project_prompt.prompt_id = p.prompt_id
+      INNER JOIN app.judgment_refusal refusal
+        ON refusal.article_id = p.article_id
+       AND refusal.prompt_id = p.prompt_id
+      WHERE ${getProjectVisibleJudgmentScopeSql({
+        judgmentAlias: 'refusal',
+        projectAlias: 'project',
+        projectPromptAlias: 'project_prompt',
+        projectScopeAlias: 'scope_article',
+      })}
     `)
 
     const existingSet = new Set(

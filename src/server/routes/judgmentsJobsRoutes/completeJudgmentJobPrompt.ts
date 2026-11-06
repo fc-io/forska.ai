@@ -6,6 +6,7 @@ import {
   getJudgmentJobSqliteService,
   JudgmentPromptClaimIdentityError,
 } from '../../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {markPromptSkipFromCompletion} from '../../cron/judgmentsJobs/markPromptSkipCompletion.ts'
 import {getDateValue} from '../../services/appQueryHelpers.ts'
 import {HttpError} from '../../utils/httpError.ts'
 import {
@@ -71,18 +72,23 @@ export const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCom
   }
 
   if (body.status === 'skipped') {
-    await getJudgmentJobSqliteService().markPromptAsSkipped(
-      jobId,
-      body.queueRecordId,
-      body.skipReason ?? 'no_fulltext',
-      {
+    if (body.skipReason === 'provider_refusal' && !body.refusal) {
+      throw new HttpError(400, 'A provider_refusal skip needs its refusal record')
+    }
+
+    await markPromptSkipFromCompletion({
+      completionAck: {
         claimId: body.claimId,
         queuePromptId: body.queueRecordId,
         status: 'skipped',
         requestAttemptsJson: completionAckRequestAttemptsJson,
         tokenUseId,
       },
-    )
+      jobId,
+      queueRecordId: body.queueRecordId,
+      refusal: body.refusal,
+      skipReason: body.skipReason ?? 'no_fulltext',
+    })
     await enqueueCompletionTokenUse(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'skipped'}, error: null}
   }

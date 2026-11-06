@@ -1887,6 +1887,165 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
   ])
 })
 
+test('a new job never re-queues a pair the provider refused under the same judgment identity', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
+  const suffix = `queue-refusal-${Date.now()}`
+  const connectionId = `${suffix}-connection`
+  const modelId = `${suffix}-model`
+  const otherModelId = `${suffix}-other-model`
+  const projectId = `${suffix}-project`
+  const jobId = `${suffix}-job`
+  const promptId = `${suffix}-prompt`
+  const refusedArticleId = `${suffix}-article-refused`
+  const otherModelRefusedArticleId = `${suffix}-article-refused-other-model`
+  const otherVariantRefusedArticleId = `${suffix}-article-refused-other-variant`
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (_jobId, entries) => {
+      addReadyPromptsCalls.push(entries)
+      return entries.length
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  await dbRun(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await dbRun(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES
+      ('${modelId}', '${connectionId}', 'Refusal model', 'refusal-model', 'Refusal model', 'manual', TRUE),
+      ('${otherModelId}', '${connectionId}', 'Other model', 'other-model', 'Other model', 'manual', TRUE)
+  `)
+  await dbRun(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Queue Refusal Project', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await dbRun(`
+    INSERT INTO app.prompt (id, original_text)
+    VALUES ('${promptId}', 'Queue refusal prompt')
+  `)
+  await dbRun(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${suffix}-project-prompt', '${projectId}', '${promptId}', 1, TRUE)
+  `)
+  await dbRun(`
+    INSERT INTO app.article (id, article_id, article_title)
+    VALUES
+      ('${refusedArticleId}', '${refusedArticleId}-external', 'Refused article'),
+      ('${otherModelRefusedArticleId}', '${otherModelRefusedArticleId}-external', 'Refused by another model'),
+      ('${otherVariantRefusedArticleId}', '${otherVariantRefusedArticleId}-external', 'Refused under another variant')
+  `)
+  await dbRun(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('${suffix}-project-article-refused', '${projectId}', '${refusedArticleId}'),
+      ('${suffix}-project-article-other-model', '${projectId}', '${otherModelRefusedArticleId}'),
+      ('${suffix}-project-article-other-variant', '${projectId}', '${otherVariantRefusedArticleId}')
+  `)
+  await dbRun(`
+    INSERT INTO app.judgment_refusal (
+      article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata,
+      system_prompt_variant, full_text_strategy_id, project_id, judgment_job_id, queue_prompt_id, failure_code,
+      provider_kind, model_name, reason, refused_at
+    )
+    VALUES
+      ('${refusedArticleId}', '${promptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none',
+        '${projectId}', 'old-job', 'old-queue-1', 'claude_code_content_refusal', 'claude-code', 'claude-opus-5-5',
+        'safeguards flagged this message', TIMESTAMPTZ '2026-11-06T06:59:13Z'),
+      ('${otherModelRefusedArticleId}', '${promptId}', '${otherModelId}', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy',
+        'fts-none', '${projectId}', 'old-job', 'old-queue-2', 'claude_code_content_refusal', 'claude-code',
+        'claude-opus-5-5', 'safeguards flagged this message', TIMESTAMPTZ '2026-11-06T06:59:13Z'),
+      ('${otherVariantRefusedArticleId}', '${promptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE, FALSE, 'screening_v5',
+        'fts-none', '${projectId}', 'old-job', 'old-queue-3', 'claude_code_content_refusal', 'claude-code',
+        'claude-opus-5-5', 'safeguards flagged this message', TIMESTAMPTZ '2026-11-06T06:59:13Z')
+  `)
+  await dbRun(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
+    return {
+      getJudgeWorkerReadOnlyAppDatabaseService: () => {
+        return getMockJudgeReadOnlyDatabaseService(dbQuery, dbRun)
+      },
+      getJudgmentJobSqliteService: () => {
+        return sqliteService
+      },
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 10, maxInflight: 10, readyTargetPerJob: 10}
+      },
+      inferenceRuntimeConfig: {
+        codexMaxInflight: 1,
+        judgmentsAddToQueueMaxBatchSize: 10,
+        judgmentsReadyTargetMultiplier: 1,
+      },
+      JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+      judgmentsJobsCronGetPrompts: async (...args: unknown[]) => {
+        return args[4]
+          ? {nextCursor: null, promptEntries: []}
+          : {
+              nextCursor: null,
+              promptEntries: [
+                {articleId: refusedArticleId, promptId},
+                {articleId: otherModelRefusedArticleId, promptId},
+                {articleId: otherVariantRefusedArticleId, promptId},
+              ],
+            }
+      },
+      judgmentsJobsGetRunningJobs: async () => {
+        return [{id: jobId, maxInflightRequests: null, modelProvider: 'openai', projectId, providerConnectionId: null}]
+      },
+    }
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?queue-refusal=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(addReadyPromptsCalls).toEqual([
+    [
+      {articleId: otherModelRefusedArticleId, promptId},
+      {articleId: otherVariantRefusedArticleId, promptId},
+    ],
+  ])
+})
+
 test('queue reuse keeps cloned prompt edits queued when source judgments stay on the old prompt id', async () => {
   if (!queryDatabase || !runDatabase) {
     throw new Error('Test database not initialized')

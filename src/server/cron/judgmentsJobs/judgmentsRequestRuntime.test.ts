@@ -2,6 +2,10 @@ import {afterEach, expect, mock, setSystemTime, test} from 'bun:test'
 import {Effect, Fiber} from 'effect'
 
 import {
+  type ProviderContentRefusal,
+  ProviderContentRefusalError,
+} from '../../../agent/judge/providerContentRefusalError.ts'
+import {
   getCodexConnectionRateLimitCooldownRemainingMs,
   recordCodexConnectionRateLimit,
 } from '../../providers/codexRateLimitBackoff.ts'
@@ -280,6 +284,9 @@ const sqliteServiceMock = {
   markPromptAsSkipped: mock(async (_jobId: string, _recordId: string, _skipReason: string) => {
     sqliteStateTransitions.push('skipped')
   }),
+  markPromptAsRefused: mock(async (_jobId: string, _recordId: string, _refusal: ProviderContentRefusal) => {
+    sqliteStateTransitions.push('refused')
+  }),
 }
 
 const registerModuleMocks = () => {
@@ -454,6 +461,7 @@ afterEach(async () => {
   sqliteServiceMock.consumePromptExtraRetry.mockClear()
   sqliteServiceMock.markPromptAsRunning.mockClear()
   sqliteServiceMock.markPromptAsSkipped.mockClear()
+  sqliteServiceMock.markPromptAsRefused.mockClear()
   recordJudgmentJobProviderFailure.mockClear()
   recordJudgmentJobProviderSuccess.mockClear()
   recordJudgmentJobProviderFailure.mockImplementation(async (_input: ProviderFailureRecordInput) => {
@@ -2646,6 +2654,54 @@ test('prompt release stops requeueing after recoverable retry budget is exhauste
 
   expect(sqliteStateTransitions).toEqual(['running', 'closed'])
   expect(sqliteServiceMock.markPromptAsRetry).not.toHaveBeenCalled()
+})
+
+const providerContentRefusal: ProviderContentRefusal = {
+  failureCode: 'claude_code_content_refusal',
+  modelName: 'claude-opus-5-5',
+  providerKind: 'claude-code',
+  reason: "Claude Code content refusal (stop_reason=refusal): API Error: Opus 5's safeguards flagged this message",
+  refusedAt: '2026-11-06T06:59:13.635Z',
+}
+
+test('a provider content refusal skips the prompt as provider_refusal without retry budget or provider health', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new ProviderContentRefusalError(providerContentRefusal)
+  })
+
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(sqliteStateTransitions).toEqual(['running', 'refused'])
+  expect(sqliteServiceMock.markPromptAsRefused).toHaveBeenCalledWith('job-a', 'record-a', providerContentRefusal)
+  expect(sqliteServiceMock.markPromptAsSkipped).not.toHaveBeenCalled()
+  expect(sqliteServiceMock.consumePromptExtraRetry).not.toHaveBeenCalled()
+  expect(sqliteServiceMock.markPromptAsRetry).not.toHaveBeenCalled()
+  expect(recordJudgmentJobProviderFailure).not.toHaveBeenCalled()
+})
+
+test('judge-worker provider content refusals hand the owner a provider_refusal skip with the refusal record', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new ProviderContentRefusalError(providerContentRefusal)
+  })
+
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(judgeSinglePrompt).toHaveBeenCalledTimes(1)
+  expect(enqueueJudgeWorkerCompletion).toHaveBeenCalledTimes(1)
+  expect(enqueueJudgeWorkerCompletion).toHaveBeenCalledWith(
+    expect.objectContaining({
+      claimId: 'claim-a',
+      refusal: providerContentRefusal,
+      skipReason: 'provider_refusal',
+      status: 'skipped',
+    }),
+  )
+  expect(sqliteStateTransitions).toEqual([])
 })
 
 const codexUsageLimitMessage =

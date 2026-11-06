@@ -8,8 +8,9 @@ import {
   getJudgmentFullTextExecution,
   getJudgmentFullTextExecutionForStrategy,
 } from '../../../agent/judge/judgmentFullTextExecution.ts'
+import type {ProviderContentRefusal} from '../../../agent/judge/providerContentRefusalError.ts'
 import {getSystemPromptVariant, type SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
-import type {JudgmentsJobsPromptsSkipReason} from '../../../db/schemaTypes.ts'
+import type {JudgmentsJobsPromptsContentSkipReason, JudgmentsJobsPromptsSkipReason} from '../../../db/schemaTypes.ts'
 import {
   FULL_TEXT_STRATEGY_NONE,
   getLegacyFullTextStrategyId,
@@ -481,7 +482,7 @@ type PromptClaimIdentityRow = {
 }
 type PromptClaimIdentityOptions = {allowUnclaimedReadyPrompt?: boolean}
 
-type PromptCompletionAck = {
+export type PromptCompletionAck = {
   claimId: string
   queuePromptId: string
   status: 'failed' | 'judged' | 'retry' | 'skipped'
@@ -974,6 +975,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
   ensureOutboxClaimSchema(database)
   ensureCompletionAckSchema(database)
   ensureCompletionTokenUseOutboxSchema(database)
+  ensurePromptRefusalOutboxSchema(database)
   ensurePreparedExecutionSnapshotSchema(database)
   ensureAdmittedArticleSchema(database)
 
@@ -1442,6 +1444,34 @@ const ensureCompletionTokenUseOutboxSchema = (database: Database) => {
   `)
 }
 
+// Provider content refusals wait here until the background import writes them to app.judgment_refusal,
+// so the completion ack never waits on DuckDB and a drained job never drops one.
+const ensurePromptRefusalOutboxSchema = (database: Database) => {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_refusal_outbox (
+      queue_prompt_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      article_id TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      provider_kind TEXT,
+      use_title INTEGER NOT NULL,
+      use_abstract INTEGER NOT NULL,
+      use_fulltext INTEGER NOT NULL,
+      use_fulltext_no_images INTEGER NOT NULL,
+      use_metadata INTEGER NOT NULL,
+      system_prompt_variant TEXT NOT NULL,
+      full_text_strategy_id TEXT NOT NULL,
+      failure_code TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      refused_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `)
+}
+
 // Execution snapshots built ahead of the claim by the refill. The owner serves their payload to
 // the judge from here, so neither the claim nor the judge's snapshot fetch waits on DuckDB.
 const ensurePreparedExecutionSnapshotSchema = (database: Database) => {
@@ -1470,6 +1500,12 @@ const ensureAdmittedArticleSchema = (database: Database) => {
 
 const getAdmittedArticleCountFromDatabase = (database: Database) => {
   const row = database.query(`SELECT COUNT(*) AS count FROM admitted_article`).get() as {count: number} | null
+
+  return Number(row?.count ?? 0)
+}
+
+const getPendingPromptRefusalCount = (database: Database) => {
+  const row = database.query(`SELECT COUNT(*) AS count FROM prompt_refusal_outbox`).get() as {count: number} | null
 
   return Number(row?.count ?? 0)
 }
@@ -1511,6 +1547,195 @@ const ensureCompletionAckSchema = (database: Database) => {
       ON completion_ack(queue_prompt_id);
   `)
   database.exec(completionAckCloseoutProofIndexSql)
+}
+
+export type JudgmentPromptRefusalOutboxRow = {
+  articleId: string
+  failureCode: string
+  fullTextStrategyId: string
+  jobId: string
+  modelId: string
+  modelName: string
+  projectId: string
+  promptId: string
+  providerKind: string | null
+  queuePromptId: string
+  reason: string
+  refusedAt: string
+  systemPromptVariant: SystemPromptVariant
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useMetadata: boolean
+  useTitle: boolean
+}
+
+type PromptRefusalJobIdentityRow = {
+  fullTextStrategyId: string | null
+  modelId: string
+  projectId: string
+  systemPromptVariant: string | null
+  useAbstract: number
+  useFulltext: number
+  useFulltextNoImages: number
+  useMetadata: number
+  useTitle: number
+}
+
+const getPromptRefusalJobIdentityFromDatabase = (database: Database, jobId: string): PromptRefusalJobIdentityRow => {
+  const row = database
+    .query(
+      `
+        SELECT
+          project_id AS projectId,
+          model_id AS modelId,
+          use_title AS useTitle,
+          use_abstract AS useAbstract,
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages,
+          use_metadata AS useMetadata,
+          system_prompt_variant AS systemPromptVariant,
+          full_text_strategy_id AS fullTextStrategyId
+        FROM job_info
+        WHERE job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId) as PromptRefusalJobIdentityRow | null
+
+  if (!row) {
+    throw new Error(`Cannot record a provider refusal for job ${jobId}: the job store has no job_info row`)
+  }
+
+  return row
+}
+
+const getPromptRefusalQueuePromptFromDatabase = (
+  database: Database,
+  recordId: string,
+): {articleId: string; promptId: string} => {
+  const row = database
+    .query(`SELECT article_id AS articleId, prompt_id AS promptId FROM queue_prompt WHERE id = ? LIMIT 1`)
+    .get(recordId) as {articleId: string; promptId: string} | null
+
+  if (!row) {
+    throw new Error(`Cannot record a provider refusal for queue prompt ${recordId}: the row does not exist`)
+  }
+
+  return row
+}
+
+const insertPromptRefusalOutboxFromDatabase = ({
+  database,
+  jobId,
+  recordId,
+  refusal,
+}: {
+  database: Database
+  jobId: string
+  recordId: string
+  refusal: ProviderContentRefusal
+}) => {
+  const identity = getPromptRefusalJobIdentityFromDatabase(database, jobId)
+  const queuePrompt = getPromptRefusalQueuePromptFromDatabase(database, recordId)
+
+  database
+    .query(
+      `
+        INSERT OR IGNORE INTO prompt_refusal_outbox (
+          queue_prompt_id,
+          job_id,
+          project_id,
+          article_id,
+          prompt_id,
+          model_id,
+          model_name,
+          provider_kind,
+          use_title,
+          use_abstract,
+          use_fulltext,
+          use_fulltext_no_images,
+          use_metadata,
+          system_prompt_variant,
+          full_text_strategy_id,
+          failure_code,
+          reason,
+          refused_at,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      recordId,
+      jobId,
+      identity.projectId,
+      queuePrompt.articleId,
+      queuePrompt.promptId,
+      identity.modelId,
+      refusal.modelName,
+      refusal.providerKind,
+      toBoolean(identity.useTitle) ? 1 : 0,
+      toBoolean(identity.useAbstract) ? 1 : 0,
+      toBoolean(identity.useFulltext) ? 1 : 0,
+      toBoolean(identity.useFulltextNoImages) ? 1 : 0,
+      toBoolean(identity.useMetadata) ? 1 : 0,
+      getSystemPromptVariant(identity.systemPromptVariant),
+      getStoredFullTextStrategyId(identity),
+      refusal.failureCode,
+      refusal.reason,
+      refusal.refusedAt,
+      new Date().toISOString(),
+    )
+}
+
+const markPromptAsSkippedWithReason = async ({
+  completionAck,
+  jobId,
+  onSkipped,
+  recordId,
+  skipReason,
+}: {
+  completionAck?: PromptCompletionAck
+  jobId: string
+  onSkipped?: (database: Database) => void
+  recordId: string
+  skipReason: JudgmentsJobsPromptsSkipReason
+}) => {
+  await withOwnedJobDatabase(jobId, false, (database) => {
+    const now = new Date().toISOString()
+    database.transaction(() => {
+      database
+        .query(
+          `
+        UPDATE queue_prompt
+        SET status = 'judged',
+            terminal_kind = 'skipped',
+            skip_reason = ?,
+            judged_at = ?,
+            updated_at = ?
+        WHERE id = ?
+      `,
+        )
+        .run(skipReason, now, now, recordId)
+
+      onSkipped?.(database)
+
+      if (completionAck) {
+        recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
+      }
+    })()
+  })
+  await withOwnedJobDatabase(jobId, false, (database) => {
+    return completionAck
+      ? compactQueuePromptManifestCloseoutFromDatabase({
+          database,
+          jobId,
+          queueRecordId: completionAck.queuePromptId,
+          requestAttemptsJson: completionAck.requestAttemptsJson,
+        })
+      : undefined
+  })
 }
 
 const getStoredScanState = (database: Database, jobId: string) => {
@@ -2317,6 +2542,7 @@ const isDrainedSqliteJob = (database: Database, _jobId: string) => {
     && getOrphanedJudgedQueueRowCount(database) === 0
     && getUnresolvedLegacyCompletionEvidenceCount(database) === 0
     && getPendingCompletionTokenUseCount(database) === 0
+    && getPendingPromptRefusalCount(database) === 0
   )
 }
 
@@ -6641,40 +6867,94 @@ const sqliteService = {
   markPromptAsSkipped: async (
     jobId: string,
     recordId: string,
-    skipReason: JudgmentsJobsPromptsSkipReason,
+    skipReason: JudgmentsJobsPromptsContentSkipReason,
     completionAck?: PromptCompletionAck,
   ) => {
-    await withOwnedJobDatabase(jobId, false, (database) => {
-      const now = new Date().toISOString()
-      database.transaction(() => {
-        database
-          .query(
-            `
-          UPDATE queue_prompt
-          SET status = 'judged',
-              terminal_kind = 'skipped',
-              skip_reason = ?,
-              judged_at = ?,
-              updated_at = ?
-          WHERE id = ?
-        `,
-          )
-          .run(skipReason, now, now, recordId)
-
-        if (completionAck) {
-          recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
-        }
-      })()
+    await markPromptAsSkippedWithReason({completionAck, jobId, recordId, skipReason})
+  },
+  markPromptAsRefused: async (
+    jobId: string,
+    recordId: string,
+    refusal: ProviderContentRefusal,
+    completionAck?: PromptCompletionAck,
+  ) => {
+    await markPromptAsSkippedWithReason({
+      completionAck,
+      jobId,
+      onSkipped: (database) => {
+        insertPromptRefusalOutboxFromDatabase({database, jobId, recordId, refusal})
+      },
+      recordId,
+      skipReason: 'provider_refusal',
     })
+  },
+  getPendingPromptRefusals: async (jobId: string, limit: number): Promise<JudgmentPromptRefusalOutboxRow[]> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return (
+          database
+            .query(
+              `
+                SELECT
+                  queue_prompt_id AS queuePromptId,
+                  job_id AS jobId,
+                  project_id AS projectId,
+                  article_id AS articleId,
+                  prompt_id AS promptId,
+                  model_id AS modelId,
+                  model_name AS modelName,
+                  provider_kind AS providerKind,
+                  use_title AS useTitle,
+                  use_abstract AS useAbstract,
+                  use_fulltext AS useFulltext,
+                  use_fulltext_no_images AS useFulltextNoImages,
+                  use_metadata AS useMetadata,
+                  system_prompt_variant AS systemPromptVariant,
+                  full_text_strategy_id AS fullTextStrategyId,
+                  failure_code AS failureCode,
+                  reason,
+                  refused_at AS refusedAt
+                FROM prompt_refusal_outbox
+                ORDER BY created_at ASC, queue_prompt_id ASC
+                LIMIT ?
+              `,
+            )
+            .all(limit) as Array<
+            Omit<
+              JudgmentPromptRefusalOutboxRow,
+              'useAbstract' | 'useFulltext' | 'useFulltextNoImages' | 'useMetadata' | 'useTitle'
+            > & {
+              useAbstract: number
+              useFulltext: number
+              useFulltextNoImages: number
+              useMetadata: number
+              useTitle: number
+            }
+          >
+        ).map((row) => {
+          return {
+            ...row,
+            useAbstract: toBoolean(row.useAbstract),
+            useFulltext: toBoolean(row.useFulltext),
+            useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+            useMetadata: toBoolean(row.useMetadata),
+            useTitle: toBoolean(row.useTitle),
+          }
+        })
+      }) ?? []
+    )
+  },
+  deletePromptRefusals: async (jobId: string, queuePromptIds: string[]): Promise<void> => {
+    if (queuePromptIds.length === 0) {
+      return
+    }
+
     await withOwnedJobDatabase(jobId, false, (database) => {
-      return completionAck
-        ? compactQueuePromptManifestCloseoutFromDatabase({
-            database,
-            jobId,
-            queueRecordId: completionAck.queuePromptId,
-            requestAttemptsJson: completionAck.requestAttemptsJson,
-          })
-        : undefined
+      database
+        .query(
+          `DELETE FROM prompt_refusal_outbox WHERE queue_prompt_id IN (${getSqlPlaceholders(queuePromptIds.length).join(', ')})`,
+        )
+        .run(...queuePromptIds)
     })
   },
   recordJudgmentSuccess: async (

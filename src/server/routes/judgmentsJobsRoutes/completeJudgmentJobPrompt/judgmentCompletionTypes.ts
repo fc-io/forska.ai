@@ -1,3 +1,4 @@
+import type {ProviderContentRefusal} from '../../../../agent/judge/providerContentRefusalError.ts'
 import type {SystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
 import type {JudgmentsJobsPromptsSkipReason} from '../../../../db/schemaTypes.ts'
 import type {JudgmentCompletionTokenUseSummary} from '../../../cron/judgmentsJobs/judgmentCompletionTokenUseOutbox.ts'
@@ -35,6 +36,7 @@ export type JudgmentCompletionBody = Omit<JudgmentCompletionIdentity, 'fullTextS
   judgmentId?: string
   quotes?: unknown
   rawResponseJson?: unknown
+  refusal?: ProviderContentRefusal | null
   requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
   retryAfterMs?: number | null
   skipReason?: JudgmentsJobsPromptsSkipReason

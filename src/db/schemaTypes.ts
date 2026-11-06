@@ -26,6 +26,8 @@ export type JudgmentsJobsPromptsSkipReason =
   | 'conversion_failed'
   | 'fulltext_too_large'
   | 'fulltext_figure_too_large'
+  | 'provider_refusal'
+export type JudgmentsJobsPromptsContentSkipReason = Exclude<JudgmentsJobsPromptsSkipReason, 'provider_refusal'>
 export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_greedy' | 'article_paragraph_greedy'
 export type JudgmentFullTextMode = 'single' | 'chunked'
 export type JudgmentFullTextExecution = {

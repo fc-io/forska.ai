@@ -5362,3 +5362,118 @@ test('recoverJudgmentJobLeasesOnStartup deletes orphaned lease files', async () 
   expect(existsSync(leasePath)).toBe(false)
   expect(service.hasOwnedLease(jobId)).toBe(false)
 })
+
+test('a provider refusal skip is terminal, keeps its job identity and drains into app.judgment_refusal', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {jobId, modelId, projectId, service} = await createSqliteJobFixture('refusal', 'screening_v5', true)
+  const articleId = `${jobId}-article`
+  const promptId = `${jobId}-prompt`
+  const refusal = {
+    failureCode: 'claude_code_content_refusal',
+    modelName: 'claude-opus-5-5',
+    providerKind: 'claude-code',
+    reason: "Claude Code content refusal (stop_reason=refusal): API Error: Opus 5's safeguards flagged this message",
+    refusedAt: '2026-11-06T06:59:13.635Z',
+  }
+
+  await runDatabase(
+    `INSERT INTO app.article (id, article_id, article_title) VALUES ('${articleId}', '${articleId}-x', 'Refused')`,
+  )
+  await runDatabase(`INSERT INTO app.prompt (id, original_text) VALUES ('${promptId}', 'Refused prompt')`)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${jobId}-project-prompt', '${projectId}', '${promptId}', 1, TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${jobId}-project-article', '${projectId}', '${articleId}')
+  `)
+  await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-refusal')
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-refusal', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim the SQLite queue prompt for the refusal test')
+  }
+
+  await service.markPromptAsRefused(jobId, claimedPrompt.recordId, refusal)
+
+  expect(await service.filterOutLocallyJudgedPrompts(jobId, [{articleId, promptId}])).toEqual([])
+  expect(await service.getPendingPromptRefusals(jobId, 10)).toEqual([
+    {
+      ...refusal,
+      articleId,
+      fullTextStrategyId: 'fts-none',
+      jobId,
+      modelId,
+      projectId,
+      promptId,
+      queuePromptId: claimedPrompt.recordId,
+      systemPromptVariant: 'screening_v5',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: true,
+      useTitle: true,
+    },
+  ])
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId), {readonly: true})
+  const queueRow = sqliteDatabase
+    .query(`SELECT status, terminal_kind AS terminalKind, skip_reason AS skipReason FROM queue_prompt WHERE id = ?`)
+    .get(claimedPrompt.recordId)
+
+  sqliteDatabase.close(false)
+  expect(queueRow).toEqual({skipReason: 'provider_refusal', status: 'judged', terminalKind: 'skipped'})
+
+  const {drainJudgmentPromptRefusalOutbox} = await import('./judgmentPromptRefusalImport.ts')
+
+  expect(await drainJudgmentPromptRefusalOutbox(jobId)).toBe(1)
+  expect(await service.getPendingPromptRefusals(jobId, 10)).toEqual([])
+  expect(await drainJudgmentPromptRefusalOutbox(jobId)).toBe(0)
+  expect(
+    await queryDatabase<Record<string, unknown>>(`
+      SELECT
+        model_id AS modelId,
+        use_metadata AS useMetadata,
+        system_prompt_variant AS systemPromptVariant,
+        full_text_strategy_id AS fullTextStrategyId,
+        judgment_job_id AS jobId,
+        failure_code AS failureCode,
+        provider_kind AS providerKind,
+        model_name AS modelName,
+        reason,
+        strftime(refused_at AT TIME ZONE 'UTC', '%Y-%m-%dT%H:%M:%S') AS refusedAt
+      FROM app.judgment_refusal
+      WHERE article_id = '${articleId}' AND prompt_id = '${promptId}'
+    `),
+  ).toEqual([
+    {
+      failureCode: refusal.failureCode,
+      fullTextStrategyId: 'fts-none',
+      jobId,
+      modelId,
+      modelName: refusal.modelName,
+      providerKind: refusal.providerKind,
+      reason: refusal.reason,
+      refusedAt: '2026-11-06T06:59:13',
+      systemPromptVariant: 'screening_v5',
+      useMetadata: true,
+    },
+  ])
+  expect(
+    await queryDatabase<{count: number}>(
+      `SELECT CAST(COUNT(*) AS INTEGER) AS count FROM app.judgment WHERE article_id = '${articleId}'`,
+    ),
+  ).toEqual([{count: 0}])
+  expect(
+    await queryDatabase<{changeKind: string; projectId: string; sourcePartition: string}>(`
+      SELECT change_kind AS changeKind, project_id AS projectId, source_partition AS sourcePartition
+      FROM app.review_change_delta
+      WHERE source_table = 'app.judgment_refusal' AND article_id = '${articleId}'
+    `),
+  ).toEqual([{changeKind: 'judgment.llm.updated', projectId, sourcePartition: `llmJudgment:${articleId}`}])
+})
