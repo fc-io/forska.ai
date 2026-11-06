@@ -243,6 +243,26 @@ test('review bulk operation worker selects add-to-project batches from persisted
   expect(joined).not.toContain('FROM app.article')
 })
 
+test('review bulk operation worker applies the provider refusal filter without requiring an LLM answer', async () => {
+  const refusedHarness = createWorkerHarness({
+    criteriaJson: {hasProviderRefusal: true, listType: 'llm', llmStatus: 'both', operation: 'addToProject'},
+  })
+  const plainHarness = createWorkerHarness({
+    criteriaJson: {listType: 'llm', llmStatus: 'both', operation: 'addToProject'},
+  })
+
+  await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, refusedHarness.dependencies)
+  await runReviewBulkOperationWorkerOnce({workerId: 'worker-1'}, plainHarness.dependencies)
+
+  const refusedJoined = refusedHarness.statements.join('\n')
+  const plainJoined = plainHarness.statements.join('\n')
+
+  expect(refusedJoined).toContain('list_mode_state.llm_refused_prompt_count > 0')
+  expect(refusedJoined).not.toContain('list_mode_state.llm_has_judgment IS TRUE')
+  expect(plainJoined).not.toContain('llm_refused_prompt_count')
+  expect(plainJoined).toContain('list_mode_state.llm_has_judgment IS TRUE')
+})
+
 test('review bulk operation worker applies unassessed queue scope for filter criteria', async () => {
   const harness = createWorkerHarness({criteriaJson: {listType: 'unassessed', operation: 'export'}})
 

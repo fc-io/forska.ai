@@ -24,6 +24,7 @@ interface ReviewsArticlesTableContainerProps {
   projectId: string
   covidenceDuplicatesOnly: Accessor<boolean>
   covidenceConflictsOnly: Accessor<boolean>
+  providerRefusalOnly: Accessor<boolean>
   promptFilters: Accessor<Record<string, string[] | null>>
   currentPage: Accessor<number>
   setCurrentPage: Setter<number>
@@ -48,6 +49,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
     props.promptFilters()
     props.covidenceDuplicatesOnly()
     props.covidenceConflictsOnly()
+    props.providerRefusalOnly()
     props.fromDate()
     props.toDate()
     props.searchTitle()
@@ -81,6 +83,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.projectId,
         props.covidenceDuplicatesOnly,
         props.covidenceConflictsOnly,
+        props.providerRefusalOnly,
         props.promptFilters,
         props.currentPage,
         () => {
@@ -156,6 +159,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.projectId,
         props.covidenceDuplicatesOnly,
         props.covidenceConflictsOnly,
+        props.providerRefusalOnly,
         props.promptFilters,
         props.pageLimit,
         props.fromDate,
@@ -310,7 +314,12 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
               )
             </h3>
             <p class="text-sm text-gray-600">
-              Showing articles that have been judged by at least one prompt in this project
+              <Show
+                when={props.providerRefusalOnly()}
+                fallback="Showing articles that have been judged by at least one prompt in this project"
+              >
+                Showing articles where the model refused at least one prompt in this project
+              </Show>
               {hasPromptFilters() && <span> (with filters applied)</span>}
             </p>
           </div>
@@ -350,6 +359,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 search?: string
                 llmStatus?: LlmStatus
                 hasDuplicateStudyRecords?: true
+                hasProviderRefusal?: true
                 hasStudyDecisionConflict?: true
               } = {}
               if (Object.keys(prompts).length > 0) body.prompts = prompts
@@ -359,6 +369,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
               if (props.llmStatus?.()) body.llmStatus = props.llmStatus?.()
               if (props.covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
               if (props.covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
+              if (props.providerRefusalOnly()) body.hasProviderRefusal = true
               return body
             }}
           />
@@ -420,6 +431,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 search?: string
                 llmStatus?: LlmStatus
                 hasDuplicateStudyRecords?: true
+                hasProviderRefusal?: true
                 hasStudyDecisionConflict?: true
               } = {}
               if (Object.keys(prompts).length > 0) body.prompts = prompts
@@ -429,6 +441,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
               if (props.llmStatus?.()) body.llmStatus = props.llmStatus?.()
               if (props.covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
               if (props.covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
+              if (props.providerRefusalOnly()) body.hasProviderRefusal = true
               return body
             }}
           />

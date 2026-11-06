@@ -47,6 +47,7 @@ type ReviewBulkOperationCriteria = {
   forceRefetch?: boolean
   from?: string
   hasDuplicateStudyRecords?: boolean
+  hasProviderRefusal?: boolean
   hasStudyDecisionConflict?: boolean
   humanStatus?: string
   listType?: string
@@ -298,7 +299,9 @@ const shouldRequireTabLlmJudgment = (criteria: ReviewBulkOperationCriteria) => {
   const listMode = getListModeKey(criteria)
 
   return (
-    listMode === 'llm' && (!criteria.llmStatus || criteria.llmStatus === 'both' || criteria.llmStatus === 'partial')
+    listMode === 'llm'
+    && !criteria.hasProviderRefusal
+    && (!criteria.llmStatus || criteria.llmStatus === 'both' || criteria.llmStatus === 'partial')
   )
 }
 
@@ -409,13 +412,14 @@ const getPostingFilterPredicates = (criteria: ReviewBulkOperationCriteria) => {
 
     return `AND list_mode_state.${columnName} IS TRUE`
   })
+  const providerRefusalPredicate = criteria.hasProviderRefusal ? 'AND list_mode_state.llm_refused_prompt_count > 0' : ''
   const datePredicate =
     criteria.from || criteria.to
       ? `${criteria.from ? `AND s.article_created_at >= TIMESTAMPTZ ${getSqlLiteral(criteria.from)}` : ''}
          ${getDateToPredicate('s.article_created_at', criteria.to)}`
       : ''
 
-  return [...simplePredicates, datePredicate].join('\n')
+  return [...simplePredicates, providerRefusalPredicate, datePredicate].join('\n')
 }
 
 const getServingSnapshotScopeCteSql = (
@@ -531,6 +535,7 @@ const shouldUseSearchCandidateArticleIds = (input: {
     || Boolean(input.criteria.to)
     || Boolean(input.criteria.hasDuplicateStudyRecords)
     || Boolean(input.criteria.hasStudyDecisionConflict)
+    || Boolean(input.criteria.hasProviderRefusal)
     || Boolean(input.cursor)
   )
 }

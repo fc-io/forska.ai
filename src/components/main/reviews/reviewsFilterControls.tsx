@@ -40,6 +40,8 @@ interface ReviewsFilterControlsProps {
   filterMode?: 'both' | 'review'
   llmStatus?: LlmStatus
   setLlmStatus?: Setter<LlmStatus | undefined>
+  providerRefusalOnly?: boolean
+  setProviderRefusalOnly?: Setter<boolean>
 }
 
 export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
@@ -264,6 +266,20 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
               />
               <span>Covidence conflicts only</span>
             </label>
+            <Show when={props.setProviderRefusalOnly}>
+              <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={props.providerRefusalOnly}
+                  onChange={(e) => {
+                    props.setProviderRefusalOnly?.(e.currentTarget.checked)
+                    props.setCurrentPage(1)
+                  }}
+                  class="h-4 w-4 rounded border-gray-300"
+                />
+                <span>Provider refused</span>
+              </label>
+            </Show>
           </div>
         </div>
         <Show when={!props.hidePromptSelectors}>

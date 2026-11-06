@@ -24,6 +24,7 @@ const Reviews = () => {
     routePath: '/projects/$id/reviews-llm/',
     routeParams: {id: params().id},
     includeLlmStatus: true,
+    includeProviderRefusal: true,
   })
 
   useArchivedProjectRedirect(projectAccessQuery)
@@ -138,12 +139,15 @@ const Reviews = () => {
           onSubmitSearch={filters.onSubmitSearch}
           llmStatus={filters.llmStatus()}
           setLlmStatus={filters.setLlmStatus}
+          providerRefusalOnly={filters.providerRefusalOnly()}
+          setProviderRefusalOnly={filters.setProviderRefusalOnly}
         />
 
         <ReviewsArticlesTableContainer
           projectId={params().id}
           covidenceDuplicatesOnly={filters.covidenceDuplicatesOnly}
           covidenceConflictsOnly={filters.covidenceConflictsOnly}
+          providerRefusalOnly={filters.providerRefusalOnly}
           promptFilters={filters.promptFilters}
           currentPage={filters.currentPage}
           setCurrentPage={filters.setCurrentPage}

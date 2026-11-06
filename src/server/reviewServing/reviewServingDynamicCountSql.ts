@@ -28,7 +28,14 @@ const getPostingFilterGroupPredicate = (group: ReviewServingDynamicCountPostingF
 }
 
 const isStateFilterGroup = (group: ReviewServingDynamicCountPostingFilterGroup) => {
-  return ['duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus', 'llmHasJudgment'].includes(group.filterKind)
+  return [
+    'duplicateFlag',
+    'conflictFlag',
+    'providerRefusalFlag',
+    'llmStatus',
+    'humanStatus',
+    'llmHasJudgment',
+  ].includes(group.filterKind)
 }
 
 const getStateFilterGroupPredicate = (group: ReviewServingDynamicCountPostingFilterGroup, alias = 'state') => {
@@ -38,6 +45,10 @@ const getStateFilterGroupPredicate = (group: ReviewServingDynamicCountPostingFil
 
   if (group.filterKind === 'conflictFlag') {
     return group.filterValues.includes('true') ? `${alias}.conflict_flag IS TRUE` : ''
+  }
+
+  if (group.filterKind === 'providerRefusalFlag') {
+    return group.filterValues.includes('true') ? `${alias}.llm_refused_prompt_count > 0` : ''
   }
 
   if (group.filterKind === 'llmStatus') {

@@ -17,6 +17,7 @@ export const articlesRoutesPostPdfFetchByFilter = async ({
     prompts?: Record<string, string[]>
     hasDuplicateStudyRecords?: boolean
     hasStudyDecisionConflict?: boolean
+    hasProviderRefusal?: boolean
     from?: string
     to?: string
     search?: string
@@ -39,6 +40,7 @@ export const articlesRoutesPostPdfFetchByFilter = async ({
       from: body.from,
       hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
       hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+      hasProviderRefusal: body.hasProviderRefusal,
       listType: body.listType,
       llmStatus: body.llmStatus,
       operation: 'pdfFetch',
@@ -52,6 +54,7 @@ export const articlesRoutesPostPdfFetchByFilter = async ({
       from: body.from,
       hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
       hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+      hasProviderRefusal: body.hasProviderRefusal,
       listType: body.listType,
       llmStatus: body.llmStatus,
       prompts: body.prompts,

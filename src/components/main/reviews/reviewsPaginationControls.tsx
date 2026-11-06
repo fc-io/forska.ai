@@ -70,6 +70,7 @@ interface ReviewsPaginationControlsProps {
     search?: string
     llmStatus?: 'complete' | 'both' | 'partial'
     hasDuplicateStudyRecords?: true
+    hasProviderRefusal?: true
     hasStudyDecisionConflict?: true
   }
 }

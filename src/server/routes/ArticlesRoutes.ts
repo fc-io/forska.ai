@@ -51,6 +51,7 @@ export const articlesRoutes = new Elysia()
         prompts: t.Optional(t.Record(t.String(), t.Array(t.String()))),
         hasDuplicateStudyRecords: t.Optional(t.Boolean()),
         hasStudyDecisionConflict: t.Optional(t.Boolean()),
+        hasProviderRefusal: t.Optional(t.Boolean()),
         from: t.Optional(t.String()),
         to: t.Optional(t.String()),
         search: t.Optional(t.String()),

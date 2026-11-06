@@ -11,6 +11,7 @@ export const createArticlesReviewsCountQueryOptions = (
   projectId: string,
   covidenceDuplicatesOnly: Accessor<boolean>,
   covidenceConflictsOnly: Accessor<boolean>,
+  providerRefusalOnly: Accessor<boolean>,
   promptFilters: Accessor<Record<string, string[] | null>>,
   pageLimit: Accessor<number>,
   fromDateStr: Accessor<string>,
@@ -60,6 +61,7 @@ export const createArticlesReviewsCountQueryOptions = (
       projectId,
       covidenceDuplicatesOnly(),
       covidenceConflictsOnly(),
+      providerRefusalOnly(),
       promptFilters(),
       pageLimit(),
       validFrom(),
@@ -87,6 +89,7 @@ export const createArticlesReviewsCountQueryOptions = (
         projectId: string
         hasDuplicateStudyRecords?: true
         hasStudyDecisionConflict?: true
+        hasProviderRefusal?: true
         prompts: Record<string, string[]>
         from?: string
         to?: string
@@ -100,6 +103,7 @@ export const createArticlesReviewsCountQueryOptions = (
       if (llmStatus?.()) body.llmStatus = llmStatus()
       if (covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
       if (covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
+      if (providerRefusalOnly()) body.hasProviderRefusal = true
 
       const response = await apiClient.api.articlesreviewscount.post(body)
 

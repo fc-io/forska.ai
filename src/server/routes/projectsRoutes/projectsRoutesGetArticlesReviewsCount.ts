@@ -29,6 +29,7 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
         promptFilterCount: Object.keys(body.prompts || {}).length,
         hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
         hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+        hasProviderRefusal: body.hasProviderRefusal,
         llmStatus: body.llmStatus,
       },
     )
@@ -41,6 +42,7 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
       const result = await countLlmReviewArticlesFromServing({
         hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
         hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+        hasProviderRefusal: body.hasProviderRefusal,
         projectId: body.projectId,
         page: 1,
         limit,
@@ -82,6 +84,7 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
       from: t.Optional(t.String()),
       hasDuplicateStudyRecords: t.Optional(t.Boolean()),
       hasStudyDecisionConflict: t.Optional(t.Boolean()),
+      hasProviderRefusal: t.Optional(t.Boolean()),
       llmStatus: t.Optional(t.Union([t.Literal('complete'), t.Literal('both'), t.Literal('partial')])),
       limit: t.String(),
       projectId: t.String(),

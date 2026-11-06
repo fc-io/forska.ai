@@ -11,6 +11,7 @@ export type ArticlesReviewsParams = {
   llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
+  hasProviderRefusal?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -65,6 +66,7 @@ export type ArticleReviewResult = {
   judgedPromptIds: string[]
   isFullyJudged: boolean
   hasLlmJudgment?: boolean
+  llmRefusedPromptCount: number
   journalTitle: string | null
 }
 

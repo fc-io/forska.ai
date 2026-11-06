@@ -49,6 +49,7 @@ export type ArticleWithJudgments = ArticleUrlInput & {
   judgedPromptIds?: string[]
   isFullyJudged?: boolean
   hasLlmJudgment?: boolean
+  llmRefusedPromptCount?: number
   selectedExternalArticleId?: string | null
   selectedImportRecordId?: string | null
   selectedImportRouteId?: string | null
@@ -202,6 +203,17 @@ const ReviewDetailReadinessBadge = (props: {readiness: Exclude<ReviewDetailReadi
   )
 }
 
+const ProviderRefusalBadge = (props: {refusedPromptCount: number}) => {
+  return (
+    <span
+      class="inline-flex rounded px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800"
+      title={`The model refused ${props.refusedPromptCount} prompt(s); needs human screening`}
+    >
+      {`${props.refusedPromptCount} refused`}
+    </span>
+  )
+}
+
 const getSourceArticleId = (article: ArticleWithJudgments) => {
   const value = article.articleId ?? article.selectedExternalArticleId
   const trimmed = typeof value === 'string' ? value.trim() : ''
@@ -252,37 +264,48 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
       const judgedCount = info.row.original.judgedPromptIds?.length ?? 0
       const totalJudgments = info.row.original.judgments?.length ?? 0
       const hasLlmJudgment = info.row.original.hasLlmJudgment ?? judgedCount > 0
+      const refusedPromptCount = info.row.original.llmRefusedPromptCount ?? 0
 
       return (
         <Show when={isFullyJudged !== undefined} fallback={<span class="text-gray-400">—</span>}>
-          <Show
-            when={isFullyJudged}
-            fallback={
-              <Show
-                when={hasLlmJudgment}
-                fallback={
-                  <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-700" title="No prompts judged yet">
-                    Not judged
-                  </span>
-                }
-              >
-                <span
-                  class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800"
-                  title={
-                    judgedCount > 0
-                      ? `${judgedCount} prompt(s) judged, ${totalJudgments} judgment(s)`
-                      : 'Some prompts judged'
+          <div class="flex flex-wrap gap-2">
+            <Show
+              when={isFullyJudged}
+              fallback={
+                <Show
+                  when={hasLlmJudgment}
+                  fallback={
+                    <Show when={refusedPromptCount === 0}>
+                      <span
+                        class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-700"
+                        title="No prompts judged yet"
+                      >
+                        Not judged
+                      </span>
+                    </Show>
                   }
                 >
-                  Partial
-                </span>
-              </Show>
-            }
-          >
-            <span class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800" title="All prompts judged">
-              Complete
-            </span>
-          </Show>
+                  <span
+                    class="px-1.5 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800"
+                    title={
+                      judgedCount > 0
+                        ? `${judgedCount} prompt(s) judged, ${totalJudgments} judgment(s)`
+                        : 'Some prompts judged'
+                    }
+                  >
+                    Partial
+                  </span>
+                </Show>
+              }
+            >
+              <span class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800" title="All prompts judged">
+                Complete
+              </span>
+            </Show>
+            <Show when={refusedPromptCount > 0}>
+              <ProviderRefusalBadge refusedPromptCount={refusedPromptCount} />
+            </Show>
+          </div>
         </Show>
       )
     },

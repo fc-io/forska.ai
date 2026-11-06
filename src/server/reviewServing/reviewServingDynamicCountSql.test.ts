@@ -641,6 +641,33 @@ test('dynamic filtered counts use base-scoped fast path for list-mode-state filt
   expect(sql).not.toContain('review_article_filter_posting_serving_v4')
 })
 
+test('dynamic filtered counts read the provider-refusal filter from list-mode state', () => {
+  const stateOnlySql = getReviewServingDynamicFilteredCountSql({
+    listModeKey: 'llm',
+    postingFilterGroups: [{filterKind: 'providerRefusalFlag', filterValues: ['true']}],
+    projectId: 'project-1',
+    reviewConfigHash: 'review-config-1',
+    snapshotId: 'snapshot-1',
+  })
+  const promptFilteredSql = getReviewServingDynamicFilteredCountSql({
+    listModeKey: 'llm',
+    postingFilterGroups: [
+      {filterKind: 'promptAnswer', filterValues: ['review:promptAnswer:prompt-1:yes']},
+      {filterKind: 'providerRefusalFlag', filterValues: ['true']},
+    ],
+    projectId: 'project-1',
+    reviewConfigHash: 'review-config-1',
+    snapshotId: 'snapshot-1',
+  })
+
+  expect(stateOnlySql).toContain('list_mode_state.llm_refused_prompt_count > 0')
+  expect(stateOnlySql).not.toContain('review_article_filter_posting_serving_v4')
+  expect(stateOnlySql).not.toContain('llm_has_judgment')
+  expect(promptFilteredSql).toContain('list_mode_state.llm_refused_prompt_count > 0')
+  expect(promptFilteredSql).toContain("posting.filter_kind = 'promptAnswer'")
+  expect(promptFilteredSql).not.toContain("posting.filter_kind = 'providerRefusalFlag'")
+})
+
 test('dynamic state-only counts ignore orphan list-mode-state rows without base rows', async () => {
   const duckdbInstance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
   const connection = await duckdbInstance.connect()
@@ -736,7 +763,10 @@ test('imported summary-human status rebuild materializes tab-count state from so
         use_abstract BOOLEAN,
         use_fulltext BOOLEAN,
         use_fulltext_no_images BOOLEAN,
-        human_judgment_mode VARCHAR
+        human_judgment_mode VARCHAR,
+        use_metadata BOOLEAN,
+        system_prompt_variant VARCHAR,
+        full_text_strategy_id VARCHAR
       );
       CREATE TABLE app.project_prompt (
         project_id VARCHAR,
@@ -759,7 +789,22 @@ test('imported summary-human status rebuild materializes tab-count state from so
         use_fulltext_no_images BOOLEAN,
         is_answered BOOLEAN,
         created_at TIMESTAMPTZ,
-        deleted_at TIMESTAMPTZ
+        deleted_at TIMESTAMPTZ,
+        system_prompt_variant VARCHAR NOT NULL DEFAULT 'legacy',
+        use_metadata BOOLEAN NOT NULL DEFAULT FALSE,
+        full_text_strategy_id VARCHAR NOT NULL DEFAULT 'fts-none'
+      );
+      CREATE TABLE app.judgment_refusal (
+        article_id VARCHAR,
+        prompt_id VARCHAR,
+        model_id VARCHAR,
+        use_title BOOLEAN,
+        use_abstract BOOLEAN,
+        use_fulltext BOOLEAN,
+        use_fulltext_no_images BOOLEAN,
+        use_metadata BOOLEAN,
+        system_prompt_variant VARCHAR,
+        full_text_strategy_id VARCHAR
       );
       CREATE TABLE app."judgment_human" (
         id VARCHAR,
@@ -803,6 +848,7 @@ test('imported summary-human status rebuild materializes tab-count state from so
         llm_status VARCHAR,
         human_status VARCHAR,
         llm_has_judgment BOOLEAN DEFAULT FALSE,
+        llm_refused_prompt_count INTEGER NOT NULL DEFAULT 0,
         llm_patch_watermark BIGINT DEFAULT 0,
         human_patch_watermark BIGINT DEFAULT 0,
         both_patch_watermark BIGINT DEFAULT 0,
@@ -817,7 +863,7 @@ test('imported summary-human status rebuild materializes tab-count state from so
       );
 
       INSERT INTO app.project VALUES
-        ('${projectId}', 'model-1', TRUE, TRUE, FALSE, FALSE, 'summary');
+        ('${projectId}', 'model-1', TRUE, TRUE, FALSE, FALSE, 'summary', FALSE, NULL, NULL);
       INSERT INTO app.project_prompt VALUES
         ('${projectId}', 'prompt-1', TRUE, FALSE),
         ('${projectId}', 'prompt-2', TRUE, FALSE);
@@ -856,12 +902,22 @@ test('imported summary-human status rebuild materializes tab-count state from so
       INSERT INTO mart.review_unassessed_queue_article_rank_serving_v4 VALUES
         ('${projectId}', '${reviewConfigHash}', '${snapshotId}', 'unassessed', 'article-4');
 
-      INSERT INTO app."judgment" VALUES
+      INSERT INTO app."judgment" (
+        id, article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images,
+        is_answered, created_at, deleted_at
+      ) VALUES
         ('llm-1-prompt-1', 'article-1', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:00Z', NULL),
         ('llm-1-prompt-2', 'article-1', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:01Z', NULL),
         ('llm-2-prompt-1', 'article-2', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:02Z', NULL),
         ('llm-2-prompt-2', 'article-2', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:03Z', NULL),
         ('llm-3-prompt-1', 'article-3', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, TRUE, TIMESTAMPTZ '2026-06-16 10:00:04Z', NULL);
+      INSERT INTO app.judgment_refusal VALUES
+        ('article-1', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none'),
+        ('article-3', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none'),
+        ('article-4', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none'),
+        ('article-4', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none'),
+        ('article-2', 'prompt-1', 'model-2', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none'),
+        ('article-2', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, FALSE, 'screening_v5', 'fts-none');
       INSERT INTO app."judgment_human_summary" VALUES
         ('human-summary-1', '${projectId}', 'article-1', 'include'),
         ('human-summary-2', '${projectId}', 'article-2', 'exclude'),
@@ -922,6 +978,21 @@ test('imported summary-human status rebuild materializes tab-count state from so
       {human_answered: '2', llm_assessed: '3', llm_complete: '2', llm_partial_or_unanswered: '2', rows: '4'},
     ])
 
+    const refusedReader = await connection.runAndReadAll(`
+      SELECT article_id, llm_refused_prompt_count
+      FROM mart.review_article_serving_list_mode_state_v4
+      WHERE project_id = '${projectId}'
+        AND review_config_hash = '${reviewConfigHash}'
+        AND snapshot_id = '${snapshotId}'
+      ORDER BY article_id
+    `)
+    expect(refusedReader.getRowObjectsJson()).toEqual([
+      {article_id: 'article-1', llm_refused_prompt_count: 0},
+      {article_id: 'article-2', llm_refused_prompt_count: 0},
+      {article_id: 'article-3', llm_refused_prompt_count: 1},
+      {article_id: 'article-4', llm_refused_prompt_count: 2},
+    ])
+
     const baseCountInput = {projectId, reviewConfigHash, snapshotId}
     const counts = {
       both: await getDynamicCount(connection, {
@@ -938,6 +1009,11 @@ test('imported summary-human status rebuild materializes tab-count state from so
         postingFilterGroups: [{filterKind: 'humanStatus', filterValues: ['answered']}],
       }),
       llm: await getDynamicCount(connection, {...baseCountInput, listModeKey: 'llm', requireLlmJudgment: true}),
+      llmProviderRefused: await getDynamicCount(connection, {
+        ...baseCountInput,
+        listModeKey: 'llm',
+        postingFilterGroups: [{filterKind: 'providerRefusalFlag', filterValues: ['true']}],
+      }),
       unassessed: await getDynamicCount(connection, {
         ...baseCountInput,
         includeUnassessedQueue: true,
@@ -945,7 +1021,7 @@ test('imported summary-human status rebuild materializes tab-count state from so
       }),
     }
 
-    expect(counts).toEqual({both: 2, human: 2, llm: 3, unassessed: 1})
+    expect(counts).toEqual({both: 2, human: 2, llm: 3, llmProviderRefused: 2, unassessed: 1})
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()

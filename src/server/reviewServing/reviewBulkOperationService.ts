@@ -37,6 +37,7 @@ export type ReviewBulkOperationCriteria = {
   forceRefetch?: boolean
   from?: string
   hasDuplicateStudyRecords?: boolean
+  hasProviderRefusal?: boolean
   hasStudyDecisionConflict?: boolean
   listType?: string
   llmStatus?: string
