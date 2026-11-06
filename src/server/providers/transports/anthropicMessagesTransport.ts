@@ -1,4 +1,5 @@
 import {getAnthropicThinkingConfig} from '../../../utils/anthropicThinking.ts'
+import {anthropicRefusalEmptyResponseFailureCode} from '../providerContentRefusal.ts'
 import {getProviderImageBase64, getProviderPromptParts, getProviderTransportImages} from '../providerImageInput.ts'
 import {
   ProviderInvocationError,
@@ -16,7 +17,6 @@ import {
 const anthropicVersion = '2023-06-01'
 const anthropicPauseTurnLimit = 8
 const anthropicEmptyResponseFailureCode = 'anthropic_empty_response'
-const anthropicRefusalEmptyResponseFailureCode = 'anthropic_refusal_empty_response'
 const anthropicThinkingOnlyEmptyResponseFailureCode = 'anthropic_thinking_only_empty_response'
 
 type AnthropicErrorResponse = {error?: {message?: string; type?: string}; request_id?: string}
