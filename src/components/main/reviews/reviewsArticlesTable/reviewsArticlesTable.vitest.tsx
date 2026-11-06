@@ -129,4 +129,52 @@ describe('ReviewsArticlesTable', () => {
       container.remove()
     }
   })
+
+  test('marks provider-refused rows with a refused count instead of not judged', () => {
+    const {container, dispose} = renderTable([
+      getArticle({
+        id: 'fully-refused',
+        hasLlmJudgment: false,
+        isFullyJudged: false,
+        judgedPromptIds: [],
+        llmRefusedPromptCount: 3,
+      }),
+      getArticle({
+        id: 'partly-refused',
+        hasLlmJudgment: true,
+        isFullyJudged: false,
+        judgedPromptIds: ['prompt-1'],
+        llmRefusedPromptCount: 1,
+      }),
+      getArticle({
+        id: 'unjudged',
+        hasLlmJudgment: false,
+        isFullyJudged: false,
+        judgedPromptIds: [],
+        llmRefusedPromptCount: 0,
+      }),
+      getArticle({id: 'complete', hasLlmJudgment: true, isFullyJudged: true, llmRefusedPromptCount: 0}),
+    ])
+
+    try {
+      const statusBadges = [...container.querySelectorAll('tbody tr')].map((row) => {
+        return [...row.querySelectorAll('td:nth-child(2) span')].map((badge) => {
+          return [badge.textContent, badge.getAttribute('title')]
+        })
+      })
+
+      expect(statusBadges).toEqual([
+        [['3 refused', 'The model refused 3 prompt(s); needs human screening']],
+        [
+          ['Partial', '1 prompt(s) judged, 0 judgment(s)'],
+          ['1 refused', 'The model refused 1 prompt(s); needs human screening'],
+        ],
+        [['Not judged', 'No prompts judged yet']],
+        [['Complete', 'All prompts judged']],
+      ])
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
 })

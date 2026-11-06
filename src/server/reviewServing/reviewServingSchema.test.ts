@@ -122,6 +122,7 @@ const reviewServingPhase1MigrationPaths = [
   '../../db/duckdbMigrations/0224_reviewServingDirtyWorkLifecycleReason.sql',
   '../../db/duckdbMigrations/0234_reviewServingComponentRevision.sql',
   '../../db/duckdbMigrations/0248_retainOpenReviewServingDirtyWork.sql',
+  '../../db/duckdbMigrations/0276_reviewArticleServingLlmRefusedPromptCount.sql',
 ] as const
 const reviewServingPhase1MigrationSqlByPath = Object.fromEntries(
   reviewServingPhase1MigrationPaths.map((migrationPath) => {
@@ -1352,6 +1353,7 @@ test('article serving list-mode normalization created historical base/state tabl
     'llm_status',
     'human_status',
     'llm_has_judgment',
+    'llm_refused_prompt_count',
   ])
   expect(reviewArticleServingListModeNormalizationForwardMigrationSql).toContain(
     'DROP TABLE IF EXISTS mart.review_article_filter_state_serving_v4;',

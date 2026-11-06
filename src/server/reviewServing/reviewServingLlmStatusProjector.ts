@@ -67,6 +67,7 @@ type LlmStatusSourceRow = {
   articleId: string
   fullTextStrategyId: string
   isAnswered: boolean | null
+  isRefused: boolean
   latestLlmCreatedAt: Date | string | null
   humanJudgmentMode: 'prompt' | 'summary'
   modelExecutionOptions: string | null
@@ -298,6 +299,20 @@ const assertCompatibleLlmStatusRanges = (ranges: readonly ProjectReviewServingLl
   })
 }
 
+const getProjectIdentityRefusalJoinSql = (input: {articleIdSql: string; projectAlias: string; promptIdSql: string}) => {
+  return `LEFT JOIN app.judgment_refusal refusal
+          ON refusal.article_id = ${input.articleIdSql}
+          AND refusal.prompt_id = ${input.promptIdSql}
+          AND refusal.model_id = ${input.projectAlias}.model_id
+          AND refusal.use_title = ${input.projectAlias}.use_title
+          AND refusal.use_abstract = ${input.projectAlias}.use_abstract
+          AND refusal.use_fulltext = ${input.projectAlias}.use_fulltext
+          AND refusal.use_fulltext_no_images = ${input.projectAlias}.use_fulltext_no_images
+          AND refusal.system_prompt_variant = COALESCE(${input.projectAlias}.system_prompt_variant, 'legacy')
+          AND refusal.use_metadata = COALESCE(${input.projectAlias}.use_metadata, FALSE)
+          AND refusal.full_text_strategy_id = ${getProjectFullTextStrategyIdSql(input.projectAlias)}`
+}
+
 const getProjectPromptConfigRows = async (
   projectId: string,
   database: Pick<ReviewServingLlmStatusProjectorDatabase, 'queryJson'>,
@@ -410,6 +425,7 @@ const getJudgmentDeltaRows = async (
           delta.source_operation AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           judgment.is_answered AS isAnswered,
+          refusal.article_id IS NOT NULL AS isRefused,
           judgment.answered_original AS answeredOriginal,
           judgment.answered_original_as_array AS answeredOriginalAsArray,
           judgment.created_at AS latestLlmCreatedAt,
@@ -462,6 +478,17 @@ const getJudgmentDeltaRows = async (
                 OR (newer_judgment.created_at = judgment.created_at AND newer_judgment.id > judgment.id)
               )
           )
+        LEFT JOIN app.judgment_refusal refusal
+          ON refusal.article_id = delta.article_id
+          AND refusal.prompt_id = delta.prompt_id
+          AND refusal.model_id = delta.model_id
+          AND refusal.use_title = delta.use_title
+          AND refusal.use_abstract = delta.use_abstract
+          AND refusal.use_fulltext = delta.use_fulltext
+          AND refusal.use_fulltext_no_images = delta.use_fulltext_no_images
+          AND refusal.system_prompt_variant = COALESCE(delta.system_prompt_variant, 'legacy')
+          AND refusal.use_metadata = COALESCE(delta.use_metadata, FALSE)
+          AND refusal.full_text_strategy_id = ${getReviewChangeDeltaFullTextStrategyIdSql('delta')}
         WHERE delta.project_id = ${getSqlLiteral(input.projectId)}
           AND delta.change_kind IN ('judgment.llm.created', 'judgment.llm.updated', 'judgment.llm.deleted')
           AND ${claimRangePredicateSql}
@@ -500,6 +527,7 @@ const getPromptScopedRows = async (
           'update' AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           NULL AS isAnswered,
+          refusal.article_id IS NOT NULL AS isRefused,
           NULL AS answeredOriginal,
           NULL AS answeredOriginalAsArray,
           NULL AS latestLlmCreatedAt,
@@ -523,6 +551,7 @@ const getPromptScopedRows = async (
           AND project_prompt.prompt_id = dirty_prompt.prompt_id
         INNER JOIN app.prompt prompt
           ON prompt.id = dirty_prompt.prompt_id
+        ${getProjectIdentityRefusalJoinSql({articleIdSql: 'scope.article_id', projectAlias: 'project', promptIdSql: 'dirty_prompt.prompt_id'})}
         ORDER BY dirty_prompt.prompt_id ASC, scope.article_id ASC
       `)
 }
@@ -602,6 +631,7 @@ const getProjectScopedRows = async (
           'update' AS sourceOperation,
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           judgment.is_answered AS isAnswered,
+          refusal.article_id IS NOT NULL AS isRefused,
           judgment.answered_original AS answeredOriginal,
           judgment.answered_original_as_array AS answeredOriginalAsArray,
           judgment.created_at AS latestLlmCreatedAt,
@@ -623,6 +653,7 @@ const getProjectScopedRows = async (
           AND project_prompt.prompt_id = dirty_prompt.prompt_id
         INNER JOIN app.prompt prompt
           ON prompt.id = dirty_prompt.prompt_id
+        ${getProjectIdentityRefusalJoinSql({articleIdSql: 'scope.article_id', projectAlias: 'project', promptIdSql: 'dirty_prompt.prompt_id'})}
         LEFT JOIN latest_judgment judgment
           ON judgment.article_id = scope.article_id
           AND judgment.prompt_id = dirty_prompt.prompt_id
@@ -693,6 +724,7 @@ const getArticleScopedRows = async (
           'update' AS sourceOperation,
           NOT (COALESCE(scope.in_curated_scope, FALSE) OR COALESCE(scope.in_route_scope, FALSE)) AS tombstone,
           judgment.is_answered AS isAnswered,
+          refusal.article_id IS NOT NULL AS isRefused,
           judgment.answered_original AS answeredOriginal,
           judgment.answered_original_as_array AS answeredOriginalAsArray,
           judgment.created_at AS latestLlmCreatedAt,
@@ -729,16 +761,25 @@ const getArticleScopedRows = async (
           AND judgment.use_metadata = COALESCE(project.use_metadata, FALSE)
           AND judgment.full_text_strategy_id = ${getProjectFullTextStrategyIdSql('project')}
           AND judgment.judgment_rank = 1
+        ${getProjectIdentityRefusalJoinSql({articleIdSql: 'dirty.article_id', projectAlias: 'project', promptIdSql: 'prompt.id'})}
         ORDER BY dirty.article_id ASC, project_prompt.prompt_order ASC NULLS LAST, prompt.id ASC
       `)
 }
 
+const isLlmStatusRowAnswered = (row: LlmStatusSourceRow) => {
+  return Boolean(row.isAnswered) || row.answeredOriginal !== null || (row.answeredOriginalAsArray?.length ?? 0) > 0
+}
+
+const getUnansweredLlmStatusKey = (row: LlmStatusSourceRow) => {
+  return row.isRefused ? 'refused' : 'unanswered'
+}
+
+const getLiveLlmStatusKey = (row: LlmStatusSourceRow) => {
+  return isLlmStatusRowAnswered(row) ? 'answered' : getUnansweredLlmStatusKey(row)
+}
+
 const getLlmStatusKey = (row: LlmStatusSourceRow) => {
-  return row.tombstone
-    ? null
-    : row.isAnswered || row.answeredOriginal !== null || (row.answeredOriginalAsArray?.length ?? 0) > 0
-      ? 'answered'
-      : 'unanswered'
+  return row.tombstone ? null : getLiveLlmStatusKey(row)
 }
 
 const getLlmStatusPatchManifest = (
@@ -841,7 +882,10 @@ const getApplyLlmStatusServingStatement = (input: {
             ) = COUNT(DISTINCT latest_prompt.prompt_id) FILTER (WHERE NOT latest_prompt.tombstone) THEN 'answered'
             ELSE 'unanswered'
           END AS llm_status,
-          COALESCE(BOOL_OR(NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'answered'), FALSE) AS llm_has_judgment
+          COALESCE(BOOL_OR(NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'answered'), FALSE) AS llm_has_judgment,
+          COUNT(DISTINCT latest_prompt.prompt_id) FILTER (
+            WHERE NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'refused'
+          ) AS llm_refused_prompt_count
         FROM latest_prompt
         GROUP BY latest_prompt.review_config_hash, latest_prompt.list_mode_key, latest_prompt.article_id
       )
@@ -849,6 +893,7 @@ const getApplyLlmStatusServingStatement = (input: {
       SET
         llm_status = article_status.llm_status,
         llm_has_judgment = article_status.llm_has_judgment,
+        llm_refused_prompt_count = article_status.llm_refused_prompt_count,
         llm_patch_watermark = CASE
           WHEN article_status.list_mode_key = 'llm'
             THEN GREATEST(COALESCE(state.llm_patch_watermark, 0), ${getSqlLiteral(input.patchWatermark)})
@@ -990,7 +1035,10 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
            ) THEN 'answered'
            ELSE 'unanswered'
          END AS llm_status,
-         COALESCE(BOOL_OR(latest_judgment.is_answered IS TRUE), FALSE) AS llm_has_judgment
+         COALESCE(BOOL_OR(latest_judgment.is_answered IS TRUE), FALSE) AS llm_has_judgment,
+         COUNT(DISTINCT prompt.id) FILTER (
+           WHERE refusal.article_id IS NOT NULL AND latest_judgment.is_answered IS NOT TRUE
+         ) AS llm_refused_prompt_count
        FROM target_serving serving
        INNER JOIN app.project project
          ON project.id = serving.project_id
@@ -1007,10 +1055,16 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
          ON latest_judgment.article_id = serving.article_id
         AND latest_judgment.prompt_id = prompt.id
         AND latest_judgment.judgment_rank = 1
+       ${getProjectIdentityRefusalJoinSql({articleIdSql: 'serving.article_id', projectAlias: 'project', promptIdSql: 'prompt.id'})}
        GROUP BY serving.project_id, serving.review_config_hash, serving.snapshot_id, serving.article_id, enabled_prompt_count.prompt_count
      )
      UPDATE mart.review_article_serving_list_mode_state_v4 state
-     SET ${['llm_status = article_status.llm_status', 'llm_has_judgment = article_status.llm_has_judgment', ...setClauses].join(', ')}
+     SET ${[
+       'llm_status = article_status.llm_status',
+       'llm_has_judgment = article_status.llm_has_judgment',
+       'llm_refused_prompt_count = article_status.llm_refused_prompt_count',
+       ...setClauses,
+     ].join(', ')}
      FROM article_status
      WHERE state.project_id = article_status.project_id
        AND state.review_config_hash = article_status.review_config_hash

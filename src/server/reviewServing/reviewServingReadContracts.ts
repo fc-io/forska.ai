@@ -196,7 +196,14 @@ const filterFacetContract = (input: {
 
 export const reviewServingReadContractList = [
   rowContract({
-    allowedFilters: [...defaultRowFilters, 'conflictFlag', 'llmHasJudgment', 'llmStatus', 'promptAnswer'],
+    allowedFilters: [
+      ...defaultRowFilters,
+      'conflictFlag',
+      'llmHasJudgment',
+      'llmStatus',
+      'promptAnswer',
+      'providerRefusalFlag',
+    ],
     key: 'review.llm.rows',
     listMode: 'llm',
     namedFastCounts: [],
@@ -205,14 +212,29 @@ export const reviewServingReadContractList = [
     searchMode: 'tokenPrefix',
   }),
   rowByArticleSetContract({
-    allowedFilters: [...defaultRowFilters, 'articleId', 'conflictFlag', 'llmHasJudgment', 'llmStatus', 'promptAnswer'],
+    allowedFilters: [
+      ...defaultRowFilters,
+      'articleId',
+      'conflictFlag',
+      'llmHasJudgment',
+      'llmStatus',
+      'promptAnswer',
+      'providerRefusalFlag',
+    ],
     key: 'review.llm.rowsByArticleSet',
     listMode: 'llm',
     namedFastCounts: [],
     requiredComponents: llmRowComponents,
   }),
   defineContract({
-    allowedFilters: [...defaultCountFilters, 'llmHasJudgment', 'llmStatus', 'promptAnswer', 'searchTokenPrefix'],
+    allowedFilters: [
+      ...defaultCountFilters,
+      'llmHasJudgment',
+      'llmStatus',
+      'promptAnswer',
+      'providerRefusalFlag',
+      'searchTokenPrefix',
+    ],
     cursorFields: [],
     freshnessBehavior: 'requireReadySnapshot',
     key: 'review.llm.count',

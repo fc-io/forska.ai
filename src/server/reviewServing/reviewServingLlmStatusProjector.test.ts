@@ -585,6 +585,108 @@ test('LLM judgment delta lookup matches claim watermark ranges through one claim
   expect(selectStatement).not.toContain('OR (delta.source_partition')
 })
 
+test('refused unanswered prompts get their own status key and answered or tombstoned prompts never count as refused', async () => {
+  const unanswered = {answeredOriginal: null, answeredOriginalAsArray: null, isAnswered: null}
+  const {database, statements} = createLlmStatusDatabase({
+    promptConfigRows: [
+      promptConfigRow(),
+      promptConfigRow({promptId: 'prompt-2', promptTextHash: 'prompt-text-2'}),
+      promptConfigRow({promptId: 'prompt-3', promptTextHash: 'prompt-text-3'}),
+      promptConfigRow({promptId: 'prompt-4', promptTextHash: 'prompt-text-4'}),
+    ],
+    scopedArticleRows: [
+      llmStatusRow({isRefused: true, promptId: 'prompt-1'}),
+      llmStatusRow({...unanswered, isRefused: true, promptId: 'prompt-2', promptTextHash: 'prompt-text-2'}),
+      llmStatusRow({...unanswered, isRefused: false, promptId: 'prompt-3', promptTextHash: 'prompt-text-3'}),
+      llmStatusRow({
+        ...unanswered,
+        isRefused: true,
+        promptId: 'prompt-4',
+        promptTextHash: 'prompt-text-4',
+        tombstone: true,
+      }),
+    ],
+  })
+
+  await projectReviewServingLlmStatusPatches(projectInput([llmClaim()]), database)
+
+  const updateStatement =
+    statements.find((statement) => {
+      return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+    }) ?? ''
+  const articleSelect =
+    statements.find((statement) => {
+      return statement.includes('FROM article_id_filter dirty')
+    }) ?? ''
+
+  expect(
+    decodeReviewServingJsonRows(updateStatement).map((row) => {
+      return [row.prompt_id, row.llm_status_key]
+    }),
+  ).toEqual([
+    ['prompt-1', 'answered'],
+    ['prompt-2', 'refused'],
+    ['prompt-3', 'unanswered'],
+    ['prompt-4', null],
+  ])
+  expect(updateStatement).toContain("WHERE NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'refused'")
+  expect(updateStatement).toContain('llm_refused_prompt_count = article_status.llm_refused_prompt_count')
+  expect(updateStatement).toContain("latest_prompt.llm_status_key = 'answered'), FALSE) AS llm_has_judgment")
+  expect(articleSelect).toContain('refusal.article_id IS NOT NULL AS isRefused')
+  expect(articleSelect).toContain('LEFT JOIN app.judgment_refusal refusal')
+  expect(articleSelect).toContain('refusal.article_id = dirty.article_id')
+  expect(articleSelect).toContain('refusal.prompt_id = prompt.id')
+  expect(articleSelect).toContain('refusal.model_id = project.model_id')
+  expect(articleSelect).toContain('refusal.use_fulltext_no_images = project.use_fulltext_no_images')
+  expect(articleSelect).toContain("refusal.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')")
+  expect(articleSelect).toContain('refusal.use_metadata = COALESCE(project.use_metadata, FALSE)')
+  expect(articleSelect).toContain("refusal.full_text_strategy_id = COALESCE(project.full_text_strategy_id, 'fts-none')")
+})
+
+test('LLM judgment deltas match refusals by the delta identity', async () => {
+  const {database, statements} = createLlmStatusDatabase({judgmentRows: [llmStatusRow()]})
+
+  await projectReviewServingLlmStatusPatches(projectInput([llmClaim()]), database)
+
+  const selectStatement =
+    statements.find((statement) => {
+      return statement.includes('FROM app.review_change_delta delta')
+    }) ?? ''
+
+  expect(selectStatement).toContain('refusal.article_id IS NOT NULL AS isRefused')
+  expect(selectStatement).toContain('refusal.article_id = delta.article_id')
+  expect(selectStatement).toContain('refusal.prompt_id = delta.prompt_id')
+  expect(selectStatement).toContain('refusal.model_id = delta.model_id')
+  expect(selectStatement).toContain('refusal.use_fulltext_no_images = delta.use_fulltext_no_images')
+  expect(selectStatement).toContain("refusal.system_prompt_variant = COALESCE(delta.system_prompt_variant, 'legacy')")
+  expect(selectStatement).toContain('refusal.use_metadata = COALESCE(delta.use_metadata, FALSE)')
+  expect(selectStatement).toContain(
+    "refusal.full_text_strategy_id = COALESCE(delta.full_text_strategy_id, CASE WHEN COALESCE(delta.use_fulltext, FALSE) OR COALESCE(delta.use_fulltext_no_images, FALSE) THEN 'fts-legacy-v0' ELSE 'fts-none' END)",
+  )
+})
+
+test('LLM range rebuilds write the refused prompt count from refusals under the project identity', async () => {
+  const {database, statements} = createLlmStatusDatabase()
+
+  await projectReviewServingLlmStatusRanges(
+    {ranges: [{...projectInput([]), chunkEndArticleId: 'article-050', chunkStartArticleId: 'article-001'}]},
+    database,
+  )
+
+  const replacementStatement =
+    statements.find((statement) => {
+      return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+    }) ?? ''
+
+  expect(replacementStatement).toContain('LEFT JOIN app.judgment_refusal refusal')
+  expect(replacementStatement).toContain('refusal.article_id = serving.article_id')
+  expect(replacementStatement).toContain('refusal.prompt_id = prompt.id')
+  expect(replacementStatement).toContain(
+    'WHERE refusal.article_id IS NOT NULL AND latest_judgment.is_answered IS NOT TRUE',
+  )
+  expect(replacementStatement).toContain('llm_refused_prompt_count = article_status.llm_refused_prompt_count')
+})
+
 const getProjectedReviewConfigHashes = async (rowInput: Record<string, unknown>) => {
   const {database, statements} = createLlmStatusDatabase({judgmentRows: [llmStatusRow(rowInput)]})
 

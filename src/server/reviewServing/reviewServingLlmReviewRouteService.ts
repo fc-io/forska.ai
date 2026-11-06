@@ -59,6 +59,7 @@ type ReviewServingArticleRow = {
   journal_title?: string | null
   journalTitle?: string | null
   llm_has_judgment?: boolean | null
+  llm_refused_prompt_count?: unknown
   llm_status?: string | null
   llmHasJudgment?: boolean | null
   llmStatus?: string | null
@@ -205,13 +206,15 @@ const getPromptAnswerFilterGroups = (prompts: Record<string, string[]> | undefin
 const getRouteFilters = (params: ArticlesReviewsParams) => {
   const promptAnswer = getPromptAnswerFilters(params.prompts)
   const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
-  const shouldRequireLlmJudgment = !params.llmStatus || params.llmStatus === 'both' || params.llmStatus === 'partial'
+  const shouldRequireLlmJudgment =
+    !params.hasProviderRefusal && (!params.llmStatus || params.llmStatus === 'both' || params.llmStatus === 'partial')
 
   return {
     ...(params.from ? {articleCreatedAtFrom: params.from} : {}),
     ...(params.to ? {articleCreatedAtTo: params.to} : {}),
     ...(params.hasDuplicateStudyRecords ? {duplicateFlag: 'true'} : {}),
     ...(params.hasStudyDecisionConflict ? {conflictFlag: 'true'} : {}),
+    ...(params.hasProviderRefusal ? {providerRefusalFlag: 'true'} : {}),
     ...(shouldRequireLlmJudgment ? {llmHasJudgment: true} : {}),
     ...(params.llmStatus ? {llmStatus: params.llmStatus} : {}),
     ...(promptAnswer.length > 0 ? {promptAnswer} : {}),
@@ -299,6 +302,7 @@ const getFlagPostingFilterGroups = (filters: ReturnType<typeof getRouteFilters>)
   return [
     {filterKind: 'duplicateFlag', enabled: Boolean(filters.duplicateFlag)},
     {filterKind: 'conflictFlag', enabled: Boolean(filters.conflictFlag)},
+    {filterKind: 'providerRefusalFlag', enabled: Boolean(filters.providerRefusalFlag)},
   ]
     .filter((filter) => {
       return filter.enabled
@@ -633,6 +637,16 @@ const getHasLlmJudgment = (row: ReviewServingArticleRow, judgedPromptIds: readon
   return row.llm_has_judgment ?? row.llmHasJudgment ?? judgedPromptIds.length > 0
 }
 
+const getLlmRefusedPromptCount = (row: ReviewServingArticleRow) => {
+  const count = row.llm_refused_prompt_count
+
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+    throw new Error(`review.llm.rows returned no valid llm_refused_prompt_count for article ${getArticleId(row)}`)
+  }
+
+  return count
+}
+
 const getResponseRows = (
   rows: readonly ReviewServingArticleRow[],
   judgmentRows: readonly ReviewServingJudgmentRow[],
@@ -675,6 +689,7 @@ const getResponseRows = (
       judgedPromptIds,
       isFullyJudged: getIsFullyJudged(row, judgedPromptIds, enabledPromptCount),
       hasLlmJudgment: getHasLlmJudgment(row, judgedPromptIds),
+      llmRefusedPromptCount: getLlmRefusedPromptCount(row),
     }
   })
 }

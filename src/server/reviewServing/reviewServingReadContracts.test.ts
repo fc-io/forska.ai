@@ -197,6 +197,7 @@ test('direct ordered row contracts advertise only migrated route filters', () =>
         'llmHasJudgment',
         'llmStatus',
         'promptAnswer',
+        'providerRefusalFlag',
       ],
       ['search'],
       'tokenPrefix',
@@ -703,6 +704,7 @@ test('filtered row routes have article-set hydration contracts', () => {
         'llmHasJudgment',
         'llmStatus',
         'promptAnswer',
+        'providerRefusalFlag',
       ],
     ],
     [

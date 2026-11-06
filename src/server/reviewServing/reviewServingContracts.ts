@@ -192,6 +192,7 @@ export const reviewServingFilterKeys = [
   'llmStatus',
   'promptAnswer',
   'promptId',
+  'providerRefusalFlag',
   'publicationYear',
   'queueKind',
   'searchTokenPrefix',

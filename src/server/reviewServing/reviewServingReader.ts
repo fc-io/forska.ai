@@ -513,7 +513,7 @@ const getFlagPostingFilterValue = (value: ReviewServingFilterSignatureValue | un
 }
 
 const isPostingArticleFilterKind = (filterKind: string) => {
-  return !['duplicateFlag', 'conflictFlag', 'llmStatus', 'humanStatus'].includes(filterKind)
+  return !['duplicateFlag', 'conflictFlag', 'providerRefusalFlag', 'llmStatus', 'humanStatus'].includes(filterKind)
 }
 
 const getPromptAnswerValueGroups = (request: ReviewServingReaderRequest) => {
@@ -589,6 +589,12 @@ const getPostingFilterPredicate = (input: {
     return input.filterValues.includes('true') ? `${articleStateSqlAlias}.${columnName} IS TRUE` : ''
   }
 
+  if (input.filterKind === 'providerRefusalFlag') {
+    const articleStateSqlAlias = getReviewServingArticleFilterStateSqlAlias(input.contract)
+
+    return input.filterValues.includes('true') ? `${articleStateSqlAlias}.llm_refused_prompt_count > 0` : ''
+  }
+
   if (input.filterKind === 'llmStatus' || input.filterKind === 'humanStatus') {
     const columnName = input.filterKind === 'llmStatus' ? 'llm_status' : 'human_status'
     const articleStateSqlAlias = getReviewServingArticleFilterStateSqlAlias(input.contract)
@@ -622,6 +628,10 @@ const getPostingFilterGroups = (request: ReviewServingReaderRequest) => {
     ...getPromptAnswerValueGroups(request).map((filterValues) => {
       return {filterKind: 'promptAnswer', filterValues}
     }),
+    {
+      filterKind: 'providerRefusalFlag',
+      filterValues: getFlagPostingFilterValue(filters.providerRefusalFlag) ? ['true'] : [],
+    },
   ]
 }
 

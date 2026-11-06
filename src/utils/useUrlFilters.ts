@@ -3,7 +3,12 @@ import {createEffect, createSignal, on, onMount} from 'solid-js'
 
 import type {LlmStatus} from '../services/olap/olapTypes.ts'
 
-type UseUrlFiltersOptions = {routePath: string; routeParams: Record<string, string>; includeLlmStatus?: boolean}
+type UseUrlFiltersOptions = {
+  routePath: string
+  routeParams: Record<string, string>
+  includeLlmStatus?: boolean
+  includeProviderRefusal?: boolean
+}
 
 type UseUrlFiltersResult = {
   fromDate: () => string
@@ -14,6 +19,8 @@ type UseUrlFiltersResult = {
   setCovidenceDuplicatesOnly: Setter<boolean>
   covidenceConflictsOnly: () => boolean
   setCovidenceConflictsOnly: Setter<boolean>
+  providerRefusalOnly: () => boolean
+  setProviderRefusalOnly: Setter<boolean>
   promptFilters: () => Record<string, string[] | null>
   setPromptFilters: Setter<Record<string, string[] | null>>
   currentPage: () => number
@@ -40,6 +47,7 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
   const [toDate, setToDate] = createSignal('')
   const [covidenceDuplicatesOnly, setCovidenceDuplicatesOnly] = createSignal(false)
   const [covidenceConflictsOnly, setCovidenceConflictsOnly] = createSignal(false)
+  const [providerRefusalOnly, setProviderRefusalOnly] = createSignal(false)
   const [promptFilters, setPromptFilters] = createSignal<Record<string, string[] | null>>({})
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
@@ -61,6 +69,7 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     if (to) setToDate(to)
     setCovidenceDuplicatesOnly(urlParams.get('covidenceDuplicates') === '1')
     setCovidenceConflictsOnly(urlParams.get('covidenceConflicts') === '1')
+    setProviderRefusalOnly(options.includeProviderRefusal === true && urlParams.get('providerRefused') === '1')
 
     // Parse page and limit
     const page = urlParams.get('page')
@@ -112,6 +121,7 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     const search = appliedSearchTitle()
     const duplicatesOnly = covidenceDuplicatesOnly()
     const conflictsOnly = covidenceConflictsOnly()
+    const refusedOnly = providerRefusalOnly()
     const filters = promptFilters()
     const currentLlmStatus = llmStatus()
 
@@ -122,6 +132,7 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     if (search) params.search = search
     if (duplicatesOnly) params.covidenceDuplicates = '1'
     if (conflictsOnly) params.covidenceConflicts = '1'
+    if (options.includeProviderRefusal && refusedOnly) params.providerRefused = '1'
     if (options.includeLlmStatus && currentLlmStatus) params.llmStatus = currentLlmStatus
 
     for (const [promptId, values] of Object.entries(filters)) {
@@ -145,6 +156,7 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
         toDate,
         covidenceDuplicatesOnly,
         covidenceConflictsOnly,
+        providerRefusalOnly,
         currentPage,
         pageLimit,
         appliedSearchTitle,
@@ -177,6 +189,8 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     setCovidenceDuplicatesOnly,
     covidenceConflictsOnly,
     setCovidenceConflictsOnly,
+    providerRefusalOnly,
+    setProviderRefusalOnly,
     promptFilters,
     setPromptFilters,
     currentPage,

@@ -792,6 +792,51 @@ test('readReviewServingRows rejects unsupported filters before DuckDB execution'
   expect(reader.statements).toHaveLength(0)
 })
 
+test('readReviewServingRows filters LLM rows on refused prompts through list-mode state and selects the count', async () => {
+  const reader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {'active-snapshot': getSnapshotRow({snapshotId: 'active-snapshot', status: 'active'})},
+  })
+  const result = await readReviewServingRows(
+    {...readyRequest, filters: {conflictFlag: 'true', providerRefusalFlag: 'true'}},
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+  const sql = reader.statements[0] ?? ''
+
+  expect(result.status).toBe('accepted')
+  expect(sql).toContain('list_mode_state.llm_refused_prompt_count,')
+  expect(sql).toContain('list_mode_state.llm_refused_prompt_count > 0')
+  expect(sql).toContain('list_mode_state.conflict_flag IS TRUE')
+  expect(sql).not.toContain("filter_kind = 'providerRefusalFlag'")
+  expect(sql).not.toContain('FROM mart.review_article_filter_posting_serving_v4')
+})
+
+test('readReviewServingRows keeps the refused prompt count out of non-LLM rows and rejects the refusal filter there', async () => {
+  const reader = createReaderDatabase()
+  const manifestDatabase = createManifestDatabase({
+    bySnapshot: {
+      'active-snapshot': getSnapshotRow({
+        components: hydratedListComponents,
+        snapshotId: 'active-snapshot',
+        status: 'active',
+      }),
+    },
+  })
+  const humanRows = await readReviewServingRows(
+    {...readyRequest, contractKey: 'review.human.rows'},
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+  const humanRefusalRows = await readReviewServingRows(
+    {...readyRequest, contractKey: 'review.human.rows', filters: {providerRefusalFlag: 'true'}},
+    {database: reader.database, diagnosticsDatabase: manifestDatabase, manifestDatabase},
+  )
+
+  expect(humanRows.status).toBe('accepted')
+  expect(reader.statements).toHaveLength(1)
+  expect(reader.statements[0]).not.toContain('llm_refused_prompt_count')
+  expect(humanRefusalRows).toMatchObject({reason: 'unsupportedFilterKey', status: 'rejected'})
+})
+
 test('readReviewServingRows requires supported count state before count SQL execution', async () => {
   const reader = createReaderDatabase([{value: 12}])
   const manifestDatabase = createManifestDatabase({

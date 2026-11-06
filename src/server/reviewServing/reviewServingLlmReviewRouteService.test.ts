@@ -189,6 +189,7 @@ const createArticleRows = (articleCount: number) => {
       full_text_conversion_status: 'converted',
       full_text_fetched_at: '2026-01-04T00:00:00.000Z',
       journal_title: 'Journal',
+      llm_refused_prompt_count: 0,
       pmid: `1234${articleNumber}`,
       sort_key: `2026-01-01T00:00:00.${String(index).padStart(3, '0')}Z`,
       source_metadata: JSON.stringify({covidence: {studyId: `study-${articleNumber}`}}),
@@ -1010,4 +1011,93 @@ test('migrated LLM review routes do not import OLAP fallback wrappers', async ()
   expect(listRoute).not.toContain('queryArticlesReviewsFromOlap')
   expect(countRoute).not.toContain('articlesReviewsOlap')
   expect(countRoute).not.toContain('countArticlesReviewsFromOlap')
+})
+
+test('LLM provider-refusal list and count filter on refused prompts without requiring an LLM answer', async () => {
+  const articleRows = createArticleRows(2).map((row, index) => {
+    return {...row, llm_has_judgment: index === 0, llm_refused_prompt_count: index + 1, llm_status: 'unanswered'}
+  })
+  const reader = createReaderDatabase(2, 2, 2, {articleRows, judgmentRows: []})
+  const result = await getLlmReviewArticlesFromServing(
+    {hasProviderRefusal: true, projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const rowsStatement =
+    reader.statements.find((statement) => {
+      return hasArticleServingRowSource(statement) && statement.includes('ORDER BY')
+    }) ?? ''
+  const countStatement =
+    reader.statements.find((statement) => {
+      return statement.includes('SELECT COUNT(DISTINCT filtered_article_ids.article_id) AS totalCount')
+    }) ?? ''
+
+  expect(
+    result.data.map((row) => {
+      return [row.id, row.llmRefusedPromptCount, row.hasLlmJudgment]
+    }),
+  ).toEqual([
+    ['article-1', 1, true],
+    ['article-2', 2, false],
+  ])
+  expect(result.totalCount).toBe(2)
+  expect(rowsStatement).toContain('list_mode_state.llm_refused_prompt_count')
+  expect(rowsStatement).toContain('list_mode_state.llm_refused_prompt_count > 0')
+  expect(rowsStatement).not.toContain('list_mode_state.llm_has_judgment IS TRUE')
+  expect(countStatement).toContain('list_mode_state.llm_refused_prompt_count > 0')
+  expect(countStatement).not.toContain('list_mode_state.llm_has_judgment IS TRUE')
+})
+
+test('LLM provider-refusal filter keeps the selected LLM status and the default list keeps requiring an LLM answer', async () => {
+  const refusedReader = createReaderDatabase()
+  const defaultReader = createReaderDatabase()
+  const dependencies = {currentReviewConfigHash: 'config-1', manifestDatabase: createManifestDatabase('active')}
+
+  await countLlmReviewArticlesFromServing(
+    {hasProviderRefusal: true, llmStatus: 'partial', projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {...dependencies, database: refusedReader.database},
+  )
+  await countLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {...dependencies, database: defaultReader.database},
+  )
+
+  const refusedCountSql = refusedReader.statements.join('\n')
+  const defaultCountSql = defaultReader.statements.join('\n')
+
+  expect(refusedCountSql).toContain('list_mode_state.llm_refused_prompt_count > 0')
+  expect(refusedCountSql).toContain("list_mode_state.llm_status IN (SELECT unnest(['unanswered']::VARCHAR[]))")
+  expect(refusedCountSql).not.toContain('list_mode_state.llm_has_judgment IS TRUE')
+  expect(defaultCountSql).toContain('list_mode_state.llm_has_judgment IS TRUE')
+  expect(defaultCountSql).not.toContain('llm_refused_prompt_count > 0')
+})
+
+test('LLM review rows reject a serving row without a refused prompt count', async () => {
+  const articleRows = createArticleRows(1).map((row) => {
+    return {...row, llm_refused_prompt_count: null}
+  })
+  const reader = createReaderDatabase(1, 1, 1, {articleRows})
+
+  await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  ).then(
+    () => {
+      throw new Error('Expected a missing refused prompt count to be rejected')
+    },
+    (error) => {
+      expect(error).toEqual(
+        expect.objectContaining({
+          message: 'review.llm.rows returned no valid llm_refused_prompt_count for article article-1',
+        }),
+      )
+    },
+  )
 })

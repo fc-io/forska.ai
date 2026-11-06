@@ -16,6 +16,7 @@ describe('createArticlesReviewsCountQueryOptions', () => {
     pageLimit: accessor(100),
     projectId: 'project-1',
     promptFilters: accessor({} as Record<string, string[] | null>),
+    providerRefusalOnly: accessor(false),
     searchTitleApplied: accessor(''),
     toDateStr: accessor(''),
   }
@@ -30,6 +31,7 @@ describe('createArticlesReviewsCountQueryOptions', () => {
       props.projectId,
       props.covidenceDuplicatesOnly,
       props.covidenceConflictsOnly,
+      props.providerRefusalOnly,
       props.promptFilters,
       props.pageLimit,
       props.fromDateStr,
