@@ -29,7 +29,12 @@ import {
   invokeStoredProviderModel,
   type StoredProviderInvocationContext,
 } from '../server/providers/providerInvocationService.ts'
-import {ProviderInvocationError, type ProviderInvokeImage} from '../server/providers/providerTypes.ts'
+import {
+  ProviderInvocationError,
+  type ProviderInvokeImage,
+  type ProviderUsageSnapshot,
+} from '../server/providers/providerTypes.ts'
+import {getEmptyProviderUsageSnapshot} from '../server/providers/providerUsageService.ts'
 import {inferenceRuntimeConfig} from '../server/utils/getInferenceRuntimeConfig.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {FULL_TEXT_STRATEGY_NONE, type FullTextChunkPolicy} from '../utils/fullTextStrategyOptions.ts'
@@ -390,6 +395,8 @@ const storeTokenUseAndThrowConnectionError = async ({
   promptIds,
   modelId,
   modelName,
+  providerConnectionId,
+  providerKind,
   baseURL,
   systemPrompt,
   userPrompt,
@@ -409,6 +416,8 @@ const storeTokenUseAndThrowConnectionError = async ({
   promptIds: string[]
   modelId: string
   modelName: string
+  providerConnectionId: string | null
+  providerKind: string | null
   baseURL: string
   systemPrompt: string
   userPrompt: string
@@ -431,10 +440,15 @@ const storeTokenUseAndThrowConnectionError = async ({
           queueRecordId: queueRecordId ?? null,
           modelId,
           modelName,
+          providerConnectionId,
+          providerKind,
           baseURL,
           promptTokens: 0,
           completionTokens: 0,
           totalTokens: 0,
+          cacheCreationInputTokens: null,
+          cacheReadInputTokens: null,
+          thinkingTokens: null,
           outcome: 'failure' as const,
           error: `Connection error: ${failure.message}`,
           sanitizationAttempted: false,
@@ -473,7 +487,7 @@ type SinglePromptInput = {
 type GeneratedPromptResponse = {
   stopReason?: string | null
   text: string
-  usage: {promptTokens: number; completionTokens: number; totalTokens: number}
+  usage: ProviderUsageSnapshot
   baseURL: string
   providerKey: string
   requestAttemptId: string
@@ -649,9 +663,7 @@ const getProviderInvocationDiagnostics = (error: unknown): unknown => {
   return error instanceof ProviderInvocationError ? error.diagnostics : null
 }
 
-const getProviderInvocationUsage = (
-  error: unknown,
-): {completionTokens: number; promptTokens: number; totalTokens: number} | null => {
+const getProviderInvocationUsage = (error: unknown): ProviderUsageSnapshot | null => {
   return error instanceof ProviderInvocationError ? error.usage : null
 }
 
@@ -1236,7 +1248,17 @@ const getTokenUseBase = (context: JudgeCallContext) => {
     modelId: context.modelConfig.modelId,
     modelName: context.modelConfig.modelName,
     promptIds: context.promptIds,
+    providerConnectionId: context.modelConfig.providerConnectionId,
+    providerKind: context.modelConfig.provider,
     queueRecordId: context.queueRecordId,
+  }
+}
+
+const getTokenUseBreakdown = (usage: ProviderUsageSnapshot) => {
+  return {
+    cacheCreationInputTokens: usage.cacheCreationInputTokens,
+    cacheReadInputTokens: usage.cacheReadInputTokens,
+    thinkingTokens: usage.thinkingTokens,
   }
 }
 
@@ -1272,6 +1294,7 @@ const pushResponseTokenUse = ({
     promptTokens: response.usage.promptTokens,
     completionTokens: response.usage.completionTokens,
     totalTokens: response.usage.totalTokens,
+    ...getTokenUseBreakdown(response.usage),
     outcome: error === null ? 'success' : 'failure',
     error,
     sanitizationAttempted: false,
@@ -1376,8 +1399,7 @@ const getNextJudgeCallStateAfterError = <T>({
   const failureCode = getProviderInvocationFailureCode(error)
   const recoverableJudgeError = getRecoverableJudgeError({adjustedErrorMessage, error})
   const requestBaseURL = getRequestBaseURL({baseURL: input.context.modelConfig.baseURL, currentResponse, error})
-  const usage = currentResponse?.usage
-    ?? getProviderInvocationUsage(error) ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
+  const usage = currentResponse?.usage ?? getProviderInvocationUsage(error) ?? getEmptyProviderUsageSnapshot()
   const requestAttemptFields = currentResponse
     ? getResponseRequestAttemptFields(currentResponse)
     : getErrorRequestAttemptFields(error)
@@ -1389,6 +1411,7 @@ const getNextJudgeCallStateAfterError = <T>({
     promptTokens: usage.promptTokens,
     completionTokens: usage.completionTokens,
     totalTokens: usage.totalTokens,
+    ...getTokenUseBreakdown(usage),
     outcome: 'failure',
     error: adjustedErrorMessage,
     ...getSanitizationFields(responseText),
@@ -1640,6 +1663,8 @@ const getJudgeOutcome = async <T>(result: JudgeCallResult<T>, run: JudgeRunInput
       queueRecordId: run.context.queueRecordId,
       modelId: run.context.modelConfig.modelId,
       modelName: run.context.modelConfig.modelName,
+      providerConnectionId: run.context.modelConfig.providerConnectionId,
+      providerKind: run.context.modelConfig.provider,
       baseURL: result.baseURL,
       systemPrompt: result.systemPrompt,
       userPrompt: result.userPrompt,

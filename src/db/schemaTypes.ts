@@ -739,6 +739,13 @@ export type TokenUseRecord = {
   totalFailedCompletionTokens: number | null
   totalFailedTokens: number | null
   requestAttemptsJson: unknown
+  cacheCreationInputTokens: number | null
+  cacheReadInputTokens: number | null
+  thinkingTokens: number | null
+  modelId: string | null
+  modelName: string | null
+  providerKind: string | null
+  providerConnectionId: string | null
 }
 
 export type JudgmentAssessmentRecord = {
