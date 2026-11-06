@@ -88,7 +88,13 @@ type ClaudeCodeTokenCounts = {
   thinkingTokens: number
 }
 
-type ClaudeCodeFailureKind = 'not_logged_in' | 'rate_limited' | 'request_failed' | 'transient' | 'usage_limit'
+type ClaudeCodeFailureKind =
+  | 'content_refusal'
+  | 'not_logged_in'
+  | 'rate_limited'
+  | 'request_failed'
+  | 'transient'
+  | 'usage_limit'
 
 type ClaudeCodeInvocationContext = {effort: string | null; modelName: string}
 
@@ -413,7 +419,11 @@ export const getClaudeCodeUsageLimitResetHint = (text: string): string | null =>
       : null
 }
 
-export const classifyClaudeCodeFailure = ({
+export const isClaudeCodeContentRefusalResult = (result: Pick<ClaudeCodeCliResult, 'stop_reason'>): boolean => {
+  return result.stop_reason === 'refusal'
+}
+
+const classifyClaudeCodeErrorText = ({
   apiErrorStatus,
   text,
 }: {
@@ -429,6 +439,20 @@ export const classifyClaudeCodeFailure = ({
         : (apiErrorStatus !== null && apiErrorStatus >= 500) || transientPattern.test(text)
           ? 'transient'
           : 'request_failed'
+}
+
+export const classifyClaudeCodeFailure = ({
+  apiErrorStatus,
+  stopReason,
+  text,
+}: {
+  apiErrorStatus: number | null
+  stopReason: string | null
+  text: string
+}): ClaudeCodeFailureKind => {
+  return isClaudeCodeContentRefusalResult({stop_reason: stopReason})
+    ? 'content_refusal'
+    : classifyClaudeCodeErrorText({apiErrorStatus, text})
 }
 
 const getClaudeCodeStatusLabel = (apiErrorStatus: number | null): string => {
@@ -447,6 +471,7 @@ const getClaudeCodeFailureMessage = ({
   const resetHint = getClaudeCodeUsageLimitResetHint(text)
   const statusLabel = getClaudeCodeStatusLabel(apiErrorStatus)
   const messages: Record<ClaudeCodeFailureKind, string> = {
+    content_refusal: `Claude Code content refusal (stop_reason=refusal)${statusLabel}: ${text}`,
     not_logged_in: `Claude Code authentication failed${statusLabel}: ${text}. Run \`claude\` in a terminal and use /login.`,
     rate_limited: `Claude Code rate limit${statusLabel}: ${text}`,
     request_failed: `Claude Code request failed${statusLabel}: ${text}`,
@@ -458,6 +483,7 @@ const getClaudeCodeFailureMessage = ({
 }
 
 const claudeCodeFailureKindCodes: Record<ClaudeCodeFailureKind, string> = {
+  content_refusal: claudeCodeFailureCodes.contentRefusal,
   not_logged_in: claudeCodeFailureCodes.notLoggedIn,
   rate_limited: claudeCodeFailureCodes.rateLimited,
   request_failed: claudeCodeFailureCodes.requestFailed,
@@ -574,12 +600,14 @@ const getClaudeCodeResultFailure = ({
   const text =
     getTruncatedText(result.result, claudeCodeMessageTextMaxLength)
     || `subtype=${result.subtype ?? 'unknown'} stderr=${getTruncatedText(run.stderr, claudeCodeMessageTextMaxLength)}`
-  const kind = classifyClaudeCodeFailure({apiErrorStatus, text})
+  const kind = classifyClaudeCodeFailure({apiErrorStatus, stopReason: result.stop_reason ?? null, text})
+  const messageText =
+    kind === 'content_refusal' ? getTruncatedText(result.result, claudeCodeLogTextMaxLength) || text : text
 
   return getClaudeCodeInvocationError({
     code: claudeCodeFailureKindCodes[kind],
     context,
-    message: getClaudeCodeFailureMessage({apiErrorStatus, kind, text}),
+    message: getClaudeCodeFailureMessage({apiErrorStatus, kind, text: messageText}),
     result,
     run,
   })
@@ -612,7 +640,7 @@ const getClaudeCodeRunFailure = ({
           result,
           run,
         })
-      : result.is_error === true || result.subtype !== 'success'
+      : result.is_error === true || result.subtype !== 'success' || isClaudeCodeContentRefusalResult(result)
         ? getClaudeCodeResultFailure({context, result, run})
         : null
 }

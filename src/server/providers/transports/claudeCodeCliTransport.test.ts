@@ -10,8 +10,11 @@ import {
   classifyJudgmentJobProviderFailure,
   parseProviderRetryAfterAt,
 } from '../../services/judgmentJobProviderHealthService.ts'
+import {claudeCodeRecoverableFailureCodes} from '../claudeCodeFailureCodes.ts'
+import {isProviderContentRefusalFailureCode} from '../providerContentRefusal.ts'
 import {ProviderInvocationError} from '../providerTypes.ts'
 import {
+  classifyClaudeCodeFailure,
   getClaudeCodeChildEnv,
   getClaudeCodeCliArgs,
   getClaudeCodeCliInput,
@@ -44,6 +47,11 @@ if (scenario === 'not-logged-in') { print({...base, is_error: true, result: 'Not
 if (scenario === 'usage-limit') { print({...base, is_error: true, api_error_status: 429, result: "You've hit your limit · resets 3pm (Europe/Stockholm)"}); process.exit(1) }
 if (scenario === 'overloaded') { print({...base, is_error: true, api_error_status: 529, result: 'API Error: 529 Overloaded'}); process.exit(1) }
 if (scenario === 'schema-failure') { print({...base, subtype: 'error_max_structured_output_retries', is_error: true, result: 'not json at all'}); process.exit(1) }
+const refusalText = "API Error: Opus 5's safeguards flagged this message (https://www.anthropic.com/legal/aup). Our intentionally broad safeguards allow us to deliver more capabilities faster, but can sometimes flag legitimate biology tasks. Claude Code can't respond to this message with Opus 5.\\n\\nTry rephrasing the request in a new session or change your model.\\n\\nLearn more: https://support.claude.com/en/articles/16049681\\n\\nDetails: \`[bio]\`\\n\\nRequest ID: req_011CgmEy98Ur5STyrSmBCgVk\\n\\nMessage ID: msg_011CgmEy9FvsUZRmoEXn5Ldj"
+const refusalUsage = {input_tokens: 4, cache_creation_input_tokens: 6875, cache_read_input_tokens: 7116, output_tokens: 0}
+if (scenario === 'refusal') { print({...base, is_error: true, stop_reason: 'refusal', usage: refusalUsage, result: refusalText}); process.exit(1) }
+if (scenario === 'refusal-empty') { print({...base, stop_reason: 'refusal', usage: refusalUsage, result: ''}); process.exit(0) }
+if (scenario === 'refusal-text-only') { print({...base, is_error: true, stop_reason: 'end_turn', result: refusalText}); process.exit(1) }
 if (scenario === 'non-json') { print('Error: something exploded\\n'); process.exit(2) }
 if (scenario === 'hang') { setTimeout(() => print({...base, result: 'late'}), 30000) }
 `
@@ -386,6 +394,36 @@ describe('invokeClaudeCodeCliModel', () => {
     expect((error as Error).message).toContain('not json at all')
   })
 
+  test('maps a stop_reason=refusal error result to a non-recoverable content refusal with the full reason text', async () => {
+    const error = await getRejection(invoke('refusal'))
+    const message = (error as Error).message
+
+    expect(error).toBeInstanceOf(ProviderInvocationError)
+    expect(error).toMatchObject({code: 'claude_code_content_refusal', providerKind: 'claude-code'})
+    expect(claudeCodeRecoverableFailureCodes).not.toContain('claude_code_content_refusal')
+    expect(isProviderContentRefusalFailureCode((error as ProviderInvocationError).code)).toBe(true)
+    expect(message).toStartWith('Claude Code content refusal (stop_reason=refusal): API Error: Opus 5')
+    expect(message).toContain('Details: `[bio]`')
+    expect(message).toContain('Message ID: msg_011CgmEy9FvsUZRmoEXn5Ldj')
+    expect((error as ProviderInvocationError).usage).toEqual({
+      completionTokens: 0,
+      promptTokens: 13995,
+      totalTokens: 13995,
+    })
+  })
+
+  test('maps stop_reason=refusal to a content refusal even when the CLI does not flag is_error', async () => {
+    const error = await getRejection(invoke('refusal-empty'))
+
+    expect(error).toMatchObject({code: 'claude_code_content_refusal'})
+  })
+
+  test('does not treat refusal prose without stop_reason=refusal as a content refusal', async () => {
+    const error = await getRejection(invoke('refusal-text-only'))
+
+    expect(error).toMatchObject({code: 'claude_code_request_failed'})
+  })
+
   test('maps non-JSON stdout to an invalid-output failure', async () => {
     const error = await getRejection(invoke('non-json'))
 
@@ -492,5 +530,36 @@ describe('getClaudeCodeUsageLimitResetHint', () => {
     )
     expect(getClaudeCodeUsageLimitResetHint('5-hour limit reached ∙ resets 4:30pm')).toBe('resets at 4:30 pm')
     expect(getClaudeCodeUsageLimitResetHint('rate limited')).toBeNull()
+  })
+})
+
+describe('classifyClaudeCodeFailure', () => {
+  test('classifies on stop_reason=refusal first, then on status and text', () => {
+    const refusalText = "API Error: Opus 5's safeguards flagged this message. Details: `[bio]`"
+
+    expect(classifyClaudeCodeFailure({apiErrorStatus: null, stopReason: 'refusal', text: refusalText})).toBe(
+      'content_refusal',
+    )
+    expect(classifyClaudeCodeFailure({apiErrorStatus: 429, stopReason: 'refusal', text: 'hit your limit'})).toBe(
+      'content_refusal',
+    )
+    expect(classifyClaudeCodeFailure({apiErrorStatus: null, stopReason: 'end_turn', text: refusalText})).toBe(
+      'request_failed',
+    )
+    expect(classifyClaudeCodeFailure({apiErrorStatus: null, stopReason: null, text: 'not json at all'})).toBe(
+      'request_failed',
+    )
+    expect(
+      classifyClaudeCodeFailure({apiErrorStatus: 429, stopReason: null, text: "You've hit your limit · resets 3pm"}),
+    ).toBe('usage_limit')
+    expect(classifyClaudeCodeFailure({apiErrorStatus: 429, stopReason: null, text: 'Too many requests'})).toBe(
+      'rate_limited',
+    )
+    expect(classifyClaudeCodeFailure({apiErrorStatus: 529, stopReason: null, text: 'API Error: 529 Overloaded'})).toBe(
+      'transient',
+    )
+    expect(classifyClaudeCodeFailure({apiErrorStatus: 401, stopReason: null, text: 'Not logged in'})).toBe(
+      'not_logged_in',
+    )
   })
 })

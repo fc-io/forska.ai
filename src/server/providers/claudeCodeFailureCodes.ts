@@ -1,5 +1,6 @@
 export const claudeCodeFailureCodes = {
   cliUnavailable: 'claude_code_cli_unavailable',
+  contentRefusal: 'claude_code_content_refusal',
   emptyResponse: 'claude_code_empty_response',
   invalidOutput: 'claude_code_invalid_output',
   notLoggedIn: 'claude_code_not_logged_in',
