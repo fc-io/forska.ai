@@ -3,15 +3,25 @@ import {getProviderRegistryEntry} from './providerRegistry.ts'
 import {type ProviderUsageSnapshot} from './providerTypes.ts'
 
 export const getEmptyProviderUsageSnapshot = (): ProviderUsageSnapshot => {
-  return {completionTokens: 0, promptTokens: 0, totalTokens: 0}
+  return {
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null,
+    completionTokens: 0,
+    promptTokens: 0,
+    thinkingTokens: null,
+    totalTokens: 0,
+  }
 }
 
 const getNormalizedProviderUsageSnapshot = (
   usage: Partial<ProviderUsageSnapshot> | null | undefined,
 ): ProviderUsageSnapshot => {
   return {
+    cacheCreationInputTokens: usage?.cacheCreationInputTokens ?? null,
+    cacheReadInputTokens: usage?.cacheReadInputTokens ?? null,
     completionTokens: usage?.completionTokens ?? 0,
     promptTokens: usage?.promptTokens ?? 0,
+    thinkingTokens: usage?.thinkingTokens ?? null,
     totalTokens: usage?.totalTokens ?? 0,
   }
 }

@@ -92,7 +92,17 @@ test('invokeCodexAppModel maps Codex token usage into provider usage', async () 
     version: 'medium',
   })
 
-  expect(result).toEqual({text: 'codex-response', usage: {completionTokens: 35, promptTokens: 120, totalTokens: 155}})
+  expect(result).toEqual({
+    text: 'codex-response',
+    usage: {
+      cacheCreationInputTokens: null,
+      cacheReadInputTokens: 20,
+      completionTokens: 35,
+      promptTokens: 120,
+      thinkingTokens: 5,
+      totalTokens: 155,
+    },
+  })
 })
 
 test('invokeCodexAppModel forwards admission fencing abort signals to the app-server turn', async () => {
@@ -281,7 +291,14 @@ test('getProviderUsageFromCodexThreadTokenUsage falls back to output totals when
     total: {cachedInputTokens: 0, inputTokens: 0, outputTokens: 11, reasoningOutputTokens: 7, totalTokens: 0},
   })
 
-  expect(result).toEqual({completionTokens: 18, promptTokens: 0, totalTokens: 0})
+  expect(result).toEqual({
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: 0,
+    completionTokens: 18,
+    promptTokens: 0,
+    thinkingTokens: 7,
+    totalTokens: 0,
+  })
 })
 
 test('invokeCodexAppModel sends text-only prompts with exactly the previous turn parameters', async () => {
@@ -335,4 +352,17 @@ test('invokeCodexAppModel flattens image parts and passes them as data URLs afte
     inputText: 'system\n\nArticle\n\n[figure:1]',
   })
   expect(getProviderImageDataUrl(flattenFigureImage(transparent))).not.toBe(getProviderImageDataUrl(transparent))
+})
+
+test('getProviderUsageFromCodexThreadTokenUsage reports no breakdown when Codex sent no usage', async () => {
+  const {getProviderUsageFromCodexThreadTokenUsage} = await loadTransport()
+
+  expect(getProviderUsageFromCodexThreadTokenUsage(null)).toEqual({
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null,
+    completionTokens: 0,
+    promptTokens: 0,
+    thinkingTokens: null,
+    totalTokens: 0,
+  })
 })

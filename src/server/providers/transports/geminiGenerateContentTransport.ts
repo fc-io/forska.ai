@@ -1,6 +1,39 @@
 import {getProviderImageBase64, getProviderPromptParts, getProviderTransportImages} from '../providerImageInput.ts'
-import {type ProviderInvocationResult, type ProviderInvokePrompt, type ProviderListedModel} from '../providerTypes.ts'
-import {getRequiredApiKey, getRequiredBaseURL, getTrimmedValue} from './providerTransportUtils.ts'
+import {
+  type ProviderInvocationResult,
+  type ProviderInvokePrompt,
+  type ProviderListedModel,
+  type ProviderUsageSnapshot,
+} from '../providerTypes.ts'
+import {
+  getReportedTokenCountOrNull,
+  getRequiredApiKey,
+  getRequiredBaseURL,
+  getTrimmedValue,
+} from './providerTransportUtils.ts'
+
+type GeminiUsageMetadata = {
+  cachedContentTokenCount?: number
+  candidatesTokenCount?: number
+  promptTokenCount?: number
+  thoughtsTokenCount?: number
+  totalTokenCount?: number
+}
+
+export const getGeminiUsage = (usageMetadata: GeminiUsageMetadata | undefined): ProviderUsageSnapshot => {
+  const promptTokens = usageMetadata?.promptTokenCount ?? 0
+  const thinkingTokens = getReportedTokenCountOrNull(usageMetadata?.thoughtsTokenCount)
+  const completionTokens = (usageMetadata?.candidatesTokenCount ?? 0) + (thinkingTokens ?? 0)
+
+  return {
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: getReportedTokenCountOrNull(usageMetadata?.cachedContentTokenCount),
+    completionTokens,
+    promptTokens,
+    thinkingTokens,
+    totalTokens: usageMetadata?.totalTokenCount ?? promptTokens + completionTokens,
+  }
+}
 
 const getGoogleModelName = (modelName: string): string => {
   return modelName.startsWith('models/') ? modelName : `models/${modelName}`
@@ -120,7 +153,7 @@ export const invokeGeminiGenerateContentModel = async ({
 
   const body = (await response.json()) as {
     candidates?: Array<{content?: {parts?: Array<{text?: string}>}}>
-    usageMetadata?: {candidatesTokenCount?: number; promptTokenCount?: number; totalTokenCount?: number}
+    usageMetadata?: GeminiUsageMetadata
   }
   const text =
     body.candidates?.[0]?.content?.parts
@@ -128,9 +161,5 @@ export const invokeGeminiGenerateContentModel = async ({
         return String(part.text ?? '')
       })
       .join('\n') ?? ''
-  const promptTokens = body.usageMetadata?.promptTokenCount ?? 0
-  const completionTokens = body.usageMetadata?.candidatesTokenCount ?? 0
-  const totalTokens = body.usageMetadata?.totalTokenCount ?? promptTokens + completionTokens
-
-  return {text, usage: {completionTokens, promptTokens, totalTokens}}
+  return {text, usage: getGeminiUsage(body.usageMetadata)}
 }

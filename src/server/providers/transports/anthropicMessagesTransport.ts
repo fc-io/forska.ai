@@ -6,6 +6,7 @@ import {
   type ProviderInvocationResult,
   type ProviderInvokePrompt,
   type ProviderListedModel,
+  type ProviderUsageSnapshot,
 } from '../providerTypes.ts'
 import {
   getAnthropicJsonSchemaOutputConfig,
@@ -22,16 +23,57 @@ const anthropicThinkingOnlyEmptyResponseFailureCode = 'anthropic_thinking_only_e
 type AnthropicErrorResponse = {error?: {message?: string; type?: string}; request_id?: string}
 type AnthropicContentBlock = {text?: string; type?: string; [key: string]: unknown}
 type AnthropicMessage = {content: AnthropicContentBlock[] | string; role: 'assistant' | 'user'}
+type AnthropicMessageUsage = {
+  cache_creation_input_tokens?: number | null
+  cache_read_input_tokens?: number | null
+  input_tokens?: number
+  output_tokens?: number
+  output_tokens_details?: {thinking_tokens?: number | null} | null
+}
 type AnthropicMessageResponseBody = {
   content?: AnthropicContentBlock[]
   stop_reason?: string | null
-  usage?: {input_tokens?: number; output_tokens?: number}
+  usage?: AnthropicMessageUsage
 }
 type AnthropicInvocationRunResult = {
   content: AnthropicContentBlock[]
   stopReason: string | null
   text: string
-  usage: {completionTokens: number; promptTokens: number; totalTokens: number}
+  usage: ProviderUsageSnapshot
+}
+
+const emptyAnthropicUsage: ProviderUsageSnapshot = {
+  cacheCreationInputTokens: null,
+  cacheReadInputTokens: null,
+  completionTokens: 0,
+  promptTokens: 0,
+  thinkingTokens: null,
+  totalTokens: 0,
+}
+
+const addReportedTokenCount = (total: number | null, value: unknown): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? (total ?? 0) + value : total
+}
+
+export const addAnthropicMessageUsage = (
+  total: ProviderUsageSnapshot,
+  usage: AnthropicMessageUsage | undefined,
+): ProviderUsageSnapshot => {
+  const promptTokens =
+    total.promptTokens
+    + (usage?.input_tokens ?? 0)
+    + (usage?.cache_creation_input_tokens ?? 0)
+    + (usage?.cache_read_input_tokens ?? 0)
+  const completionTokens = total.completionTokens + (usage?.output_tokens ?? 0)
+
+  return {
+    cacheCreationInputTokens: addReportedTokenCount(total.cacheCreationInputTokens, usage?.cache_creation_input_tokens),
+    cacheReadInputTokens: addReportedTokenCount(total.cacheReadInputTokens, usage?.cache_read_input_tokens),
+    completionTokens,
+    promptTokens,
+    thinkingTokens: addReportedTokenCount(total.thinkingTokens, usage?.output_tokens_details?.thinking_tokens),
+    totalTokens: promptTokens + completionTokens,
+  }
 }
 
 const getAnthropicHeaders = (apiKey: string): HeadersInit => {
@@ -153,8 +195,7 @@ const invokeAnthropicMessagesRun = async ({
   thinkingVersion: string | null
 }): Promise<AnthropicInvocationRunResult> => {
   const messages: AnthropicMessage[] = [{content: getAnthropicUserContent(prompt), role: 'user'}]
-  let completionTokens = 0
-  let promptTokens = 0
+  let usage = emptyAnthropicUsage
   let text = ''
   let pauseTurns = 0
 
@@ -185,17 +226,11 @@ const invokeAnthropicMessagesRun = async ({
     const responseText = getAnthropicResponseText(content)
     const stopReason = body.stop_reason ?? null
 
-    promptTokens += body.usage?.input_tokens ?? 0
-    completionTokens += body.usage?.output_tokens ?? 0
+    usage = addAnthropicMessageUsage(usage, body.usage)
     text += responseText
 
     if (stopReason !== 'pause_turn') {
-      return {
-        content,
-        stopReason,
-        text,
-        usage: {completionTokens, promptTokens, totalTokens: promptTokens + completionTokens},
-      }
+      return {content, stopReason, text, usage}
     }
 
     messages.push({content, role: 'assistant'})

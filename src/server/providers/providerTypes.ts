@@ -158,7 +158,14 @@ export type ProviderListedModel = {
   version: string | null
 }
 
-export type ProviderUsageSnapshot = {completionTokens: number; promptTokens: number; totalTokens: number}
+export type ProviderUsageSnapshot = {
+  cacheCreationInputTokens: number | null
+  cacheReadInputTokens: number | null
+  completionTokens: number
+  promptTokens: number
+  thinkingTokens: number | null
+  totalTokens: number
+}
 
 export type ProviderInvocationDiagnostics = Record<string, unknown>
 

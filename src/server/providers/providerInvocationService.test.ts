@@ -41,7 +41,17 @@ const resolveAdapterRuntimeCredentials = mock(async ({connection}: {connection: 
   return {apiKey: null, baseURL: connection.baseURL, headers: {}, secretRef: connection.secretRef}
 })
 const invoke = mock(async () => {
-  return {text: '{}', usage: {completionTokens: 2, promptTokens: 1, totalTokens: 3}}
+  return {
+    text: '{}',
+    usage: {
+      cacheCreationInputTokens: null,
+      cacheReadInputTokens: null,
+      completionTokens: 2,
+      promptTokens: 1,
+      thinkingTokens: null,
+      totalTokens: 3,
+    },
+  }
 })
 const requireProviderRegistryEntry = mock((_providerKind: string) => {
   return {
@@ -127,7 +137,17 @@ test('stored provider invocation can use supplied context without repository loo
     temperature: 0.2,
   })
 
-  expect(result).toEqual({text: '{}', usage: {completionTokens: 2, promptTokens: 1, totalTokens: 3}})
+  expect(result).toEqual({
+    text: '{}',
+    usage: {
+      cacheCreationInputTokens: null,
+      cacheReadInputTokens: null,
+      completionTokens: 2,
+      promptTokens: 1,
+      thinkingTokens: null,
+      totalTokens: 3,
+    },
+  })
   expect(getProviderConnectionForStoredModel).not.toHaveBeenCalled()
   expect(getProviderModels).not.toHaveBeenCalled()
   expect(requireProviderRegistryEntry).toHaveBeenCalledWith('codex')

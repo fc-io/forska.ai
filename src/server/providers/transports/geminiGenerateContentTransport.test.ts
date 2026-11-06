@@ -1,6 +1,6 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
-import {invokeGeminiGenerateContentModel} from './geminiGenerateContentTransport.ts'
+import {getGeminiUsage, invokeGeminiGenerateContentModel} from './geminiGenerateContentTransport.ts'
 
 const originalFetch = globalThis.fetch
 const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) => {
@@ -59,4 +59,32 @@ test('keeps text-only prompts as one text part', async () => {
   })
 
   expect(getRequestBody()).toMatchObject({contents: [{parts: [{text: 'Hello'}], role: 'user'}]})
+})
+
+test('counts Gemini thoughts as completion tokens and maps cached content', () => {
+  expect(
+    getGeminiUsage({
+      cachedContentTokenCount: 400,
+      candidatesTokenCount: 30,
+      promptTokenCount: 500,
+      thoughtsTokenCount: 70,
+      totalTokenCount: 600,
+    }),
+  ).toEqual({
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: 400,
+    completionTokens: 100,
+    promptTokens: 500,
+    thinkingTokens: 70,
+    totalTokens: 600,
+  })
+  expect(getGeminiUsage({candidatesTokenCount: 3, promptTokenCount: 5})).toEqual({
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null,
+    completionTokens: 3,
+    promptTokens: 5,
+    thinkingTokens: null,
+    totalTokens: 8,
+  })
+  expect(getGeminiUsage(undefined).thinkingTokens).toBeNull()
 })

@@ -1,8 +1,14 @@
 import {getProviderImageDataUrl, getProviderPromptParts, getProviderTransportImages} from '../providerImageInput.ts'
-import {type ProviderInvocationResult, type ProviderInvokePrompt, type ProviderListedModel} from '../providerTypes.ts'
+import {
+  type ProviderInvocationResult,
+  type ProviderInvokePrompt,
+  type ProviderListedModel,
+  type ProviderUsageSnapshot,
+} from '../providerTypes.ts'
 import {
   getJsonSchemaTextFormat,
   getOpenAIClient,
+  getReportedTokenCountOrNull,
   getRequiredApiKey,
   getRequiredBaseURL,
 } from './providerTransportUtils.ts'
@@ -20,6 +26,25 @@ const getOpenAIResponsesUserContent = (prompt: ProviderInvokePrompt): OpenAIResp
           return {image_url: getProviderImageDataUrl(image), type: 'input_image'}
         }),
       ]
+}
+
+type OpenAIResponsesUsage = {
+  input_tokens?: number | null
+  input_tokens_details?: {cached_tokens?: number | null} | null
+  output_tokens?: number | null
+  output_tokens_details?: {reasoning_tokens?: number | null} | null
+  total_tokens?: number | null
+}
+
+export const getOpenAIResponsesUsage = (usage: OpenAIResponsesUsage | null | undefined): ProviderUsageSnapshot => {
+  return {
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: getReportedTokenCountOrNull(usage?.input_tokens_details?.cached_tokens),
+    completionTokens: usage?.output_tokens ?? 0,
+    promptTokens: usage?.input_tokens ?? 0,
+    thinkingTokens: getReportedTokenCountOrNull(usage?.output_tokens_details?.reasoning_tokens),
+    totalTokens: usage?.total_tokens ?? 0,
+  }
 }
 
 export const getOpenAIResponsesRequest = ({
@@ -114,12 +139,5 @@ export const invokeOpenAIResponsesModel = async ({
   )
   const usage = response.usage
 
-  return {
-    text: response.output_text,
-    usage: {
-      completionTokens: usage?.output_tokens ?? 0,
-      promptTokens: usage?.input_tokens ?? 0,
-      totalTokens: usage?.total_tokens ?? 0,
-    },
-  }
+  return {text: response.output_text, usage: getOpenAIResponsesUsage(usage)}
 }
