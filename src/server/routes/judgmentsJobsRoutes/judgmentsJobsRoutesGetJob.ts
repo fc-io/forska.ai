@@ -16,6 +16,7 @@ import {getProviderHealthApi} from './getProviderHealthApi.ts'
 import {getJudgingRuntime} from './judgingRuntime.ts'
 import {getStoragePolicy} from './judgmentJobStorageHealth.ts'
 import {getFailedRequestSummaryFromDatabase} from './judgmentsJobsRoutesGetJob/getFailedRequestSummaryFromDatabase.ts'
+import {getJobProviderQuota} from './judgmentsJobsRoutesGetJob/getJobProviderQuota.ts'
 import {getProviderHealthForReadableRoute} from './providerHealthForReadableRoute.ts'
 import {runJudgmentJobsRead} from './runJudgmentJobsRead.ts'
 import {getSqliteHealthForReadableRoute} from './sqliteHealthForReadableRoute.ts'
@@ -28,6 +29,9 @@ export const judgmentsJobsRoutesGetJob = async ({params, request}: {params: {id:
       const sqliteService = getJudgmentJobSqliteService()
       const sqliteHealthPromise = getSqliteHealthForReadableRoute({db, job, jobId: job.id})
       const providerConnectionPromise = getProviderConnectionForStoredModel(projectModelId, db)
+      const providerQuotaPromise = providerConnectionPromise.then((connection) => {
+        return getJobProviderQuota({connection, db})
+      })
       const leaseMetadataPromise = shouldCurrentServerRunJudgingLoops()
         ? sqliteService.getJudgmentJobLeaseMetadata(job.id)
         : Promise.resolve(null)
@@ -50,6 +54,7 @@ export const judgmentsJobsRoutesGetJob = async ({params, request}: {params: {id:
         admittedArticleCount,
         fullTextStrategyLabelsById,
         fullTextGate,
+        providerQuota,
       ] = await Promise.all([
         sqliteHealthPromise,
         leaseMetadataPromise,
@@ -74,6 +79,7 @@ export const judgmentsJobsRoutesGetJob = async ({params, request}: {params: {id:
         admittedArticleCountPromise,
         getFullTextStrategyLabelsById(db, [job.fullTextStrategyId]),
         getProjectFullTextGate(job.projectId, db),
+        providerQuotaPromise,
       ])
       const storagePolicy = getStoragePolicy({job, sqliteHealth})
       const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
@@ -124,6 +130,7 @@ export const judgmentsJobsRoutesGetJob = async ({params, request}: {params: {id:
         leaseMetadata,
         promptStats,
         providerHealth: getProviderHealthApi({jobStatus: job.status, providerHealth}),
+        providerQuota,
         storagePolicy,
         storageHealth,
         judgingRuntime,
