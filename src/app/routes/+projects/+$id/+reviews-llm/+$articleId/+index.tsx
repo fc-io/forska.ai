@@ -9,6 +9,7 @@ import {ReviewArticleDetails} from '../../../../../../components/main/projects/r
 import {ReviewAvailableJudgments} from '../../../../../../components/main/projects/reviews/review/reviewAvailableJudgments.tsx'
 import {ReviewHumanAssessments} from '../../../../../../components/main/projects/reviews/review/reviewHumanAssessments.tsx'
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
+import {ReviewProviderRefusalBanner} from '../../../../../../components/main/projects/reviews/review/reviewProviderRefusalBanner.tsx'
 import {ReviewsCovidenceBadges} from '../../../../../../components/main/reviews/reviewsCovidenceBadges.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
@@ -144,6 +145,17 @@ export const ReviewDetail = () => {
                 <div class="flex gap-6">
                   <div class="flex-1 space-y-6">
                     <h1 class="text-2xl font-bold">Article Details</h1>
+
+                    <Show when={data().providerRefusalSummary}>
+                      {(providerRefusalSummary) => {
+                        return (
+                          <ReviewProviderRefusalBanner
+                            enabledPromptCount={providerRefusalSummary().enabledPromptCount}
+                            refusedPromptCount={providerRefusalSummary().refusedPromptCount}
+                          />
+                        )
+                      }}
+                    </Show>
 
                     <Show when={(data().covidenceRelatedRecords?.length ?? 0) > 1}>
                       <div class="rounded-lg border border-amber-200 bg-amber-50 p-4">

@@ -148,3 +148,50 @@ test('ReviewJudgments labels legacy no-images judgments and keeps one full text 
 
   dispose()
 })
+
+test('ReviewJudgments shows a refused prompt as a model refusal with its reason and model instead of a missing answer', () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+
+  const dispose = render(() => {
+    return (
+      <ReviewJudgments
+        judgments={[
+          {
+            id: 'placeholder:prompt-1',
+            promptId: 'prompt-1',
+            prompt: {id: 'prompt-1', originalText: 'Population prompt text', promptHeading: 'Population'},
+            answeredOriginal: 'not answered',
+            explanation: null,
+            quotes: [],
+            providerRefusal: {
+              failureCode: 'claude_code_content_refusal',
+              modelName: 'claude-opus-5-5',
+              providerKind: 'claude-code',
+              reason:
+                "Claude Code content refusal (stop_reason=refusal): API Error: Opus 5's safeguards flagged this message",
+              refusedAt: '2026-11-06T06:59:13.635Z',
+            },
+          },
+          {
+            id: 'judgment-2',
+            promptId: 'prompt-2',
+            prompt: {id: 'prompt-2', originalText: 'Design prompt text', promptHeading: 'Design'},
+            answeredOriginal: 'yes',
+            explanation: 'Randomised trial',
+            quotes: [],
+          },
+        ]}
+        setArticleViewToShow={() => {}}
+      />
+    )
+  }, container)
+
+  expect(container.textContent).toContain('MODEL REFUSED TO ANSWER')
+  expect(container.textContent).toContain('Model: claude-opus-5-5')
+  expect(container.textContent).toContain("Opus 5's safeguards flagged this message")
+  expect(container.textContent).not.toContain('NOT ANSWERED')
+  expect(container.textContent).toContain('YES')
+
+  dispose()
+})

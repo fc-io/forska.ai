@@ -508,6 +508,48 @@ test('project review details builds prompt placeholders from project prompt meta
   ])
 })
 
+test('project review details puts a provider refusal on the refused prompt placeholder and counts it', async () => {
+  const defaultQueryJson = queryJsonRef.current
+  const refusal = {
+    failureCode: 'claude_code_content_refusal',
+    modelName: 'claude-opus-5-5',
+    providerKind: 'claude-code',
+    reason: "Claude Code content refusal (stop_reason=refusal): API Error: Opus 5's safeguards flagged this message",
+    refusedAt: '2026-11-06T06:59:13.635Z',
+  }
+
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.row'
+      ? {rows: [getServingArticleRow()], status: 'accepted'}
+      : {rows: [], status: 'accepted'}
+  }
+  const refusalStatements: string[] = []
+
+  queryJsonRef.current = async (statement) => {
+    if (!statement.includes('FROM app.judgment_refusal refusal')) {
+      return defaultQueryJson(statement)
+    }
+
+    refusalStatements.push(statement)
+
+    return [{...refusal, promptId: 'prompt-1'}]
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    judgments: Array<{id: string; providerRefusal: unknown}>
+    providerRefusalSummary: {enabledPromptCount: number; refusedPromptCount: number}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.judgments).toMatchObject([{id: 'placeholder:prompt-1', providerRefusal: refusal}])
+  expect(body.providerRefusalSummary).toEqual({enabledPromptCount: 1, refusedPromptCount: 1})
+  expect(refusalStatements).toHaveLength(1)
+  expect(refusalStatements[0]).toContain(
+    "refusal.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')",
+  )
+})
+
 test('project review details reads migrated V4 judgment fields from scalar columns', () => {
   const routeText = readFileSync(
     'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails/getProjectReviewDetailJudgmentRows.ts',
