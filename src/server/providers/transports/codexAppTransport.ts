@@ -99,7 +99,14 @@ export const getProviderUsageFromCodexThreadTokenUsage = (
 ): ProviderUsageSnapshot => {
   const last = usage?.last
   if (!last) {
-    return {completionTokens: 0, promptTokens: 0, totalTokens: 0}
+    return {
+      cacheCreationInputTokens: null,
+      cacheReadInputTokens: null,
+      completionTokens: 0,
+      promptTokens: 0,
+      thinkingTokens: null,
+      totalTokens: 0,
+    }
   }
 
   const promptTokens = Math.max(0, last.inputTokens)
@@ -110,7 +117,14 @@ export const getProviderUsageFromCodexThreadTokenUsage = (
       ? completionTokensFromTotal
       : completionTokensFromOutputs
 
-  return {completionTokens, promptTokens, totalTokens: Math.max(0, last.totalTokens)}
+  return {
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: Math.max(0, last.cachedInputTokens),
+    completionTokens,
+    promptTokens,
+    thinkingTokens: Math.max(0, last.reasoningOutputTokens),
+    totalTokens: Math.max(0, last.totalTokens),
+  }
 }
 
 const getCodexInvocationErrorMessage = (error: unknown): string => {

@@ -395,11 +395,69 @@ export const getClaudeCodeTokenCounts = (result: ClaudeCodeCliResult | null): Cl
     : modelUsageCounts
 }
 
+type ClaudeCodeTokenBreakdown = Pick<
+  ProviderUsageSnapshot,
+  'cacheCreationInputTokens' | 'cacheReadInputTokens' | 'thinkingTokens'
+>
+
+const getReportedTokenCount = (value: unknown): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+const getModelUsageReportedTokenSum = (
+  modelUsage: ClaudeCodeCliResult['modelUsage'],
+  key: keyof ClaudeCodeCliModelUsage,
+): number | null => {
+  return Object.values(modelUsage ?? {}).reduce<number | null>((total, entry) => {
+    const reported = getReportedTokenCount(entry[key])
+
+    return reported === null ? total : (total ?? 0) + reported
+  }, null)
+}
+
+const getClaudeCodeReportedThinkingTokens = (
+  usage: ClaudeCodeCliUsage,
+  modelUsage: ClaudeCodeCliResult['modelUsage'],
+): number | null => {
+  const usageThinkingTokens = getReportedTokenCount(usage.output_tokens_details?.thinking_tokens)
+
+  return usageThinkingTokens !== null && usageThinkingTokens > 0
+    ? usageThinkingTokens
+    : (getModelUsageReportedTokenSum(modelUsage, 'thinkingTokens') ?? usageThinkingTokens)
+}
+
+const getClaudeCodeModelUsageTokenBreakdown = (
+  modelUsage: ClaudeCodeCliResult['modelUsage'],
+): ClaudeCodeTokenBreakdown => {
+  return {
+    cacheCreationInputTokens: getModelUsageReportedTokenSum(modelUsage, 'cacheCreationInputTokens'),
+    cacheReadInputTokens: getModelUsageReportedTokenSum(modelUsage, 'cacheReadInputTokens'),
+    thinkingTokens: getModelUsageReportedTokenSum(modelUsage, 'thinkingTokens'),
+  }
+}
+
+export const getClaudeCodeTokenBreakdown = (result: ClaudeCodeCliResult | null): ClaudeCodeTokenBreakdown => {
+  const usage = result?.usage
+
+  return usage
+    ? {
+        cacheCreationInputTokens: getReportedTokenCount(usage.cache_creation_input_tokens),
+        cacheReadInputTokens: getReportedTokenCount(usage.cache_read_input_tokens),
+        thinkingTokens: getClaudeCodeReportedThinkingTokens(usage, result.modelUsage),
+      }
+    : getClaudeCodeModelUsageTokenBreakdown(result?.modelUsage)
+}
+
 export const getProviderUsageFromClaudeCodeResult = (result: ClaudeCodeCliResult | null): ProviderUsageSnapshot => {
   const counts = getClaudeCodeTokenCounts(result)
   const promptTokens = counts.inputTokens + counts.cacheCreationInputTokens + counts.cacheReadInputTokens
 
-  return {completionTokens: counts.outputTokens, promptTokens, totalTokens: promptTokens + counts.outputTokens}
+  return {
+    ...getClaudeCodeTokenBreakdown(result),
+    completionTokens: counts.outputTokens,
+    promptTokens,
+    totalTokens: promptTokens + counts.outputTokens,
+  }
 }
 
 const normalizeClaudeCodeClockTimes = (value: string): string => {

@@ -4,7 +4,7 @@ import {expect, test} from 'bun:test'
 
 import {flattenFigureImage} from '../../fullText/figureImageEncoding.ts'
 import {getProviderImageBase64} from '../providerImageInput.ts'
-import {getOpenAIResponsesRequest} from './openaiResponsesTransport.ts'
+import {getOpenAIResponsesRequest, getOpenAIResponsesUsage} from './openaiResponsesTransport.ts'
 
 const transparentPng = {
   bytes: new Uint8Array(
@@ -48,4 +48,31 @@ test('keeps text-only prompts as a plain string input', () => {
 
   expect(request.input[1]).toEqual({content: 'Prompt', role: 'user'})
   expect('max_output_tokens' in request).toBe(false)
+})
+
+test('maps cached input and reasoning tokens and keeps unreported parts NULL', () => {
+  expect(
+    getOpenAIResponsesUsage({
+      input_tokens: 1000,
+      input_tokens_details: {cached_tokens: 800},
+      output_tokens: 120,
+      output_tokens_details: {reasoning_tokens: 90},
+      total_tokens: 1120,
+    }),
+  ).toEqual({
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: 800,
+    completionTokens: 120,
+    promptTokens: 1000,
+    thinkingTokens: 90,
+    totalTokens: 1120,
+  })
+  expect(getOpenAIResponsesUsage({input_tokens: 10, output_tokens: 2, total_tokens: 12})).toEqual({
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null,
+    completionTokens: 2,
+    promptTokens: 10,
+    thinkingTokens: null,
+    totalTokens: 12,
+  })
 })

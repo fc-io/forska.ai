@@ -5,7 +5,18 @@ import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
 
 const openAIClients = new Map<string, OpenAI>()
 
-export type OpenAICompatibleUsage = {completionTokens: number; promptTokens: number; totalTokens: number}
+export type OpenAICompatibleUsage = {
+  cacheCreationInputTokens: null
+  cacheReadInputTokens: number | null
+  completionTokens: number
+  promptTokens: number
+  thinkingTokens: number | null
+  totalTokens: number
+}
+
+export const getReportedTokenCountOrNull = (value: unknown): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
 
 export const getTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
@@ -91,13 +102,22 @@ export const getOpenAIMessageText = (message: ChatCompletionMessage): string => 
 
 export const getOpenAICompatibleUsage = (
   usage:
-    | {completion_tokens?: number | null; prompt_tokens?: number | null; total_tokens?: number | null}
+    | {
+        completion_tokens?: number | null
+        completion_tokens_details?: {reasoning_tokens?: number | null} | null
+        prompt_tokens?: number | null
+        prompt_tokens_details?: {cached_tokens?: number | null} | null
+        total_tokens?: number | null
+      }
     | null
     | undefined,
 ): OpenAICompatibleUsage => {
   return {
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: getReportedTokenCountOrNull(usage?.prompt_tokens_details?.cached_tokens),
     completionTokens: usage?.completion_tokens ?? 0,
     promptTokens: usage?.prompt_tokens ?? 0,
+    thinkingTokens: getReportedTokenCountOrNull(usage?.completion_tokens_details?.reasoning_tokens),
     totalTokens: usage?.total_tokens ?? 0,
   }
 }

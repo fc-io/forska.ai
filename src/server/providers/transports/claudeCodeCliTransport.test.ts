@@ -20,6 +20,7 @@ import {
   getClaudeCodeCliInput,
   getClaudeCodeCliRuntime,
   getClaudeCodeCliStatus,
+  getClaudeCodeTokenBreakdown,
   getClaudeCodeUsageLimitResetHint,
   invokeClaudeCodeCliModel,
   listClaudeCodeModels,
@@ -237,7 +238,14 @@ describe('invokeClaudeCodeCliModel', () => {
       stopReason: 'tool_use',
       structuredOutput: {answer: 'yes'},
       text: '{"answer":"yes"}',
-      usage: {completionTokens: 40, promptTokens: 142, totalTokens: 182},
+      usage: {
+        cacheCreationInputTokens: 100,
+        cacheReadInputTokens: 30,
+        completionTokens: 40,
+        promptTokens: 142,
+        thinkingTokens: 8,
+        totalTokens: 182,
+      },
     })
     expect(record.stdin).toBe('long article prompt')
     expect(record.args).toEqual(
@@ -374,8 +382,11 @@ describe('invokeClaudeCodeCliModel', () => {
       }).shouldPauseConnection,
     ).toBe(false)
     expect((error as ProviderInvocationError).usage).toEqual({
+      cacheCreationInputTokens: 100,
+      cacheReadInputTokens: 30,
       completionTokens: 40,
       promptTokens: 142,
+      thinkingTokens: 8,
       totalTokens: 182,
     })
   })
@@ -406,8 +417,11 @@ describe('invokeClaudeCodeCliModel', () => {
     expect(message).toContain('Details: `[bio]`')
     expect(message).toContain('Message ID: msg_011CgmEy9FvsUZRmoEXn5Ldj')
     expect((error as ProviderInvocationError).usage).toEqual({
+      cacheCreationInputTokens: 6875,
+      cacheReadInputTokens: 7116,
       completionTokens: 0,
       promptTokens: 13995,
+      thinkingTokens: null,
       totalTokens: 13995,
     })
   })
@@ -561,5 +575,46 @@ describe('classifyClaudeCodeFailure', () => {
     expect(classifyClaudeCodeFailure({apiErrorStatus: 401, stopReason: null, text: 'Not logged in'})).toBe(
       'not_logged_in',
     )
+  })
+})
+
+describe('getClaudeCodeTokenBreakdown', () => {
+  test('reads the usage object and leaves an unreported thinking count NULL', () => {
+    expect(
+      getClaudeCodeTokenBreakdown({
+        type: 'result',
+        usage: {cache_creation_input_tokens: 5, cache_read_input_tokens: 0, input_tokens: 1, output_tokens: 2},
+      }),
+    ).toEqual({cacheCreationInputTokens: 5, cacheReadInputTokens: 0, thinkingTokens: null})
+  })
+
+  test('takes thinking tokens from modelUsage when the usage object reports zero', () => {
+    expect(
+      getClaudeCodeTokenBreakdown({
+        modelUsage: {'claude-opus-5-5': {thinkingTokens: 33}},
+        type: 'result',
+        usage: {output_tokens: 40, output_tokens_details: {thinking_tokens: 0}},
+      }),
+    ).toEqual({cacheCreationInputTokens: null, cacheReadInputTokens: null, thinkingTokens: 33})
+  })
+
+  test('sums modelUsage entries when there is no usage object', () => {
+    expect(
+      getClaudeCodeTokenBreakdown({
+        modelUsage: {
+          'claude-haiku-5-5': {cacheReadInputTokens: 10},
+          'claude-opus-5-5': {cacheCreationInputTokens: 7, cacheReadInputTokens: 3},
+        },
+        type: 'result',
+      }),
+    ).toEqual({cacheCreationInputTokens: 7, cacheReadInputTokens: 13, thinkingTokens: null})
+  })
+
+  test('reports nothing for a missing result', () => {
+    expect(getClaudeCodeTokenBreakdown(null)).toEqual({
+      cacheCreationInputTokens: null,
+      cacheReadInputTokens: null,
+      thinkingTokens: null,
+    })
   })
 })

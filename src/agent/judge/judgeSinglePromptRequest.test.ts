@@ -171,7 +171,14 @@ const getProviderFailureRejection = async ({
     throw new ProviderInvocationError(message, {
       code,
       providerKind,
-      usage: {completionTokens: 0, promptTokens: 13_995, totalTokens: 13_995},
+      usage: {
+        cacheCreationInputTokens: 6875,
+        cacheReadInputTokens: 7116,
+        completionTokens: 0,
+        promptTokens: 13_995,
+        thinkingTokens: null,
+        totalTokens: 13_995,
+      },
     })
   })
   const judgeStoreTokenUse = mock(async (_tokenUse: Array<{failureCode?: string | null; outcome: string}>) => {})

@@ -5,7 +5,11 @@ import {afterEach, expect, mock, test} from 'bun:test'
 import {flattenFigureImage} from '../../fullText/figureImageEncoding.ts'
 import {getProviderImageBase64} from '../providerImageInput.ts'
 import {ProviderInvocationError} from '../providerTypes.ts'
-import {invokeAnthropicMessagesModel, listAnthropicMessageModels} from './anthropicMessagesTransport.ts'
+import {
+  addAnthropicMessageUsage,
+  invokeAnthropicMessagesModel,
+  listAnthropicMessageModels,
+} from './anthropicMessagesTransport.ts'
 
 const transparentPng = {
   bytes: new Uint8Array(
@@ -235,7 +239,14 @@ test('continues Anthropic pause_turn responses until text arrives', async () => 
   expect(result).toEqual({
     stopReason: 'end_turn',
     text: '{"answer":"no","explanation":"No intervention is described.","quotes":[]}',
-    usage: {completionTokens: 36, promptTokens: 5, totalTokens: 41},
+    usage: {
+      cacheCreationInputTokens: null,
+      cacheReadInputTokens: null,
+      completionTokens: 36,
+      promptTokens: 5,
+      thinkingTokens: null,
+      totalTokens: 41,
+    },
   })
   expect(getRequestBody(1)).toEqual({
     max_tokens: 128000,
@@ -285,8 +296,11 @@ test('throws when Anthropic returns an empty thinking-only response', async () =
   expect(error).toBeInstanceOf(ProviderInvocationError)
   expect(error instanceof ProviderInvocationError ? error.code : null).toBe('anthropic_thinking_only_empty_response')
   expect(error instanceof ProviderInvocationError ? error.usage : null).toEqual({
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null,
     completionTokens: 24,
     promptTokens: 2,
+    thinkingTokens: null,
     totalTokens: 26,
   })
   expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -331,8 +345,11 @@ test('throws when Anthropic returns an empty refusal response', async () => {
   expect(error).toBeInstanceOf(ProviderInvocationError)
   expect(error instanceof ProviderInvocationError ? error.code : null).toBe('anthropic_refusal_empty_response')
   expect(error instanceof ProviderInvocationError ? error.usage : null).toEqual({
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null,
     completionTokens: 24,
     promptTokens: 2,
+    thinkingTokens: null,
     totalTokens: 26,
   })
   expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -381,8 +398,11 @@ test('throws a classified error when Anthropic returns no text', async () => {
   expect(error).toBeInstanceOf(ProviderInvocationError)
   expect(error instanceof ProviderInvocationError ? error.code : null).toBe('anthropic_thinking_only_empty_response')
   expect(error instanceof ProviderInvocationError ? error.usage : null).toEqual({
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null,
     completionTokens: 24,
     promptTokens: 2,
+    thinkingTokens: null,
     totalTokens: 26,
   })
   expect(error instanceof Error ? error.message : null).toContain('failure_code=anthropic_thinking_only_empty_response')
@@ -454,4 +474,43 @@ test('keeps text-only prompts as a plain string user message', async () => {
   })
 
   expect(getRequestBody(0)).toMatchObject({messages: [{content: 'Hello', role: 'user'}]})
+})
+
+test('adds cache and thinking tokens across pause_turn responses and counts cached input as prompt tokens', () => {
+  const empty = {
+    cacheCreationInputTokens: null,
+    cacheReadInputTokens: null,
+    completionTokens: 0,
+    promptTokens: 0,
+    thinkingTokens: null,
+    totalTokens: 0,
+  }
+  const firstTurn = addAnthropicMessageUsage(empty, {
+    cache_creation_input_tokens: 600,
+    cache_read_input_tokens: 0,
+    input_tokens: 4,
+    output_tokens: 30,
+    output_tokens_details: {thinking_tokens: 20},
+  })
+  const secondTurn = addAnthropicMessageUsage(firstTurn, {
+    cache_creation_input_tokens: 10,
+    cache_read_input_tokens: 600,
+    input_tokens: 2,
+    output_tokens: 12,
+  })
+
+  expect(secondTurn).toEqual({
+    cacheCreationInputTokens: 610,
+    cacheReadInputTokens: 600,
+    completionTokens: 42,
+    promptTokens: 1216,
+    thinkingTokens: 20,
+    totalTokens: 1258,
+  })
+  expect(addAnthropicMessageUsage(empty, {input_tokens: 3, output_tokens: 1})).toEqual({
+    ...empty,
+    completionTokens: 1,
+    promptTokens: 3,
+    totalTokens: 4,
+  })
 })
