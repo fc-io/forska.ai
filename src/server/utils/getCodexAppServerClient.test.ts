@@ -788,6 +788,9 @@ test('runJsonTurn keeps a replacement singleton when the recycled app-server dra
   }
   const oldClient = createCodexAppServerClient({...getTestCodexHomeOptions(), spawnProcess})
   const replacementClient: CodexAppServerClient = {
+    accountRateLimitsRead: async () => {
+      return {}
+    },
     modelList: async () => {
       return {data: [], nextCursor: null}
     },

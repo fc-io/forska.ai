@@ -68,6 +68,7 @@ const CODEX_MAX_TURNS_BEFORE_RECYCLE = 25
 const CODEX_SLOW_THREAD_START_MS = 5_000
 
 const MAX_DEBUG_OUTPUT_CHARS = 8_000
+const CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS = 15_000
 
 export type CodexTokenUsageBreakdown = {
   totalTokens: number
@@ -182,6 +183,7 @@ const isCodexThreadReadTimeoutError = (error: unknown): boolean => {
 }
 
 export type CodexAppServerClient = {
+  accountRateLimitsRead: () => Promise<unknown>
   modelList: (params?: {limit?: number; includeHidden?: boolean; cursor?: string | null}) => Promise<ModelListResult>
   runJsonTurn: (params: {
     model: string
@@ -943,6 +945,12 @@ export const createCodexAppServerClient = ({
     }
   }
 
+  const accountRateLimitsRead = async (): Promise<unknown> => {
+    await initPromise
+
+    return request('account/rateLimits/read', {excludeResetCreditDetails: true}, CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS)
+  }
+
   const runJsonTurn = async (params: {
     model: string
     effort?: string | null
@@ -1107,7 +1115,7 @@ export const createCodexAppServerClient = ({
     }
   }
 
-  const client = {modelList, runJsonTurn}
+  const client = {accountRateLimitsRead, modelList, runJsonTurn}
   clientInstance = client
 
   return client

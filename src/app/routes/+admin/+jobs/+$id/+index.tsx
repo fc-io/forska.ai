@@ -43,6 +43,7 @@ import {
   type JudgmentJobProviderHealth,
 } from '../jobsPageShared'
 import {hasJobFullTextGateMessages, JobFullTextGateNotice} from './jobFullTextGateNotice.tsx'
+import {type JobProviderQuota, JobProviderQuotaNotice} from './jobProviderQuotaNotice.tsx'
 import {JobRunControl} from './jobRunControl.tsx'
 import {JobStopReasonBanner} from './jobStopReasonBanner.tsx'
 import {JobTelemetryPanel} from './jobTelemetryPanel.tsx'
@@ -287,6 +288,7 @@ type JobData = {
   }
   judgingRuntime?: {enabled?: boolean; reason?: string | null}
   providerHealth?: JudgmentJobProviderHealth | null
+  providerQuota?: JobProviderQuota | null
   error?: string[]
   admittedArticleCount?: number | null
   stopAfterArticles?: number | null
@@ -887,6 +889,8 @@ export const AdminJudgmentJobDetail = () => {
                           <p class="font-medium text-gray-900">{formatDateTime(data()?.updatedAt)}</p>
                         </div>
                       </div>
+
+                      <JobProviderQuotaNotice quota={data()?.providerQuota} />
                     </div>
 
                     <div class="min-w-0 xl:w-96 xl:flex-none">
