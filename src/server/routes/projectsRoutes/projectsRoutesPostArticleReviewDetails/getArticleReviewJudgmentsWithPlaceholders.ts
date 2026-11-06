@@ -1,6 +1,7 @@
 import type {JudgmentAssessmentRecord, JudgmentRecord} from '../../../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {getDateValue, getQuotedStringList} from '../../../services/appQueryHelpers.ts'
+import type {ArticleProviderRefusal} from '../../../services/judgmentRefusalReadService.ts'
 import type {
   PlaceholderJudgment,
   ProjectPromptRow,
@@ -65,6 +66,25 @@ const getLatestAssessmentRows = (rows: readonly AssessmentRow[]) => {
   return [...latestAssessmentsByJudgment.values()]
 }
 
+const getPromptProviderRefusal = (
+  providerRefusals: ArticleProviderRefusal[],
+  promptId: string,
+): PlaceholderJudgment['providerRefusal'] => {
+  const refusal = providerRefusals.find((candidate) => {
+    return candidate.promptId === promptId
+  })
+
+  return refusal
+    ? {
+        failureCode: refusal.failureCode,
+        modelName: refusal.modelName,
+        providerKind: refusal.providerKind,
+        reason: refusal.reason,
+        refusedAt: refusal.refusedAt,
+      }
+    : null
+}
+
 export const getArticleReviewJudgmentsWithPlaceholders = async ({
   articleJudgments,
   enabledPromptRows,
@@ -72,6 +92,7 @@ export const getArticleReviewJudgmentsWithPlaceholders = async ({
   projectId,
   projectReviewDetailJudgmentRows,
   promptOrderMap,
+  providerRefusals,
 }: {
   articleJudgments: ReviewJudgmentDetail[]
   enabledPromptRows: ProjectPromptRow[]
@@ -79,6 +100,7 @@ export const getArticleReviewJudgmentsWithPlaceholders = async ({
   projectId: string
   projectReviewDetailJudgmentRows: ProjectReviewDetailJudgmentRow[]
   promptOrderMap: Record<string, number>
+  providerRefusals: ArticleProviderRefusal[]
 }) => {
   const appAssessmentRows = await getAppJudgmentAssessmentRows({
     judgmentIds: fallbackAppJudgmentDetails.map((detail) => {
@@ -145,6 +167,7 @@ export const getArticleReviewJudgmentsWithPlaceholders = async ({
         prompt: {originalText: p.originalText, promptHeading: p.promptHeading},
         assessments: [] as Array<JudgmentAssessmentRecord>,
         createdAt: null,
+        providerRefusal: getPromptProviderRefusal(providerRefusals, p.id),
       }
     })
 

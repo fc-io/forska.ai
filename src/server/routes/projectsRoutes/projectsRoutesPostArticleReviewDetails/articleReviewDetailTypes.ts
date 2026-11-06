@@ -1,5 +1,6 @@
 import type {SystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
 import type {JudgmentAssessmentRecord, JudgmentRecord, PromptRecord} from '../../../../db/schemaTypes.ts'
+import type {ArticleProviderRefusal} from '../../../services/judgmentRefusalReadService.ts'
 
 type JudgmentWithPromptAndAssessments = JudgmentRecord & {
   prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
@@ -20,6 +21,7 @@ export type PlaceholderJudgment = {
   prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
   assessments: Array<JudgmentAssessmentRecord>
   createdAt: null
+  providerRefusal: Omit<ArticleProviderRefusal, 'promptId'> | null
   modelName?: string | null
   modelProvider?: string | null
   modelThinking?: string | null

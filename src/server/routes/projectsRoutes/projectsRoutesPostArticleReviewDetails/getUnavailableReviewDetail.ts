@@ -14,6 +14,7 @@ export const getUnavailableReviewDetail = (input: {articleId: string; reason: st
     martFreshness: null,
     projectsById: {},
     prompts: [],
+    providerRefusalSummary: {enabledPromptCount: 0, refusedPromptCount: 0},
     reason: input.reason,
     repairRequested: false,
     requestedArticleId: input.articleId,

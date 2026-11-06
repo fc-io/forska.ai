@@ -9,6 +9,10 @@ import type {ProviderModelThinkingOption} from '../../../../../utils/providerMod
 import {reviewArticleDetailsDispatchScrollToQuote} from './reviewArticleDetails/reviewArticleDetailsScrollEvents.ts'
 import {ReviewJudgmentAssessments} from './reviewJudgmentAssessments.tsx'
 import {getReviewJudgmentChunkingLabel} from './reviewJudgmentChunkingLabel.ts'
+import {
+  ReviewJudgmentItemProviderRefusal,
+  type ReviewJudgmentProviderRefusal,
+} from './reviewJudgmentItem/reviewJudgmentItemProviderRefusal.tsx'
 
 type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
 
@@ -74,6 +78,7 @@ type ReviewJudgmentItemProps = {
     fullTextMode?: string | null
     chunkCount?: number | null
     chunkPlanHash?: string | null
+    providerRefusal?: ReviewJudgmentProviderRefusal | null
   }
   setArticleViewToShow: SetArticleViewToShow
   humanAnswers?: HumanAnswer[]
@@ -96,7 +101,12 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
   }
   const modelName = () => {
     // Use modelName (from joined models table) or fall back to snapshotProjectModelName
-    return props.judgment.modelName || props.judgment.snapshotProjectModelName || undefined
+    return (
+      props.judgment.modelName
+      || props.judgment.snapshotProjectModelName
+      || props.judgment.providerRefusal?.modelName
+      || undefined
+    )
   }
   const modelLabel = () => {
     const resolvedModelName = modelName()
@@ -309,12 +319,21 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
 
       <div class="mb-2 border-t border-dashed border-gray-200" />
 
-      <div class="flex items-start justify-between gap-2 text-xs">
-        <div class="flex items-start gap-2 min-w-0 flex-1">
-          <span class="font-medium w-[70px] text-right shrink-0">Answer:</span>
-          <span class={`${getAnswerColorClass()} min-w-0 flex-1 break-words`}>{llmAnswerDisplay()}</span>
-        </div>
-      </div>
+      <Show
+        when={props.judgment.providerRefusal}
+        fallback={
+          <div class="flex items-start justify-between gap-2 text-xs">
+            <div class="flex items-start gap-2 min-w-0 flex-1">
+              <span class="font-medium w-[70px] text-right shrink-0">Answer:</span>
+              <span class={`${getAnswerColorClass()} min-w-0 flex-1 break-words`}>{llmAnswerDisplay()}</span>
+            </div>
+          </div>
+        }
+      >
+        {(refusal) => {
+          return <ReviewJudgmentItemProviderRefusal refusal={refusal()} />
+        }}
+      </Show>
 
       <Show when={props.humanAnswers && props.humanAnswers.length > 0}>
         <div class="mt-1">

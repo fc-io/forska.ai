@@ -1,6 +1,7 @@
 import {createSignal, For, onCleanup, Show} from 'solid-js'
 
 import {ReviewJudgmentItem} from './reviewJudgmentItem.tsx'
+import type {ReviewJudgmentProviderRefusal} from './reviewJudgmentItem/reviewJudgmentItemProviderRefusal.tsx'
 import {getReviewJudgmentsCopyText} from './reviewJudgmentsCopyText.ts'
 
 type SetArticleViewToShow = (articleViewToShow: string | undefined) => void
@@ -29,6 +30,7 @@ type Judgment = {
   fullTextMode?: string | null
   chunkCount?: number | null
   chunkPlanHash?: string | null
+  providerRefusal?: ReviewJudgmentProviderRefusal | null
 }
 
 type ReviewJudgmentsProps = {
