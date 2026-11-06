@@ -3,6 +3,7 @@ import {dirname} from 'node:path'
 
 import {Database} from 'bun:sqlite'
 
+import type {ProviderContentRefusal} from '../../../agent/judge/providerContentRefusalError.ts'
 import type {SystemPromptVariant} from '../../../agent/judge/systemPromptVariant.ts'
 import type {JudgmentsJobsPromptsSkipReason} from '../../../db/schemaTypes.ts'
 import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
@@ -42,6 +43,7 @@ import {
 } from './judgmentRequestAttemptManifest.ts'
 import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
+import {markPromptSkipFromCompletion} from './markPromptSkipCompletion.ts'
 import type {ProviderBucketSnapshot} from './providerAdmissionLease.ts'
 
 export type JudgeWorkerTokenUseSummary = {
@@ -106,6 +108,7 @@ export type JudgeWorkerCompletionPayload = {
   queueRecordId: string
   quotes?: unknown
   rawResponseJson?: unknown
+  refusal?: ProviderContentRefusal | null
   requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
   retryAfterMs?: number | null
   skipReason?: JudgmentsJobsPromptsSkipReason
@@ -2121,12 +2124,13 @@ const applyTerminalCompletionLocally = async (
         completionAck,
       )
     : payload.status === 'skipped'
-      ? getJudgmentJobSqliteService().markPromptAsSkipped(
-          payload.jobId,
-          payload.queueRecordId,
-          payload.skipReason ?? 'no_fulltext',
+      ? markPromptSkipFromCompletion({
           completionAck,
-        )
+          jobId: payload.jobId,
+          queueRecordId: payload.queueRecordId,
+          refusal: payload.refusal,
+          skipReason: payload.skipReason ?? 'no_fulltext',
+        })
       : getJudgmentJobSqliteService().markPromptAsClosed(
           payload.jobId,
           payload.queueRecordId,

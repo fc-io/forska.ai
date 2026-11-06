@@ -10,9 +10,18 @@ import {
   getFullTextJudgingBlockFromPayload,
 } from '../../../../agent/judge/fullTextJudgingInput.ts'
 import {JudgePromptTooLargeError} from '../../../../agent/judge/judgePromptTooLargeError.ts'
+import {
+  type ProviderContentRefusal,
+  ProviderContentRefusalError,
+} from '../../../../agent/judge/providerContentRefusalError.ts'
 import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromptJudgment.ts'
 import {getSystemPromptVariant} from '../../../../agent/judge/systemPromptVariant.ts'
-import type {ArticleRecord, JudgmentsJobsPromptsSkipReason, PublicationStatus} from '../../../../db/schemaTypes.ts'
+import type {
+  ArticleRecord,
+  JudgmentsJobsPromptsContentSkipReason,
+  JudgmentsJobsPromptsSkipReason,
+  PublicationStatus,
+} from '../../../../db/schemaTypes.ts'
 import {
   codexRateLimitedFailureCode,
   getCodexConnectionRateLimitCooldownRemainingMs,
@@ -108,7 +117,7 @@ type PreparedPromptResult =
       fullTextJudging: FullTextJudgingInput | null
       prompt: PromptDefinition
     }
-  | {kind: 'skipped'; skipReason: JudgmentsJobsPromptsSkipReason}
+  | {kind: 'skipped'; skipReason: JudgmentsJobsPromptsContentSkipReason}
 
 type OwnerBackedPromptInput = {
   article: ArticleRecord
@@ -130,7 +139,11 @@ type PromptTerminalState =
   | {kind: 'closed'; closeoutReason: PromptCloseoutReason}
   | {kind: 'completed'; noRequestSuccessReason?: PromptNoRequestSuccessReason}
   | {kind: 'ready'; retryAfterMs: number | null}
-  | {kind: 'skipped'; skipReason: JudgmentsJobsPromptsSkipReason}
+  | PromptSkippedTerminalState
+
+type PromptSkippedTerminalState =
+  | {kind: 'skipped'; skipReason: JudgmentsJobsPromptsContentSkipReason}
+  | {kind: 'skipped'; refusal: ProviderContentRefusal; skipReason: 'provider_refusal'}
 
 const processPromptLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const processPromptFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
@@ -580,13 +593,21 @@ const markAsRetry = async (jobId: string, recordId: string, retryAfterMs: number
 const markAsSkipped = async (
   jobId: string,
   recordId: string,
-  skipReason: JudgmentsJobsPromptsSkipReason,
+  terminalState: PromptSkippedTerminalState,
 ): Promise<void> => {
   if (shouldUseJudgeWorkerOwnerHandoff()) {
     return undefined
   }
 
-  await getJudgmentJobSqliteService().markPromptAsSkipped(jobId, recordId, skipReason)
+  await (terminalState.skipReason === 'provider_refusal'
+    ? getJudgmentJobSqliteService().markPromptAsRefused(jobId, recordId, terminalState.refusal)
+    : getJudgmentJobSqliteService().markPromptAsSkipped(jobId, recordId, terminalState.skipReason))
+}
+
+const getTerminalStateRefusal = (terminalState: PromptTerminalState): ProviderContentRefusal | undefined => {
+  return terminalState.kind === 'skipped' && terminalState.skipReason === 'provider_refusal'
+    ? terminalState.refusal
+    : undefined
 }
 
 /**
@@ -853,7 +874,7 @@ const releasePromptTerminalState = async (
         ? markAsClosed(jobId, recordId, terminalState.closeoutReason)
         : terminalState.kind === 'ready'
           ? markAsRetry(jobId, recordId, terminalState.retryAfterMs)
-          : markAsSkipped(jobId, recordId, terminalState.skipReason)
+          : markAsSkipped(jobId, recordId, terminalState)
 }
 
 const enqueueJudgeWorkerTerminalCompletion = async (
@@ -875,6 +896,7 @@ const enqueueJudgeWorkerTerminalCompletion = async (
     projectId: promptToProcess.projectId,
     promptId: promptToProcess.promptId,
     queueRecordId: promptToProcess.recordId,
+    refusal: getTerminalStateRefusal(terminalState),
     retryAfterMs: terminalState.kind === 'ready' ? terminalState.retryAfterMs : undefined,
     skipReason: terminalState.kind === 'skipped' ? terminalState.skipReason : undefined,
     status: terminalState.kind === 'ready' ? 'retry' : terminalState.kind === 'skipped' ? 'skipped' : 'failed',
@@ -908,6 +930,26 @@ const releaseJudgeWorkerTerminalState = async (
       },
     )
   })
+}
+
+const logProviderContentRefusalSkip = (promptToProcess: PromptToProcess, refusal: ProviderContentRefusal): void => {
+  processPromptFailureLogger.warn(
+    `llm.prompt.providerContentRefusalSkipped.${promptToProcess.jobId}`,
+    '[llm] Skipping prompt after a provider content refusal; it will not be retried',
+    {
+      articleId: promptToProcess.articleId,
+      component: processPromptComponent,
+      event: 'providerContentRefusalSkipped',
+      failureCode: refusal.failureCode,
+      jobId: promptToProcess.jobId,
+      message: refusal.reason,
+      modelName: refusal.modelName,
+      promptId: promptToProcess.promptId,
+      providerKind: refusal.providerKind,
+      recordId: promptToProcess.recordId,
+      skipReason: 'provider_refusal',
+    },
+  )
 }
 
 const getProviderDiagnosticsMessage = (providerDiagnostics: unknown): string | null => {
@@ -1165,6 +1207,12 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
             if (error instanceof FullTextFigureTooLargeError) {
               logFullTextSkip(promptToProcess, 'fulltext_figure_too_large', error.message)
               terminalState = {kind: 'skipped', skipReason: 'fulltext_figure_too_large'}
+              return undefined
+            }
+
+            if (error instanceof ProviderContentRefusalError) {
+              logProviderContentRefusalSkip(promptToProcess, error.refusal)
+              terminalState = {kind: 'skipped', refusal: error.refusal, skipReason: 'provider_refusal'}
               return undefined
             }
 

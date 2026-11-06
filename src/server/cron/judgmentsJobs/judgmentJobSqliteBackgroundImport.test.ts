@@ -79,6 +79,7 @@ test('background import continues past an idle job to the next job with outbox w
             releaseOwnedLease: async () => {},
             syncOwnedLeases: async () => {},
             getPendingCompletionTokenUse: async () => [],
+            getPendingPromptRefusals: async () => [],
           }),
         }))
 
@@ -171,6 +172,7 @@ test('background import waits until the oldest unexported outbox row is 5 s old 
             releaseOwnedLease: async () => {},
             syncOwnedLeases: async () => {},
             getPendingCompletionTokenUse: async () => [],
+            getPendingPromptRefusals: async () => [],
           }),
         }))
 
@@ -262,6 +264,7 @@ test('background import treats exported ack-only outbox rows as idle import work
             releaseOwnedLease: async () => {},
             syncOwnedLeases: async () => {},
             getPendingCompletionTokenUse: async () => [],
+            getPendingPromptRefusals: async () => [],
           }),
         }))
 
@@ -378,6 +381,7 @@ test('draining background import runs a bounded retention cleanup pass', () => {
             releaseOwnedLease: async () => {},
             syncOwnedLeases: async () => {},
             getPendingCompletionTokenUse: async () => [],
+            getPendingPromptRefusals: async () => [],
           }),
         }))
 

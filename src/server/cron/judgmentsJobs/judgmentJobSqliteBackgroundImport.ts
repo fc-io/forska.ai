@@ -10,6 +10,7 @@ import {
   getJudgmentJobSqliteErrorMessage,
   isTransientJudgmentJobSqliteLockMessage,
 } from './judgmentJobSqliteTransientLock.ts'
+import {drainJudgmentPromptRefusalOutbox} from './judgmentPromptRefusalImport.ts'
 
 const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowMs: 30_000})
 const isolatedImportFailureThreshold = 3
@@ -409,22 +410,34 @@ const runNextJudgmentJobSqliteBackgroundImport = async ({
     : nextSummary
 }
 
+const drainJobOutbox = async ({
+  drain,
+  jobId,
+  label,
+}: {
+  drain: (jobId: string) => Promise<number>
+  jobId: string
+  label: 'completion token use' | 'provider refusal'
+}): Promise<void> => {
+  try {
+    await drain(jobId)
+  } catch (error) {
+    if (!(error instanceof JudgmentJobLeaseError)) {
+      judgmentJobSqliteBackgroundImportLogger.warn(
+        `judgmentJobs:${label.replaceAll(' ', '-')}-drain:${jobId}`,
+        `[judgmentJobs] ${label} drain deferred`,
+        {errorMessage: getJudgmentJobSqliteErrorMessage(error), jobId},
+      )
+    }
+  }
+}
+
 // Best effort each tick; cleanup-stale also drains before finalizing a draining job.
-const drainCompletionTokenUseForJobs = async (jobIds: string[]): Promise<void> => {
+const drainCompletionOutboxesForJobs = async (jobIds: string[]): Promise<void> => {
   await jobIds.reduce(async (previous, jobId) => {
     await previous
-
-    try {
-      await drainCompletionTokenUseOutbox(jobId)
-    } catch (error) {
-      if (!(error instanceof JudgmentJobLeaseError)) {
-        judgmentJobSqliteBackgroundImportLogger.warn(
-          `judgmentJobs:completion-token-use-drain:${jobId}`,
-          '[judgmentJobs] completion token use drain deferred',
-          {errorMessage: getJudgmentJobSqliteErrorMessage(error), jobId},
-        )
-      }
-    }
+    await drainJobOutbox({drain: drainCompletionTokenUseOutbox, jobId, label: 'completion token use'})
+    await drainJobOutbox({drain: drainJudgmentPromptRefusalOutbox, jobId, label: 'provider refusal'})
   }, Promise.resolve())
 }
 
@@ -435,7 +448,7 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
 
   const jobs = await getImportableJudgmentJobs()
 
-  await drainCompletionTokenUseForJobs(
+  await drainCompletionOutboxesForJobs(
     jobs.map((job) => {
       return job.id
     }),

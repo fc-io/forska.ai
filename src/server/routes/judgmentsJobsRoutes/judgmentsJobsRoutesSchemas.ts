@@ -44,6 +44,18 @@ export const judgmentCompletionBodySchema = t.Object({
   judgmentId: t.Optional(t.String()),
   quotes: t.Optional(t.Any()),
   rawResponseJson: t.Optional(t.Any()),
+  refusal: t.Optional(
+    t.Union([
+      t.Object({
+        failureCode: t.String({minLength: 1}),
+        modelName: t.String({minLength: 1}),
+        providerKind: t.Union([t.String(), t.Null()]),
+        reason: t.String({minLength: 1}),
+        refusedAt: t.String({minLength: 1}),
+      }),
+      t.Null(),
+    ]),
+  ),
   requestAttempts: t.Optional(t.Union([t.Array(t.Any()), t.Null()])),
   retryAfterMs: t.Optional(t.Union([t.Number(), t.Null()])),
   skipReason: t.Optional(
@@ -52,6 +64,7 @@ export const judgmentCompletionBodySchema = t.Object({
       t.Literal('fulltext_figure_too_large'),
       t.Literal('fulltext_too_large'),
       t.Literal('no_fulltext'),
+      t.Literal('provider_refusal'),
     ]),
   ),
   status: t.Optional(

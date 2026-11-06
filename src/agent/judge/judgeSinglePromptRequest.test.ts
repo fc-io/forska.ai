@@ -1,5 +1,7 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
+import {ProviderInvocationError} from '../../server/providers/providerTypes.ts'
+import {ProviderContentRefusalError} from './providerContentRefusalError.ts'
 import {JudgmentPersistenceError} from './storeSinglePromptJudgment.ts'
 
 type JudgeModule = typeof import('../judge.ts')
@@ -154,4 +156,87 @@ test('judgeSinglePrompt sends the shared system and user prompts to the provider
   expect(capturedRequest?.prompt).toContain('## article_title')
   expect(capturedRequest?.prompt).toContain('Preview title')
   expect(capturedRequest?.prompt).toContain('Should this study be included?')
+})
+
+const getProviderFailureRejection = async ({
+  code,
+  message,
+  providerKind,
+}: {
+  code: string
+  message: string
+  providerKind: string
+}) => {
+  const invokeStoredProviderModel = mock(async () => {
+    throw new ProviderInvocationError(message, {
+      code,
+      providerKind,
+      usage: {completionTokens: 0, promptTokens: 13_995, totalTokens: 13_995},
+    })
+  })
+  const judgeStoreTokenUse = mock(async (_tokenUse: Array<{failureCode?: string | null; outcome: string}>) => {})
+  const storeSinglePromptJudgment = mock(async () => {})
+  const {judgeSinglePrompt} = await loadJudgeModule({
+    invokeStoredProviderModel,
+    judgeStoreTokenUse,
+    storeSinglePromptJudgment,
+  })
+  const error = await judgeSinglePrompt(createJudgeSinglePromptInput()).then(
+    () => {
+      return null
+    },
+    (caught: unknown) => {
+      return caught
+    },
+  )
+
+  return {error, invokeStoredProviderModel, judgeStoreTokenUse, storeSinglePromptJudgment}
+}
+
+test('a Claude Code content refusal aborts after exactly one provider attempt as a ProviderContentRefusalError', async () => {
+  const message =
+    "Claude Code content refusal (stop_reason=refusal): API Error: Opus 5's safeguards flagged this message"
+  const {error, invokeStoredProviderModel, judgeStoreTokenUse, storeSinglePromptJudgment} =
+    await getProviderFailureRejection({code: 'claude_code_content_refusal', message, providerKind: 'claude-code'})
+
+  expect(invokeStoredProviderModel).toHaveBeenCalledTimes(1)
+  expect(storeSinglePromptJudgment).not.toHaveBeenCalled()
+  expect(error).toBeInstanceOf(ProviderContentRefusalError)
+  expect(error instanceof ProviderContentRefusalError ? error.refusal : null).toMatchObject({
+    failureCode: 'claude_code_content_refusal',
+    modelName: 'gpt-5.4',
+    providerKind: 'claude-code',
+    reason: message,
+  })
+  expect(Number.isNaN(Date.parse(error instanceof ProviderContentRefusalError ? error.refusal.refusedAt : ''))).toBe(
+    false,
+  )
+  expect(judgeStoreTokenUse.mock.calls[0]?.[0]).toEqual([
+    expect.objectContaining({failureCode: 'claude_code_content_refusal', outcome: 'failure', pendingQueueRetry: false}),
+  ])
+})
+
+test('a direct Anthropic refusal takes the same terminal path after exactly one provider attempt', async () => {
+  const {error, invokeStoredProviderModel} = await getProviderFailureRejection({
+    code: 'anthropic_refusal_empty_response',
+    message: 'Anthropic returned no text content (failure_code=anthropic_refusal_empty_response; stop_reason=refusal)',
+    providerKind: 'anthropic',
+  })
+
+  expect(invokeStoredProviderModel).toHaveBeenCalledTimes(1)
+  expect(error).toBeInstanceOf(ProviderContentRefusalError)
+  expect(error instanceof ProviderContentRefusalError ? error.refusal.failureCode : null).toBe(
+    'anthropic_refusal_empty_response',
+  )
+})
+
+test('a non-refusal Claude Code request failure still uses every provider attempt', async () => {
+  const {error, invokeStoredProviderModel} = await getProviderFailureRejection({
+    code: 'claude_code_request_failed',
+    message: 'Claude Code request failed: not json at all',
+    providerKind: 'claude-code',
+  })
+
+  expect(invokeStoredProviderModel).toHaveBeenCalledTimes(3)
+  expect(error).not.toBeInstanceOf(ProviderContentRefusalError)
 })

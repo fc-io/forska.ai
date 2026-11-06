@@ -28,6 +28,7 @@ import {runJudgmentJobRepairAction} from './judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {getTransientJudgmentJobSqliteLockReasonSql} from './judgmentJobSqliteTransientLock.ts'
+import {drainJudgmentPromptRefusalOutbox} from './judgmentPromptRefusalImport.ts'
 import {type JudgmentRequestAttemptCloseoutProof} from './judgmentRequestAttemptManifest.ts'
 import {
   finalizeMissingLocalSqliteDrainingJobs,
@@ -1608,9 +1609,10 @@ const reapStaleOutboxClaimsForJobs = async ({
   return {jobsHandled, rowsChanged}
 }
 
-const drainCompletionTokenUseOutboxForCleanup = async (jobId: string): Promise<void> => {
+const drainCompletionOutboxesForCleanup = async (jobId: string): Promise<void> => {
   try {
     await drainCompletionTokenUseOutbox(jobId)
+    await drainJudgmentPromptRefusalOutbox(jobId)
   } catch (error) {
     if (!(error instanceof JudgmentJobLeaseError)) {
       throw error
@@ -1659,9 +1661,9 @@ const finalizeDrainingSqliteJobs = async ({
       }
     }
 
-    // Pending completion token use keeps a job from counting as drained; flush it first so a
-    // paused job can finish draining in this pass.
-    await drainCompletionTokenUseOutboxForCleanup(currentJobId)
+    // Pending completion token use and provider refusals keep a job from counting as drained;
+    // flush them first so a paused job can finish draining in this pass.
+    await drainCompletionOutboxesForCleanup(currentJobId)
     const currentDrainedJobIds = await sqliteService.finalizeDrainingJobs({
       jobId: currentJobId,
       serverJobId: budget.serverJobId,

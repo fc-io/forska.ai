@@ -4653,6 +4653,58 @@ const getJobDetailWithProviderHealth = async (jobId: string) => {
   return {body: (await response.json()) as {providerHealth: ProviderHealthResponse | null}, status: response.status}
 }
 
+test('owner-backed provider_refusal completion stores the refusal as a terminal skip without provider health', async () => {
+  const {getJudgmentJobProviderHealth} = await import('../services/judgmentJobProviderHealthService.ts')
+  const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
+    prefix: 'provider-refusal-skip',
+    promptCount: 2,
+  })
+  const [claim, missingRefusalClaim] = claims
+
+  if (!claim || !missingRefusalClaim) {
+    throw new Error('Expected owner-backed claims')
+  }
+
+  const refusal = {
+    failureCode: 'claude_code_content_refusal',
+    modelName: 'claude-opus-5-5',
+    providerKind: 'claude-code',
+    reason: "Claude Code content refusal (stop_reason=refusal): API Error: Opus 5's safeguards flagged this message",
+    refusedAt: '2026-11-06T06:59:13.635Z',
+  }
+  const completion = await postOwnerBackedCompletion(jobId, {
+    ...getOwnerBackedCompletionBody(jobId, claim),
+    refusal,
+    skipReason: 'provider_refusal',
+    status: 'skipped',
+  })
+  const missingRefusalCompletion = await app?.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
+      body: JSON.stringify({
+        ...getOwnerBackedCompletionBody(jobId, missingRefusalClaim),
+        skipReason: 'provider_refusal',
+        status: 'skipped',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(completion.status).toBe(200)
+  expect(completion.body.data.status).toBe('skipped')
+  expect(missingRefusalCompletion?.status).toBe(400)
+  expect(
+    await sqliteService.filterOutLocallyJudgedPrompts(jobId, [
+      {articleId: claim.articleId, promptId: claim.promptId},
+      {articleId: missingRefusalClaim.articleId, promptId: missingRefusalClaim.promptId},
+    ]),
+  ).toEqual([{articleId: missingRefusalClaim.articleId, promptId: missingRefusalClaim.promptId}])
+  expect(await sqliteService.getPendingPromptRefusals(jobId, 10)).toMatchObject([
+    {...refusal, articleId: claim.articleId, jobId, queuePromptId: claim.recordId},
+  ])
+  expect(await getJudgmentJobProviderHealth(jobId)).toBeNull()
+})
+
 test('owner-backed retry completion records provider usage-limit health and backs off the requeue', async () => {
   const {getJudgmentJobProviderHealth} = await import('../services/judgmentJobProviderHealthService.ts')
   const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
