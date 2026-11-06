@@ -1,50 +1,52 @@
+import {
+  anthropicRefusalEmptyResponseFailureCode,
+  isProviderContentRefusalFailureCode,
+} from '../../../providers/providerContentRefusal.ts'
 import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import type {JudgmentJobSqliteHealthProjectionReader} from '../../../services/judgmentJobSqliteHealthProjectionService.ts'
 import {type FailedRequestDetailRecord, getFailedRequestDetailRecords} from '../getFailedRequestDetailRecords.ts'
 
-type FailedRequestSummary = {
-  anthropicRefusalArticles: number
-  anthropicRefusals: number
-  persistedFailedRequests: number
+type FailedRequestSummary = {persistedFailedRequests: number; providerRefusalArticles: number; providerRefusals: number}
+type ProviderRefusalSummary = Pick<FailedRequestSummary, 'providerRefusalArticles' | 'providerRefusals'>
+
+const getObjectRecord = (value: unknown): Record<string, unknown> | null => {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
-type AnthropicRefusalSummary = Pick<FailedRequestSummary, 'anthropicRefusalArticles' | 'anthropicRefusals'>
 
-const isAnthropicRefusalDetail = (detail: FailedRequestDetailRecord): boolean => {
-  const error = typeof detail.error === 'string' ? detail.error : ''
-  const failureCode = typeof detail.failureCode === 'string' ? detail.failureCode : ''
-  const providerDiagnostics =
-    detail.providerDiagnostics
-    && typeof detail.providerDiagnostics === 'object'
-    && !Array.isArray(detail.providerDiagnostics)
-      ? (detail.providerDiagnostics as Record<string, unknown>)
-      : null
-  const initialStopReason =
-    providerDiagnostics?.initial
-    && typeof providerDiagnostics.initial === 'object'
-    && !Array.isArray(providerDiagnostics.initial)
-      ? (providerDiagnostics.initial as Record<string, unknown>).stopReason
-      : null
-  const fallbackStopReason =
-    providerDiagnostics?.fallback
-    && typeof providerDiagnostics.fallback === 'object'
-    && !Array.isArray(providerDiagnostics.fallback)
-      ? (providerDiagnostics.fallback as Record<string, unknown>).stopReason
-      : null
+const getDiagnosticsStopReasons = (providerDiagnostics: Record<string, unknown> | null): unknown[] => {
+  return [
+    providerDiagnostics?.stopReason,
+    getObjectRecord(providerDiagnostics?.initial)?.stopReason,
+    getObjectRecord(providerDiagnostics?.fallback)?.stopReason,
+  ]
+}
 
+const isLegacyAnthropicEmptyRefusalDetail = ({error, failureCode}: {error: string; failureCode: string}): boolean => {
   return (
-    failureCode === 'anthropic_refusal_empty_response'
-    || error.includes('failure_code=anthropic_refusal_empty_response')
-    || ((failureCode === 'anthropic_empty_response' || error.includes('failure_code=anthropic_empty_response'))
-      && (error.includes('stop_reason=refusal') || initialStopReason === 'refusal' || fallbackStopReason === 'refusal'))
+    (failureCode === 'anthropic_empty_response' || error.includes('failure_code=anthropic_empty_response'))
+    && error.includes('stop_reason=refusal')
   )
 }
 
-const getAnthropicRefusalSummary = (rows: Array<{failedRequestsDetails: unknown}>) => {
+export const isProviderRefusalDetail = (detail: FailedRequestDetailRecord): boolean => {
+  const error = typeof detail.error === 'string' ? detail.error : ''
+  const failureCode = typeof detail.failureCode === 'string' ? detail.failureCode : ''
+  const stopReasons = getDiagnosticsStopReasons(getObjectRecord(detail.providerDiagnostics))
+
+  return (
+    isProviderContentRefusalFailureCode(failureCode)
+    || error.includes(`failure_code=${anthropicRefusalEmptyResponseFailureCode}`)
+    || stopReasons.includes('refusal')
+    || isLegacyAnthropicEmptyRefusalDetail({error, failureCode})
+  )
+}
+
+const getProviderRefusalSummary = (rows: Array<{failedRequestsDetails: unknown}>): ProviderRefusalSummary => {
   const detailRecords = rows.flatMap((row) => {
     return getFailedRequestDetailRecords(row.failedRequestsDetails)
   })
   const refusalRecords = detailRecords.filter((detail) => {
-    return isAnthropicRefusalDetail(detail)
+    return isProviderRefusalDetail(detail)
   })
   const articleIds = new Set(
     refusalRecords.flatMap((detail) => {
@@ -53,10 +55,8 @@ const getAnthropicRefusalSummary = (rows: Array<{failedRequestsDetails: unknown}
     }),
   )
 
-  return {anthropicRefusalArticles: articleIds.size, anthropicRefusals: refusalRecords.length}
+  return {providerRefusalArticles: articleIds.size, providerRefusals: refusalRecords.length}
 }
-
-const emptyAnthropicRefusalSummary: AnthropicRefusalSummary = {anthropicRefusalArticles: 0, anthropicRefusals: 0}
 
 const getPersistedFailedRequestCountFromLegacyDetails = async ({
   db,
@@ -108,13 +108,13 @@ const getPersistedFailedRequestCount = async ({
   return persistedFailedRequests + legacyPersistedFailedRequests
 }
 
-const getAnthropicRefusalSummaryFromDatabase = async ({
+const getProviderRefusalSummaryFromDatabase = async ({
   db,
   jobId,
 }: {
   db: JudgmentJobSqliteHealthProjectionReader
   jobId: string
-}): Promise<AnthropicRefusalSummary> => {
+}): Promise<ProviderRefusalSummary> => {
   const rows = await db.queryJson<{failedRequestsDetails: unknown}>(`
     WITH failed_rows AS (
       SELECT
@@ -126,40 +126,23 @@ const getAnthropicRefusalSummaryFromDatabase = async ({
     )
     SELECT TO_JSON(failed_requests_details) AS failedRequestsDetails
     FROM failed_rows
-    WHERE contains(detailText, ${getSqlLiteral('anthropic_refusal_empty_response')})
-      OR contains(detailText, ${getSqlLiteral('anthropic_empty_response')})
+    WHERE contains(detailText, ${getSqlLiteral('refusal')})
   `)
 
-  return getAnthropicRefusalSummary(rows)
-}
-
-const getAnthropicRefusalSummaryForProvider = ({
-  db,
-  jobId,
-  modelProvider,
-}: {
-  db: JudgmentJobSqliteHealthProjectionReader
-  jobId: string
-  modelProvider: string | null
-}): Promise<AnthropicRefusalSummary> => {
-  return modelProvider === 'anthropic'
-    ? getAnthropicRefusalSummaryFromDatabase({db, jobId})
-    : Promise.resolve(emptyAnthropicRefusalSummary)
+  return getProviderRefusalSummary(rows)
 }
 
 export const getFailedRequestSummaryFromDatabase = async ({
   db,
   jobId,
-  modelProvider,
 }: {
   db: JudgmentJobSqliteHealthProjectionReader
   jobId: string
-  modelProvider: string | null
 }): Promise<FailedRequestSummary> => {
-  const [persistedFailedRequests, anthropicRefusalSummary] = await Promise.all([
+  const [persistedFailedRequests, providerRefusalSummary] = await Promise.all([
     getPersistedFailedRequestCount({db, jobId}),
-    getAnthropicRefusalSummaryForProvider({db, jobId, modelProvider}),
+    getProviderRefusalSummaryFromDatabase({db, jobId}),
   ])
 
-  return {...anthropicRefusalSummary, persistedFailedRequests}
+  return {...providerRefusalSummary, persistedFailedRequests}
 }
