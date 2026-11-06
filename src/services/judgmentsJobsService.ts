@@ -258,7 +258,7 @@ export type JudgmentJobRequestStats = {
     probeInProgress: boolean
     status: string
   } | null
-  failures?: {anthropicRefusalArticles: number; anthropicRefusals: number; persistedFailedRequests: number}
+  failures?: {persistedFailedRequests: number; providerRefusalArticles: number; providerRefusals: number}
   inFlight: number
   lifecycleCounters?: {
     claimedPrompts: number

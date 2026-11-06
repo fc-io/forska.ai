@@ -1182,13 +1182,13 @@ export const AdminJudgmentJobDetail = () => {
                           {formatMetricCount(data()?.requestStats?.failures?.persistedFailedRequests)}
                         </DenseMetric>
                         <DenseMetric
-                          description={`Articles affected: ${formatMetricCount(
-                            data()?.requestStats?.failures?.anthropicRefusalArticles,
+                          description={`Refused request attempts from any provider. Articles affected: ${formatMetricCount(
+                            data()?.requestStats?.failures?.providerRefusalArticles,
                           )}`}
-                          label="Anthropic Refusals"
+                          label="Provider Refusals"
                           tone="rose"
                         >
-                          {formatMetricCount(data()?.requestStats?.failures?.anthropicRefusals)}
+                          {formatMetricCount(data()?.requestStats?.failures?.providerRefusals)}
                         </DenseMetric>
                       </div>
                     </MetricGroup>

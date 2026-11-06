@@ -2736,6 +2736,32 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
       CAST('[{"articleId":"article-refusal","error":"Anthropic returned no text content (failure_code=anthropic_empty_response; stop_reason=refusal; content_types=none)","providerDiagnostics":{"initial":{"stopReason":"refusal"}}},{"articleId":"article-other","error":"Invalid JSON response"}]' AS JSON)
     )
   `)
+  await runDatabase(`
+    INSERT INTO app.token_use (
+      id,
+      judgment_job_id,
+      requests,
+      total_prompt_tokens,
+      total_completion_tokens,
+      total_tokens,
+      successful_requests,
+      failed_requests,
+      has_failed_requests,
+      failed_requests_details
+    )
+    VALUES (
+      'sqlite-stats-claude-code-token-${Date.now()}',
+      '${jobId}',
+      3,
+      42000,
+      0,
+      42000,
+      0,
+      3,
+      TRUE,
+      CAST('[{"articleId":"article-cli-refusal","failureCode":"claude_code_content_refusal","error":"Claude Code content refusal (stop_reason=refusal): API Error: safeguards flagged this message"},{"articleId":"article-cli-refusal-before-fix","failureCode":"claude_code_request_failed","error":"Claude Code request failed: API Error: safeguards flagged this message","providerDiagnostics":{"isError":true,"stopReason":"refusal","subtype":"success"}},{"articleId":"article-cli-refusal-before-fix","failureCode":"claude_code_request_failed","error":"Claude Code request failed: not json at all","providerDiagnostics":{"isError":true,"stopReason":"end_turn"}}]' AS JSON)
+    )
+  `)
 
   const response = await withDuckdbMemoryLimitOverride('10GB', () => {
     return testApp.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
@@ -2761,7 +2787,7 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
         providerDispatchQueueLimit: number
         providerDispatchQueuedPrompts: number
       }
-      failures: {anthropicRefusalArticles: number; anthropicRefusals: number; persistedFailedRequests: number}
+      failures: {persistedFailedRequests: number; providerRefusalArticles: number; providerRefusals: number}
       inFlight: number
       providerTelemetry: {
         normalRequestCapacity: number
@@ -2791,11 +2817,11 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   expect(body.promptStats).toEqual({claimed: 1, judged: 1, ready: 1, running: 1, skipped: 1})
   expect(body.storageHealth.promptCounts).toEqual(body.promptStats)
   expect(body.requestStats.inFlight).toBe(0)
-  expect(body.requestStats.attempts).toBe(3)
+  expect(body.requestStats.attempts).toBe(6)
   expect(body.requestStats.failures).toEqual({
-    anthropicRefusalArticles: 1,
-    anthropicRefusals: 1,
-    persistedFailedRequests: 2,
+    persistedFailedRequests: 5,
+    providerRefusalArticles: 3,
+    providerRefusals: 3,
   })
   expect(body.requestStats.dispatch).toEqual({
     jobActivePrompts: 0,

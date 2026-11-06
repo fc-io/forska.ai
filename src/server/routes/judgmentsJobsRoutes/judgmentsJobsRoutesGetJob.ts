@@ -31,13 +31,7 @@ export const judgmentsJobsRoutesGetJob = async ({params, request}: {params: {id:
       const leaseMetadataPromise = shouldCurrentServerRunJudgingLoops()
         ? sqliteService.getJudgmentJobLeaseMetadata(job.id)
         : Promise.resolve(null)
-      const failedRequestSummaryPromise = providerConnectionPromise.then((providerConnection) => {
-        return getFailedRequestSummaryFromDatabase({
-          db,
-          jobId: job.id,
-          modelProvider: providerConnection?.providerKind ?? null,
-        })
-      })
+      const failedRequestSummaryPromise = getFailedRequestSummaryFromDatabase({db, jobId: job.id})
 
       const judgingRuntimePromise = getJudgingRuntime()
       const admittedArticleCountPromise = getJudgmentJobAdmittedArticleCount({
