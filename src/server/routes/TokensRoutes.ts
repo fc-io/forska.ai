@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {getDateValue} from '../services/appQueryHelpers.ts'
+import {getTokenUseCostColumnValues} from '../services/tokenUseCostColumns.ts'
 import {getTokenUseQueryService} from '../services/tokenUseQueryService.ts'
 import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {tokensRoutesGetFailedRequestById} from './tokensRoutes/tokensRoutesGetFailedRequestById.ts'
@@ -9,6 +10,7 @@ import {tokensRoutesGetTimeline} from './tokensRoutes/tokensRoutesGetTimeline.ts
 import {tokensRoutesGetTimelineAllJobs} from './tokensRoutes/tokensRoutesGetTimelineAllJobs.ts'
 import {tokensRoutesGetTimelineAllJobsStats} from './tokensRoutes/tokensRoutesGetTimelineAllJobsStats.ts'
 import {tokensRoutesGetTimelineStats} from './tokensRoutes/tokensRoutesGetTimelineStats.ts'
+import {tokensRoutesPostCostByHour} from './tokensRoutes/tokensRoutesPostCostByHour.ts'
 
 export const tokensRoutes = new Elysia()
   .post(
@@ -40,6 +42,7 @@ export const tokensRoutes = new Elysia()
           total_failed_completion_tokens: body.totalFailedCompletionTokens ?? null,
           total_failed_tokens: body.totalFailedTokens ?? null,
           request_attempts_json: body.requestAttempts ?? null,
+          ...getTokenUseCostColumnValues({...body, modelName: body.sglangModel ?? null}),
           started_at: getDateValue(body.startedAt),
           finished_at: getDateValue(body.finishedAt),
           duration: body.duration,
@@ -73,8 +76,21 @@ export const tokensRoutes = new Elysia()
         totalFailedCompletionTokens: t.Optional(t.Number()),
         totalFailedTokens: t.Optional(t.Number()),
         requestAttempts: t.Optional(t.Array(t.Any())),
+        modelId: t.Optional(t.Union([t.String(), t.Null()])),
+        providerConnectionId: t.Optional(t.Union([t.String(), t.Null()])),
+        providerKind: t.Optional(t.Union([t.String(), t.Null()])),
+        totalCacheCreationInputTokens: t.Optional(t.Union([t.Number(), t.Null()])),
+        totalCacheReadInputTokens: t.Optional(t.Union([t.Number(), t.Null()])),
+        totalThinkingTokens: t.Optional(t.Union([t.Number(), t.Null()])),
       }),
     },
+  )
+  .post(
+    '/api/tokens/cost-by-hour',
+    async ({body, set}) => {
+      return await tokensRoutesPostCostByHour({body, set})
+    },
+    {body: t.Object({from: t.Optional(t.String()), jobId: t.Optional(t.String()), to: t.Optional(t.String())})},
   )
   .get('/api/tokens/largest-per-request', async () => {
     try {

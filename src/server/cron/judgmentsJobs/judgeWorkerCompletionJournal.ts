@@ -10,6 +10,7 @@ import {withAbortSignalTimeout} from '../../../utils/withAbortSignalTimeout.ts'
 import {getLegacyFullTextStrategyId} from '../../fullText/fullTextStrategy.ts'
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
 import type {JudgmentExecutionSnapshotRecord} from '../../services/judgmentExecutionSnapshotService.ts'
+import type {TokenUseCostFields} from '../../services/tokenUseCostColumns.ts'
 import {getEnv} from '../../utils/env.ts'
 import {getCurrentJudgeWorkerJournalIdentity} from '../../utils/judgeWorkerJournalIdentity.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
@@ -46,7 +47,7 @@ import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPr
 import {markPromptSkipFromCompletion} from './markPromptSkipCompletion.ts'
 import type {ProviderBucketSnapshot} from './providerAdmissionLease.ts'
 
-export type JudgeWorkerTokenUseSummary = {
+export type JudgeWorkerTokenUseSummary = TokenUseCostFields & {
   failedRequests: number
   failedRequestsDetails: unknown[]
   gpuGpusPerNode?: number | null

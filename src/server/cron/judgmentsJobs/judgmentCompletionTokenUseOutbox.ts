@@ -1,3 +1,4 @@
+import {getTokenUseCostColumnValues, type TokenUseCostFields} from '../../services/tokenUseCostColumns.ts'
 import {getTokenUseQueryService} from '../../services/tokenUseQueryService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
@@ -7,7 +8,7 @@ import {
   withDurableCloseoutRef,
 } from './judgmentRequestAttemptManifest.ts'
 
-export type JudgmentCompletionTokenUseSummary = {
+export type JudgmentCompletionTokenUseSummary = TokenUseCostFields & {
   dpSize?: number | null
   duration?: number | null
   failedRequests: number
@@ -93,6 +94,7 @@ const getCompletionTokenUseInsertValues = (
         requestAttempts: tokenUse.requestAttempts ?? input.requestAttempts ?? [],
       }),
     ),
+    ...getTokenUseCostColumnValues(tokenUse),
     started_at: tokenUse.startedAt ? new Date(tokenUse.startedAt) : null,
     finished_at: tokenUse.finishedAt ? new Date(tokenUse.finishedAt) : null,
     duration: tokenUse.duration == null ? null : Math.round(tokenUse.duration),

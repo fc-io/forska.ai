@@ -312,3 +312,46 @@ test('judgeStoreTokenUse records persistence failure and leaves request attempts
     }
   }
 })
+
+test('buildTokenUseTotals sums the reported breakdown and keeps NULL when no attempt reported it', () => {
+  const {buildTokenUseTotals} = require('./judgeStoreTokenUse.ts') as typeof import('./judgeStoreTokenUse.ts')
+  const identity = {providerConnectionId: 'conn-claude', providerKind: 'claude-code'}
+  const totals = buildTokenUseTotals([
+    {
+      ...buildEntry({outcome: 'success', error: null}),
+      ...identity,
+      cacheCreationInputTokens: 6,
+      cacheReadInputTokens: 3,
+      thinkingTokens: null,
+    },
+    {
+      ...buildEntry({outcome: 'failure', error: 'Invalid JSON response'}),
+      ...identity,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: null,
+      thinkingTokens: null,
+    },
+    buildEntry({outcome: 'failure', error: 'Connection error'}),
+  ])
+
+  expect(totals).toMatchObject({
+    modelId: 'model-1',
+    modelName: 'model-name',
+    providerConnectionId: 'conn-claude',
+    providerKind: 'claude-code',
+    totalCacheCreationInputTokens: 6,
+    totalCacheReadInputTokens: 3,
+    totalThinkingTokens: null,
+  })
+})
+
+test('buildTokenUseTotals stores no identity when the attempts disagree on it', () => {
+  const {buildTokenUseTotals} = require('./judgeStoreTokenUse.ts') as typeof import('./judgeStoreTokenUse.ts')
+  const totals = buildTokenUseTotals([
+    {...buildEntry({outcome: 'success', error: null}), providerConnectionId: 'conn-a', providerKind: 'claude-code'},
+    {...buildEntry({outcome: 'success', error: null}), providerConnectionId: 'conn-b', providerKind: 'claude-code'},
+  ])
+
+  expect(totals.providerConnectionId).toBeNull()
+  expect(totals.providerKind).toBe('claude-code')
+})

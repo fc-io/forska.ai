@@ -50,6 +50,13 @@ type TokenUseRow = {
   totalFailedCompletionTokens: number | null
   totalFailedTokens: number | null
   requestAttemptsJson: unknown
+  cacheCreationInputTokens: number | string | null
+  cacheReadInputTokens: number | string | null
+  thinkingTokens: number | string | null
+  modelId: string | null
+  modelName: string | null
+  providerKind: string | null
+  providerConnectionId: string | null
 }
 
 type TokenUseProjection = {
@@ -170,6 +177,10 @@ const getTokenUseInsertLiteral = (column: string, value: unknown) => {
       : getSqlLiteral(value)
 }
 
+const getNullableTokenCount = (value: number | string | null): number | null => {
+  return value === null ? null : Number(value)
+}
+
 const getTokenUseValue = (row: TokenUseRow): TokenUseRecord => {
   return {
     id: row.id,
@@ -202,6 +213,13 @@ const getTokenUseValue = (row: TokenUseRow): TokenUseRecord => {
     totalFailedCompletionTokens: row.totalFailedCompletionTokens,
     totalFailedTokens: row.totalFailedTokens,
     requestAttemptsJson: getJsonValue(row.requestAttemptsJson),
+    cacheCreationInputTokens: getNullableTokenCount(row.cacheCreationInputTokens),
+    cacheReadInputTokens: getNullableTokenCount(row.cacheReadInputTokens),
+    thinkingTokens: getNullableTokenCount(row.thinkingTokens),
+    modelId: row.modelId,
+    modelName: row.modelName,
+    providerKind: row.providerKind,
+    providerConnectionId: row.providerConnectionId,
   }
 }
 
@@ -264,7 +282,14 @@ const tokenUseSelectClause = `
   total_failed_prompt_tokens AS totalFailedPromptTokens,
   total_failed_completion_tokens AS totalFailedCompletionTokens,
   total_failed_tokens AS totalFailedTokens,
-  TO_JSON(request_attempts_json) AS requestAttemptsJson
+  TO_JSON(request_attempts_json) AS requestAttemptsJson,
+  cache_creation_input_tokens AS cacheCreationInputTokens,
+  cache_read_input_tokens AS cacheReadInputTokens,
+  thinking_tokens AS thinkingTokens,
+  model_id AS modelId,
+  model_name AS modelName,
+  provider_kind AS providerKind,
+  provider_connection_id AS providerConnectionId
 `
 
 const getInsertTokenUseValues = (values: Record<string, unknown>) => {
@@ -274,6 +299,12 @@ const getInsertTokenUseValues = (values: Record<string, unknown>) => {
 }
 
 const tokenUseInsertColumnValueGetters: Record<string, (row: TokenUseRecord) => unknown> = {
+  cache_creation_input_tokens: (row) => {
+    return row.cacheCreationInputTokens
+  },
+  cache_read_input_tokens: (row) => {
+    return row.cacheReadInputTokens
+  },
   created_at: (row) => {
     return row.createdAt
   },
@@ -312,6 +343,18 @@ const tokenUseInsertColumnValueGetters: Record<string, (row: TokenUseRecord) => 
   },
   judgment_job_id: (row) => {
     return row.judgmentsJobId
+  },
+  model_id: (row) => {
+    return row.modelId
+  },
+  model_name: (row) => {
+    return row.modelName
+  },
+  provider_connection_id: (row) => {
+    return row.providerConnectionId
+  },
+  provider_kind: (row) => {
+    return row.providerKind
   },
   request_attempts_json: (row) => {
     return row.requestAttemptsJson
@@ -357,6 +400,9 @@ const tokenUseInsertColumnValueGetters: Record<string, (row: TokenUseRecord) => 
   },
   total_tokens: (row) => {
     return row.totalTokens
+  },
+  thinking_tokens: (row) => {
+    return row.thinkingTokens
   },
   tp_size: (row) => {
     return row.tpSize

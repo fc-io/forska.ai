@@ -10,6 +10,7 @@ import {
   recordRequestAttemptsPersistenceFailure,
 } from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts'
 import {markJudgmentRequestAttemptsClosed} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
+import {getTokenUseCostColumnValues} from '../../server/services/tokenUseCostColumns.ts'
 import {getTokenUseQueryService} from '../../server/services/tokenUseQueryService.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../../server/utils/duckdbMemoryLimit.ts'
 import {inferenceRuntimeConfig} from '../../server/utils/getInferenceRuntimeConfig.ts'
@@ -23,13 +24,18 @@ export type JudgeTokenUsageEntry = {
   modelId: string
   modelName: string
   baseURL: string
+  providerConnectionId?: string | null
   providerKey?: string
+  providerKind?: string | null
   requestAttemptId?: string
   requestFinishedAt?: string
   requestStartedAt?: string
   promptTokens: number
   completionTokens: number
   totalTokens: number
+  cacheCreationInputTokens?: number | null
+  cacheReadInputTokens?: number | null
+  thinkingTokens?: number | null
   outcome: 'success' | 'failure'
   error: string | null
   sanitizationAttempted: boolean
@@ -106,7 +112,13 @@ const isConnectionError = (error: string | null): boolean => {
 }
 
 export type TokenUseTotals = {
+  modelId: string | null
   modelName: string | null
+  providerConnectionId: string | null
+  providerKind: string | null
+  totalCacheCreationInputTokens: number | null
+  totalCacheReadInputTokens: number | null
+  totalThinkingTokens: number | null
   totalRequests: number
   totalPromptTokens: number
   totalCompletionTokens: number
@@ -147,6 +159,33 @@ const getStoredModelName = (tokenUseEntries: JudgeTokenUsageEntry[]): string | n
     const normalized = String(entry.modelName ?? '').trim()
 
     return resolved ?? (normalized === '' ? null : normalized)
+  }, null)
+}
+
+const getSingleReportedValue = (values: Array<string | null | undefined>): string | null => {
+  const distinctValues = [
+    ...new Set(
+      values
+        .map((value) => {
+          return String(value ?? '').trim()
+        })
+        .filter((value) => {
+          return value !== ''
+        }),
+    ),
+  ]
+
+  return distinctValues.length === 1 ? (distinctValues[0] ?? null) : null
+}
+
+const getReportedTokenSum = (
+  tokenUseEntries: JudgeTokenUsageEntry[],
+  key: 'cacheCreationInputTokens' | 'cacheReadInputTokens' | 'thinkingTokens',
+): number | null => {
+  return tokenUseEntries.reduce<number | null>((total, entry) => {
+    const value = entry[key]
+
+    return typeof value === 'number' && Number.isFinite(value) ? (total ?? 0) + value : total
   }, null)
 }
 
@@ -263,6 +302,7 @@ const storeTokenUseDirectly = async (
       total_failed_completion_tokens: totalTokenUse.totalFailedCompletionTokens,
       total_failed_tokens: totalTokenUse.totalFailedTokens,
       request_attempts_json: stringifyRequestAttempts(requestAttempts),
+      ...getTokenUseCostColumnValues(totalTokenUse),
       started_at: new Date(startedAt),
       finished_at: new Date(finishedAt),
       duration: Math.round(duration),
@@ -299,7 +339,13 @@ const storeTokenUseViaAPI = async (
   try {
     const response = await apiClient.api.tokens.usage.post({
       judgmentsJobId,
+      modelId: totalTokenUse.modelId,
+      providerConnectionId: totalTokenUse.providerConnectionId,
+      providerKind: totalTokenUse.providerKind,
       sglangModel: totalTokenUse.modelName ?? undefined,
+      totalCacheCreationInputTokens: totalTokenUse.totalCacheCreationInputTokens,
+      totalCacheReadInputTokens: totalTokenUse.totalCacheReadInputTokens,
+      totalThinkingTokens: totalTokenUse.totalThinkingTokens,
       requests: totalTokenUse.totalRequests,
       totalPromptTokens: totalTokenUse.totalPromptTokens,
       totalCompletionTokens: totalTokenUse.totalCompletionTokens,
@@ -383,11 +429,16 @@ const storeTokenUseInJudgeWorkerCompletionOutbox = async (
         gpuShape: inferenceRuntimeConfig.gpuShape,
         gpuTotalGpus: inferenceRuntimeConfig.gpuTotalGpus,
         hasFailedRequests: totalTokenUse.hasFailedRequests,
+        modelId: totalTokenUse.modelId,
         modelName: totalTokenUse.modelName,
+        providerConnectionId: totalTokenUse.providerConnectionId,
+        providerKind: totalTokenUse.providerKind,
         sglangMaxRunningRequests: inferenceRuntimeConfig.sglangMaxRunningRequests,
         startedAt,
         successfulRequests: totalTokenUse.successfulRequests,
         tpSize: inferenceRuntimeConfig.tpSize,
+        totalCacheCreationInputTokens: totalTokenUse.totalCacheCreationInputTokens,
+        totalCacheReadInputTokens: totalTokenUse.totalCacheReadInputTokens,
         totalCompletionTokens: totalTokenUse.totalCompletionTokens,
         totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
         totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
@@ -397,6 +448,7 @@ const storeTokenUseInJudgeWorkerCompletionOutbox = async (
         totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
         totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
         totalSuccessTokens: totalTokenUse.totalSuccessTokens,
+        totalThinkingTokens: totalTokenUse.totalThinkingTokens,
         totalTokens: totalTokenUse.totalTokens,
         requestAttempts,
       },
@@ -593,7 +645,25 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
   const hasFailedRequests = failedRequestsDetails.length > 0
 
   return {
+    modelId: getSingleReportedValue(
+      tokenUseEntries.map((entry) => {
+        return entry.modelId
+      }),
+    ),
     modelName: getStoredModelName(tokenUseEntries),
+    providerConnectionId: getSingleReportedValue(
+      tokenUseEntries.map((entry) => {
+        return entry.providerConnectionId
+      }),
+    ),
+    providerKind: getSingleReportedValue(
+      tokenUseEntries.map((entry) => {
+        return entry.providerKind
+      }),
+    ),
+    totalCacheCreationInputTokens: getReportedTokenSum(tokenUseEntries, 'cacheCreationInputTokens'),
+    totalCacheReadInputTokens: getReportedTokenSum(tokenUseEntries, 'cacheReadInputTokens'),
+    totalThinkingTokens: getReportedTokenSum(tokenUseEntries, 'thinkingTokens'),
     totalRequests: totals.totalRequests,
     totalPromptTokens: totals.totalPromptTokens,
     totalCompletionTokens: totals.totalCompletionTokens,

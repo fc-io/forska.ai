@@ -13,6 +13,7 @@ export const tokensRouteSurfaceRoutes: RouteSurfaceRoute[] = [
     ['POST', '/api/tokens/timelineAllJobs'],
     ['POST', '/api/tokens/timelineStats'],
     ['POST', '/api/tokens/timelineAllJobsStats'],
+    ['POST', '/api/tokens/cost-by-hour'],
   ]),
   ...ownerDependentSensitive(
     'TokensRoutes.ts',
