@@ -41,7 +41,7 @@ const defaultReadableComponents: readonly ReviewServingProjectionComponent[] = [
 ]
 const forbiddenSqlFragments = ['selected_scoped_article_import', 'FROM app.article', 'FROM app.judgment', 'OFFSET']
 const hasArticleServingRowSource = (statement: string) => {
-  return statement.includes('FROM mart.review_article_serving_base_v4 serving')
+  return /\b(?:FROM|JOIN) mart\.review_article_serving_base_v4 serving\b/u.test(statement)
 }
 
 const getComponentState = (inputComponents: readonly ReviewServingProjectionComponent[] = components) => {
@@ -120,6 +120,7 @@ const createManifestDatabase = (
 const createReaderDatabase = (input?: {
   humanRows?: readonly Record<string, unknown>[]
   llmHasJudgment?: boolean
+  llmRefusedPromptCount?: unknown
   llmRows?: readonly Record<string, unknown>[]
   projectHumanJudgmentMode?: 'prompt' | 'summary'
   promptCount?: number
@@ -130,7 +131,7 @@ const createReaderDatabase = (input?: {
     queryJson: async <T>(statement: string, _workloadContext?: DuckdbWorkloadContext): Promise<T[]> => {
       statements.push(statement)
 
-      if (statement.includes('FROM app.project')) {
+      if (statement.includes('FROM app.project') && !hasArticleServingRowSource(statement)) {
         return [{humanJudgmentMode: input?.projectHumanJudgmentMode ?? 'prompt'}] as T[]
       }
 
@@ -148,6 +149,7 @@ const createReaderDatabase = (input?: {
             activity_sort_at: '2026-01-04T00:00:00.000Z',
             article_id: 'article-1',
             llm_has_judgment: input?.llmHasJudgment ?? false,
+            llm_refused_prompt_count: input && 'llmRefusedPromptCount' in input ? input.llmRefusedPromptCount : 0,
             priority_bucket: 1,
           },
         ] as T[]
@@ -167,6 +169,7 @@ const createReaderDatabase = (input?: {
             article_title: 'Article 1',
             journal_title: 'Journal',
             llm_has_judgment: input?.llmHasJudgment ?? false,
+            llm_refused_prompt_count: input && 'llmRefusedPromptCount' in input ? input.llmRefusedPromptCount : 0,
             source_metadata: JSON.stringify({covidence: {studyId: 'study-1'}}),
             sort_key: '2026-01-01T00:00:00.000Z',
             url: 'https://example.test/article-1',
@@ -355,6 +358,7 @@ const getRowsForListMode = (articles: readonly ReviewTabCountFixtureArticle[], l
         activity_sort_at: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
         article_id: article.id,
         article_title: article.id,
+        llm_refused_prompt_count: 0,
         sort_key: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
       }
     })
@@ -479,7 +483,12 @@ const createChunkedHydrationReaderDatabase = (articleCount: number, enabledPromp
 
       if (hasArticleServingRowSource(statement)) {
         return articleIds.map((articleId) => {
-          return {article_id: articleId, article_title: articleId, sort_key: '2026-01-01T00:00:00.000Z'}
+          return {
+            article_id: articleId,
+            article_title: articleId,
+            llm_refused_prompt_count: 0,
+            sort_key: '2026-01-01T00:00:00.000Z',
+          }
         }) as T[]
       }
 
@@ -1149,6 +1158,54 @@ test('unassessed rows report whether the article has any LLM judgment', async ()
   expect(unjudged.servingStatement).toContain('list_mode_state.llm_has_judgment')
   expect(unjudged.row).toMatchObject({hasLlmJudgment: false, isFullyJudged: false, judgedPromptIds: []})
   expect(partial.row).toMatchObject({hasLlmJudgment: true, isFullyJudged: false})
+})
+
+test('human, both, and unassessed rows carry the provider refused prompt count from list-mode state', async () => {
+  const readers = {
+    both: getBothReviewArticlesFromServing,
+    human: getHumanReviewArticlesFromServing,
+    unassessed: getUnassessedReviewArticlesFromServing,
+  } as const
+
+  for (const [mode, read] of Object.entries(readers)) {
+    const reader = createReaderDatabase({llmRefusedPromptCount: 4})
+    const result = await read(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: reader.database,
+        manifestDatabase: createManifestDatabase('active'),
+      },
+    )
+    const rowsStatement = reader.statements.find((statement) => {
+      return statement.includes(`'${mode}' AS list_mode_key`)
+    })
+
+    expect(rowsStatement).toContain('list_mode_state.llm_refused_prompt_count')
+    expect(result.data[0]).toMatchObject({id: 'article-1', llmRefusedPromptCount: 4})
+
+    const missingReader = createReaderDatabase({llmRefusedPromptCount: undefined})
+
+    await read(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: missingReader.database,
+        manifestDatabase: createManifestDatabase('active'),
+      },
+    ).then(
+      () => {
+        throw new Error(`Expected ${mode} rows without a refused prompt count to be rejected`)
+      },
+      (error) => {
+        expect(error).toEqual(
+          expect.objectContaining({
+            message: `review.${mode}.rows returned no valid llm_refused_prompt_count for article article-1`,
+          }),
+        )
+      },
+    )
+  }
 })
 
 test('unassessed filtered count cache identity includes LLM status generation', async () => {

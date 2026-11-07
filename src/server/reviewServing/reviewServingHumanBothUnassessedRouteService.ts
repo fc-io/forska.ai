@@ -24,6 +24,7 @@ import {
   ensureReviewServingLazyPromptAnswerPostingBuckets,
   type ReviewServingLazyPromptAnswerPostingDatabase,
 } from './reviewServingLazyPromptAnswerPostingSql.ts'
+import {getReviewServingLlmRefusedPromptCount} from './reviewServingLlmRefusedPromptCount.ts'
 import {
   getActiveReviewServingSnapshotManifest,
   getLastKnownGoodReviewServingSnapshotManifest,
@@ -66,6 +67,7 @@ type ReviewServingArticleRow = {
   journal_title?: string | null
   journalTitle?: string | null
   llm_has_judgment?: boolean | null
+  llm_refused_prompt_count?: unknown
   llmHasJudgment?: boolean | null
   medrxiv_id?: string | null
   medrxivId?: string | null
@@ -952,9 +954,15 @@ const getRowHasLlmJudgment = (row: ReviewServingArticleRow) => {
   return (row.llm_has_judgment ?? row.llmHasJudgment) === true
 }
 
-const getArticleResponseBase = (row: ReviewServingArticleRow, detailReadiness?: ReviewDetailReadiness) => {
+const getArticleResponseBase = (
+  row: ReviewServingArticleRow,
+  mode: ReviewServingReviewMode,
+  detailReadiness?: ReviewDetailReadiness,
+) => {
+  const articleId = getArticleId(row)
+
   return {
-    id: getArticleId(row),
+    id: articleId,
     articleTitle: row.article_title ?? row.articleTitle ?? null,
     articleCreatedAt: getDateValue(row.article_created_at ?? row.articleCreatedAt),
     articleUpdatedAt: getDateValue(row.article_updated_at ?? row.articleUpdatedAt),
@@ -968,6 +976,7 @@ const getArticleResponseBase = (row: ReviewServingArticleRow, detailReadiness?: 
     fullTextFetchedAt: getDateValue(row.full_text_fetched_at ?? row.fullTextFetchedAt),
     fullTextPDF: row.full_text_pdf ?? row.fullTextPDF ?? null,
     journalTitle: row.journal_title ?? row.journalTitle ?? null,
+    llmRefusedPromptCount: getReviewServingLlmRefusedPromptCount({articleId, contractKey: `review.${mode}.rows`, row}),
     medrxivId: row.medrxiv_id ?? row.medrxivId ?? null,
     originalData: row.original_data ?? row.originalData ?? null,
     pubmedId: row.pmid ?? null,
@@ -1023,7 +1032,7 @@ export const getHumanReviewArticlesFromServing = async (
     })
 
     return {
-      ...getArticleResponseBase(row, detailReadiness),
+      ...getArticleResponseBase(row, 'human', detailReadiness),
       humanJudgmentMode,
       humanSummaryAnswer: summaryJudgment?.answer ?? null,
       judgments,
@@ -1098,7 +1107,7 @@ export const getBothReviewArticlesFromServing = async (
     const judgments = llmJudgmentsByArticleId.get(articleId) ?? []
 
     return {
-      ...getArticleResponseBase(row, detailReadiness),
+      ...getArticleResponseBase(row, 'both', detailReadiness),
       judgments: withoutInternalLlmJudgmentFields(judgments),
       humanJudgmentMode,
       humanSummaryAnswer: getSummaryAnswer(summaryJudgment?.answer),
@@ -1147,7 +1156,7 @@ export const getUnassessedReviewArticlesFromServing = async (
   const totalCount = await getOptionalCountValue(effectiveParams, manifest, 'unassessed', routeDependencies)
   const data = pageRows.map((row) => {
     return {
-      ...getArticleResponseBase(row),
+      ...getArticleResponseBase(row, 'unassessed'),
       judgments: [],
       judgedPromptIds: [],
       isFullyJudged: false,

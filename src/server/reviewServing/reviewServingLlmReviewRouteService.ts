@@ -22,6 +22,7 @@ import {
   ensureReviewServingLazyPromptAnswerPostingBuckets,
   type ReviewServingLazyPromptAnswerPostingDatabase,
 } from './reviewServingLazyPromptAnswerPostingSql.ts'
+import {getReviewServingLlmRefusedPromptCount} from './reviewServingLlmRefusedPromptCount.ts'
 import {
   getActiveOrLastKnownGoodReviewServingSnapshotManifest,
   type ReviewServingManifestRepositoryDatabase,
@@ -637,16 +638,6 @@ const getHasLlmJudgment = (row: ReviewServingArticleRow, judgedPromptIds: readon
   return row.llm_has_judgment ?? row.llmHasJudgment ?? judgedPromptIds.length > 0
 }
 
-const getLlmRefusedPromptCount = (row: ReviewServingArticleRow) => {
-  const count = row.llm_refused_prompt_count
-
-  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
-    throw new Error(`review.llm.rows returned no valid llm_refused_prompt_count for article ${getArticleId(row)}`)
-  }
-
-  return count
-}
-
 const getResponseRows = (
   rows: readonly ReviewServingArticleRow[],
   judgmentRows: readonly ReviewServingJudgmentRow[],
@@ -689,7 +680,7 @@ const getResponseRows = (
       judgedPromptIds,
       isFullyJudged: getIsFullyJudged(row, judgedPromptIds, enabledPromptCount),
       hasLlmJudgment: getHasLlmJudgment(row, judgedPromptIds),
-      llmRefusedPromptCount: getLlmRefusedPromptCount(row),
+      llmRefusedPromptCount: getReviewServingLlmRefusedPromptCount({articleId, contractKey: 'review.llm.rows', row}),
     }
   })
 }

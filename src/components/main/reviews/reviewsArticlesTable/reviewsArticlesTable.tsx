@@ -9,6 +9,7 @@ import {type ArticleUrlInput, getArticleUrl} from '../../../../app/utils/getArti
 import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
 import {ReviewsCovidenceBadges} from '../reviewsCovidenceBadges.tsx'
 import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
+import {ReviewsProviderRefusalBadge} from './reviewsProviderRefusalBadge.tsx'
 
 declare module '@tanstack/solid-table' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -203,17 +204,6 @@ const ReviewDetailReadinessBadge = (props: {readiness: Exclude<ReviewDetailReadi
   )
 }
 
-const ProviderRefusalBadge = (props: {refusedPromptCount: number}) => {
-  return (
-    <span
-      class="inline-flex rounded px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800"
-      title={`The model refused ${props.refusedPromptCount} prompt(s); needs human screening`}
-    >
-      {`${props.refusedPromptCount} refused`}
-    </span>
-  )
-}
-
 const getSourceArticleId = (article: ArticleWithJudgments) => {
   const value = article.articleId ?? article.selectedExternalArticleId
   const trimmed = typeof value === 'string' ? value.trim() : ''
@@ -267,7 +257,14 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
       const refusedPromptCount = info.row.original.llmRefusedPromptCount ?? 0
 
       return (
-        <Show when={isFullyJudged !== undefined} fallback={<span class="text-gray-400">—</span>}>
+        <Show
+          when={isFullyJudged !== undefined}
+          fallback={
+            <Show when={refusedPromptCount > 0} fallback={<span class="text-gray-400">—</span>}>
+              <ReviewsProviderRefusalBadge refusedPromptCount={refusedPromptCount} />
+            </Show>
+          }
+        >
           <div class="flex flex-wrap gap-2">
             <Show
               when={isFullyJudged}
@@ -303,7 +300,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
               </span>
             </Show>
             <Show when={refusedPromptCount > 0}>
-              <ProviderRefusalBadge refusedPromptCount={refusedPromptCount} />
+              <ReviewsProviderRefusalBadge refusedPromptCount={refusedPromptCount} />
             </Show>
           </div>
         </Show>

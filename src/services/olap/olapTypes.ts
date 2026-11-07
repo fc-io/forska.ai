@@ -152,6 +152,7 @@ export type ArticleReviewsBothResult = {
   humanAnswersByPrompt?: HumanAnswersByPrompt
   humanSummaryAnswer?: 'yes' | 'no' | 'maybe' | null
   llmSummaryAnswer?: 'yes' | 'no' | 'maybe' | null
+  llmRefusedPromptCount: number
   journalTitle: string | null
 }
 
