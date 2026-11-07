@@ -166,6 +166,25 @@ describe('ProjectsGrid content used label', () => {
   })
 })
 
+describe('ProjectsGrid edit link', () => {
+  test('renders Edit as a router link instead of a full page navigation', async () => {
+    const {container, dispose, queryClient} = await renderProjectsGrid()
+
+    try {
+      expect(container.querySelector('a[href="/projects/project-1/edit"]')?.textContent?.trim()).toBe('Edit')
+      expect(
+        Array.from(container.querySelectorAll('button')).find((button) => {
+          return button.textContent?.trim() === 'Edit'
+        }),
+      ).toBeUndefined()
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
+})
+
 describe('ProjectsGrid export project link', () => {
   test('renders Export Project as a page link immediately after CSV Export data', async () => {
     const {container, dispose, queryClient} = await renderProjectsGrid()
