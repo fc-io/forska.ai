@@ -601,7 +601,8 @@ test('direct article reads expand list modes from flags instead of stale list ke
         unassessed_patch_watermark INTEGER,
         llm_status VARCHAR,
         human_status VARCHAR,
-        llm_has_judgment BOOLEAN
+        llm_has_judgment BOOLEAN,
+        llm_refused_prompt_count INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE mart.review_selected_article_import_current_v4 (
         project_id VARCHAR,
@@ -683,7 +684,8 @@ test('direct article reads expand list modes from flags instead of stale list ke
         44,
         'answered',
         'unanswered',
-        TRUE
+        TRUE,
+        2
       ),
       (
         'project-1',
@@ -701,7 +703,8 @@ test('direct article reads expand list modes from flags instead of stale list ke
         444,
         'answered',
         'answered',
-        TRUE
+        TRUE,
+        0
       );
       INSERT INTO app.article VALUES
       (
@@ -742,6 +745,7 @@ test('direct article reads expand list modes from flags instead of stale list ke
     const staleArrayRows = staleArrayReader.getRowObjectsJson() as Array<{
       human_status: string | null
       llm_has_judgment: boolean
+      llm_refused_prompt_count: number
       llm_status: string | null
       list_mode_key: string
       patch_watermark: number
@@ -753,6 +757,7 @@ test('direct article reads expand list modes from flags instead of stale list ke
     expect(staleArrayRows[0]?.llm_status).toBe('answered')
     expect(staleArrayRows[0]?.human_status).toBe('unanswered')
     expect(staleArrayRows[0]?.llm_has_judgment).toBe(true)
+    expect(staleArrayRows[0]?.llm_refused_prompt_count).toBe(2)
 
     const priorityReader = await connection.runAndReadAll(getSql('article-2'))
     const priorityRows = priorityReader.getRowObjectsJson() as Array<{

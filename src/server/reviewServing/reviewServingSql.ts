@@ -1283,7 +1283,7 @@ const getReviewServingArticlePhysicalSelectColumns = (contract: ReviewServingRea
     `${reviewServingArticleDirectStateAlias}.llm_status`,
     `${reviewServingArticleDirectStateAlias}.human_status`,
     `${reviewServingArticleDirectStateAlias}.llm_has_judgment`,
-    ...(contract.listMode === 'llm' ? [`${reviewServingArticleDirectStateAlias}.llm_refused_prompt_count`] : []),
+    `${reviewServingArticleDirectStateAlias}.llm_refused_prompt_count`,
   ]
 }
 

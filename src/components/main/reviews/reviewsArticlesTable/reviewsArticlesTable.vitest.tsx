@@ -4,6 +4,7 @@ import {createSignal} from 'solid-js'
 import {render} from 'solid-js/web'
 import {afterEach, describe, expect, test, vi} from 'vitest'
 
+import {type ArticleWithHumanJudgments, ReviewsArticlesHumanTable} from './reviewsArticlesHumanTable'
 import {type ArticleWithJudgments, ReviewsArticlesTable} from './reviewsArticlesTable'
 
 vi.mock('@tanstack/solid-router', () => {
@@ -171,6 +172,82 @@ describe('ReviewsArticlesTable', () => {
         ],
         [['Not judged', 'No prompts judged yet']],
         [['Complete', 'All prompts judged']],
+      ])
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows the refused count on rows without an LLM status, as on the both-reviews tab', () => {
+    const {container, dispose} = renderTable([
+      getArticle({id: 'both-refused', llmRefusedPromptCount: 2}),
+      getArticle({id: 'both-clean', llmRefusedPromptCount: 0}),
+    ])
+
+    try {
+      const statuses = [...container.querySelectorAll('tbody tr')].map((row) => {
+        return row.querySelector('td:nth-child(2) span')?.textContent
+      })
+
+      expect(statuses).toEqual(['2 refused', '—'])
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+})
+
+// The human table renders a few display fields; the full article record shape is irrelevant to these tests.
+const getHumanArticle = (overrides: {id: string; llmRefusedPromptCount: number}) => {
+  return {
+    ...getArticle({id: overrides.id}),
+    llmRefusedPromptCount: overrides.llmRefusedPromptCount,
+  } as unknown as ArticleWithHumanJudgments
+}
+
+const renderHumanTable = (articles: ArticleWithHumanJudgments[]) => {
+  const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const dispose = render(() => {
+    return (
+      <ReviewsArticlesHumanTable
+        articles={articles}
+        projectId="project-1"
+        rowSelection={rowSelection}
+        setRowSelection={setRowSelection}
+      />
+    )
+  }, container)
+
+  return {container, dispose}
+}
+
+describe('ReviewsArticlesHumanTable', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  test('shows the refused count in the status column', () => {
+    const {container, dispose} = renderHumanTable([
+      getHumanArticle({id: 'human-refused', llmRefusedPromptCount: 4}),
+      getHumanArticle({id: 'human-clean', llmRefusedPromptCount: 0}),
+    ])
+
+    try {
+      const headers = [...container.querySelectorAll('thead th')].map((header) => {
+        return header.textContent
+      })
+      const statuses = [...container.querySelectorAll('tbody tr')].map((row) => {
+        const badge = row.querySelector('td:nth-child(2) span')
+        return [badge?.textContent, badge?.getAttribute('title') ?? null]
+      })
+
+      expect(headers[1]).toBe('Status')
+      expect(statuses).toEqual([
+        ['4 refused', 'The model refused 4 prompt(s); needs human screening'],
+        ['—', null],
       ])
     } finally {
       dispose()
