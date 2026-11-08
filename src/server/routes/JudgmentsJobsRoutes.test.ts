@@ -5185,6 +5185,92 @@ test('a paused job reports its failing provider health inactive and resuming it 
   await sqliteService.closeAll()
 })
 
+test('owner-backed failed completion records a prompt failure and resuming the job re-offers only that prompt', async () => {
+  if (!runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {claims, jobId, sqliteService} = await createOwnerBackedClaimsFixture({
+    prefix: 'failed-closeout-resume',
+    promptCount: 2,
+  })
+  const [failedClaim, refusedClaim] = claims
+
+  if (!failedClaim || !refusedClaim) {
+    throw new Error('Expected owner-backed claims')
+  }
+
+  const failedCompletion = await postOwnerBackedCompletion(jobId, {
+    ...getOwnerBackedCompletionBody(jobId, failedClaim),
+    requestAttempts: [
+      {
+        articleId: failedClaim.articleId,
+        claimId: failedClaim.claimId,
+        closeoutKind: 'live_request',
+        error: 'Claude Code request failed: subtype=error_max_turns stderr=',
+        errorCode: 'claude_code_request_failed',
+        finishedAt: '2026-10-27T19:40:05.282Z',
+        jobId,
+        outcome: 'failure',
+        promptId: failedClaim.promptId,
+        providerKey: 'provider-1',
+        queueRecordId: failedClaim.recordId,
+        requestAttemptId: `${failedClaim.claimId}-attempt-1`,
+      },
+    ],
+    status: 'failed',
+  })
+  const refusedCompletion = await postOwnerBackedCompletion(jobId, {
+    ...getOwnerBackedCompletionBody(jobId, refusedClaim),
+    refusal: {
+      failureCode: 'claude_code_content_refusal',
+      modelName: 'claude-opus-5-5',
+      providerKind: 'claude-code',
+      reason: 'safeguards flagged this message',
+      refusedAt: '2026-11-06T06:59:13.635Z',
+    },
+    skipReason: 'provider_refusal',
+    status: 'skipped',
+  })
+  const entries = [failedClaim, refusedClaim].map((claim) => {
+    return {articleId: claim.articleId, promptId: claim.promptId}
+  })
+
+  expect(failedCompletion.status).toBe(200)
+  expect(failedCompletion.body.data.status).toBe('failed')
+  expect(refusedCompletion.status).toBe(200)
+  expect(await sqliteService.filterOutLocallyJudgedPrompts(jobId, entries)).toEqual([])
+  expect(await sqliteService.getPendingPromptFailures(jobId, 10)).toMatchObject([
+    {
+      articleId: failedClaim.articleId,
+      attemptCount: 1,
+      claimId: failedClaim.claimId,
+      failedAt: '2026-10-27T19:40:05.282Z',
+      failureCode: 'claude_code_request_failed',
+      jobId,
+      queuePromptId: failedClaim.recordId,
+      reason: 'Claude Code request failed: subtype=error_max_turns stderr=',
+    },
+  ])
+
+  await runDatabase(`UPDATE app.judgment_job SET status = 'paused' WHERE id = '${jobId}'`)
+
+  const resumeResponse = await patchJudgmentJobStatus(jobId, 'running')
+  const resumedClaims = await postOwnerBackedClaims(jobId, 5)
+
+  expect(resumeResponse?.status).toBe(200)
+  expect(await sqliteService.filterOutLocallyJudgedPrompts(jobId, entries)).toEqual(entries.slice(0, 1))
+  expect(resumedClaims.status).toBe(200)
+  expect(
+    resumedClaims.body.data.claims.map((claim) => {
+      return claim.recordId
+    }),
+  ).toEqual([failedClaim.recordId])
+  expect(await sqliteService.reopenFailedCloseoutsForResume(jobId)).toBe(0)
+
+  await sqliteService.closeAll()
+})
+
 test('owner-backed retry completion still succeeds when the provider health table is unavailable', async () => {
   if (!runDatabase) {
     throw new Error('Test app not initialized')
