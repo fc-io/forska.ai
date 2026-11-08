@@ -19,6 +19,7 @@ import {
   getCustomImportRouteValue,
   getResolvedImportRoute,
 } from '../dataSourceImportRouteOptions.ts'
+import {CovidenceRematchPanel} from './-covidenceRematchPanel.tsx'
 
 type StructuredFileConfig = {
   assetPath: string
@@ -36,6 +37,7 @@ type CovidenceFileConfig = {
 }
 
 type CovidencePackageConfig = {
+  baseImportRoute?: string
   files: CovidenceFileConfig[]
   kind: 'covidence_import'
   mode: 'full_text' | 'title_abstract'
@@ -816,6 +818,16 @@ export const AdminEditDataSource = () => {
                 Archive Data Source
               </button>
             </div>
+
+            <Show when={isCovidenceImportDataSource()}>
+              <CovidenceRematchPanel
+                dataSourceId={dataSourceId()}
+                initialBaseImportRoute={dataSourceQuery.data?.covidencePackageConfig?.baseImportRoute ?? null}
+                onApplied={() => {
+                  void dataSourceQuery.refetch()
+                }}
+              />
+            </Show>
 
             <Show when={showArchiveConfirm()}>
               <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">

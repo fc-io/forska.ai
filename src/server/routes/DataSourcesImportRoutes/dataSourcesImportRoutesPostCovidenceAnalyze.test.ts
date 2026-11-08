@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test'
 
-type CovidenceAnalyzeRouteResult = {error: string | null; response: unknown; status: number}
+type CovidenceAnalyzeRouteResult = {error: string | null; response: unknown; sameReviewCalls: unknown[]; status: number}
 
 const getLastJsonLine = (stdout: string) => {
   return (
@@ -29,12 +29,14 @@ test('Covidence analyze route returns service analysis data and 400 errors', () 
         const state = {
           error: null,
           response: null,
+          sameReviewCalls: [],
           status: 200,
         }
 
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
             analyzeCovidencePackageFiles: async (body) => {
+              state.sameReviewCalls.push(body.sameReview)
               return body.mode === 'title_abstract'
                 ? {
                     data: {
@@ -80,7 +82,7 @@ test('Covidence analyze route returns service analysis data and 400 errors', () 
 
         state.error = (
           await dataSourcesImportRoutesPostCovidenceAnalyze({
-            body: {files: [], mode: 'full_text'},
+            body: {baseImportRoute: '  covidence:base-route  ', files: [], mode: 'full_text'},
             set: state,
           })
         ).error
@@ -116,4 +118,5 @@ test('Covidence analyze route returns service analysis data and 400 errors', () 
   })
   expect(parsed.error).toBe('bad package')
   expect(parsed.status).toBe(400)
+  expect(parsed.sameReviewCalls).toEqual([{baseImportRoute: null}, {baseImportRoute: 'covidence:base-route'}])
 })

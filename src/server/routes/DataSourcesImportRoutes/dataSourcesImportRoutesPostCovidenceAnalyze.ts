@@ -10,12 +10,17 @@ export const dataSourcesImportRoutesPostCovidenceAnalyze = async ({
   set,
 }: {
   body: {
+    baseImportRoute?: string
     files: Array<{file: Blob & {name?: string; type?: string}; fileRole: CovidenceFileRole}>
     mode: CovidenceImportMode
   }
   set: Context['set']
 }) => {
-  const result = await analyzeCovidencePackageFiles(body)
+  const result = await analyzeCovidencePackageFiles({
+    files: body.files,
+    mode: body.mode,
+    sameReview: {baseImportRoute: body.baseImportRoute?.trim() || null},
+  })
 
   if (result.ok === false) {
     set.status = 400

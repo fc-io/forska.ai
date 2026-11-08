@@ -15,6 +15,7 @@ export const dataSourcesRouteSurfaceRoutes: RouteSurfaceRoute[] = [
     ['GET', '/api/datasources/:id/tracking/changes'],
     ['POST', '/api/datasources'],
     ['POST', '/api/datasources/:id/tracking/reconcile'],
+    ['POST', '/api/datasources/:id/covidence-rematch'],
     ['PATCH', '/api/datasources/:id'],
     ['DELETE', '/api/datasources/:id'],
   ]),

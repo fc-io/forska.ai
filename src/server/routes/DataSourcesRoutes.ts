@@ -7,6 +7,7 @@ import {dataSourcesRoutesGetDataSource} from './DataSourcesRoutes/dataSourcesRou
 import {dataSourcesRoutesGetDataSources} from './DataSourcesRoutes/dataSourcesRoutesGetDataSources.ts'
 import {dataSourcesRoutesGetTrackingChanges} from './DataSourcesRoutes/dataSourcesRoutesGetTrackingChanges.ts'
 import {dataSourcesRoutesPatchDataSource} from './DataSourcesRoutes/dataSourcesRoutesPatchDataSource.ts'
+import {dataSourcesRoutesPostCovidenceRematch} from './DataSourcesRoutes/dataSourcesRoutesPostCovidenceRematch.ts'
 import {dataSourcesRoutesPostDataSource} from './DataSourcesRoutes/dataSourcesRoutesPostDataSource.ts'
 import {dataSourcesRoutesPostTrackingReconcile} from './DataSourcesRoutes/dataSourcesRoutesPostTrackingReconcile.ts'
 
@@ -61,6 +62,13 @@ export const dataSourcesRoutes = new Elysia()
   .post('/api/datasources/:id/tracking/reconcile', async ({params}) => {
     return dataSourcesRoutesPostTrackingReconcile({params})
   })
+  .post(
+    '/api/datasources/:id/covidence-rematch',
+    async ({params, body}) => {
+      return dataSourcesRoutesPostCovidenceRematch({params, body})
+    },
+    {body: t.Object({baseImportRoute: t.String(), dryRun: t.Boolean()})},
+  )
   .get(
     '/api/datasources/:id/tracking/changes',
     async ({params, query}) => {

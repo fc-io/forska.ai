@@ -8,6 +8,7 @@ import {apiClient} from '../../../../services/apiClient.ts'
 import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
 import {postFormDataToApi} from '../../../utils/postFormDataToApi.ts'
+import {type CovidenceSameReviewAnalysis, CovidenceSameReviewPanel} from './-covidenceSameReviewPanel.tsx'
 import {
   type CovidenceEligibilityDisposition,
   type CovidenceEligibilitySectionKey,
@@ -57,6 +58,7 @@ type CovidenceAnalyzeResponse = {
     }
     detectedFiles: Array<{fileRole: CovidenceFileRole; format: 'csv' | 'ris'; rowCount: number; sourceFileName: string}>
     mode: CovidenceImportMode
+    sameReview?: CovidenceSameReviewAnalysis
     sampleMergedRows: Array<{
       articleKey: string
       articleKeySource: 'covidence' | 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author' | 'unkeyed'
@@ -320,11 +322,17 @@ const appendCovidenceEligibilityFieldsToFormData = (
 }
 
 const analyzeCovidencePackage = async (params: {
+  baseImportRoute?: string
   files: Array<{file: File; fileRole: CovidenceFileRole}>
   mode: CovidenceImportMode
 }) => {
   const formData = appendCovidenceFilesToFormData(new FormData(), params.files)
   formData.append('mode', params.mode)
+
+  if (params.baseImportRoute) {
+    formData.append('baseImportRoute', params.baseImportRoute)
+  }
+
   const result = await postFormDataToApi<CovidenceAnalyzeResponse>({
     errorMessage: 'Failed to analyze Covidence package',
     formData,
@@ -340,6 +348,7 @@ const ensureSelectedModelId = async (selectedModel: ModelOption): Promise<string
 
 const createCovidenceImport = async (params: {
   answerSet: CovidencePromptAnswerSet
+  baseImportRoute: string | null
   description: string
   eligibilityFields: Array<{
     disposition: CovidenceEligibilityDisposition
@@ -365,6 +374,10 @@ const createCovidenceImport = async (params: {
 
   if (params.description.trim()) {
     formData.append('description', params.description.trim())
+  }
+
+  if (params.baseImportRoute) {
+    formData.append('baseImportRoute', params.baseImportRoute)
   }
 
   return postFormDataToApi<CovidenceCreateResponse>({
@@ -396,6 +409,7 @@ const AdminCovidenceImport = () => {
     irrelevant: null,
   })
   const [analysis, setAnalysis] = createSignal<CovidenceAnalyzeResponse['data'] | null>(null)
+  const [baseImportRoute, setBaseImportRoute] = createSignal<string | null>(null)
 
   const modelsQuery = useQuery(() => {
     return {
@@ -444,8 +458,9 @@ const AdminCovidenceImport = () => {
   const analyzeMutation = createMutation(() => {
     return {
       mutationFn: analyzeCovidencePackage,
-      onSuccess: (data) => {
+      onSuccess: (data, variables) => {
         setAnalysis(data)
+        setBaseImportRoute(variables.baseImportRoute ?? data.sameReview?.suggestedBaseImportRoute?.importRoute ?? null)
       },
     }
   })
@@ -466,6 +481,7 @@ const AdminCovidenceImport = () => {
 
     setMode(nextMode)
     setAnalysis(null)
+    setBaseImportRoute(null)
     setPageError('')
     setFilesByRole({all: null, excluded: null, full_text: null, included: null, irrelevant: null})
   }
@@ -474,6 +490,7 @@ const AdminCovidenceImport = () => {
     const nextFile = event.currentTarget instanceof HTMLInputElement ? (event.currentTarget.files?.[0] ?? null) : null
     setFilesByRole(fileRole, nextFile)
     setAnalysis(null)
+    setBaseImportRoute(null)
     setPageError('')
   }
 
@@ -524,6 +541,18 @@ const AdminCovidenceImport = () => {
     analyzeMutation.mutate({files: getSelectedUploadFiles(filesByRole, mode()), mode: mode()})
   }
 
+  const handleSelectBaseImportRoute = (nextBaseImportRoute: string | null) => {
+    setBaseImportRoute(nextBaseImportRoute)
+
+    if (nextBaseImportRoute && nextBaseImportRoute !== analysis()?.sameReview?.matchSummary?.baseImportRoute) {
+      analyzeMutation.mutate({
+        baseImportRoute: nextBaseImportRoute,
+        files: getSelectedUploadFiles(filesByRole, mode()),
+        mode: mode(),
+      })
+    }
+  }
+
   const handleSubmit = () => {
     const trimmedProjectName = projectName().trim()
     const nextEligibilityFields = eligibilityFields()
@@ -534,6 +563,7 @@ const AdminCovidenceImport = () => {
     const nextSelectedModel = selectedModel()
     const nextFiles = getSelectedUploadFiles(filesByRole, nextMode)
     const nextPromptGrouping = promptGrouping()
+    const nextBaseImportRoute = baseImportRoute()
 
     if (!trimmedProjectName) {
       setPageError('Project name is required')
@@ -566,6 +596,7 @@ const AdminCovidenceImport = () => {
       .then((modelId) => {
         createMutationState.mutate({
           answerSet: nextAnswerSet,
+          baseImportRoute: nextBaseImportRoute,
           description: nextDescription,
           eligibilityFields: nextEligibilityFields,
           files: nextFiles,
@@ -970,6 +1001,12 @@ const AdminCovidenceImport = () => {
 
               <Show when={analysis()}>
                 <div class="space-y-6">
+                  <CovidenceSameReviewPanel
+                    isAnalyzing={analyzeMutation.isPending}
+                    onSelectBaseImportRoute={handleSelectBaseImportRoute}
+                    sameReview={analysis()?.sameReview}
+                    selectedBaseImportRoute={baseImportRoute()}
+                  />
                   <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     <div class="rounded-2xl bg-stone-50 p-4">
                       <p class="text-xs font-medium uppercase tracking-wide text-stone-500">Imported records</p>
