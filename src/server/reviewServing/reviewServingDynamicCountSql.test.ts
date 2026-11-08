@@ -806,6 +806,19 @@ test('imported summary-human status rebuild materializes tab-count state from so
         system_prompt_variant VARCHAR,
         full_text_strategy_id VARCHAR
       );
+      CREATE TABLE app.judgment_prompt_failure (
+        article_id VARCHAR,
+        prompt_id VARCHAR,
+        model_id VARCHAR,
+        use_title BOOLEAN,
+        use_abstract BOOLEAN,
+        use_fulltext BOOLEAN,
+        use_fulltext_no_images BOOLEAN,
+        use_metadata BOOLEAN,
+        system_prompt_variant VARCHAR,
+        full_text_strategy_id VARCHAR,
+        failure_code VARCHAR
+      );
       CREATE TABLE app."judgment_human" (
         id VARCHAR,
         project_id VARCHAR,
@@ -849,6 +862,8 @@ test('imported summary-human status rebuild materializes tab-count state from so
         human_status VARCHAR,
         llm_has_judgment BOOLEAN DEFAULT FALSE,
         llm_refused_prompt_count INTEGER NOT NULL DEFAULT 0,
+        llm_failed_prompt_count INTEGER NOT NULL DEFAULT 0,
+        llm_failed_prompt_codes VARCHAR,
         llm_patch_watermark BIGINT DEFAULT 0,
         human_patch_watermark BIGINT DEFAULT 0,
         both_patch_watermark BIGINT DEFAULT 0,
@@ -918,6 +933,9 @@ test('imported summary-human status rebuild materializes tab-count state from so
         ('article-4', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none'),
         ('article-2', 'prompt-1', 'model-2', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none'),
         ('article-2', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, FALSE, 'screening_v5', 'fts-none');
+      INSERT INTO app.judgment_prompt_failure VALUES
+        ('article-2', 'prompt-1', 'model-1', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none', 'claude_code_request_failed'),
+        ('article-3', 'prompt-2', 'model-1', TRUE, TRUE, FALSE, FALSE, FALSE, 'legacy', 'fts-none', 'claude_code_request_failed');
       INSERT INTO app."judgment_human_summary" VALUES
         ('human-summary-1', '${projectId}', 'article-1', 'include'),
         ('human-summary-2', '${projectId}', 'article-2', 'exclude'),
@@ -979,7 +997,7 @@ test('imported summary-human status rebuild materializes tab-count state from so
     ])
 
     const refusedReader = await connection.runAndReadAll(`
-      SELECT article_id, llm_refused_prompt_count
+      SELECT article_id, llm_refused_prompt_count, llm_failed_prompt_count
       FROM mart.review_article_serving_list_mode_state_v4
       WHERE project_id = '${projectId}'
         AND review_config_hash = '${reviewConfigHash}'
@@ -987,10 +1005,10 @@ test('imported summary-human status rebuild materializes tab-count state from so
       ORDER BY article_id
     `)
     expect(refusedReader.getRowObjectsJson()).toEqual([
-      {article_id: 'article-1', llm_refused_prompt_count: 0},
-      {article_id: 'article-2', llm_refused_prompt_count: 0},
-      {article_id: 'article-3', llm_refused_prompt_count: 1},
-      {article_id: 'article-4', llm_refused_prompt_count: 2},
+      {article_id: 'article-1', llm_failed_prompt_count: 0, llm_refused_prompt_count: 0},
+      {article_id: 'article-2', llm_failed_prompt_count: 0, llm_refused_prompt_count: 0},
+      {article_id: 'article-3', llm_failed_prompt_count: 0, llm_refused_prompt_count: 1},
+      {article_id: 'article-4', llm_failed_prompt_count: 0, llm_refused_prompt_count: 2},
     ])
 
     const baseCountInput = {projectId, reviewConfigHash, snapshotId}

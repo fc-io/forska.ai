@@ -631,7 +631,11 @@ test('refused unanswered prompts get their own status key and answered or tombst
   ])
   expect(updateStatement).toContain("WHERE NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'refused'")
   expect(updateStatement).toContain('llm_refused_prompt_count = article_status.llm_refused_prompt_count')
+  expect(updateStatement).toContain('llm_failed_prompt_count = article_status.llm_failed_prompt_count')
+  expect(updateStatement).toContain('llm_failed_prompt_codes = article_status.llm_failed_prompt_codes')
   expect(updateStatement).toContain("latest_prompt.llm_status_key = 'answered'), FALSE) AS llm_has_judgment")
+  expect(articleSelect).toContain('LEFT JOIN app.judgment_prompt_failure failure')
+  expect(articleSelect).toContain('failure.failure_code AS failureCode')
   expect(articleSelect).toContain('refusal.article_id IS NOT NULL AS isRefused')
   expect(articleSelect).toContain('LEFT JOIN app.judgment_refusal refusal')
   expect(articleSelect).toContain('refusal.article_id = dirty.article_id')
@@ -643,6 +647,74 @@ test('refused unanswered prompts get their own status key and answered or tombst
   expect(articleSelect).toContain("refusal.full_text_strategy_id = COALESCE(project.full_text_strategy_id, 'fts-none')")
 })
 
+test('failed closeouts get the failed status key only without an answer or a refusal and carry their code', async () => {
+  const unanswered = {answeredOriginal: null, answeredOriginalAsArray: null, isAnswered: null}
+  const failureCode = 'claude_code_request_failed'
+  const {database, statements} = createLlmStatusDatabase({
+    promptConfigRows: [
+      promptConfigRow(),
+      promptConfigRow({promptId: 'prompt-2', promptTextHash: 'prompt-text-2'}),
+      promptConfigRow({promptId: 'prompt-3', promptTextHash: 'prompt-text-3'}),
+      promptConfigRow({promptId: 'prompt-4', promptTextHash: 'prompt-text-4'}),
+      promptConfigRow({promptId: 'prompt-5', promptTextHash: 'prompt-text-5'}),
+    ],
+    scopedArticleRows: [
+      llmStatusRow({failureCode, isRefused: false, promptId: 'prompt-1'}),
+      llmStatusRow({
+        ...unanswered,
+        failureCode,
+        isRefused: true,
+        promptId: 'prompt-2',
+        promptTextHash: 'prompt-text-2',
+      }),
+      llmStatusRow({
+        ...unanswered,
+        failureCode,
+        isRefused: false,
+        promptId: 'prompt-3',
+        promptTextHash: 'prompt-text-3',
+      }),
+      llmStatusRow({
+        ...unanswered,
+        failureCode: null,
+        isRefused: false,
+        promptId: 'prompt-4',
+        promptTextHash: 'prompt-text-4',
+      }),
+      llmStatusRow({
+        ...unanswered,
+        failureCode,
+        isRefused: false,
+        promptId: 'prompt-5',
+        promptTextHash: 'prompt-text-5',
+        tombstone: true,
+      }),
+    ],
+  })
+
+  await projectReviewServingLlmStatusPatches(projectInput([llmClaim()]), database)
+
+  const updateStatement =
+    statements.find((statement) => {
+      return statement.includes('UPDATE mart.review_article_serving_list_mode_state_v4 state')
+    }) ?? ''
+
+  expect(
+    decodeReviewServingJsonRows(updateStatement).map((row) => {
+      return [row.prompt_id, row.llm_status_key, row.llm_failure_code]
+    }),
+  ).toEqual([
+    ['prompt-1', 'answered', null],
+    ['prompt-2', 'refused', null],
+    ['prompt-3', 'failed', failureCode],
+    ['prompt-4', 'unanswered', null],
+    ['prompt-5', null, null],
+  ])
+  expect(updateStatement).toContain("WHERE NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'failed'")
+  expect(updateStatement).toContain(
+    "string_agg(DISTINCT latest_prompt.llm_failure_code, ',' ORDER BY latest_prompt.llm_failure_code)",
+  )
+})
 test('LLM judgment deltas match refusals by the delta identity', async () => {
   const {database, statements} = createLlmStatusDatabase({judgmentRows: [llmStatusRow()]})
 
@@ -685,6 +757,9 @@ test('LLM range rebuilds write the refused prompt count from refusals under the 
     'WHERE refusal.article_id IS NOT NULL AND latest_judgment.is_answered IS NOT TRUE',
   )
   expect(replacementStatement).toContain('llm_refused_prompt_count = article_status.llm_refused_prompt_count')
+  expect(replacementStatement).toContain('llm_failed_prompt_count = article_status.llm_failed_prompt_count')
+  expect(replacementStatement).toContain('llm_failed_prompt_codes = article_status.llm_failed_prompt_codes')
+  expect(replacementStatement).toContain('LEFT JOIN app.judgment_prompt_failure failure')
 })
 
 const getProjectedReviewConfigHashes = async (rowInput: Record<string, unknown>) => {

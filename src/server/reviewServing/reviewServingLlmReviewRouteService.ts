@@ -22,6 +22,7 @@ import {
   ensureReviewServingLazyPromptAnswerPostingBuckets,
   type ReviewServingLazyPromptAnswerPostingDatabase,
 } from './reviewServingLazyPromptAnswerPostingSql.ts'
+import {getReviewServingLlmFailedPrompts} from './reviewServingLlmFailedPrompts.ts'
 import {getReviewServingLlmRefusedPromptCount} from './reviewServingLlmRefusedPromptCount.ts'
 import {
   getActiveOrLastKnownGoodReviewServingSnapshotManifest,
@@ -59,6 +60,8 @@ type ReviewServingArticleRow = {
   fullTextPDF?: string | null
   journal_title?: string | null
   journalTitle?: string | null
+  llm_failed_prompt_codes?: unknown
+  llm_failed_prompt_count?: unknown
   llm_has_judgment?: boolean | null
   llm_refused_prompt_count?: unknown
   llm_status?: string | null
@@ -681,6 +684,7 @@ const getResponseRows = (
       isFullyJudged: getIsFullyJudged(row, judgedPromptIds, enabledPromptCount),
       hasLlmJudgment: getHasLlmJudgment(row, judgedPromptIds),
       llmRefusedPromptCount: getReviewServingLlmRefusedPromptCount({articleId, contractKey: 'review.llm.rows', row}),
+      ...getReviewServingLlmFailedPrompts({articleId, contractKey: 'review.llm.rows', row}),
     }
   })
 }

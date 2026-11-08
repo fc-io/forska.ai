@@ -26,6 +26,10 @@ const judgmentRefusalTableSql = readFileSync(
   resolve(import.meta.dir, '../../db/duckdbMigrations/0275_judgmentRefusal.sql'),
   'utf8',
 )
+const judgmentPromptFailureTableSql = readFileSync(
+  resolve(import.meta.dir, '../../db/duckdbMigrations/0278_judgmentPromptFailure.sql'),
+  'utf8',
+)
 const projectId = 'project-1'
 const projectionIdentity = 'llmStatus:identity-1'
 const snapshotId = 'snapshot-1'
@@ -140,9 +144,12 @@ const schemaSql = `
     llm_status VARCHAR,
     human_status VARCHAR,
     llm_has_judgment BOOLEAN NOT NULL DEFAULT FALSE,
-    llm_refused_prompt_count INTEGER NOT NULL DEFAULT 0
+    llm_refused_prompt_count INTEGER NOT NULL DEFAULT 0,
+    llm_failed_prompt_count INTEGER NOT NULL DEFAULT 0,
+    llm_failed_prompt_codes VARCHAR
   );
   ${judgmentRefusalTableSql}
+  ${judgmentPromptFailureTableSql}
 `
 
 const getJudgmentSql = (input: {answered: boolean; articleId: string; promptId: string}) => {

@@ -189,6 +189,8 @@ const createArticleRows = (articleCount: number) => {
       full_text_conversion_status: 'converted',
       full_text_fetched_at: '2026-01-04T00:00:00.000Z',
       journal_title: 'Journal',
+      llm_failed_prompt_codes: null,
+      llm_failed_prompt_count: 0,
       llm_refused_prompt_count: 0,
       pmid: `1234${articleNumber}`,
       sort_key: `2026-01-01T00:00:00.${String(index).padStart(3, '0')}Z`,
@@ -1096,6 +1098,65 @@ test('LLM review rows reject a serving row without a refused prompt count', asyn
       expect(error).toEqual(
         expect.objectContaining({
           message: 'review.llm.rows returned no valid llm_refused_prompt_count for article article-1',
+        }),
+      )
+    },
+  )
+})
+
+test('LLM review rows carry the failed prompt count and codes next to the refused count', async () => {
+  const articleRows = createArticleRows(2).map((row, index) => {
+    return index === 0
+      ? {...row, llm_failed_prompt_codes: 'claude_code_request_failed', llm_failed_prompt_count: 2}
+      : row
+  })
+  const reader = createReaderDatabase(2, 2, 2, {articleRows})
+  const result = await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+  const rowsStatement =
+    reader.statements.find((statement) => {
+      return hasArticleServingRowSource(statement) && statement.includes('ORDER BY')
+    }) ?? ''
+
+  expect(
+    result.data.map((row) => {
+      return [row.id, row.llmFailedPromptCount, row.llmFailedPromptCodes]
+    }),
+  ).toEqual([
+    ['article-1', 2, 'claude_code_request_failed'],
+    ['article-2', 0, null],
+  ])
+  expect(rowsStatement).toContain('list_mode_state.llm_failed_prompt_count')
+  expect(rowsStatement).toContain('list_mode_state.llm_failed_prompt_codes')
+})
+
+test('LLM review rows reject a serving row without a failed prompt count', async () => {
+  const articleRows = createArticleRows(1).map((row) => {
+    return {...row, llm_failed_prompt_count: null}
+  })
+  const reader = createReaderDatabase(1, 1, 1, {articleRows})
+
+  await getLlmReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  ).then(
+    () => {
+      throw new Error('Expected a missing failed prompt count to be rejected')
+    },
+    (error) => {
+      expect(error).toEqual(
+        expect.objectContaining({
+          message: 'review.llm.rows returned no valid llm_failed_prompt_count for article article-1',
         }),
       )
     },

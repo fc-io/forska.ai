@@ -67,6 +67,7 @@ type LlmStatusSourceRow = {
   articleId: string
   fullTextStrategyId: string
   isAnswered: boolean | null
+  failureCode: string | null
   isRefused: boolean
   latestLlmCreatedAt: Date | string | null
   humanJudgmentMode: 'prompt' | 'summary'
@@ -313,6 +314,22 @@ const getProjectIdentityRefusalJoinSql = (input: {articleIdSql: string; projectA
           AND refusal.full_text_strategy_id = ${getProjectFullTextStrategyIdSql(input.projectAlias)}`
 }
 
+// Failed closeouts (the judge gave up after its retries) project as 'failed' only when the identity has no
+// answer and no refusal: judgment > refusal > failure.
+const getProjectIdentityFailureJoinSql = (input: {articleIdSql: string; projectAlias: string; promptIdSql: string}) => {
+  return `LEFT JOIN app.judgment_prompt_failure failure
+          ON failure.article_id = ${input.articleIdSql}
+          AND failure.prompt_id = ${input.promptIdSql}
+          AND failure.model_id = ${input.projectAlias}.model_id
+          AND failure.use_title = ${input.projectAlias}.use_title
+          AND failure.use_abstract = ${input.projectAlias}.use_abstract
+          AND failure.use_fulltext = ${input.projectAlias}.use_fulltext
+          AND failure.use_fulltext_no_images = ${input.projectAlias}.use_fulltext_no_images
+          AND failure.system_prompt_variant = COALESCE(${input.projectAlias}.system_prompt_variant, 'legacy')
+          AND failure.use_metadata = COALESCE(${input.projectAlias}.use_metadata, FALSE)
+          AND failure.full_text_strategy_id = ${getProjectFullTextStrategyIdSql(input.projectAlias)}`
+}
+
 const getProjectPromptConfigRows = async (
   projectId: string,
   database: Pick<ReviewServingLlmStatusProjectorDatabase, 'queryJson'>,
@@ -426,6 +443,7 @@ const getJudgmentDeltaRows = async (
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           judgment.is_answered AS isAnswered,
           refusal.article_id IS NOT NULL AS isRefused,
+          failure.failure_code AS failureCode,
           judgment.answered_original AS answeredOriginal,
           judgment.answered_original_as_array AS answeredOriginalAsArray,
           judgment.created_at AS latestLlmCreatedAt,
@@ -489,6 +507,17 @@ const getJudgmentDeltaRows = async (
           AND refusal.system_prompt_variant = COALESCE(delta.system_prompt_variant, 'legacy')
           AND refusal.use_metadata = COALESCE(delta.use_metadata, FALSE)
           AND refusal.full_text_strategy_id = ${getReviewChangeDeltaFullTextStrategyIdSql('delta')}
+        LEFT JOIN app.judgment_prompt_failure failure
+          ON failure.article_id = delta.article_id
+          AND failure.prompt_id = delta.prompt_id
+          AND failure.model_id = delta.model_id
+          AND failure.use_title = delta.use_title
+          AND failure.use_abstract = delta.use_abstract
+          AND failure.use_fulltext = delta.use_fulltext
+          AND failure.use_fulltext_no_images = delta.use_fulltext_no_images
+          AND failure.system_prompt_variant = COALESCE(delta.system_prompt_variant, 'legacy')
+          AND failure.use_metadata = COALESCE(delta.use_metadata, FALSE)
+          AND failure.full_text_strategy_id = ${getReviewChangeDeltaFullTextStrategyIdSql('delta')}
         WHERE delta.project_id = ${getSqlLiteral(input.projectId)}
           AND delta.change_kind IN ('judgment.llm.created', 'judgment.llm.updated', 'judgment.llm.deleted')
           AND ${claimRangePredicateSql}
@@ -528,6 +557,7 @@ const getPromptScopedRows = async (
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           NULL AS isAnswered,
           refusal.article_id IS NOT NULL AS isRefused,
+          failure.failure_code AS failureCode,
           NULL AS answeredOriginal,
           NULL AS answeredOriginalAsArray,
           NULL AS latestLlmCreatedAt,
@@ -552,6 +582,7 @@ const getPromptScopedRows = async (
         INNER JOIN app.prompt prompt
           ON prompt.id = dirty_prompt.prompt_id
         ${getProjectIdentityRefusalJoinSql({articleIdSql: 'scope.article_id', projectAlias: 'project', promptIdSql: 'dirty_prompt.prompt_id'})}
+        ${getProjectIdentityFailureJoinSql({articleIdSql: 'scope.article_id', projectAlias: 'project', promptIdSql: 'dirty_prompt.prompt_id'})}
         ORDER BY dirty_prompt.prompt_id ASC, scope.article_id ASC
       `)
 }
@@ -632,6 +663,7 @@ const getProjectScopedRows = async (
           project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE) AS tombstone,
           judgment.is_answered AS isAnswered,
           refusal.article_id IS NOT NULL AS isRefused,
+          failure.failure_code AS failureCode,
           judgment.answered_original AS answeredOriginal,
           judgment.answered_original_as_array AS answeredOriginalAsArray,
           judgment.created_at AS latestLlmCreatedAt,
@@ -654,6 +686,7 @@ const getProjectScopedRows = async (
         INNER JOIN app.prompt prompt
           ON prompt.id = dirty_prompt.prompt_id
         ${getProjectIdentityRefusalJoinSql({articleIdSql: 'scope.article_id', projectAlias: 'project', promptIdSql: 'dirty_prompt.prompt_id'})}
+        ${getProjectIdentityFailureJoinSql({articleIdSql: 'scope.article_id', projectAlias: 'project', promptIdSql: 'dirty_prompt.prompt_id'})}
         LEFT JOIN latest_judgment judgment
           ON judgment.article_id = scope.article_id
           AND judgment.prompt_id = dirty_prompt.prompt_id
@@ -725,6 +758,7 @@ const getArticleScopedRows = async (
           NOT (COALESCE(scope.in_curated_scope, FALSE) OR COALESCE(scope.in_route_scope, FALSE)) AS tombstone,
           judgment.is_answered AS isAnswered,
           refusal.article_id IS NOT NULL AS isRefused,
+          failure.failure_code AS failureCode,
           judgment.answered_original AS answeredOriginal,
           judgment.answered_original_as_array AS answeredOriginalAsArray,
           judgment.created_at AS latestLlmCreatedAt,
@@ -762,6 +796,7 @@ const getArticleScopedRows = async (
           AND judgment.full_text_strategy_id = ${getProjectFullTextStrategyIdSql('project')}
           AND judgment.judgment_rank = 1
         ${getProjectIdentityRefusalJoinSql({articleIdSql: 'dirty.article_id', projectAlias: 'project', promptIdSql: 'prompt.id'})}
+        ${getProjectIdentityFailureJoinSql({articleIdSql: 'dirty.article_id', projectAlias: 'project', promptIdSql: 'prompt.id'})}
         ORDER BY dirty.article_id ASC, project_prompt.prompt_order ASC NULLS LAST, prompt.id ASC
       `)
 }
@@ -771,7 +806,7 @@ const isLlmStatusRowAnswered = (row: LlmStatusSourceRow) => {
 }
 
 const getUnansweredLlmStatusKey = (row: LlmStatusSourceRow) => {
-  return row.isRefused ? 'refused' : 'unanswered'
+  return row.isRefused ? 'refused' : typeof row.failureCode === 'string' ? 'failed' : 'unanswered'
 }
 
 const getLiveLlmStatusKey = (row: LlmStatusSourceRow) => {
@@ -811,6 +846,7 @@ const llmStatusChangedRowColumns = [
   {name: 'prompt_config_hash', type: 'VARCHAR'},
   {name: 'prompt_id', type: 'VARCHAR'},
   {name: 'llm_status_key', type: 'VARCHAR'},
+  {name: 'llm_failure_code', type: 'VARCHAR'},
   {name: 'tombstone', type: 'BOOLEAN'},
 ] as const
 
@@ -823,6 +859,7 @@ const getApplyLlmStatusServingStatement = (input: {
   recordRows: readonly {
     articleId: string
     listModeKey: string
+    llmFailureCode: string | null
     llmStatusKey: string | null
     promptConfigHash: string
     promptId: string
@@ -843,6 +880,7 @@ const getApplyLlmStatusServingStatement = (input: {
               row.promptConfigHash,
               row.promptId,
               row.llmStatusKey,
+              row.llmFailureCode,
               row.tombstone,
             ]
           }),
@@ -855,10 +893,11 @@ const getApplyLlmStatusServingStatement = (input: {
           changed.prompt_config_hash,
           changed.prompt_id,
           changed.llm_status_key,
+          changed.llm_failure_code,
           changed.tombstone,
           ${getSqlLiteral(input.patchWatermark)} AS patch_watermark
         FROM changed
-        GROUP BY changed.review_config_hash, changed.list_mode_key, changed.article_id, changed.prompt_config_hash, changed.prompt_id, changed.llm_status_key, changed.tombstone
+        GROUP BY changed.review_config_hash, changed.list_mode_key, changed.article_id, changed.prompt_config_hash, changed.prompt_id, changed.llm_status_key, changed.llm_failure_code, changed.tombstone
       ), latest_prompt AS (
         SELECT candidate.*
         FROM candidate_prompt candidate
@@ -885,7 +924,13 @@ const getApplyLlmStatusServingStatement = (input: {
           COALESCE(BOOL_OR(NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'answered'), FALSE) AS llm_has_judgment,
           COUNT(DISTINCT latest_prompt.prompt_id) FILTER (
             WHERE NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'refused'
-          ) AS llm_refused_prompt_count
+          ) AS llm_refused_prompt_count,
+          COUNT(DISTINCT latest_prompt.prompt_id) FILTER (
+            WHERE NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'failed'
+          ) AS llm_failed_prompt_count,
+          string_agg(DISTINCT latest_prompt.llm_failure_code, ',' ORDER BY latest_prompt.llm_failure_code) FILTER (
+            WHERE NOT latest_prompt.tombstone AND latest_prompt.llm_status_key = 'failed'
+          ) AS llm_failed_prompt_codes
         FROM latest_prompt
         GROUP BY latest_prompt.review_config_hash, latest_prompt.list_mode_key, latest_prompt.article_id
       )
@@ -894,6 +939,8 @@ const getApplyLlmStatusServingStatement = (input: {
         llm_status = article_status.llm_status,
         llm_has_judgment = article_status.llm_has_judgment,
         llm_refused_prompt_count = article_status.llm_refused_prompt_count,
+        llm_failed_prompt_count = article_status.llm_failed_prompt_count,
+        llm_failed_prompt_codes = article_status.llm_failed_prompt_codes,
         llm_patch_watermark = CASE
           WHEN article_status.list_mode_key = 'llm'
             THEN GREATEST(COALESCE(state.llm_patch_watermark, 0), ${getSqlLiteral(input.patchWatermark)})
@@ -1038,7 +1085,13 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
          COALESCE(BOOL_OR(latest_judgment.is_answered IS TRUE), FALSE) AS llm_has_judgment,
          COUNT(DISTINCT prompt.id) FILTER (
            WHERE refusal.article_id IS NOT NULL AND latest_judgment.is_answered IS NOT TRUE
-         ) AS llm_refused_prompt_count
+         ) AS llm_refused_prompt_count,
+         COUNT(DISTINCT prompt.id) FILTER (
+           WHERE failure.article_id IS NOT NULL AND refusal.article_id IS NULL AND latest_judgment.is_answered IS NOT TRUE
+         ) AS llm_failed_prompt_count,
+         string_agg(DISTINCT failure.failure_code, ',' ORDER BY failure.failure_code) FILTER (
+           WHERE failure.article_id IS NOT NULL AND refusal.article_id IS NULL AND latest_judgment.is_answered IS NOT TRUE
+         ) AS llm_failed_prompt_codes
        FROM target_serving serving
        INNER JOIN app.project project
          ON project.id = serving.project_id
@@ -1056,6 +1109,7 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
         AND latest_judgment.prompt_id = prompt.id
         AND latest_judgment.judgment_rank = 1
        ${getProjectIdentityRefusalJoinSql({articleIdSql: 'serving.article_id', projectAlias: 'project', promptIdSql: 'prompt.id'})}
+       ${getProjectIdentityFailureJoinSql({articleIdSql: 'serving.article_id', projectAlias: 'project', promptIdSql: 'prompt.id'})}
        GROUP BY serving.project_id, serving.review_config_hash, serving.snapshot_id, serving.article_id, enabled_prompt_count.prompt_count
      )
      UPDATE mart.review_article_serving_list_mode_state_v4 state
@@ -1063,6 +1117,8 @@ const getApplyLlmStatusServingRangeReplacementStatements = (input: {
        'llm_status = article_status.llm_status',
        'llm_has_judgment = article_status.llm_has_judgment',
        'llm_refused_prompt_count = article_status.llm_refused_prompt_count',
+       'llm_failed_prompt_count = article_status.llm_failed_prompt_count',
+       'llm_failed_prompt_codes = article_status.llm_failed_prompt_codes',
        ...setClauses,
      ].join(', ')}
      FROM article_status
@@ -1142,10 +1198,13 @@ export const projectReviewServingLlmStatusPatches = async (
       const reviewConfigHash = getReviewConfigHash({...row, promptConfigRows})
 
       return input.listModeKeys.map((listModeKey) => {
+        const llmStatusKey = getLlmStatusKey(row)
+
         return {
           articleId: row.articleId,
           listModeKey,
-          llmStatusKey: getLlmStatusKey(row),
+          llmFailureCode: llmStatusKey === 'failed' ? row.failureCode : null,
+          llmStatusKey,
           promptConfigHash,
           promptId: row.promptId,
           reviewConfigHash,
