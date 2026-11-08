@@ -10,6 +10,7 @@ import {
   getJudgmentJobSqliteErrorMessage,
   isTransientJudgmentJobSqliteLockMessage,
 } from './judgmentJobSqliteTransientLock.ts'
+import {drainJudgmentPromptFailureOutbox} from './judgmentPromptFailureImport.ts'
 import {drainJudgmentPromptRefusalOutbox} from './judgmentPromptRefusalImport.ts'
 
 const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowMs: 30_000})
@@ -417,7 +418,7 @@ const drainJobOutbox = async ({
 }: {
   drain: (jobId: string) => Promise<number>
   jobId: string
-  label: 'completion token use' | 'provider refusal'
+  label: 'completion token use' | 'prompt failure' | 'provider refusal'
 }): Promise<void> => {
   try {
     await drain(jobId)
@@ -438,6 +439,7 @@ const drainCompletionOutboxesForJobs = async (jobIds: string[]): Promise<void> =
     await previous
     await drainJobOutbox({drain: drainCompletionTokenUseOutbox, jobId, label: 'completion token use'})
     await drainJobOutbox({drain: drainJudgmentPromptRefusalOutbox, jobId, label: 'provider refusal'})
+    await drainJobOutbox({drain: drainJudgmentPromptFailureOutbox, jobId, label: 'prompt failure'})
   }, Promise.resolve())
 }
 

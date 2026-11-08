@@ -976,6 +976,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
   ensureCompletionAckSchema(database)
   ensureCompletionTokenUseOutboxSchema(database)
   ensurePromptRefusalOutboxSchema(database)
+  ensurePromptFailureOutboxSchema(database)
   ensurePreparedExecutionSnapshotSchema(database)
   ensureAdmittedArticleSchema(database)
 
@@ -1472,6 +1473,37 @@ const ensurePromptRefusalOutboxSchema = (database: Database) => {
   `)
 }
 
+// Failed closeouts (the judge gave up after its retries) wait here until the background import writes them to
+// app.judgment_prompt_failure. One row per closed claim, so a prompt that fails again after a resume re-offer
+// before the import ran keeps both failures.
+const ensurePromptFailureOutboxSchema = (database: Database) => {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_failure_outbox (
+      claim_id TEXT PRIMARY KEY,
+      queue_prompt_id TEXT NOT NULL,
+      job_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      article_id TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      model_name TEXT,
+      provider_kind TEXT,
+      use_title INTEGER NOT NULL,
+      use_abstract INTEGER NOT NULL,
+      use_fulltext INTEGER NOT NULL,
+      use_fulltext_no_images INTEGER NOT NULL,
+      use_metadata INTEGER NOT NULL,
+      system_prompt_variant TEXT NOT NULL,
+      full_text_strategy_id TEXT NOT NULL,
+      failure_code TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL,
+      failed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `)
+}
+
 // Execution snapshots built ahead of the claim by the refill. The owner serves their payload to
 // the judge from here, so neither the claim nor the judge's snapshot fetch waits on DuckDB.
 const ensurePreparedExecutionSnapshotSchema = (database: Database) => {
@@ -1506,6 +1538,12 @@ const getAdmittedArticleCountFromDatabase = (database: Database) => {
 
 const getPendingPromptRefusalCount = (database: Database) => {
   const row = database.query(`SELECT COUNT(*) AS count FROM prompt_refusal_outbox`).get() as {count: number} | null
+
+  return Number(row?.count ?? 0)
+}
+
+const getPendingPromptFailureCount = (database: Database) => {
+  const row = database.query(`SELECT COUNT(*) AS count FROM prompt_failure_outbox`).get() as {count: number} | null
 
   return Number(row?.count ?? 0)
 }
@@ -1570,9 +1608,11 @@ export type JudgmentPromptRefusalOutboxRow = {
   useTitle: boolean
 }
 
-type PromptRefusalJobIdentityRow = {
+type PromptOutcomeJobIdentityRow = {
   fullTextStrategyId: string | null
   modelId: string
+  modelName: string | null
+  modelProvider: string | null
   projectId: string
   systemPromptVariant: string | null
   useAbstract: number
@@ -1582,13 +1622,21 @@ type PromptRefusalJobIdentityRow = {
   useTitle: number
 }
 
-const getPromptRefusalJobIdentityFromDatabase = (database: Database, jobId: string): PromptRefusalJobIdentityRow => {
+// Refusals and failed closeouts both record the job's judgment identity, so the DuckDB row matches the
+// judgment the prompt would have produced.
+const getPromptOutcomeJobIdentityFromDatabase = (
+  database: Database,
+  jobId: string,
+  recordLabel: string,
+): PromptOutcomeJobIdentityRow => {
   const row = database
     .query(
       `
         SELECT
           project_id AS projectId,
           model_id AS modelId,
+          model_name AS modelName,
+          model_provider AS modelProvider,
           use_title AS useTitle,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
@@ -1601,25 +1649,26 @@ const getPromptRefusalJobIdentityFromDatabase = (database: Database, jobId: stri
         LIMIT 1
       `,
     )
-    .get(jobId) as PromptRefusalJobIdentityRow | null
+    .get(jobId) as PromptOutcomeJobIdentityRow | null
 
   if (!row) {
-    throw new Error(`Cannot record a provider refusal for job ${jobId}: the job store has no job_info row`)
+    throw new Error(`Cannot record ${recordLabel} for job ${jobId}: the job store has no job_info row`)
   }
 
   return row
 }
 
-const getPromptRefusalQueuePromptFromDatabase = (
+const getPromptOutcomeQueuePromptFromDatabase = (
   database: Database,
   recordId: string,
+  recordLabel: string,
 ): {articleId: string; promptId: string} => {
   const row = database
     .query(`SELECT article_id AS articleId, prompt_id AS promptId FROM queue_prompt WHERE id = ? LIMIT 1`)
     .get(recordId) as {articleId: string; promptId: string} | null
 
   if (!row) {
-    throw new Error(`Cannot record a provider refusal for queue prompt ${recordId}: the row does not exist`)
+    throw new Error(`Cannot record ${recordLabel} for queue prompt ${recordId}: the row does not exist`)
   }
 
   return row
@@ -1636,8 +1685,8 @@ const insertPromptRefusalOutboxFromDatabase = ({
   recordId: string
   refusal: ProviderContentRefusal
 }) => {
-  const identity = getPromptRefusalJobIdentityFromDatabase(database, jobId)
-  const queuePrompt = getPromptRefusalQueuePromptFromDatabase(database, recordId)
+  const identity = getPromptOutcomeJobIdentityFromDatabase(database, jobId, 'a provider refusal')
+  const queuePrompt = getPromptOutcomeQueuePromptFromDatabase(database, recordId, 'a provider refusal')
 
   database
     .query(
@@ -1687,6 +1736,158 @@ const insertPromptRefusalOutboxFromDatabase = ({
       refusal.refusedAt,
       new Date().toISOString(),
     )
+}
+
+export type JudgmentPromptFailureOutboxRow = {
+  articleId: string
+  attemptCount: number
+  claimId: string
+  failedAt: string
+  failureCode: string
+  fullTextStrategyId: string
+  jobId: string
+  modelId: string
+  modelName: string | null
+  projectId: string
+  promptId: string
+  providerKind: string | null
+  queuePromptId: string
+  reason: string
+  systemPromptVariant: SystemPromptVariant
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useMetadata: boolean
+  useTitle: boolean
+}
+
+type PromptFailureEvidence = Pick<
+  JudgmentPromptFailureOutboxRow,
+  'attemptCount' | 'failedAt' | 'failureCode' | 'reason'
+>
+
+export const promptFailureWithoutFailedRequestCode = 'closed_without_failed_request'
+export const promptFailureWithoutErrorCode = 'request_failed_without_code'
+
+const getRequestAttemptFailureTime = (entry: JudgmentRequestAttemptJsonEntry) => {
+  return entry.finishedAt ?? entry.updatedAt ?? entry.createdAt ?? null
+}
+
+const getTrimmedText = (value: string | null | undefined) => {
+  const text = value?.trim() ?? ''
+
+  return text.length > 0 ? text : null
+}
+
+// The completion ack carries every request attempt of the closed claim. The last failed attempt names the
+// failure; a closeout with no failed attempt (article or prompt missing, prompt too large) says so explicitly.
+export const getPromptFailureEvidence = (requestAttemptsJson: string | null | undefined): PromptFailureEvidence => {
+  const failedAttempts = parseRequestAttempts(requestAttemptsJson ?? null)
+    .filter((entry) => {
+      return entry.outcome === 'failure'
+    })
+    .toSorted((left, right) => {
+      return String(getRequestAttemptFailureTime(left) ?? '').localeCompare(
+        String(getRequestAttemptFailureTime(right) ?? ''),
+      )
+    })
+  const lastFailedAttempt = failedAttempts.at(-1)
+
+  if (!lastFailedAttempt) {
+    return {
+      attemptCount: 0,
+      failedAt: new Date().toISOString(),
+      failureCode: promptFailureWithoutFailedRequestCode,
+      reason: 'The judge closed this prompt as failed without recording a failed model call',
+    }
+  }
+
+  const failureCode = getTrimmedText(lastFailedAttempt.errorCode) ?? promptFailureWithoutErrorCode
+
+  return {
+    attemptCount: failedAttempts.length,
+    failedAt: getRequestAttemptFailureTime(lastFailedAttempt) ?? new Date().toISOString(),
+    failureCode,
+    reason: getTrimmedText(lastFailedAttempt.error) ?? `The model call failed (${failureCode})`,
+  }
+}
+
+const insertPromptFailureOutboxFromDatabase = ({
+  completionAck,
+  database,
+  jobId,
+}: {
+  completionAck: PromptCompletionAck
+  database: Database
+  jobId: string
+}) => {
+  const recordLabel = 'a failed closeout'
+  const identity = getPromptOutcomeJobIdentityFromDatabase(database, jobId, recordLabel)
+  const queuePrompt = getPromptOutcomeQueuePromptFromDatabase(database, completionAck.queuePromptId, recordLabel)
+  const evidence = getPromptFailureEvidence(completionAck.requestAttemptsJson)
+
+  database
+    .query(
+      `
+        INSERT OR IGNORE INTO prompt_failure_outbox (
+          claim_id,
+          queue_prompt_id,
+          job_id,
+          project_id,
+          article_id,
+          prompt_id,
+          model_id,
+          model_name,
+          provider_kind,
+          use_title,
+          use_abstract,
+          use_fulltext,
+          use_fulltext_no_images,
+          use_metadata,
+          system_prompt_variant,
+          full_text_strategy_id,
+          failure_code,
+          reason,
+          attempt_count,
+          failed_at,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .run(
+      completionAck.claimId,
+      completionAck.queuePromptId,
+      jobId,
+      identity.projectId,
+      queuePrompt.articleId,
+      queuePrompt.promptId,
+      identity.modelId,
+      getTrimmedText(identity.modelName),
+      getTrimmedText(identity.modelProvider),
+      toBoolean(identity.useTitle) ? 1 : 0,
+      toBoolean(identity.useAbstract) ? 1 : 0,
+      toBoolean(identity.useFulltext) ? 1 : 0,
+      toBoolean(identity.useFulltextNoImages) ? 1 : 0,
+      toBoolean(identity.useMetadata) ? 1 : 0,
+      getSystemPromptVariant(identity.systemPromptVariant),
+      getStoredFullTextStrategyId(identity),
+      evidence.failureCode,
+      evidence.reason,
+      evidence.attemptCount,
+      evidence.failedAt,
+      new Date().toISOString(),
+    )
+}
+
+const recordFailedCloseoutFromDatabase = (
+  database: Database,
+  jobId: string,
+  completionAck: PromptCompletionAck | undefined,
+) => {
+  if (completionAck?.status === 'failed') {
+    insertPromptFailureOutboxFromDatabase({completionAck, database, jobId})
+  }
 }
 
 const markPromptAsSkippedWithReason = async ({
@@ -2543,6 +2744,7 @@ const isDrainedSqliteJob = (database: Database, _jobId: string) => {
     && getUnresolvedLegacyCompletionEvidenceCount(database) === 0
     && getPendingCompletionTokenUseCount(database) === 0
     && getPendingPromptRefusalCount(database) === 0
+    && getPendingPromptFailureCount(database) === 0
   )
 }
 
@@ -6595,6 +6797,8 @@ const sqliteService = {
           )
           .run(terminalKind, skipReason, now, now, recordId)
 
+        recordFailedCloseoutFromDatabase(database, jobId, completionAck)
+
         if (completionAck) {
           recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
         }
@@ -6655,6 +6859,8 @@ const sqliteService = {
         `,
           )
           .run(reason, now, now, recordId)
+
+        recordFailedCloseoutFromDatabase(database, jobId, completionAck)
 
         if (completionAck) {
           recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
@@ -6956,6 +7162,138 @@ const sqliteService = {
         )
         .run(...queuePromptIds)
     })
+  },
+  getPendingPromptFailures: async (jobId: string, limit: number): Promise<JudgmentPromptFailureOutboxRow[]> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return (
+          database
+            .query(
+              `
+                SELECT
+                  claim_id AS claimId,
+                  queue_prompt_id AS queuePromptId,
+                  job_id AS jobId,
+                  project_id AS projectId,
+                  article_id AS articleId,
+                  prompt_id AS promptId,
+                  model_id AS modelId,
+                  model_name AS modelName,
+                  provider_kind AS providerKind,
+                  use_title AS useTitle,
+                  use_abstract AS useAbstract,
+                  use_fulltext AS useFulltext,
+                  use_fulltext_no_images AS useFulltextNoImages,
+                  use_metadata AS useMetadata,
+                  system_prompt_variant AS systemPromptVariant,
+                  full_text_strategy_id AS fullTextStrategyId,
+                  failure_code AS failureCode,
+                  reason,
+                  attempt_count AS attemptCount,
+                  failed_at AS failedAt
+                FROM prompt_failure_outbox
+                ORDER BY created_at ASC, claim_id ASC
+                LIMIT ?
+              `,
+            )
+            .all(limit) as Array<
+            Omit<
+              JudgmentPromptFailureOutboxRow,
+              'useAbstract' | 'useFulltext' | 'useFulltextNoImages' | 'useMetadata' | 'useTitle'
+            > & {
+              useAbstract: number
+              useFulltext: number
+              useFulltextNoImages: number
+              useMetadata: number
+              useTitle: number
+            }
+          >
+        ).map((row) => {
+          return {
+            ...row,
+            attemptCount: Number(row.attemptCount),
+            useAbstract: toBoolean(row.useAbstract),
+            useFulltext: toBoolean(row.useFulltext),
+            useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+            useMetadata: toBoolean(row.useMetadata),
+            useTitle: toBoolean(row.useTitle),
+          }
+        })
+      }) ?? []
+    )
+  },
+  deletePromptFailures: async (jobId: string, claimIds: string[]): Promise<void> => {
+    if (claimIds.length === 0) {
+      return
+    }
+
+    await withOwnedJobDatabase(jobId, false, (database) => {
+      database
+        .query(
+          `DELETE FROM prompt_failure_outbox WHERE claim_id IN (${getSqlPlaceholders(claimIds.length).join(', ')})`,
+        )
+        .run(...claimIds)
+    })
+  },
+  // A human resume re-offers prompts the judge closed as failed after its retries. Within one run a failing
+  // prompt still closes (no retry loop); each resume offers it once more. Refusals, content skips and
+  // no-request successes stay terminal.
+  reopenFailedCloseoutsForResume: async (jobId: string): Promise<number> => {
+    return (
+      (await withOwnedJobDatabase(jobId, false, (database) => {
+        const now = new Date().toISOString()
+
+        return database.transaction(() => {
+          const rows = database
+            .query(
+              `
+                SELECT id
+                FROM queue_prompt
+                WHERE status = 'judged'
+                  AND terminal_kind IN ('closed', 'failed')
+                  AND skip_reason = 'ownerCompletionFailed'
+                ORDER BY judged_at ASC, id ASC
+              `,
+            )
+            .all() as Array<{id: string}>
+          const firstReadyInsertSeq = Number(
+            (
+              database
+                .query(`SELECT COALESCE(MAX(ready_insert_seq), 0) + 1 AS nextReadyInsertSeq FROM queue_prompt`)
+                .get() as {nextReadyInsertSeq: number | null} | null
+            )?.nextReadyInsertSeq ?? 1,
+          )
+          const reopen = database.query(`
+            UPDATE queue_prompt
+            SET status = 'ready',
+                terminal_kind = NULL,
+                skip_reason = NULL,
+                judged_at = NULL,
+                sent_at = NULL,
+                retry_after_at = NULL,
+                claim_id = NULL,
+                execution_snapshot_id = NULL,
+                execution_snapshot_hash = NULL,
+                prepared_claim_id = NULL,
+                prepared_execution_snapshot_id = NULL,
+                prepared_execution_snapshot_hash = NULL,
+                extra_retry_count = extra_retry_count + 1,
+                ready_insert_seq = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'judged'
+              AND terminal_kind IN ('closed', 'failed')
+              AND skip_reason = 'ownerCompletionFailed'
+          `)
+
+          return rows.reduce((reopenedCount, row, index) => {
+            const result = reopen.run(firstReadyInsertSeq + index, now, row.id) as {changes?: number}
+
+            return reopenedCount + Number(result.changes ?? 0)
+          }, 0)
+        })()
+      })) ?? 0
+    )
   },
   recordJudgmentSuccess: async (
     jobId: string,

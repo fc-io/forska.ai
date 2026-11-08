@@ -20,6 +20,7 @@ import {getJudgmentJobMutationResponse} from './getJudgmentJobMutationResponse.t
 import {assertJudgingRuntimeCanRun} from './judgingRuntime.ts'
 import {judgmentJobServerId} from './judgmentJobServerId.ts'
 import {logProviderHealthWriteFailure} from './logProviderHealthWriteFailure.ts'
+import {reopenFailedCloseoutsOnResume} from './reopenFailedCloseoutsOnResume.ts'
 
 const resetResumedJobProviderHealth = async (jobId: string): Promise<void> => {
   await resetJudgmentJobProviderHealthForResume({jobId}).catch((error: unknown) => {
@@ -143,6 +144,10 @@ export const judgmentsJobsRoutesPatchJob = async ({
     await assertJudgmentJobFullTextStrategyCanResume({jobId: params.id, projectFullTextStrategyId})
     await sqliteService.fillMissingFullTextStrategyId(params.id, projectFullTextStrategyId)
     await setJudgmentJobFullTextStrategyId(params.id, projectFullTextStrategyId)
+
+    if (isResume) {
+      await reopenFailedCloseoutsOnResume(params.id)
+    }
   }
 
   const updatedJob = await updateJudgmentJobStatus({
