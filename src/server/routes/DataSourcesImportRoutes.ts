@@ -23,6 +23,7 @@ export const dataSourcesImportRoutes = new Elysia()
     },
     {
       body: t.Object({
+        baseImportRoute: t.Optional(t.String()),
         mode: t.Union([t.Literal('title_abstract'), t.Literal('full_text')]),
         files: t.Array(
           t.Object({
@@ -67,6 +68,7 @@ export const dataSourcesImportRoutes = new Elysia()
         ),
         exclusionCriteria: t.Optional(t.String()),
         inclusionCriteria: t.Optional(t.String()),
+        baseImportRoute: t.Optional(t.String()),
         mode: t.Union([t.Literal('title_abstract'), t.Literal('full_text')]),
         files: t.Array(
           t.Object({

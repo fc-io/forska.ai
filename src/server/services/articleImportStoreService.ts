@@ -22,6 +22,7 @@ import {
 } from '../reviewServing/reviewImportHotFieldService.ts'
 import {
   appendReviewServingImportRunArticleDelta,
+  appendReviewServingImportRunArticleDeltas,
   type ReviewServingImportRunArticleChangeKind,
   type ReviewServingSourceOperation,
 } from '../reviewServing/reviewServingDeltaLedger.ts'
@@ -76,6 +77,7 @@ export type ArticleImportStoreRow = {
   fullTextCharCount?: number | null
   publicationStatus?: PublicationStatus | null
   externalArticleId?: string | null
+  forcedArticleId?: string | null
   sourceKind?: string | null
   importMetadata?: unknown
   matchMetadata?: unknown
@@ -99,7 +101,7 @@ type CanonicalArticleImportCandidateRecord = {
   identifierNormalization: NormalizedSourceRowIdentifiers
   row: ScopedArticleImportStoreRow
 }
-type ArticleImportRouteLinkRecord = {
+export type ArticleImportRouteLinkRecord = {
   articleId: string
   externalArticleId: string | null
   importMetadata: unknown
@@ -1077,20 +1079,21 @@ const getArticleImportRouteLinkHotFieldInput = (
   }
 }
 
-const appendImportRouteArticleDelta = async (params: {
+type ImportRouteArticleDeltaParams = {
   changeKind: ReviewServingImportRunArticleChangeKind
   record: ArticleImportRouteLinkRecord
   sourceMutationKey: string
   sourceOperation: ReviewServingSourceOperation
   sourceTable: string
   tombstone?: boolean
-  tx: ArticleImportStoreTx
-}) => {
+}
+
+const getImportRouteArticleDeltaInput = (params: ImportRouteArticleDeltaParams) => {
   const hotFieldRow = getReviewImportHotFieldRow(
     getArticleImportRouteLinkHotFieldInput(params.record, params.tombstone),
   )
 
-  await appendReviewServingImportRunArticleDelta(params.tx, {
+  return {
     articleId: params.record.articleId,
     changeKind: params.changeKind,
     importRouteId: params.record.importRouteId,
@@ -1121,6 +1124,55 @@ const appendImportRouteArticleDelta = async (params: {
             changedRankFilterFields: changedImportRouteRankFilterFields,
           }
         : getArticleImportRouteDeltaTypedKey(params.record),
+  }
+}
+
+const appendImportRouteArticleDelta = async (params: ImportRouteArticleDeltaParams & {tx: ArticleImportStoreTx}) => {
+  await appendReviewServingImportRunArticleDelta(params.tx, getImportRouteArticleDeltaInput(params))
+}
+
+export type ArticleImportRouteLinkRemap = {
+  record: ArticleImportRouteLinkRecord
+  targetArticleId: string
+  targetLinkExists: boolean
+}
+
+const getArticleImportRouteRemapDeltaInputs = (remap: ArticleImportRouteLinkRemap) => {
+  const targetRecord = {...remap.record, articleId: remap.targetArticleId}
+  const removedInput = getImportRouteArticleDeltaInput({
+    changeKind: 'importRoute.article.removed',
+    record: remap.record,
+    sourceMutationKey: `articleRemap.remove|${getArticleImportRouteCurrentLinkMutationKey(remap.record)}`,
+    sourceOperation: 'delete',
+    sourceTable: 'app.article_import_route',
+    tombstone: true,
+  })
+  const addedInput = getImportRouteArticleDeltaInput({
+    changeKind: remap.targetLinkExists ? 'importRoute.article.rankFields.updated' : 'importRoute.article.added',
+    record: targetRecord,
+    sourceMutationKey: `articleRemap.add|${getArticleImportRouteCurrentLinkMutationKey(targetRecord)}`,
+    sourceOperation: remap.targetLinkExists ? 'update' : 'insert',
+    sourceTable: 'app.article_import_route',
+  })
+
+  return [removedInput, addedInput]
+}
+
+export const appendArticleImportRouteRemapDeltasWithTx = async (
+  tx: ArticleImportStoreTx,
+  remaps: ArticleImportRouteLinkRemap[],
+) => {
+  await getValueChunks(remaps).reduce<Promise<void>>(async (previousRun, remapChunk) => {
+    await previousRun
+    await appendReviewServingImportRunArticleDeltas(tx, remapChunk.flatMap(getArticleImportRouteRemapDeltaInputs))
+  }, Promise.resolve())
+}
+
+export const getArticleImportStoreRowStrongIdentifiers = (row: ArticleImportStoreRow) => {
+  return getArticleIdentifierNormalization(
+    getScopedArticleImportStoreRow(getNormalizedArticleImportRow(row)),
+  ).strongIdentifiers.map((identifier) => {
+    return {kind: identifier.kind, normalizedValue: identifier.normalizedValue}
   })
 }
 
@@ -2038,6 +2090,7 @@ const getCanonicalArticleImportCandidateRecord = (
       biorxivId: candidateRow.biorxivId,
       candidateId: `${row.sourceRecordKey}\u0000${index}`,
       doi: candidateRow.doi,
+      ...(candidateRow.forcedArticleId ? {forcedArticleId: candidateRow.forcedArticleId} : {}),
       fullText: candidateRow.fullText,
       fullTextCharCount: candidateRow.fullTextCharCount,
       fullTextConversionAttempts: candidateRow.fullTextConversionAttempts,

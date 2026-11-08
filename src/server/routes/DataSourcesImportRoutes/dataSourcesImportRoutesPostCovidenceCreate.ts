@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {articleImportStoreWorkloadContext} from '../../services/articleImportStoreService.ts'
+import {getRequiredCovidenceBaseImportRouteId} from '../../services/covidenceBaseImportRoute.ts'
 import {
   buildCovidencePackageConfig,
   buildCovidencePromptDefinition,
@@ -173,18 +174,24 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
   eligibilityFields?: CovidenceEligibilityField[]
   exclusionCriteria?: string
   inclusionCriteria?: string
+  baseImportRoute?: string
   mode: CovidenceImportMode
   files: Array<{file: CovidencePackageUploadInput; fileRole: CovidenceFileRole}>
 }) => {
   const dataSourceId = randomUUID()
   const title = body.title.trim()
+  const baseImportRoute = body.baseImportRoute?.trim() || null
 
   if (!title) {
     throw new Error('Title is required')
   }
 
+  if (baseImportRoute) {
+    await getRequiredCovidenceBaseImportRouteId({baseImportRoute, importRoute: getCovidenceImportRoute(dataSourceId)})
+  }
+
   const storedFiles = await storeCovidencePackageFiles({datasourceId: dataSourceId, files: body.files})
-  const config = buildCovidencePackageConfig({files: storedFiles, mode: body.mode})
+  const config = buildCovidencePackageConfig({baseImportRoute, files: storedFiles, mode: body.mode})
   const created = await createCovidenceProjectRecords({
     config,
     cursor: getCovidencePackageCursor(config),

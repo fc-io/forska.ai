@@ -24,11 +24,27 @@ import {
   type ArticleImportBatchProgress,
   type ArticleImportStoreRow,
   type ArticleImportStoreTx,
+  getArticleImportStoreRowStrongIdentifiers,
   storeImportedArticles,
   syncImportedArticlesInBatches,
   syncImportedArticlesWithTx,
 } from './articleImportStoreService.ts'
 import {getComparisonProjectServingInvalidationService} from './comparisonProjectServingInvalidationService.ts'
+import {
+  covidenceImportRouteValuePrefix,
+  getRequiredCovidenceBaseImportRouteId,
+  isCovidenceBaseImportRouteValue,
+} from './covidenceBaseImportRoute.ts'
+import {
+  type CovidenceBaseRouteMatchRecord,
+  type CovidenceCandidateMatchKeys,
+  type CovidenceMatchResolution,
+  type CovidenceRouteShare,
+  getCovidenceBaseRouteMatchIndex,
+  getCovidenceSameReviewMatchSummary,
+  getSuggestedCovidenceBaseImportRoute,
+  resolveCovidenceMatchTier,
+} from './covidenceSameReviewMatching.ts'
 import {getOrCreateImmutablePromptTx, immutablePromptIdentityReviewServingFields} from './immutablePromptService.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
@@ -146,6 +162,7 @@ export type CovidencePackageConfig = {
   version: 1
   mode: CovidenceImportMode
   files: CovidencePackageFile[]
+  baseImportRoute?: string
 }
 type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
 type CovidenceAnalyzeUploadFile = {file: CovidencePackageUploadInput; fileRole: CovidenceFileRole}
@@ -187,6 +204,7 @@ type CovidenceAnalyzeResult = {
   detectedFiles: CovidenceAnalyzeDetectedFile[]
   mode: CovidenceImportMode
   sampleMergedRows: CovidenceAnalyzeSampleRow[]
+  sameReview?: CovidenceSameReviewAnalysis
   warnings: CovidenceReferenceMergeResult['warnings']
 }
 type CovidenceAnalyzeError = {
@@ -1612,15 +1630,20 @@ const getCovidencePackageConfigValue = (cursor: string | null): CovidencePackage
         })
       : []
 
+    const hasValidBaseImportRoute =
+      parsedValue.baseImportRoute === undefined || isCovidenceBaseImportRouteValue(parsedValue.baseImportRoute)
+
     return parsedValue.kind === 'covidence_import'
       && parsedValue.version === 1
       && (parsedValue.mode === 'title_abstract' || parsedValue.mode === 'full_text')
       && files.length === parsedValue.files?.length
+      && hasValidBaseImportRoute
       ? {
           kind: 'covidence_import',
           version: 1,
           mode: parsedValue.mode,
           files: getValidatedCovidencePackageFiles({files, mode: parsedValue.mode}),
+          ...(parsedValue.baseImportRoute ? {baseImportRoute: parsedValue.baseImportRoute} : {}),
         }
       : null
   } catch {
@@ -1844,53 +1867,503 @@ const getCovidenceArticleUrl = (citation: Record<string, string | null>) => {
   return url === '' ? getCovidenceDoiResolverUrl(citation.doi) : url
 }
 
-const getCovidenceArticleExternalId = (params: {candidate: CovidenceMergedArticleCandidate; importRoute: string}) => {
+export const getCovidenceArticleExternalId = (params: {
+  candidate: Pick<CovidenceMergedArticleCandidate, 'articleKey'>
+  importRoute: string
+}) => {
   return `${params.importRoute}:${getSafeIdentityPart(params.candidate.articleKey)}`
+}
+
+const getCovidenceArticleAuthors = (authors: string | null | undefined) => {
+  return authors
+    ? authors
+        .split(';')
+        .map((author) => {
+          return author.trim()
+        })
+        .filter((author) => {
+          return author !== ''
+        })
+    : null
+}
+
+const getCovidenceIdentifierFields = (candidate: CovidenceMergedArticleCandidate) => {
+  const originalData = getCovidenceImportOriginalData(candidate)
+
+  return {
+    arxivId: getCovidenceCitationValue(candidate.citation, covidenceArxivKeys),
+    biorxivId: getCovidenceCitationValue(candidate.citation, covidenceBiorxivKeys),
+    doi: normalizeDoi(candidate.citation.doi),
+    medrxivId: getCovidenceCitationValue(candidate.citation, covidenceMedrxivKeys),
+    originalData,
+    pubmedId: getCovidenceCitationValue(candidate.citation, covidencePmidKeys),
+    sourceMetadata: getCovidenceCanonicalSourceMetadata(candidate),
+    url: getCovidenceArticleUrl(candidate.citation),
+  }
+}
+
+const getCovidenceSameReviewRowFields = (params: {
+  baseImportRoute: string
+  resolution: CovidenceMatchResolution
+}): Pick<ArticleImportStoreRow, 'forcedArticleId' | 'matchMetadata'> => {
+  const matchTier = params.resolution.status === 'matched' ? params.resolution.matchTier : null
+  const matchMetadata = {covidenceSameReview: {baseImportRoute: params.baseImportRoute, matchTier}}
+
+  return params.resolution.status === 'matched' && params.resolution.matchTier !== 'strong_identifier'
+    ? {forcedArticleId: params.resolution.articleId, matchMetadata}
+    : {matchMetadata}
+}
+
+const isCovidenceSameReviewImportableResolution = (resolution: CovidenceMatchResolution | undefined) => {
+  return resolution?.status !== 'ambiguous' || resolution.matchTier === 'strong_identifier'
 }
 
 const getCovidenceImportRows = (params: {
   config: CovidencePackageConfig
   importRoute: string
   packageRows?: CovidenceReferenceMergeResult
+  sameReviewResolutions?: CovidenceSameReviewResolutions
 }): ArticleImportStoreRow[] => {
   const mergedResult = params.packageRows ?? getCovidencePackageRowsFromConfig(params.config)
+  const sameReviewResolutions = params.sameReviewResolutions
 
-  return mergedResult.candidates.map((candidate) => {
-    const externalArticleId = getCovidenceArticleExternalId({candidate, importRoute: params.importRoute})
-    const originalData = getCovidenceImportOriginalData(candidate)
-    const importMetadata = getCovidenceImportSourceMetadata({candidate, config: params.config})
+  return mergedResult.candidates
+    .filter((candidate) => {
+      return (
+        !sameReviewResolutions
+        || isCovidenceSameReviewImportableResolution(sameReviewResolutions.byArticleKey.get(candidate.articleKey))
+      )
+    })
+    .map((candidate) => {
+      const externalArticleId = getCovidenceArticleExternalId({candidate, importRoute: params.importRoute})
+      const identifierFields = getCovidenceIdentifierFields(candidate)
+      const importMetadata = getCovidenceImportSourceMetadata({candidate, config: params.config})
+      const resolution = sameReviewResolutions?.byArticleKey.get(candidate.articleKey)
+
+      return {
+        allowUnidentifiedCreate: true,
+        articleAuthors: getCovidenceArticleAuthors(candidate.citation.authors),
+        articleId: candidate.articleKey,
+        articleSummary: candidate.citation.abstract ?? null,
+        articleTitle: candidate.citation.title?.trim() || `Covidence article ${candidate.articleKey}`,
+        arxivId: identifierFields.arxivId,
+        biorxivId: identifierFields.biorxivId,
+        doi: identifierFields.doi,
+        externalArticleId,
+        importMetadata,
+        importRoute: params.importRoute,
+        medrxivId: identifierFields.medrxivId,
+        originalData: identifierFields.originalData,
+        pubmedId: identifierFields.pubmedId,
+        rawPayload: identifierFields.originalData,
+        sourceKind: 'covidence',
+        sourceMetadata: identifierFields.sourceMetadata,
+        sourceRecordKey: candidate.articleKey,
+        url: identifierFields.url,
+        ...(sameReviewResolutions && resolution
+          ? getCovidenceSameReviewRowFields({baseImportRoute: sameReviewResolutions.baseImportRoute, resolution})
+          : {}),
+      }
+    })
+}
+
+const getNormalizedCovidenceMatchValues = (values: string[]) => {
+  return Array.from(
+    new Set(
+      values.map(getNormalizedCovidenceMatchValue).filter((value): value is string => {
+        return value !== null
+      }),
+    ),
+  )
+}
+
+export const getCovidenceCandidateMatchKeys = (
+  candidate: Pick<CovidenceMergedArticleCandidate, 'citation' | 'covidenceIds' | 'referenceIds'>,
+): CovidenceCandidateMatchKeys => {
+  return {
+    covidenceIds: getNormalizedCovidenceMatchValues(candidate.covidenceIds),
+    referenceIds: getNormalizedCovidenceMatchValues(candidate.referenceIds),
+    titleYearFirstAuthorHash: getCovidenceTitleYearFirstAuthorHash(candidate.citation),
+  }
+}
+
+const getCovidenceCandidateStrongIdentifiers = (candidate: CovidenceMergedArticleCandidate) => {
+  return getArticleImportStoreRowStrongIdentifiers({
+    ...getCovidenceIdentifierFields(candidate),
+    articleAuthors: null,
+    articleId: candidate.articleKey,
+    articleSummary: null,
+    articleTitle: candidate.citation.title?.trim() || `Covidence article ${candidate.articleKey}`,
+    importRoute: covidenceImportRouteValuePrefix,
+  })
+}
+
+const getCovidenceIdentifierKey = (identifier: {kind: string; normalizedValue: string}) => {
+  return `${identifier.kind}\u0000${identifier.normalizedValue}`
+}
+
+const getCovidenceIdentifierArticleIdMap = async (params: {
+  identifiers: Array<{kind: string; normalizedValue: string}>
+  tx?: CovidenceProjectTx
+}) => {
+  const normalizedValues = Array.from(
+    new Set(
+      params.identifiers.map((identifier) => {
+        return identifier.normalizedValue
+      }),
+    ),
+  )
+  const rows = await getCovidenceValueChunks(normalizedValues).reduce<
+    Promise<Array<{articleId: string; kind: string; normalizedValue: string}>>
+  >(async (rowsPromise, valueChunk) => {
+    const previousRows = await rowsPromise
+    const chunkRows = await getCovidenceProjectQueryRunner(params.tx).queryJson<{
+      articleId: string
+      kind: string
+      normalizedValue: string
+    }>(`
+      SELECT article_id AS articleId, kind, normalized_value AS normalizedValue
+      FROM app.article_identifier
+      WHERE normalized_value IN (${getQuotedStringList(valueChunk).join(', ')})
+    `)
+
+    return [...previousRows, ...chunkRows]
+  }, Promise.resolve([]))
+
+  return new Map(
+    rows.map((row) => {
+      return [getCovidenceIdentifierKey(row), row.articleId]
+    }),
+  )
+}
+
+const getCovidenceIdentifierArticleIds = (
+  identifiers: Array<{kind: string; normalizedValue: string}>,
+  articleIdByIdentifierKey: Map<string, string>,
+) => {
+  return Array.from(
+    new Set(
+      identifiers
+        .map((identifier) => {
+          return articleIdByIdentifierKey.get(getCovidenceIdentifierKey(identifier)) ?? null
+        })
+        .filter((articleId): articleId is string => {
+          return articleId !== null
+        }),
+    ),
+  )
+}
+
+type CovidenceCandidateIdentifierState = {
+  articleKey: string
+  doiOrPmidArticleIds: string[]
+  hasDoiOrPmid: boolean
+  strongIdentifierArticleIds: string[]
+}
+
+const getCovidenceCandidateIdentifierStates = async (params: {
+  candidates: CovidenceMergedArticleCandidate[]
+  tx?: CovidenceProjectTx
+}): Promise<CovidenceCandidateIdentifierState[]> => {
+  const candidateIdentifiers = params.candidates.map((candidate) => {
+    return {articleKey: candidate.articleKey, identifiers: getCovidenceCandidateStrongIdentifiers(candidate)}
+  })
+  const articleIdByIdentifierKey = await getCovidenceIdentifierArticleIdMap({
+    identifiers: candidateIdentifiers.flatMap((candidateIdentifier) => {
+      return candidateIdentifier.identifiers
+    }),
+    tx: params.tx,
+  })
+
+  return candidateIdentifiers.map((candidateIdentifier) => {
+    const doiOrPmidIdentifiers = candidateIdentifier.identifiers.filter((identifier) => {
+      return identifier.kind === 'doi' || identifier.kind === 'pmid'
+    })
 
     return {
-      allowUnidentifiedCreate: true,
-      articleAuthors: candidate.citation.authors
-        ? candidate.citation.authors
-            .split(';')
-            .map((author) => {
-              return author.trim()
-            })
-            .filter((author) => {
-              return author !== ''
-            })
-        : null,
-      articleId: candidate.articleKey,
-      articleSummary: candidate.citation.abstract ?? null,
-      articleTitle: candidate.citation.title?.trim() || `Covidence article ${candidate.articleKey}`,
-      arxivId: getCovidenceCitationValue(candidate.citation, covidenceArxivKeys),
-      biorxivId: getCovidenceCitationValue(candidate.citation, covidenceBiorxivKeys),
-      doi: normalizeDoi(candidate.citation.doi),
-      externalArticleId,
-      importMetadata,
-      importRoute: params.importRoute,
-      medrxivId: getCovidenceCitationValue(candidate.citation, covidenceMedrxivKeys),
-      originalData,
-      pubmedId: getCovidenceCitationValue(candidate.citation, covidencePmidKeys),
-      rawPayload: originalData,
-      sourceKind: 'covidence',
-      sourceMetadata: getCovidenceCanonicalSourceMetadata(candidate),
-      sourceRecordKey: candidate.articleKey,
-      url: getCovidenceArticleUrl(candidate.citation),
+      articleKey: candidateIdentifier.articleKey,
+      doiOrPmidArticleIds: getCovidenceIdentifierArticleIds(doiOrPmidIdentifiers, articleIdByIdentifierKey),
+      hasDoiOrPmid: doiOrPmidIdentifiers.length > 0,
+      strongIdentifierArticleIds: getCovidenceIdentifierArticleIds(
+        candidateIdentifier.identifiers,
+        articleIdByIdentifierKey,
+      ),
     }
   })
+}
+
+type CovidenceBaseRouteRecordRow = {
+  articleId: string
+  authors: string | null
+  covidenceIds: string | null
+  referenceIds: string | null
+  title: string | null
+} & Record<string, string | null>
+
+const getCovidenceBaseRouteRecordSelectSql = (params: {alias: string; importRouteId: string; tableName: string}) => {
+  return `
+    SELECT
+      ${params.alias}.article_id AS articleId,
+      CAST(COALESCE(
+        json_extract(${params.alias}.import_metadata, '$.covidence.covidenceIds'),
+        json_extract(${params.alias}.raw_payload, '$.covidence.covidenceIds')
+      ) AS VARCHAR) AS covidenceIds,
+      CAST(COALESCE(
+        json_extract(${params.alias}.import_metadata, '$.covidence.referenceIds'),
+        json_extract(${params.alias}.raw_payload, '$.covidence.referenceIds')
+      ) AS VARCHAR) AS referenceIds,
+      json_extract_string(${params.alias}.raw_payload, '$.covidence.citation.title') AS title,
+      json_extract_string(${params.alias}.raw_payload, '$.covidence.citation.authors') AS authors,
+      ${covidenceYearKeys
+        .map((key) => {
+          return `json_extract_string(${params.alias}.raw_payload, '$.covidence.citation.${key}') AS ${key}`
+        })
+        .join(',\n      ')}
+    FROM ${params.tableName} ${params.alias}
+    WHERE ${params.alias}.import_route_id = ${getSqlLiteral(params.importRouteId)}
+  `
+}
+
+const getCovidenceJsonStringArray = (value: string | null) => {
+  const parsedValue = value ? (JSON.parse(value) as unknown) : null
+
+  return Array.isArray(parsedValue)
+    ? parsedValue.filter((entry): entry is string => {
+        return typeof entry === 'string'
+      })
+    : []
+}
+
+const getCovidenceBaseRouteMatchRecord = (row: CovidenceBaseRouteRecordRow): CovidenceBaseRouteMatchRecord => {
+  const citation = Object.fromEntries(
+    ['title', 'authors', ...covidenceYearKeys].map((key) => {
+      return [key, row[key] ?? null]
+    }),
+  )
+
+  return {
+    articleId: row.articleId,
+    ...getCovidenceCandidateMatchKeys({
+      citation,
+      covidenceIds: getCovidenceJsonStringArray(row.covidenceIds),
+      referenceIds: getCovidenceJsonStringArray(row.referenceIds),
+    }),
+  }
+}
+
+export const getCovidenceBaseRouteMatchRecords = async (params: {
+  baseImportRouteId: string
+  tx?: CovidenceProjectTx
+}) => {
+  const rows = await getCovidenceProjectQueryRunner(params.tx).queryJson<CovidenceBaseRouteRecordRow>(`
+    ${getCovidenceBaseRouteRecordSelectSql({
+      alias: 'source_record',
+      importRouteId: params.baseImportRouteId,
+      tableName: 'app.article_import_route_source_record',
+    })}
+      AND source_record.quarantined_at IS NULL
+    UNION
+    ${getCovidenceBaseRouteRecordSelectSql({
+      alias: 'current_link',
+      importRouteId: params.baseImportRouteId,
+      tableName: 'app.article_import_route',
+    })}
+  `)
+
+  return rows.map(getCovidenceBaseRouteMatchRecord)
+}
+
+export type CovidenceSameReviewResolution = {
+  articleKey: string
+  keys: CovidenceCandidateMatchKeys
+  resolution: CovidenceMatchResolution
+  title: string | null
+}
+export type CovidenceSameReviewResolutions = {
+  baseImportRoute: string
+  byArticleKey: Map<string, CovidenceMatchResolution>
+  resolutions: CovidenceSameReviewResolution[]
+}
+
+const getCovidenceSameReviewResolutionsFromStates = async (params: {
+  baseImportRoute: string
+  candidates: CovidenceMergedArticleCandidate[]
+  excludedArticleIds?: ReadonlySet<string>
+  identifierStates: CovidenceCandidateIdentifierState[]
+  importRoute?: string | null
+  tx?: CovidenceProjectTx
+}): Promise<CovidenceSameReviewResolutions> => {
+  const baseImportRouteId = await getRequiredCovidenceBaseImportRouteId(params)
+  const index = getCovidenceBaseRouteMatchIndex(
+    await getCovidenceBaseRouteMatchRecords({baseImportRouteId, tx: params.tx}),
+  )
+  const identifierStateByArticleKey = new Map(
+    params.identifierStates.map((identifierState) => {
+      return [identifierState.articleKey, identifierState]
+    }),
+  )
+  const resolutions = params.candidates.map((candidate) => {
+    const keys = getCovidenceCandidateMatchKeys(candidate)
+
+    return {
+      articleKey: candidate.articleKey,
+      keys,
+      resolution: resolveCovidenceMatchTier({
+        excludedArticleIds: params.excludedArticleIds,
+        index,
+        keys,
+        strongIdentifierArticleIds:
+          identifierStateByArticleKey.get(candidate.articleKey)?.strongIdentifierArticleIds ?? [],
+      }),
+      title: candidate.citation.title?.trim() || null,
+    }
+  })
+
+  return {
+    baseImportRoute: params.baseImportRoute,
+    byArticleKey: new Map(
+      resolutions.map((resolution) => {
+        return [resolution.articleKey, resolution.resolution]
+      }),
+    ),
+    resolutions,
+  }
+}
+
+export const getCovidenceSameReviewResolutions = async (params: {
+  baseImportRoute: string
+  candidates: CovidenceMergedArticleCandidate[]
+  excludedArticleIds?: ReadonlySet<string>
+  importRoute?: string | null
+  tx?: CovidenceProjectTx
+}) => {
+  const identifierStates = await getCovidenceCandidateIdentifierStates(params)
+
+  return await getCovidenceSameReviewResolutionsFromStates({...params, identifierStates})
+}
+
+const getCovidenceRouteShares = async (params: {
+  identifierStates: CovidenceCandidateIdentifierState[]
+  tx?: CovidenceProjectTx
+}): Promise<CovidenceRouteShare[]> => {
+  const strongIdentifierStates = params.identifierStates.filter((identifierState) => {
+    return identifierState.hasDoiOrPmid
+  })
+  const articleIds = Array.from(
+    new Set(
+      strongIdentifierStates.flatMap((identifierState) => {
+        return identifierState.doiOrPmidArticleIds
+      }),
+    ),
+  )
+  const routeRows = await getCovidenceValueChunks(articleIds).reduce<
+    Promise<Array<{articleId: string; importRoute: string}>>
+  >(async (rowsPromise, articleIdChunk) => {
+    const previousRows = await rowsPromise
+    const chunkRows = await getCovidenceProjectQueryRunner(params.tx).queryJson<{
+      articleId: string
+      importRoute: string
+    }>(`
+      SELECT DISTINCT article_import_route.article_id AS articleId, import_route.route AS importRoute
+      FROM app.article_import_route article_import_route
+      INNER JOIN app.import_route import_route ON import_route.id = article_import_route.import_route_id
+      WHERE import_route.route LIKE '${covidenceImportRouteValuePrefix}%'
+        AND article_import_route.article_id IN (${getQuotedStringList(articleIdChunk).join(', ')})
+    `)
+
+    return [...previousRows, ...chunkRows]
+  }, Promise.resolve([]))
+  const routesByArticleId = routeRows.reduce<Map<string, string[]>>((routeMap, row) => {
+    routeMap.set(row.articleId, [...(routeMap.get(row.articleId) ?? []), row.importRoute])
+
+    return routeMap
+  }, new Map())
+  const matchedCountByRoute = strongIdentifierStates.reduce<Map<string, number>>((countMap, identifierState) => {
+    const routes = new Set(
+      identifierState.doiOrPmidArticleIds.flatMap((articleId) => {
+        return routesByArticleId.get(articleId) ?? []
+      }),
+    )
+
+    return Array.from(routes).reduce((routeCountMap, route) => {
+      return routeCountMap.set(route, (routeCountMap.get(route) ?? 0) + 1)
+    }, countMap)
+  }, new Map())
+  const routes = Array.from(matchedCountByRoute.keys())
+  const dataSourceRows =
+    routes.length === 0
+      ? []
+      : await getCovidenceProjectQueryRunner(params.tx).queryJson<{id: string; importRoute: string; title: string}>(`
+          SELECT id, import_route AS importRoute, title
+          FROM app.data_source
+          WHERE import_route IN (${getQuotedStringList(routes).join(', ')})
+        `)
+  const dataSourceByRoute = new Map(
+    dataSourceRows.map((row) => {
+      return [row.importRoute, row]
+    }),
+  )
+
+  return routes.map((importRoute) => {
+    const matchedRecordCount = matchedCountByRoute.get(importRoute) ?? 0
+
+    return {
+      dataSourceId: dataSourceByRoute.get(importRoute)?.id ?? null,
+      dataSourceTitle: dataSourceByRoute.get(importRoute)?.title ?? null,
+      importRoute,
+      matchedRecordCount,
+      share: strongIdentifierStates.length === 0 ? 0 : matchedRecordCount / strongIdentifierStates.length,
+    }
+  })
+}
+
+export const getCovidenceSameReviewAnalysis = async (params: {
+  baseImportRoute?: string | null
+  candidates: CovidenceMergedArticleCandidate[]
+  tx?: CovidenceProjectTx
+}) => {
+  const identifierStates = await getCovidenceCandidateIdentifierStates(params)
+  const routeSuggestion = getSuggestedCovidenceBaseImportRoute(
+    await getCovidenceRouteShares({identifierStates, tx: params.tx}),
+  )
+  const selectedBaseImportRoute = params.baseImportRoute ?? routeSuggestion.suggestion?.importRoute ?? null
+  const resolutions = selectedBaseImportRoute
+    ? await getCovidenceSameReviewResolutionsFromStates({
+        baseImportRoute: selectedBaseImportRoute,
+        candidates: params.candidates,
+        identifierStates,
+        tx: params.tx,
+      })
+    : null
+
+  return {
+    matchSummary: resolutions
+      ? getCovidenceSameReviewMatchSummary(resolutions.baseImportRoute, resolutions.resolutions)
+      : null,
+    routeShares: routeSuggestion.routeShares.slice(0, 5),
+    strongIdentifierRecordCount: identifierStates.filter((identifierState) => {
+      return identifierState.hasDoiOrPmid
+    }).length,
+    suggestedBaseImportRoute: routeSuggestion.suggestion,
+  }
+}
+
+type CovidenceSameReviewAnalysis = Awaited<ReturnType<typeof getCovidenceSameReviewAnalysis>>
+
+const getCovidenceConfigSameReviewResolutions = async (params: {
+  config: CovidencePackageConfig
+  importRoute: string
+  packageRows: CovidenceReferenceMergeResult
+  tx?: CovidenceProjectTx
+}) => {
+  return params.config.baseImportRoute
+    ? await getCovidenceSameReviewResolutions({
+        baseImportRoute: params.config.baseImportRoute,
+        candidates: params.packageRows.candidates,
+        importRoute: params.importRoute,
+        tx: params.tx,
+      })
+    : undefined
 }
 
 const getCovidenceImportResultFromConfig = async (params: {
@@ -1900,7 +2373,8 @@ const getCovidenceImportResultFromConfig = async (params: {
   tx?: ArticleImportStoreTx
 }): Promise<CovidenceImportResult> => {
   const packageRows = params.packageRows ?? getCovidencePackageRowsFromConfig(params.config)
-  const rows = getCovidenceImportRows({...params, packageRows})
+  const sameReviewResolutions = await getCovidenceConfigSameReviewResolutions({...params, packageRows})
+  const rows = getCovidenceImportRows({...params, packageRows, sameReviewResolutions})
 
   if (params.tx) {
     const importRefreshState = await syncImportedArticlesWithTx({importRoute: params.importRoute, rows, tx: params.tx})
@@ -2360,10 +2834,17 @@ const markCovidenceComparisonServingStaleForPromptHumanJudgments = async (params
 }
 
 export const buildCovidencePackageConfig = (params: {
+  baseImportRoute?: string | null
   mode: CovidenceImportMode
   files: CovidencePackageFile[]
 }): CovidencePackageConfig => {
-  return {kind: 'covidence_import', version: 1, mode: params.mode, files: getValidatedCovidencePackageFiles(params)}
+  return {
+    kind: 'covidence_import',
+    version: 1,
+    mode: params.mode,
+    files: getValidatedCovidencePackageFiles(params),
+    ...(params.baseImportRoute ? {baseImportRoute: params.baseImportRoute} : {}),
+  }
 }
 
 export const buildCovidencePromptDefinition = (params: {
@@ -3342,7 +3823,33 @@ const readAndParseCovidenceAnalyzeFiles = async (
 export const analyzeCovidencePackageFiles = async (params: {
   files: CovidenceAnalyzeUploadFile[]
   mode: CovidenceImportMode
+  sameReview?: {baseImportRoute: string | null}
 }): Promise<CovidenceAnalyzeResponse> => {
+  const analysis = await analyzeCovidencePackageFilesWithMergedRows(params)
+
+  return analysis.ok
+    ? {
+        data: params.sameReview
+          ? {
+              ...analysis.data,
+              sameReview: await getCovidenceSameReviewAnalysis({
+                baseImportRoute: params.sameReview.baseImportRoute,
+                candidates: analysis.mergedResult.candidates,
+              }),
+            }
+          : analysis.data,
+        ok: true,
+      }
+    : analysis
+}
+
+const analyzeCovidencePackageFilesWithMergedRows = async (params: {
+  files: CovidenceAnalyzeUploadFile[]
+  mode: CovidenceImportMode
+}): Promise<
+  | {data: CovidenceAnalyzeResult; mergedResult: CovidenceReferenceMergeResult; ok: true}
+  | {error: CovidenceAnalyzeError; ok: false}
+> => {
   const uploads = params.files.filter((file) => {
     return file.file instanceof Blob
   })
@@ -3427,6 +3934,7 @@ export const analyzeCovidencePackageFiles = async (params: {
       }),
       warnings: mergedResult.warnings,
     },
+    mergedResult,
     ok: true,
   }
 }
@@ -3456,7 +3964,8 @@ export const importCovidencePackageInBatches = async (params: {
   onBatchStored?: (progress: ArticleImportBatchProgress) => Promise<void>
   packageRows: CovidenceReferenceMergeResult
 }): Promise<CovidenceImportResult> => {
-  const rows = getCovidenceImportRows(params)
+  const sameReviewResolutions = await getCovidenceConfigSameReviewResolutions(params)
+  const rows = getCovidenceImportRows({...params, sameReviewResolutions})
   const importRefreshState = await syncImportedArticlesInBatches({
     importRoute: params.importRoute,
     onBatchStored: params.onBatchStored,
