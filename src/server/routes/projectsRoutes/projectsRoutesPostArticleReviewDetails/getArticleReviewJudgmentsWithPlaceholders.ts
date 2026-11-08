@@ -1,6 +1,7 @@
 import type {JudgmentAssessmentRecord, JudgmentRecord} from '../../../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {getDateValue, getQuotedStringList} from '../../../services/appQueryHelpers.ts'
+import type {ArticleProviderFailure} from '../../../services/judgmentPromptFailureReadService.ts'
 import type {ArticleProviderRefusal} from '../../../services/judgmentRefusalReadService.ts'
 import type {
   PlaceholderJudgment,
@@ -85,6 +86,31 @@ const getPromptProviderRefusal = (
     : null
 }
 
+// A failed closeout only shows on a prompt with no judgment and no refusal: judgment > refusal > failure.
+const getPromptProviderFailure = (
+  providerFailures: ArticleProviderFailure[],
+  promptId: string,
+  providerRefusal: PlaceholderJudgment['providerRefusal'],
+): PlaceholderJudgment['providerFailure'] => {
+  const failure = providerRefusal
+    ? undefined
+    : providerFailures.find((candidate) => {
+        return candidate.promptId === promptId
+      })
+
+  return failure
+    ? {
+        attemptCount: failure.attemptCount,
+        failureCode: failure.failureCode,
+        failureCount: failure.failureCount,
+        lastFailedAt: failure.lastFailedAt,
+        modelName: failure.modelName,
+        providerKind: failure.providerKind,
+        reason: failure.reason,
+      }
+    : null
+}
+
 export const getArticleReviewJudgmentsWithPlaceholders = async ({
   articleJudgments,
   enabledPromptRows,
@@ -92,6 +118,7 @@ export const getArticleReviewJudgmentsWithPlaceholders = async ({
   projectId,
   projectReviewDetailJudgmentRows,
   promptOrderMap,
+  providerFailures,
   providerRefusals,
 }: {
   articleJudgments: ReviewJudgmentDetail[]
@@ -100,6 +127,7 @@ export const getArticleReviewJudgmentsWithPlaceholders = async ({
   projectId: string
   projectReviewDetailJudgmentRows: ProjectReviewDetailJudgmentRow[]
   promptOrderMap: Record<string, number>
+  providerFailures: ArticleProviderFailure[]
   providerRefusals: ArticleProviderRefusal[]
 }) => {
   const appAssessmentRows = await getAppJudgmentAssessmentRows({
@@ -157,6 +185,8 @@ export const getArticleReviewJudgmentsWithPlaceholders = async ({
       return !presentPromptIds.has(p.id)
     })
     .map((p) => {
+      const providerRefusal = getPromptProviderRefusal(providerRefusals, p.id)
+
       return {
         id: `placeholder:${p.id}`,
         promptId: p.id,
@@ -167,7 +197,8 @@ export const getArticleReviewJudgmentsWithPlaceholders = async ({
         prompt: {originalText: p.originalText, promptHeading: p.promptHeading},
         assessments: [] as Array<JudgmentAssessmentRecord>,
         createdAt: null,
-        providerRefusal: getPromptProviderRefusal(providerRefusals, p.id),
+        providerRefusal,
+        providerFailure: getPromptProviderFailure(providerFailures, p.id, providerRefusal),
       }
     })
 

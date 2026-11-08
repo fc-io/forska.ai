@@ -1,6 +1,7 @@
 import {createSignal, For, onCleanup, Show} from 'solid-js'
 
 import {ReviewJudgmentItem} from './reviewJudgmentItem.tsx'
+import type {ReviewJudgmentProviderFailure} from './reviewJudgmentItem/reviewJudgmentItemProviderFailure.tsx'
 import type {ReviewJudgmentProviderRefusal} from './reviewJudgmentItem/reviewJudgmentItemProviderRefusal.tsx'
 import {getReviewJudgmentsCopyText} from './reviewJudgmentsCopyText.ts'
 
@@ -31,6 +32,7 @@ type Judgment = {
   chunkCount?: number | null
   chunkPlanHash?: string | null
   providerRefusal?: ReviewJudgmentProviderRefusal | null
+  providerFailure?: ReviewJudgmentProviderFailure | null
 }
 
 type ReviewJudgmentsProps = {

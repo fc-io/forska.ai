@@ -196,12 +196,65 @@ describe('ReviewsArticlesTable', () => {
       container.remove()
     }
   })
+  test('marks rows with failed closeouts with a failed count next to the status and the refused count', () => {
+    const {container, dispose} = renderTable([
+      getArticle({
+        id: 'partly-failed',
+        hasLlmJudgment: true,
+        isFullyJudged: false,
+        judgedPromptIds: ['prompt-1'],
+        llmFailedPromptCodes: 'claude_code_request_failed',
+        llmFailedPromptCount: 1,
+        llmRefusedPromptCount: 0,
+      }),
+      getArticle({
+        id: 'failed-and-refused',
+        hasLlmJudgment: false,
+        isFullyJudged: false,
+        judgedPromptIds: [],
+        llmFailedPromptCodes: 'claude_code_request_failed',
+        llmFailedPromptCount: 2,
+        llmRefusedPromptCount: 1,
+      }),
+      getArticle({id: 'both-tab-failed', llmFailedPromptCodes: 'claude_code_request_failed', llmFailedPromptCount: 1}),
+    ])
+
+    try {
+      const statusBadges = [...container.querySelectorAll('tbody tr')].map((row) => {
+        return [...row.querySelectorAll('td:nth-child(2) span')].map((badge) => {
+          return [badge.textContent, badge.getAttribute('title')]
+        })
+      })
+
+      expect(statusBadges).toEqual([
+        [
+          ['Partial', '1 prompt(s) judged, 0 judgment(s)'],
+          ['1 failed', 'The model call failed after retries (claude_code_request_failed); resume the job to retry'],
+        ],
+        [
+          ['1 refused', 'The model refused 1 prompt(s); needs human screening'],
+          ['2 failed', 'The model call failed after retries (claude_code_request_failed); resume the job to retry'],
+        ],
+        [['1 failed', 'The model call failed after retries (claude_code_request_failed); resume the job to retry']],
+      ])
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
 })
 
 // The human table renders a few display fields; the full article record shape is irrelevant to these tests.
-const getHumanArticle = (overrides: {id: string; llmRefusedPromptCount: number}) => {
+const getHumanArticle = (overrides: {
+  id: string
+  llmFailedPromptCodes?: string | null
+  llmFailedPromptCount?: number
+  llmRefusedPromptCount: number
+}) => {
   return {
     ...getArticle({id: overrides.id}),
+    llmFailedPromptCodes: overrides.llmFailedPromptCodes ?? null,
+    llmFailedPromptCount: overrides.llmFailedPromptCount ?? 0,
     llmRefusedPromptCount: overrides.llmRefusedPromptCount,
   } as unknown as ArticleWithHumanJudgments
 }
@@ -248,6 +301,37 @@ describe('ReviewsArticlesHumanTable', () => {
       expect(statuses).toEqual([
         ['4 refused', 'The model refused 4 prompt(s); needs human screening'],
         ['—', null],
+      ])
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows the failed count in the status column next to the refused count', () => {
+    const {container, dispose} = renderHumanTable([
+      getHumanArticle({
+        id: 'human-failed',
+        llmFailedPromptCodes: 'claude_code_request_failed',
+        llmFailedPromptCount: 2,
+        llmRefusedPromptCount: 1,
+      }),
+      getHumanArticle({id: 'human-clean', llmRefusedPromptCount: 0}),
+    ])
+
+    try {
+      const statuses = [...container.querySelectorAll('tbody tr')].map((row) => {
+        return [...row.querySelectorAll('td:nth-child(2) span')].map((badge) => {
+          return [badge.textContent, badge.getAttribute('title')]
+        })
+      })
+
+      expect(statuses).toEqual([
+        [
+          ['1 refused', 'The model refused 1 prompt(s); needs human screening'],
+          ['2 failed', 'The model call failed after retries (claude_code_request_failed); resume the job to retry'],
+        ],
+        [['—', null]],
       ])
     } finally {
       dispose()

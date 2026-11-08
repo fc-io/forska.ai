@@ -1082,3 +1082,65 @@ test('project review details returns null article_metadata and skips the judge a
   expect(await getArticleMetadataResult(undefined)).toEqual({articleMetadata: null, requests: 0, status: 200})
   expect(await getArticleMetadataResult(true)).toMatchObject({requests: 1, status: 200})
 })
+
+test('project review details puts a failed closeout on the prompt placeholder unless the prompt was refused', async () => {
+  const defaultQueryJson = queryJsonRef.current
+  const failure = {
+    attemptCount: 3,
+    failureCode: 'claude_code_request_failed',
+    failureCount: 1,
+    lastFailedAt: '2026-10-27T19:40:05.282Z',
+    modelName: 'claude-opus-5-5',
+    providerKind: 'claude-code',
+    reason: 'Claude Code request failed: subtype=error_max_turns stderr=',
+  }
+  const refusal = {
+    failureCode: 'claude_code_content_refusal',
+    modelName: 'claude-opus-5-5',
+    providerKind: 'claude-code',
+    reason: 'safeguards flagged this message',
+    refusedAt: '2026-11-06T06:59:13.635Z',
+  }
+  const failureStatements: string[] = []
+  let refusalRows: Array<typeof refusal & {promptId: string}> = []
+
+  reviewServingRowsRef.current = async (request) => {
+    return request.contractKey === 'review.detail.row'
+      ? {rows: [getServingArticleRow()], status: 'accepted'}
+      : {rows: [], status: 'accepted'}
+  }
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('FROM app.judgment_prompt_failure failure')) {
+      failureStatements.push(statement)
+      return [{...failure, promptId: 'prompt-1'}]
+    }
+
+    return statement.includes('FROM app.judgment_refusal refusal') ? refusalRows : defaultQueryJson(statement)
+  }
+
+  const failedResponse = await postReviewDetailsRequest()
+  const failedBody = (await failedResponse.json()) as {
+    judgments: Array<{id: string; providerFailure: unknown; providerRefusal: unknown}>
+    providerRefusalSummary: {enabledPromptCount: number; refusedPromptCount: number}
+  }
+
+  expect(failedResponse.status).toBe(200)
+  expect(failedBody.judgments).toMatchObject([
+    {id: 'placeholder:prompt-1', providerFailure: failure, providerRefusal: null},
+  ])
+  expect(failedBody.providerRefusalSummary).toEqual({enabledPromptCount: 1, refusedPromptCount: 0})
+  expect(failureStatements[0]).toContain(
+    "failure.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')",
+  )
+
+  refusalRows = [{...refusal, promptId: 'prompt-1'}]
+
+  const refusedResponse = await postReviewDetailsRequest()
+  const refusedBody = (await refusedResponse.json()) as {
+    judgments: Array<{id: string; providerFailure: unknown; providerRefusal: unknown}>
+  }
+
+  expect(refusedBody.judgments).toMatchObject([
+    {id: 'placeholder:prompt-1', providerFailure: null, providerRefusal: refusal},
+  ])
+})
