@@ -195,3 +195,54 @@ test('ReviewJudgments shows a refused prompt as a model refusal with its reason 
 
   dispose()
 })
+
+test('ReviewJudgments shows a failed closeout as a failed model call with its code, reason and a resume hint', () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+
+  const dispose = render(() => {
+    return (
+      <ReviewJudgments
+        judgments={[
+          {
+            id: 'placeholder:prompt-1',
+            promptId: 'prompt-1',
+            prompt: {id: 'prompt-1', originalText: 'Intervention prompt text', promptHeading: 'Intervention'},
+            answeredOriginal: 'not answered',
+            explanation: null,
+            quotes: [],
+            providerFailure: {
+              attemptCount: 3,
+              failureCode: 'claude_code_request_failed',
+              failureCount: 1,
+              lastFailedAt: '2026-10-27T19:40:05.282Z',
+              modelName: 'claude-opus-5-5',
+              providerKind: 'claude-code',
+              reason: 'Claude Code request failed: subtype=error_max_turns stderr=',
+            },
+          },
+          {
+            id: 'judgment-2',
+            promptId: 'prompt-2',
+            prompt: {id: 'prompt-2', originalText: 'Design prompt text', promptHeading: 'Design'},
+            answeredOriginal: 'yes',
+            explanation: 'Randomised trial',
+            quotes: [],
+          },
+        ]}
+        setArticleViewToShow={() => {}}
+      />
+    )
+  }, container)
+
+  expect(container.textContent).toContain('MODEL CALL FAILED')
+  expect(container.textContent).toContain('Model: claude-opus-5-5')
+  expect(container.textContent).toContain('claude_code_request_failed')
+  expect(container.textContent).toContain('subtype=error_max_turns')
+  expect(container.textContent).toContain('Resume the job to retry.')
+  expect(container.textContent).not.toContain('NOT ANSWERED')
+  expect(container.textContent).not.toContain('MODEL REFUSED TO ANSWER')
+  expect(container.textContent).toContain('YES')
+
+  dispose()
+})

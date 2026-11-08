@@ -9,6 +9,7 @@ import {type ArticleUrlInput, getArticleUrl} from '../../../../app/utils/getArti
 import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
 import {ReviewsCovidenceBadges} from '../reviewsCovidenceBadges.tsx'
 import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
+import {ReviewsProviderFailureBadge} from './reviewsProviderFailureBadge.tsx'
 import {ReviewsProviderRefusalBadge} from './reviewsProviderRefusalBadge.tsx'
 
 declare module '@tanstack/solid-table' {
@@ -50,6 +51,8 @@ export type ArticleWithJudgments = ArticleUrlInput & {
   judgedPromptIds?: string[]
   isFullyJudged?: boolean
   hasLlmJudgment?: boolean
+  llmFailedPromptCodes?: string | null
+  llmFailedPromptCount?: number
   llmRefusedPromptCount?: number
   selectedExternalArticleId?: string | null
   selectedImportRecordId?: string | null
@@ -255,13 +258,33 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
       const totalJudgments = info.row.original.judgments?.length ?? 0
       const hasLlmJudgment = info.row.original.hasLlmJudgment ?? judgedCount > 0
       const refusedPromptCount = info.row.original.llmRefusedPromptCount ?? 0
+      const failedPromptCount = info.row.original.llmFailedPromptCount ?? 0
+      const failedPromptCodes = info.row.original.llmFailedPromptCodes ?? null
+      const promptOutcomeBadges = () => {
+        return (
+          <>
+            <Show when={refusedPromptCount > 0}>
+              <ReviewsProviderRefusalBadge refusedPromptCount={refusedPromptCount} />
+            </Show>
+            <Show when={failedPromptCount > 0}>
+              <ReviewsProviderFailureBadge
+                failedPromptCodes={failedPromptCodes}
+                failedPromptCount={failedPromptCount}
+              />
+            </Show>
+          </>
+        )
+      }
 
       return (
         <Show
           when={isFullyJudged !== undefined}
           fallback={
-            <Show when={refusedPromptCount > 0} fallback={<span class="text-gray-400">—</span>}>
-              <ReviewsProviderRefusalBadge refusedPromptCount={refusedPromptCount} />
+            <Show
+              when={refusedPromptCount > 0 || failedPromptCount > 0}
+              fallback={<span class="text-gray-400">—</span>}
+            >
+              <div class="flex flex-wrap gap-2">{promptOutcomeBadges()}</div>
             </Show>
           }
         >
@@ -272,7 +295,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
                 <Show
                   when={hasLlmJudgment}
                   fallback={
-                    <Show when={refusedPromptCount === 0}>
+                    <Show when={refusedPromptCount === 0 && failedPromptCount === 0}>
                       <span
                         class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-700"
                         title="No prompts judged yet"
@@ -299,9 +322,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
                 Complete
               </span>
             </Show>
-            <Show when={refusedPromptCount > 0}>
-              <ReviewsProviderRefusalBadge refusedPromptCount={refusedPromptCount} />
-            </Show>
+            {promptOutcomeBadges()}
           </div>
         </Show>
       )

@@ -9,6 +9,7 @@ import type {ArticleRecord, JudgmentHumanRecord} from '../../../../db/schemaType
 import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
 import {ReviewsCovidenceBadges} from '../reviewsCovidenceBadges.tsx'
 import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
+import {ReviewsProviderFailureBadge} from './reviewsProviderFailureBadge.tsx'
 import {ReviewsProviderRefusalBadge} from './reviewsProviderRefusalBadge.tsx'
 
 declare module '@tanstack/solid-table' {
@@ -26,6 +27,8 @@ export type ArticleWithHumanJudgments = Omit<ArticleRecord, 'judgments'>
     canonicalArticleId?: string | null
     judgments: Array<HumanJudgmentType>
     humanJudgmentMode?: 'prompt' | 'summary'
+    llmFailedPromptCodes?: string | null
+    llmFailedPromptCount?: number
     llmRefusedPromptCount?: number
     selectedExternalArticleId?: string | null
   }
@@ -79,10 +82,21 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
     minSize: 96,
     cell: (info) => {
       const refusedPromptCount = info.row.original.llmRefusedPromptCount ?? 0
+      const failedPromptCount = info.row.original.llmFailedPromptCount ?? 0
 
       return (
-        <Show when={refusedPromptCount > 0} fallback={<span class="text-gray-400">—</span>}>
-          <ReviewsProviderRefusalBadge refusedPromptCount={refusedPromptCount} />
+        <Show when={refusedPromptCount > 0 || failedPromptCount > 0} fallback={<span class="text-gray-400">—</span>}>
+          <div class="flex flex-wrap gap-2">
+            <Show when={refusedPromptCount > 0}>
+              <ReviewsProviderRefusalBadge refusedPromptCount={refusedPromptCount} />
+            </Show>
+            <Show when={failedPromptCount > 0}>
+              <ReviewsProviderFailureBadge
+                failedPromptCodes={info.row.original.llmFailedPromptCodes ?? null}
+                failedPromptCount={failedPromptCount}
+              />
+            </Show>
+          </div>
         </Show>
       )
     },

@@ -5,6 +5,7 @@ import type {ArticleMetadataLine} from '../../../utils/articleMetadataText.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {getProjectArticleProviderFailures} from '../../services/judgmentPromptFailureReadService.ts'
 import {getProjectArticleProviderRefusals} from '../../services/judgmentRefusalReadService.ts'
 import {getCurrentReviewConfigHash} from '../../services/reviewServingProjectConfigIdentity.ts'
 import {archivedProjectAccessErrorMessage, assertProjectIsActive} from './projectAccessGuard.ts'
@@ -87,9 +88,10 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         return getUnavailableReviewDetail({articleId, reason: 'article not in project scope'})
       }
 
-      const [articleFullTextRows, allArticleJudgments, articleMetadata, providerRefusals] = await Promise.all([
-        getAppDatabaseService().queryJson<ArticleFullTextRow>(
-          `
+      const [articleFullTextRows, allArticleJudgments, articleMetadata, providerRefusals, providerFailures] =
+        await Promise.all([
+          getAppDatabaseService().queryJson<ArticleFullTextRow>(
+            `
           SELECT
             TO_JSON(article_authors) AS articleAuthors,
             article_summary AS articleSummary,
@@ -103,20 +105,25 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           WHERE id = ${getSqlLiteral(articleId)}
           LIMIT 1
         `,
-          getProjectReviewDetailsWorkloadContext({maxResultRows: 1, operation: 'articleFullText', projectId}),
-        ),
-        getArticleJudgmentRows({articleId, projectId}),
-        getArticleMetadataForReviewDetail({
-          articleId,
-          projectId,
-          useMetadata: projectReviewConfig.useMetadata ?? false,
-        }),
-        getProjectArticleProviderRefusals({
-          articleId,
-          projectId,
-          workloadContext: getProjectReviewDetailsWorkloadContext({operation: 'providerRefusals', projectId}),
-        }),
-      ])
+            getProjectReviewDetailsWorkloadContext({maxResultRows: 1, operation: 'articleFullText', projectId}),
+          ),
+          getArticleJudgmentRows({articleId, projectId}),
+          getArticleMetadataForReviewDetail({
+            articleId,
+            projectId,
+            useMetadata: projectReviewConfig.useMetadata ?? false,
+          }),
+          getProjectArticleProviderRefusals({
+            articleId,
+            projectId,
+            workloadContext: getProjectReviewDetailsWorkloadContext({operation: 'providerRefusals', projectId}),
+          }),
+          getProjectArticleProviderFailures({
+            articleId,
+            projectId,
+            workloadContext: getProjectReviewDetailsWorkloadContext({operation: 'providerFailures', projectId}),
+          }),
+        ])
       const article = getArticleRecordFromServing({
         articleId,
         detail: articleDetail,
@@ -150,6 +157,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         projectId,
         projectReviewDetailJudgmentRows,
         promptOrderMap,
+        providerFailures,
         providerRefusals,
       })
 
