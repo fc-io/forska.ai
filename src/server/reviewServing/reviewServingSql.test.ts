@@ -602,7 +602,9 @@ test('direct article reads expand list modes from flags instead of stale list ke
         llm_status VARCHAR,
         human_status VARCHAR,
         llm_has_judgment BOOLEAN,
-        llm_refused_prompt_count INTEGER NOT NULL DEFAULT 0
+        llm_refused_prompt_count INTEGER NOT NULL DEFAULT 0,
+        llm_failed_prompt_count INTEGER NOT NULL DEFAULT 0,
+        llm_failed_prompt_codes VARCHAR
       );
       CREATE TABLE mart.review_selected_article_import_current_v4 (
         project_id VARCHAR,
@@ -685,7 +687,9 @@ test('direct article reads expand list modes from flags instead of stale list ke
         'answered',
         'unanswered',
         TRUE,
-        2
+        2,
+        1,
+        'claude_code_request_failed'
       ),
       (
         'project-1',
@@ -704,7 +708,9 @@ test('direct article reads expand list modes from flags instead of stale list ke
         'answered',
         'answered',
         TRUE,
-        0
+        0,
+        0,
+        NULL
       );
       INSERT INTO app.article VALUES
       (
@@ -744,6 +750,8 @@ test('direct article reads expand list modes from flags instead of stale list ke
     const staleArrayReader = await connection.runAndReadAll(getSql('article-1'))
     const staleArrayRows = staleArrayReader.getRowObjectsJson() as Array<{
       human_status: string | null
+      llm_failed_prompt_codes: string | null
+      llm_failed_prompt_count: number
       llm_has_judgment: boolean
       llm_refused_prompt_count: number
       llm_status: string | null
@@ -758,6 +766,8 @@ test('direct article reads expand list modes from flags instead of stale list ke
     expect(staleArrayRows[0]?.human_status).toBe('unanswered')
     expect(staleArrayRows[0]?.llm_has_judgment).toBe(true)
     expect(staleArrayRows[0]?.llm_refused_prompt_count).toBe(2)
+    expect(staleArrayRows[0]?.llm_failed_prompt_count).toBe(1)
+    expect(staleArrayRows[0]?.llm_failed_prompt_codes).toBe('claude_code_request_failed')
 
     const priorityReader = await connection.runAndReadAll(getSql('article-2'))
     const priorityRows = priorityReader.getRowObjectsJson() as Array<{

@@ -805,6 +805,8 @@ test('readReviewServingRows filters LLM rows on refused prompts through list-mod
 
   expect(result.status).toBe('accepted')
   expect(sql).toContain('list_mode_state.llm_refused_prompt_count,')
+  expect(sql).toContain('list_mode_state.llm_failed_prompt_count,')
+  expect(sql).toContain('list_mode_state.llm_failed_prompt_codes')
   expect(sql).toContain('list_mode_state.llm_refused_prompt_count > 0')
   expect(sql).toContain('list_mode_state.conflict_flag IS TRUE')
   expect(sql).not.toContain("filter_kind = 'providerRefusalFlag'")
@@ -841,6 +843,8 @@ test('readReviewServingRows selects the refused prompt count in non-LLM rows but
   expect(reader.statements).toHaveLength(contractKeys.length)
   for (const statement of reader.statements) {
     expect(statement).toContain('list_mode_state.llm_refused_prompt_count,')
+    expect(statement).toContain('list_mode_state.llm_failed_prompt_count,')
+    expect(statement).toContain('list_mode_state.llm_failed_prompt_codes')
     expect(statement).not.toContain('llm_refused_prompt_count > 0')
   }
 })

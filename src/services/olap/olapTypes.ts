@@ -67,6 +67,8 @@ export type ArticleReviewResult = {
   isFullyJudged: boolean
   hasLlmJudgment?: boolean
   llmRefusedPromptCount: number
+  llmFailedPromptCount: number
+  llmFailedPromptCodes: string | null
   journalTitle: string | null
 }
 
@@ -153,6 +155,8 @@ export type ArticleReviewsBothResult = {
   humanSummaryAnswer?: 'yes' | 'no' | 'maybe' | null
   llmSummaryAnswer?: 'yes' | 'no' | 'maybe' | null
   llmRefusedPromptCount: number
+  llmFailedPromptCount: number
+  llmFailedPromptCodes: string | null
   journalTitle: string | null
 }
 

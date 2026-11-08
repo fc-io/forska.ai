@@ -1284,6 +1284,8 @@ const getReviewServingArticlePhysicalSelectColumns = (contract: ReviewServingRea
     `${reviewServingArticleDirectStateAlias}.human_status`,
     `${reviewServingArticleDirectStateAlias}.llm_has_judgment`,
     `${reviewServingArticleDirectStateAlias}.llm_refused_prompt_count`,
+    `${reviewServingArticleDirectStateAlias}.llm_failed_prompt_count`,
+    `${reviewServingArticleDirectStateAlias}.llm_failed_prompt_codes`,
   ]
 }
 

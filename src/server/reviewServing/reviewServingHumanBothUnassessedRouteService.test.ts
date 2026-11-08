@@ -119,6 +119,8 @@ const createManifestDatabase = (
 
 const createReaderDatabase = (input?: {
   humanRows?: readonly Record<string, unknown>[]
+  llmFailedPromptCodes?: string | null
+  llmFailedPromptCount?: unknown
   llmHasJudgment?: boolean
   llmRefusedPromptCount?: unknown
   llmRows?: readonly Record<string, unknown>[]
@@ -149,6 +151,8 @@ const createReaderDatabase = (input?: {
             activity_sort_at: '2026-01-04T00:00:00.000Z',
             article_id: 'article-1',
             llm_has_judgment: input?.llmHasJudgment ?? false,
+            llm_failed_prompt_codes: input?.llmFailedPromptCodes ?? null,
+            llm_failed_prompt_count: input && 'llmFailedPromptCount' in input ? input.llmFailedPromptCount : 0,
             llm_refused_prompt_count: input && 'llmRefusedPromptCount' in input ? input.llmRefusedPromptCount : 0,
             priority_bucket: 1,
           },
@@ -169,6 +173,8 @@ const createReaderDatabase = (input?: {
             article_title: 'Article 1',
             journal_title: 'Journal',
             llm_has_judgment: input?.llmHasJudgment ?? false,
+            llm_failed_prompt_codes: input?.llmFailedPromptCodes ?? null,
+            llm_failed_prompt_count: input && 'llmFailedPromptCount' in input ? input.llmFailedPromptCount : 0,
             llm_refused_prompt_count: input && 'llmRefusedPromptCount' in input ? input.llmRefusedPromptCount : 0,
             source_metadata: JSON.stringify({covidence: {studyId: 'study-1'}}),
             sort_key: '2026-01-01T00:00:00.000Z',
@@ -358,6 +364,8 @@ const getRowsForListMode = (articles: readonly ReviewTabCountFixtureArticle[], l
         activity_sort_at: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
         article_id: article.id,
         article_title: article.id,
+        llm_failed_prompt_codes: null,
+        llm_failed_prompt_count: 0,
         llm_refused_prompt_count: 0,
         sort_key: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
       }
@@ -486,6 +494,8 @@ const createChunkedHydrationReaderDatabase = (articleCount: number, enabledPromp
           return {
             article_id: articleId,
             article_title: articleId,
+            llm_failed_prompt_codes: null,
+            llm_failed_prompt_count: 0,
             llm_refused_prompt_count: 0,
             sort_key: '2026-01-01T00:00:00.000Z',
           }
@@ -1201,6 +1211,59 @@ test('human, both, and unassessed rows carry the provider refused prompt count f
         expect(error).toEqual(
           expect.objectContaining({
             message: `review.${mode}.rows returned no valid llm_refused_prompt_count for article article-1`,
+          }),
+        )
+      },
+    )
+  }
+})
+
+test('human, both, and unassessed rows carry the failed prompt count and codes from list-mode state', async () => {
+  const readers = {
+    both: getBothReviewArticlesFromServing,
+    human: getHumanReviewArticlesFromServing,
+    unassessed: getUnassessedReviewArticlesFromServing,
+  } as const
+
+  for (const [mode, read] of Object.entries(readers)) {
+    const reader = createReaderDatabase({llmFailedPromptCodes: 'claude_code_request_failed', llmFailedPromptCount: 2})
+    const result = await read(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: reader.database,
+        manifestDatabase: createManifestDatabase('active'),
+      },
+    )
+    const rowsStatement = reader.statements.find((statement) => {
+      return statement.includes(`'${mode}' AS list_mode_key`)
+    })
+
+    expect(rowsStatement).toContain('list_mode_state.llm_failed_prompt_count')
+    expect(rowsStatement).toContain('list_mode_state.llm_failed_prompt_codes')
+    expect(result.data[0]).toMatchObject({
+      id: 'article-1',
+      llmFailedPromptCodes: 'claude_code_request_failed',
+      llmFailedPromptCount: 2,
+    })
+
+    const missingReader = createReaderDatabase({llmFailedPromptCount: undefined})
+
+    await read(
+      {projectId: 'project-1', page: 1, limit: 25, prompts: {}},
+      {
+        currentReviewConfigHash: 'config-1',
+        database: missingReader.database,
+        manifestDatabase: createManifestDatabase('active'),
+      },
+    ).then(
+      () => {
+        throw new Error(`Expected ${mode} rows without a failed prompt count to be rejected`)
+      },
+      (error) => {
+        expect(error).toEqual(
+          expect.objectContaining({
+            message: `review.${mode}.rows returned no valid llm_failed_prompt_count for article article-1`,
           }),
         )
       },
