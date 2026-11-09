@@ -2,6 +2,7 @@ import {readFileSync} from 'node:fs'
 
 import {afterAll, beforeAll, expect, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
+import {unzipSync} from 'fflate'
 
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 
@@ -76,8 +77,13 @@ type CovidenceExportRequest = {
   columnSelections: Array<{columnId: string; values: string[]}>
   conflictResolutionValues?: string[]
 }
+type CovidenceExportResponseWithPartSize = (
+  request: CovidenceExportRequest,
+  maxRecordsPerFile: number,
+) => Promise<Response>
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
+let getCovidenceExportResponseWithPartSize: CovidenceExportResponseWithPartSize | null = null
 let database: {close: () => Promise<void>; run: (statement: string) => Promise<void>} | null = null
 let columns: ComparisonProjectColumn[] = []
 
@@ -135,6 +141,34 @@ const getRisRecords = (risText: string) => {
   return risText.split('\r\n\r\n').filter((record) => {
     return record !== ''
   })
+}
+
+const getRisEndOfRecordCount = (risText: string) => {
+  return risText.split('\r\n').filter((line) => {
+    return line === 'ER  - '
+  }).length
+}
+
+const getExportWithPartSize = async (request: CovidenceExportRequest, maxRecordsPerFile: number) => {
+  if (!getCovidenceExportResponseWithPartSize) {
+    throw new Error('Covidence export response not initialized')
+  }
+
+  const response = await getCovidenceExportResponseWithPartSize(request, maxRecordsPerFile)
+
+  return {bytes: new Uint8Array(await response.arrayBuffer()), response}
+}
+
+const getZipParts = (zipBytes: Uint8Array) => {
+  return Object.entries(unzipSync(zipBytes)).map(([name, data]) => {
+    return {name, text: new TextDecoder('utf-8', {ignoreBOM: true}).decode(data)}
+  })
+}
+
+const getZipFilenameStem = (response: Response) => {
+  return /^attachment; filename="(Covidence_export_covidence_full_text_export_\d{4}-\d{2}-\d{2})\.zip"$/u.exec(
+    response.headers.get('content-disposition') ?? '',
+  )?.[1]
 }
 
 const getSqlString = (value: string) => {
@@ -292,16 +326,40 @@ const loadColumns = async () => {
 }
 
 beforeAll(async () => {
-  const [{migrateDuckdb}, {getAppDatabaseService}, {comparisonProjectsRoutes}, rebuildModule] = await Promise.all([
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {comparisonProjectsRoutes},
+    rebuildModule,
+    {getComparisonProjectScope},
+    {getRequestedComparisonProjectCovidenceExportSelection},
+    {getComparisonProjectCovidenceExportResponse},
+  ] = await Promise.all([
     import('../../db/migrateDuckdb.ts'),
     import('../services/appDatabaseService.ts'),
     import('./ComparisonProjectsRoutes.ts'),
     import('../services/comparisonProjectServingRebuildService.ts'),
+    import('./comparisonProjectsRoutes/getComparisonProjectScope.ts'),
+    import('./comparisonProjectsRoutes/comparisonProjectsRoutesPostCovidenceExport/comparisonProjectCovidenceExportRequest.ts'),
+    import('./comparisonProjectsRoutes/comparisonProjectsRoutesPostCovidenceExport/getComparisonProjectCovidenceExportResponse.ts'),
   ])
 
   await migrateDuckdb()
   database = getAppDatabaseService()
   app = new Elysia().use(comparisonProjectsRoutes)
+  getCovidenceExportResponseWithPartSize = async (request, maxRecordsPerFile) => {
+    const scope = await getComparisonProjectScope(comparisonProjectId)
+
+    if (!scope) {
+      throw new Error('Missing comparison project scope')
+    }
+
+    return getComparisonProjectCovidenceExportResponse(
+      scope,
+      getRequestedComparisonProjectCovidenceExportSelection(scope, request),
+      maxRecordsPerFile,
+    )
+  }
   await seedComparisonProjects()
   await rebuildModule.getComparisonProjectServingRebuildService().rebuildComparisonProjectServing(comparisonProjectId)
   columns = await loadColumns()
@@ -462,4 +520,81 @@ test('the export ignores the comparison page filters', async () => {
 
   expect(withPageFilters.response.status).toBe(200)
   expect(withPageFilters.body.data).toEqual(unfiltered.body.data)
+})
+
+test('over the per-file limit the download is a ZIP of RIS parts that together are the single RIS file', async () => {
+  const singleFile = await postCovidenceExport(getUnionRequest())
+  const {bytes, response} = await getExportWithPartSize(getUnionRequest(), 3)
+  const filenameStem = getZipFilenameStem(response)
+  const parts = getZipParts(bytes)
+  const partRecords = parts.flatMap((part) => {
+    return getRisRecords(part.text)
+  })
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('content-type')).toBe('application/zip')
+  expect(filenameStem).toBeDefined()
+  expect(
+    parts.map((part) => {
+      return part.name
+    }),
+  ).toEqual([`${filenameStem}_part01_of_02.ris`, `${filenameStem}_part02_of_02.ris`])
+  expect(
+    parts.map((part) => {
+      return getRisEndOfRecordCount(part.text)
+    }),
+  ).toEqual([3, 1])
+  expect(
+    parts
+      .map((part) => {
+        return part.text
+      })
+      .join(''),
+  ).toBe(singleFile.text)
+  expect(partRecords).toEqual(getRisRecords(singleFile.text))
+  expect(new Set(partRecords).size).toBe(4)
+  parts.forEach((part) => {
+    expect(part.text.startsWith('TY  - JOUR\r\n')).toBe(true)
+    expect(part.text.endsWith('\r\nER  - \r\n\r\n')).toBe(true)
+  })
+})
+
+test('the part size is a hard limit: at the limit one RIS file, above it one part per started limit', async () => {
+  const singleFile = await postCovidenceExport(getUnionRequest())
+  const atLimit = await getExportWithPartSize(getUnionRequest(), 4)
+  const [twoPerPart, onePerPart] = await Promise.all([
+    getExportWithPartSize(getUnionRequest(), 2),
+    getExportWithPartSize(getUnionRequest(), 1),
+  ])
+  const getPartShape = (bytes: Uint8Array) => {
+    return getZipParts(bytes).map((part) => {
+      return {name: part.name.replace(/^.*_(part\d+_of_\d+\.ris)$/u, '$1'), records: getRisEndOfRecordCount(part.text)}
+    })
+  }
+
+  expect(atLimit.response.headers.get('content-type')).toBe('application/x-research-info-systems; charset=utf-8')
+  expect(atLimit.response.headers.get('content-disposition')).toBe(
+    singleFile.response.headers.get('content-disposition'),
+  )
+  expect(new TextDecoder('utf-8', {ignoreBOM: true}).decode(atLimit.bytes)).toBe(singleFile.text)
+  expect(getPartShape(twoPerPart.bytes)).toEqual([
+    {name: 'part01_of_02.ris', records: 2},
+    {name: 'part02_of_02.ris', records: 2},
+  ])
+  expect(getPartShape(onePerPart.bytes)).toEqual([
+    {name: 'part01_of_04.ris', records: 1},
+    {name: 'part02_of_04.ris', records: 1},
+    {name: 'part03_of_04.ris', records: 1},
+    {name: 'part04_of_04.ris', records: 1},
+  ])
+})
+
+test('an empty selection result is still one empty RIS file', async () => {
+  const {bytes, response} = await getExportWithPartSize(
+    {columnSelections: [{columnId: 'llm:retired-model:1100:summary', values: ['yes']}]},
+    1,
+  )
+
+  expect(response.headers.get('content-type')).toBe('application/x-research-info-systems; charset=utf-8')
+  expect(bytes).toHaveLength(0)
 })

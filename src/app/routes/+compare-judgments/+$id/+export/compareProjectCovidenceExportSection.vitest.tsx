@@ -164,7 +164,7 @@ describe('CompareProjectCovidenceExportSection', () => {
     try {
       expect(container.querySelector('h2')?.textContent).toBe('Export to Covidence')
       expect(container.querySelector('section p')?.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
-        "Downloads a Covidence RIS file (full-text review set) with every article that has a selected answer in at least one column, each article once. Import it in Covidence with 'Import into: Full text review'. This export ignores the filters above.",
+        `Downloads a Covidence RIS file (full-text review set) with every article that has a selected answer in at least one column, each article once. Import it in Covidence with 'Import into: Full text review'. Covidence imports at most ${(15_000).toLocaleString()} references per file, so a larger selection downloads as a ZIP of RIS files with at most ${(15_000).toLocaleString()} articles each. This export ignores the filters above.`,
       )
       expect(getLabels(container)).toEqual([
         'Summary - LLM - GPT 5.5 - Title + Abstract:',
@@ -243,6 +243,38 @@ describe('CompareProjectCovidenceExportSection', () => {
       await waitForCondition(() => {
         expect(mockState.downloadFileFromPost).toHaveBeenCalledWith({
           body: expectedBody,
+          errorMessage: 'Covidence export failed',
+          fallbackFilename: 'covidence-export-comparison-project-1.ris',
+          path: '/api/comparison-projects/comparison-project-1/covidence-export',
+        })
+      })
+    } finally {
+      dispose()
+    }
+  })
+
+  test('says the download is a ZIP of RIS files when the count is over the Covidence per-file limit', async () => {
+    mockState.fetchComparisonProjectCovidenceExportCount.mockResolvedValueOnce({totalCount: 30_001})
+    const {container, dispose} = renderSection({
+      selection: {columnValues: {[humanColumn.id]: ['no']}, conflictResolutionValues: []},
+    })
+
+    try {
+      await waitForCondition(() => {
+        expect(getExportButton(container)?.textContent).toBe(
+          `Export ${(30_001).toLocaleString()} articles to Covidence`,
+        )
+        expect(getExportButton(container)?.hasAttribute('disabled')).toBe(false)
+        expect(container.textContent).toContain(
+          `Covidence imports at most ${(15_000).toLocaleString()} references per file, so the download is a ZIP with 3 RIS files. Import each file separately.`,
+        )
+      })
+
+      getExportButton(container)?.click()
+
+      await waitForCondition(() => {
+        expect(mockState.downloadFileFromPost).toHaveBeenCalledWith({
+          body: {columnSelections: [{columnId: humanColumn.id, values: ['no']}], conflictResolutionValues: []},
           errorMessage: 'Covidence export failed',
           fallbackFilename: 'covidence-export-comparison-project-1.ris',
           path: '/api/comparison-projects/comparison-project-1/covidence-export',
