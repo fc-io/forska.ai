@@ -28,6 +28,7 @@ import {projectsRoutesPostCreate} from './projectsRoutes/projectsRoutesPostCreat
 import {projectsRoutesPostCreateBody} from './projectsRoutes/projectsRoutesPostCreateBody.ts'
 import {projectsRoutesPostDeleteArchived} from './projectsRoutes/projectsRoutesPostDeleteArchived.ts'
 import {projectsRoutesPostFullTextValidation} from './projectsRoutes/projectsRoutesPostFullTextValidation.ts'
+import {projectsRoutesPostReprojectHumanStatus} from './projectsRoutes/projectsRoutesPostReprojectHumanStatus.ts'
 import {projectsRoutesPostUnarchive} from './projectsRoutes/projectsRoutesPostUnarchive.ts'
 import {rejectProjectPatchSettingsBody} from './projectsRoutes/rejectProjectPatchSettingsBody.ts'
 
@@ -65,3 +66,4 @@ export const projectsRoutes = new Elysia()
   .delete('/api/projects/:id', projectsRoutesDeleteProject)
   .post('/api/projects/:id/unarchive', projectsRoutesPostUnarchive)
   .post('/api/projects/:id/clone', projectsRoutesPostClone)
+  .post('/api/projects/:id/review-serving/reproject-human-status', projectsRoutesPostReprojectHumanStatus)

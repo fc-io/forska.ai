@@ -21,6 +21,7 @@ import {
   getReviewServingPromptConfigHash,
   getReviewServingReviewConfigHash,
   type ReviewServingProjectPromptConfigRow,
+  type ReviewServingProjectReviewSettingsRow,
 } from './reviewServingReviewConfig.ts'
 
 export type ReviewServingHumanStatusProjectorDatabase = ReviewServingProjectorWriterDatabase
@@ -53,10 +54,13 @@ export type ProjectReviewServingHumanStatusRangesInput = {ranges: readonly Proje
 
 type ProjectPromptConfigRow = ReviewServingProjectPromptConfigRow
 
+type HumanJudgmentMode = ReviewServingProjectReviewSettingsRow['humanJudgmentMode']
+
 type HumanStatusSourceRow = {
   answerSchemaHash: string | null
   articleId: string
   humanAnsweredValue: string | null
+  humanRowMatched?: boolean | null
   humanStatusKey: string | null
   latestHumanUpdatedAt: Date | string | null
   payloadJson: unknown
@@ -88,6 +92,23 @@ const summaryPromptConfigRow: ProjectPromptConfigRow = {
   promptTextHash: 'summary-human-judgment',
   settingsVersion: 'summary-v1',
   thresholdVersion: null,
+}
+
+// Mirrors the CASE in getApplyHumanStatusServingRangeReplacementStatements: a summary-mode project's
+// human status depends only on the summary answer, a prompt-mode project's only on its enabled prompts.
+const getHumanStatusParticipatingPromptConfigRows = (
+  humanJudgmentMode: HumanJudgmentMode,
+  promptConfigRows: readonly ProjectPromptConfigRow[],
+): readonly ProjectPromptConfigRow[] => {
+  return humanJudgmentMode === 'summary' ? [summaryPromptConfigRow] : promptConfigRows
+}
+
+const isHumanStatusParticipatingKey = (humanJudgmentMode: HumanJudgmentMode, promptOrSummaryKey: string) => {
+  return humanJudgmentMode === 'summary' ? promptOrSummaryKey === 'summary' : promptOrSummaryKey !== 'summary'
+}
+
+const getHumanStatusArticleKey = (row: Pick<HumanStatusSourceRow, 'articleId' | 'promptId'>) => {
+  return `${row.articleId}\u0000${getPromptOrSummaryKey(row.promptId)}`
 }
 
 const getNonNegativeElapsedMs = (startedAtMs: number) => {
@@ -351,6 +372,7 @@ const getJudgmentDeltaRows = async (
               AND (project_prompt.id IS NULL OR NOT project_prompt.enabled OR COALESCE(project_prompt.archived, FALSE) OR COALESCE(prompt.archived, FALSE))
             ) AS tombstone,
             delta.payload_json AS payloadJson,
+            judgment_human.id IS NOT NULL OR judgment_human_summary.id IS NOT NULL AS humanRowMatched,
             COALESCE(judgment_human.answer, judgment_human_summary.answer) AS humanAnsweredValue,
             CASE
               WHEN delta.tombstone THEN NULL
@@ -372,15 +394,13 @@ const getJudgmentDeltaRows = async (
             ON project_prompt.project_id = delta.project_id
             AND project_prompt.prompt_id = delta.prompt_id
           LEFT JOIN app."judgment_human" judgment_human
-            ON judgment_human.id = delta.human_judgment_key
-            AND judgment_human.project_id IS NOT DISTINCT FROM delta.project_id
+            ON judgment_human.project_id IS NOT DISTINCT FROM delta.project_id
             AND judgment_human.article_id = delta.article_id
             AND judgment_human.prompt_id = delta.prompt_id
           LEFT JOIN app."judgment_human_summary" judgment_human_summary
-            ON judgment_human_summary.id = delta.human_judgment_key
-            AND judgment_human_summary.project_id = delta.project_id
+            ON judgment_human_summary.project_id = delta.project_id
             AND judgment_human_summary.article_id = delta.article_id
-            AND delta.prompt_id IS NULL
+            AND (delta.prompt_id IS NULL OR delta.prompt_id = 'summary')
           WHERE delta.project_id = ${getSqlLiteral(input.projectId)}
             AND delta.change_kind = 'judgment.human.updated'
             AND ${claimRangePredicateSql}
@@ -390,7 +410,12 @@ const getJudgmentDeltaRows = async (
   return rows.map((row) => {
     const promptConfigRow =
       row.promptId === 'summary' ? summaryPromptConfigRow : getPromptConfigRowByPromptId(promptConfigRows, row.promptId)
-    const humanAnsweredValue = getPayloadAnswer(row.payloadJson) ?? row.humanAnsweredValue
+    // The table row (matched on its natural key; Covidence, clone and rematch deltas carry a composite
+    // human_judgment_key, not the row id) is the current answer. The payload only fills in when the row is gone.
+    const humanAnsweredValue =
+      row.humanRowMatched === true
+        ? row.humanAnsweredValue
+        : (getPayloadAnswer(row.payloadJson) ?? row.humanAnsweredValue)
 
     return {
       ...row,
@@ -405,8 +430,23 @@ const getJudgmentDeltaRows = async (
 const getPromptScopedRows = async (
   input: ProjectReviewServingHumanStatusInput,
   database: ReviewServingHumanStatusProjectorDatabase,
+  humanJudgmentMode: HumanJudgmentMode,
+  participatingPromptConfigRows: readonly ProjectPromptConfigRow[],
 ) => {
-  const promptIds = getClaimPromptIds(input.claims)
+  const dirtyPromptIds = getClaimPromptIds(input.claims)
+  // Prompt config changes never move a summary-mode status. In prompt mode every enabled prompt is read
+  // alongside the dirty ones so each article's status is decided over all of its prompts, not just one.
+  const promptIds =
+    humanJudgmentMode === 'summary' || dirtyPromptIds.length === 0
+      ? []
+      : [
+          ...new Set([
+            ...dirtyPromptIds,
+            ...participatingPromptConfigRows.map((row) => {
+              return row.promptId
+            }),
+          ]),
+        ]
 
   return promptIds.length === 0
     ? []
@@ -452,22 +492,43 @@ const getPromptScopedRows = async (
       `)
 }
 
+const getNoParticipatingKeyRows = (articleIds: readonly string[]) => {
+  return articleIds.map((articleId): HumanStatusSourceRow => {
+    return {
+      ...summaryPromptConfigRow,
+      articleId,
+      humanAnsweredValue: null,
+      humanStatusKey: null,
+      latestHumanUpdatedAt: null,
+      payloadJson: null,
+      promptOrSummaryKey: 'summary',
+      sourceOperation: 'update',
+      summaryOrigin: null,
+      tombstone: true,
+    }
+  })
+}
+
 const getArticleScopedRows = async (
   input: ProjectReviewServingHumanStatusInput,
   database: ReviewServingHumanStatusProjectorDatabase,
-  promptConfigRows: readonly ProjectPromptConfigRow[],
+  participatingPromptConfigRows: readonly ProjectPromptConfigRow[],
 ) => {
   const articleIds = getClaimArticleIds(input.claims)
-  const promptConfigRowsWithSummary = [...promptConfigRows, summaryPromptConfigRow]
 
-  if (articleIds.length === 0 || promptConfigRowsWithSummary.length === 0) {
+  if (articleIds.length === 0) {
     return []
+  }
+
+  // A prompt-mode project without enabled prompts has no human status (NULL), like the range replacement.
+  if (participatingPromptConfigRows.length === 0) {
+    return getNoParticipatingKeyRows(articleIds)
   }
 
   const rows = await database.queryJson<HumanStatusArticleScopedRow>(`
     WITH ${getValuesCte('article_id', articleIds)},
     prompt_config(prompt_id) AS (
-      SELECT * FROM (VALUES ${promptConfigRowsWithSummary
+      SELECT * FROM (VALUES ${participatingPromptConfigRows
         .map((row) => {
           return `(${getSqlLiteral(row.promptId)})`
         })
@@ -503,7 +564,7 @@ const getArticleScopedRows = async (
 
   return rows.map((row): HumanStatusSourceRow => {
     const promptConfigRow =
-      getPromptConfigRowByPromptId(promptConfigRowsWithSummary, row.promptId) ?? summaryPromptConfigRow
+      getPromptConfigRowByPromptId(participatingPromptConfigRows, row.promptId) ?? summaryPromptConfigRow
     const humanAnsweredValue = row.tombstone ? null : row.humanAnsweredValue
 
     return {
@@ -530,22 +591,25 @@ const getArticleScopedRows = async (
 const getProjectScopedRows = async (
   input: ProjectReviewServingHumanStatusInput,
   database: ReviewServingHumanStatusProjectorDatabase,
-  promptConfigRows: readonly ProjectPromptConfigRow[],
+  participatingPromptConfigRows: readonly ProjectPromptConfigRow[],
 ) => {
-  const promptConfigRowsWithSummary = [...promptConfigRows, summaryPromptConfigRow]
-  const activePromptValues = promptConfigRowsWithSummary
+  // No participating keys (prompt mode without enabled prompts): one inactive key tombstones every article.
+  const activePromptConfigRows =
+    participatingPromptConfigRows.length === 0
+      ? [{...summaryPromptConfigRow, active: false}]
+      : participatingPromptConfigRows.map((row) => {
+          return {...row, active: true}
+        })
+  const activePromptValues = activePromptConfigRows
     .map((row) => {
-      return `(${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.promptOrder)}, ${getSqlLiteral(row.promptTextHash)}, ${getSqlLiteral(row.answerSchemaHash)}, ${getSqlLiteral(row.settingsVersion)}, ${getSqlLiteral(row.thresholdVersion)}, TRUE)`
+      return `(${getSqlLiteral(row.promptId)}, ${getSqlLiteral(row.promptOrder)}, ${getSqlLiteral(row.promptTextHash)}, ${getSqlLiteral(row.answerSchemaHash)}, ${getSqlLiteral(row.settingsVersion)}, ${getSqlLiteral(row.thresholdVersion)}, ${row.active ? 'TRUE' : 'FALSE'})`
     })
     .join(', ')
   const promptConfigCteSql = `prompt_config AS (
       SELECT * FROM active_prompt_config
     )`
 
-  if (
-    (!shouldRebuildProjectHumanStatus(input.claims) && !hasChunkArticleRange(input))
-    || promptConfigRowsWithSummary.length === 0
-  ) {
+  if (!shouldRebuildProjectHumanStatus(input.claims) && !hasChunkArticleRange(input)) {
     return []
   }
 
@@ -911,15 +975,28 @@ export const projectReviewServingHumanStatusPatches = async (
       : getReviewServingReviewConfigHash({...projectSettings, humanJudgmentMode: 'summary', promptConfigRows})
   const currentReviewConfigHash =
     projectSettings === null ? null : getReviewServingReviewConfigHash({...projectSettings, promptConfigRows})
+  const humanJudgmentMode: HumanJudgmentMode = projectSettings?.humanJudgmentMode === 'summary' ? 'summary' : 'prompt'
+  const participatingPromptConfigRows = getHumanStatusParticipatingPromptConfigRows(humanJudgmentMode, promptConfigRows)
   const [judgmentRows, promptRows, articleRows, projectRows] = await measure('sourceQueryMs', async () => {
     return Promise.all([
       getJudgmentDeltaRows(input, database, promptConfigRows),
-      getPromptScopedRows(input, database),
-      getArticleScopedRows(input, database, promptConfigRows),
-      getProjectScopedRows(input, database, promptConfigRows),
+      getPromptScopedRows(input, database, humanJudgmentMode, participatingPromptConfigRows),
+      getArticleScopedRows(input, database, participatingPromptConfigRows),
+      getProjectScopedRows(input, database, participatingPromptConfigRows),
     ])
   })
-  const rows = [...judgmentRows, ...promptRows, ...articleRows, ...projectRows]
+  // Scoped rows read every participating key of an article from the current tables, so they decide the
+  // article's status; delta rows only fill keys no scoped read covered. Keys outside the project's
+  // human_judgment_mode never vote (a summary-mode article is not held back by unanswered prompts).
+  const scopedRows = [...promptRows, ...articleRows, ...projectRows]
+  const scopedKeys = new Set(scopedRows.map(getHumanStatusArticleKey))
+  const deltaRows = judgmentRows.filter((row) => {
+    return (
+      isHumanStatusParticipatingKey(humanJudgmentMode, getPromptOrSummaryKey(row.promptId))
+      && !scopedKeys.has(getHumanStatusArticleKey(row))
+    )
+  })
+  const rows = [...deltaRows, ...scopedRows]
   const recordRows = measureSync('recordTransformMs', () => {
     return rows.flatMap((row) => {
       const promptConfigHash = getPromptConfigHash({...row, promptId: getPromptOrSummaryKey(row.promptId)})
