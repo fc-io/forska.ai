@@ -128,17 +128,19 @@ test('Covidence export count and RIS read the same bounded serving row batches',
     'getComparisonProjectCovidenceExportCount',
     getRouteSource(`${covidenceExportFolder}/getComparisonProjectCovidenceExportCount.ts`),
   )
-  const risBody = getFunctionBody(
-    'getComparisonProjectCovidenceExportResponse',
-    getRouteSource(`${covidenceExportFolder}/getComparisonProjectCovidenceExportResponse.ts`),
-  )
+  const responseSource = getRouteSource(`${covidenceExportFolder}/getComparisonProjectCovidenceExportResponse.ts`)
+  const writeBody = getFunctionBody('writeComparisonProjectCovidenceExport', responseSource)
+  const responseBody = getFunctionBody('getComparisonProjectCovidenceExportResponse', responseSource)
 
   expect(rowBatchBody).toContain('forEachComparisonProjectServingJudgmentRowBatch')
   expect(rowBatchBody).toContain('getComparisonProjectCovidenceExportSelectedRows')
   expect(rowBatchBody).not.toContain('forEachComparisonProjectJudgmentRowBatch')
   expect(rowBatchBody).not.toContain(' OFFSET ')
   expect(countBody).toContain('forEachComparisonProjectCovidenceExportRowBatch')
-  expect(risBody).toContain('forEachComparisonProjectCovidenceExportRowBatch')
+  expect(writeBody).toContain('forEachComparisonProjectCovidenceExportRowBatch')
+  expect(responseBody).toContain('getComparisonProjectCovidenceExportCount')
+  expect(responseSource).not.toContain('forEachComparisonProjectJudgmentRowBatch')
+  expect(responseSource).not.toContain(' OFFSET ')
 })
 
 test('comparison source writes stay owner routed and queue serving rebuilds', () => {
