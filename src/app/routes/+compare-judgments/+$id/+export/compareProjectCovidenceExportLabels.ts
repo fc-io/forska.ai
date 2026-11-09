@@ -2,6 +2,10 @@ import {
   type ComparisonProjectColumnHeaderColumn,
   getComparisonProjectColumnHeader,
 } from '../../../../../utils/comparisonProjectColumnHeader.ts'
+import {
+  covidenceImportMaxReferencesPerFile,
+  getCovidenceImportPartCount,
+} from '../../../../../utils/covidenceImportLimits.ts'
 
 export const getCompareProjectCovidenceExportColumnLabel = (column: ComparisonProjectColumnHeaderColumn) => {
   return getComparisonProjectColumnHeader({...column, sourceProjectName: null})
@@ -19,10 +23,16 @@ export const getCompareProjectCovidenceExportButtonLabel = (count: number | null
   return isExporting ? 'Exporting to Covidence...' : getCountedButtonLabel(count)
 }
 
-const getEmptyResultHint = (count: number | null) => {
-  return count === 0 ? 'No articles match this selection.' : null
+const getSplitFilesHint = (count: number | null) => {
+  return count !== null && count > covidenceImportMaxReferencesPerFile
+    ? `Covidence imports at most ${covidenceImportMaxReferencesPerFile.toLocaleString()} references per file, so the download is a ZIP with ${getCovidenceImportPartCount(count)} RIS files. Import each file separately.`
+    : null
+}
+
+const getSelectionResultHint = (count: number | null) => {
+  return count === 0 ? 'No articles match this selection.' : getSplitFilesHint(count)
 }
 
 export const getCompareProjectCovidenceExportHint = (hasSelection: boolean, count: number | null) => {
-  return hasSelection ? getEmptyResultHint(count) : 'Nothing is selected, so there is nothing to export.'
+  return hasSelection ? getSelectionResultHint(count) : 'Nothing is selected, so there is nothing to export.'
 }

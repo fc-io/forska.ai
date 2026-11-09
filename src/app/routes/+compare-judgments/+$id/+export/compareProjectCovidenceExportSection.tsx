@@ -14,6 +14,7 @@ import {
   comparisonProjectCovidenceExportAnswerOptions,
   getHasComparisonProjectCovidenceExportSelection,
 } from '../../../../../utils/comparisonProjectCovidenceExportSelection.ts'
+import {covidenceImportMaxReferencesPerFile} from '../../../../../utils/covidenceImportLimits.ts'
 import {downloadFileFromPost} from '../../../../utils/downloadCsv.ts'
 import {
   getCompareProjectCovidenceExportButtonLabel,
@@ -122,8 +123,10 @@ const CompareProjectCovidenceExportPanel = (props: CompareProjectCovidenceExport
         <h2 class="text-lg font-semibold text-gray-900">Export to Covidence</h2>
         <p class="mt-2 text-sm text-gray-600">
           Downloads a Covidence RIS file (full-text review set) with every article that has a selected answer in at
-          least one column, each article once. Import it in Covidence with 'Import into: Full text review'. This export
-          ignores the filters above.
+          least one column, each article once. Import it in Covidence with 'Import into: Full text review'. Covidence
+          imports at most {covidenceImportMaxReferencesPerFile.toLocaleString()} references per file, so a larger
+          selection downloads as a ZIP of RIS files with at most {covidenceImportMaxReferencesPerFile.toLocaleString()}{' '}
+          articles each. This export ignores the filters above.
         </p>
       </div>
       <div class="space-y-4">
