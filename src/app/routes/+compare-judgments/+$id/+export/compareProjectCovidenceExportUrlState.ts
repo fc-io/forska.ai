@@ -7,9 +7,14 @@ import {getIsSameComparisonProjectFilterSelection} from '../../../../../utils/co
 export type CompareProjectCovidenceExportUrlSelection = {
   columnValues: Record<string, string[]>
   conflictResolutionValues: string[]
+  invert: boolean
 }
 
-type CompareProjectCovidenceExportSearchValue = {columns?: Record<string, string[]>; conflictResolution?: string[]}
+type CompareProjectCovidenceExportSearchValue = {
+  columns?: Record<string, string[]>
+  conflictResolution?: string[]
+  invert?: true
+}
 
 const compareProjectCovidenceExportSearchParam = 'covidenceExport'
 
@@ -47,7 +52,7 @@ const getNonEmptyColumnValues = (columnValues: Record<string, string[]>) => {
 }
 
 export const getEmptyCompareProjectCovidenceExportSelection = (): CompareProjectCovidenceExportUrlSelection => {
-  return {columnValues: {}, conflictResolutionValues: []}
+  return {columnValues: {}, conflictResolutionValues: [], invert: false}
 }
 
 export const getInitialCompareProjectCovidenceExportSelection = (
@@ -66,6 +71,7 @@ export const getInitialCompareProjectCovidenceExportSelection = (
       ),
     ),
     conflictResolutionValues: getSearchValues(record.conflictResolution, getTrimmedValue),
+    invert: record.invert === true,
   }
 }
 
@@ -76,6 +82,7 @@ export const getCompareProjectCovidenceExportSearchParams = (
   const searchValue: CompareProjectCovidenceExportSearchValue = {
     ...(Object.keys(columns).length > 0 ? {columns} : {}),
     ...(selection.conflictResolutionValues.length > 0 ? {conflictResolution: selection.conflictResolutionValues} : {}),
+    ...(selection.invert ? {invert: true as const} : {}),
   }
 
   return Object.keys(searchValue).length > 0 ? {[compareProjectCovidenceExportSearchParam]: searchValue} : {}
@@ -95,6 +102,7 @@ export const getCompareProjectCovidenceExportRequestBody = (
         return columnSelection.values.length > 0
       }),
     conflictResolutionValues: allowConflictResolution ? selection.conflictResolutionValues : [],
+    invertSelection: selection.invert,
   }
 }
 
@@ -115,4 +123,11 @@ export const getCompareProjectCovidenceExportSelectionWithConflictResolutionValu
   return getIsSameComparisonProjectFilterSelection(selection.conflictResolutionValues, values)
     ? selection
     : {...selection, conflictResolutionValues: [...values]}
+}
+
+export const getCompareProjectCovidenceExportSelectionWithInvert = (
+  selection: CompareProjectCovidenceExportUrlSelection,
+  invert: boolean,
+): CompareProjectCovidenceExportUrlSelection => {
+  return selection.invert === invert ? selection : {...selection, invert}
 }

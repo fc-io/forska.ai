@@ -29,10 +29,36 @@ const getSplitFilesHint = (count: number | null) => {
     : null
 }
 
-const getSelectionResultHint = (count: number | null) => {
+const getMatchingSelectionResultHint = (count: number | null) => {
   return count === 0 ? 'No articles match this selection.' : getSplitFilesHint(count)
 }
 
-export const getCompareProjectCovidenceExportHint = (hasSelection: boolean, count: number | null) => {
-  return hasSelection ? getSelectionResultHint(count) : 'Nothing is selected, so there is nothing to export.'
+const getNotMatchingArticleCountText = (count: number) => {
+  return count === 1 ? '1 article does not match' : `${count.toLocaleString()} articles do not match`
+}
+
+const getInvertedSelectionCountHint = (count: number) => {
+  return [`Inverted: ${getNotMatchingArticleCountText(count)} the selection above.`, getSplitFilesHint(count)]
+    .filter((hint): hint is string => {
+      return hint !== null
+    })
+    .join(' ')
+}
+
+const getInvertedSelectionResultHint = (count: number | null) => {
+  return count === null ? null : getInvertedSelectionCountHint(count)
+}
+
+const getSelectionResultHint = (count: number | null, invertSelection: boolean) => {
+  return invertSelection ? getInvertedSelectionResultHint(count) : getMatchingSelectionResultHint(count)
+}
+
+export const getCompareProjectCovidenceExportHint = (
+  hasSelection: boolean,
+  count: number | null,
+  invertSelection = false,
+) => {
+  return hasSelection
+    ? getSelectionResultHint(count, invertSelection)
+    : 'Nothing is selected, so there is nothing to export.'
 }

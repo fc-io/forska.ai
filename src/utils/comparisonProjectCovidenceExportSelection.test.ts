@@ -99,7 +99,7 @@ test('the conflict resolution select matches the resolution label, alone or with
 test('conflict resolution values are dropped when the project does not allow conflict resolution', () => {
   const selection = getSelection({columnSelections: [], conflictResolutionValues: ['yes']}, false)
 
-  expect(selection).toEqual({columnSelections: [], conflictResolutionValues: []})
+  expect(selection).toEqual({columnSelections: [], conflictResolutionValues: [], invertSelection: false})
   expect(getComparisonProjectCovidenceExportSelectedRows(rows, selection)).toEqual([])
 })
 
@@ -118,6 +118,7 @@ test('answers and selected values are compared trimmed and lowercased', () => {
   expect(getSelection({columnSelections: [{columnId: gptColumnId, values: [' Yes', 'yes', '', '  ']}]})).toEqual({
     columnSelections: [{columnId: gptColumnId, values: ['yes']}],
     conflictResolutionValues: [],
+    invertSelection: false,
   })
 })
 
@@ -148,6 +149,7 @@ test('unknown column ids are ignored and a duplicated column id merges its value
   expect(selection).toEqual({
     columnSelections: [{columnId: humanColumnId, values: ['maybe', 'yes']}],
     conflictResolutionValues: [],
+    invertSelection: false,
   })
   expect(
     getSelectedArticleIds(rows, {columnSelections: [{columnId: 'llm:retired-model:1100:summary', values: ['no']}]}),
@@ -163,7 +165,7 @@ test('a column with nothing selected matches nothing and an empty selection expo
     conflictResolutionValues: [],
   })
 
-  expect(emptySelection).toEqual({columnSelections: [], conflictResolutionValues: []})
+  expect(emptySelection).toEqual({columnSelections: [], conflictResolutionValues: [], invertSelection: false})
   expect(getHasComparisonProjectCovidenceExportSelection(emptySelection)).toBe(false)
   expect(getComparisonProjectCovidenceExportSelectedRows(rows, emptySelection)).toEqual([])
   expect(getSelectedArticleIds(rows, {columnSelections: []})).toEqual([])
@@ -190,6 +192,100 @@ test('an article matching several columns, repeated rows or earlier batches is e
 
   expect(getSelectedArticleIds(repeatedRows, request)).toEqual(['article-1', 'article-2', 'article-3'])
   expect(getSelectedArticleIds(repeatedRows, request, new Set(['article-2']))).toEqual(['article-1', 'article-3'])
+})
+
+const getAllColumnsYesMaybeRequest = (invertSelection: boolean): ComparisonProjectCovidenceExportRequest => {
+  return {
+    columnSelections: columnIds.map((columnId) => {
+      return {columnId, values: ['yes', 'maybe']}
+    }),
+    conflictResolutionValues: ['yes', 'maybe'],
+    invertSelection,
+  }
+}
+
+test('invertSelection defaults to false and is carried through normalisation', () => {
+  expect(getSelection({columnSelections: [{columnId: humanColumnId, values: ['yes']}]}).invertSelection).toBe(false)
+  expect(
+    getSelection({columnSelections: [{columnId: humanColumnId, values: ['yes']}], invertSelection: false})
+      .invertSelection,
+  ).toBe(false)
+  expect(
+    getSelection({columnSelections: [{columnId: humanColumnId, values: ['yes']}], invertSelection: true})
+      .invertSelection,
+  ).toBe(true)
+})
+
+test('the inverted selection exports every article that does not match, unanswered articles included', () => {
+  const matching = getSelectedArticleIds(rows, getAllColumnsYesMaybeRequest(false))
+  const inverted = getSelectedArticleIds(rows, getAllColumnsYesMaybeRequest(true))
+
+  expect(inverted).toEqual(['article-all-no', 'article-unanswered'])
+  expect(
+    inverted.filter((articleId) => {
+      return matching.includes(articleId)
+    }),
+  ).toEqual([])
+  expect([...matching, ...inverted].sort()).toEqual(
+    rows
+      .map((row) => {
+        return row.canonicalArticleId
+      })
+      .sort(),
+  )
+})
+
+test('a selected conflict resolution label makes a row match, so the inverted set leaves it out', () => {
+  expect(
+    getSelectedArticleIds(rows, {
+      columnSelections: [{columnId: humanColumnId, values: ['yes', 'maybe']}],
+      conflictResolutionValues: ['yes'],
+      invertSelection: true,
+    }),
+  ).toEqual(['article-yes-llm-no-human', 'article-all-no', 'article-unanswered'])
+  expect(
+    getSelectedArticleIds(rows, {
+      columnSelections: [{columnId: humanColumnId, values: ['yes', 'maybe']}],
+      invertSelection: true,
+    }),
+  ).toEqual(['article-yes-llm-no-human', 'article-all-no', 'article-resolved-yes', 'article-unanswered'])
+})
+
+test('the inverted selection exports each article once across repeated rows and earlier batches', () => {
+  const request = {columnSelections: [{columnId: humanColumnId, values: ['yes']}], invertSelection: true}
+  const repeatedRows = [
+    getRow('article-1', {[humanColumnId]: 'no'}),
+    getRow('article-1', {}),
+    getRow('article-2', {[humanColumnId]: 'maybe'}),
+    getRow('article-3', {[humanColumnId]: 'yes'}),
+    getRow('article-4', {}),
+  ]
+
+  expect(getSelectedArticleIds(repeatedRows, request)).toEqual(['article-1', 'article-2', 'article-4'])
+  expect(getSelectedArticleIds(repeatedRows, request, new Set(['article-2']))).toEqual(['article-1', 'article-4'])
+})
+
+test('with nothing selected the inverted selection exports nothing either', () => {
+  const emptyInvertedSelection = getSelection({columnSelections: [], invertSelection: true})
+
+  expect(getHasComparisonProjectCovidenceExportSelection(emptyInvertedSelection)).toBe(false)
+  expect(getComparisonProjectCovidenceExportSelectedRows(rows, emptyInvertedSelection)).toEqual([])
+  expect(
+    getSelectedArticleIds(rows, {
+      columnSelections: [
+        {columnId: gptColumnId, values: []},
+        {columnId: 'llm:retired-model:1100:summary', values: ['yes']},
+      ],
+      conflictResolutionValues: [' '],
+      invertSelection: true,
+    }),
+  ).toEqual([])
+  expect(
+    getComparisonProjectCovidenceExportSelectedRows(
+      rows,
+      getSelection({columnSelections: [], conflictResolutionValues: ['yes'], invertSelection: true}, false),
+    ),
+  ).toEqual([])
 })
 
 test('multi-line cells match on any of their answers', () => {
