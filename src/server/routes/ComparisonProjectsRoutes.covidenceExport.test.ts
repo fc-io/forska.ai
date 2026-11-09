@@ -76,6 +76,7 @@ type ComparisonProjectColumn = {id: string; kind: 'human' | 'llm'}
 type CovidenceExportRequest = {
   columnSelections: Array<{columnId: string; values: string[]}>
   conflictResolutionValues?: string[]
+  invertSelection?: boolean
 }
 type CovidenceExportResponseWithPartSize = (
   request: CovidenceExportRequest,
@@ -135,6 +136,14 @@ const postCovidenceExportCount = async (request: CovidenceExportRequest, id = co
   const response = await postJson(`/api/comparison-projects/${id}/covidence-export/count`, request)
 
   return {body: (await response.json()) as {data: {totalCount: number} | null; error?: string}, response}
+}
+
+const getServingArticleCount = async () => {
+  const response = await postJson(`/api/comparison-projects/${comparisonProjectId}/judgments/count`, {limit: 50})
+  const body = (await response.json()) as {data: {totalCount: number}}
+
+  expect(response.status).toBe(200)
+  return body.data.totalCount
 }
 
 const getRisRecords = (risText: string) => {
@@ -586,6 +595,110 @@ test('the part size is a hard limit: at the limit one RIS file, above it one par
     {name: 'part02_of_04.ris', records: 1},
     {name: 'part03_of_04.ris', records: 1},
     {name: 'part04_of_04.ris', records: 1},
+  ])
+})
+
+const getInvertedRequest = (request: CovidenceExportRequest): CovidenceExportRequest => {
+  return {...request, invertSelection: true}
+}
+
+const getRisRecordTitles = (risText: string) => {
+  return getRisRecords(risText)
+    .map((record) => {
+      return /\r\nTI {2}- (.*)\r\n/u.exec(record)?.[1] ?? ''
+    })
+    .sort()
+}
+
+test('the inverted export is every other serving article: disjoint from the matching export, together all of them', async () => {
+  const [servingArticleCount, matchingCount, invertedCount, matching, inverted] = await Promise.all([
+    getServingArticleCount(),
+    postCovidenceExportCount(getUnionRequest()),
+    postCovidenceExportCount(getInvertedRequest(getUnionRequest())),
+    postCovidenceExport(getUnionRequest()),
+    postCovidenceExport(getInvertedRequest(getUnionRequest())),
+  ])
+  const matchingRecords = getRisRecords(matching.text)
+  const invertedRecords = getRisRecords(inverted.text)
+
+  expect(servingArticleCount).toBe(6)
+  expect(matchingCount.body.data).toEqual({totalCount: 4})
+  expect(invertedCount.body.data).toEqual({totalCount: 2})
+  expect(invertedRecords).toHaveLength(2)
+  expect(getRisRecordTitles(inverted.text)).toEqual(['Excluded article five', 'Excluded article six'])
+  expect(
+    invertedRecords.filter((record) => {
+      return matchingRecords.includes(record)
+    }),
+  ).toEqual([])
+  expect(new Set([...matchingRecords, ...invertedRecords]).size).toBe(servingArticleCount)
+})
+
+test('a selected conflict resolution label keeps the resolved article out of the inverted export', async () => {
+  const humanMaybe = {columnSelections: [{columnId: getColumnId('human'), values: ['maybe']}]}
+  const [withResolution, withoutResolution] = await Promise.all([
+    postCovidenceExport(getInvertedRequest({...humanMaybe, conflictResolutionValues: ['yes']})),
+    postCovidenceExport(getInvertedRequest(humanMaybe)),
+  ])
+
+  expect(getRisRecordTitles(withResolution.text)).toEqual(
+    [covidenceTitle, 'Excluded article five', 'Excluded article six'].sort(),
+  )
+  expect(getRisRecordTitles(withoutResolution.text)).toEqual(
+    [covidenceTitle, 'Excluded article five', 'Excluded article six', 'Resolved article three'].sort(),
+  )
+})
+
+test('the inverted export is named not_matching and its ZIP parts follow the stem', async () => {
+  const single = await postCovidenceExport(getInvertedRequest(getUnionRequest()))
+  const {bytes, response} = await getExportWithPartSize(getInvertedRequest(getUnionRequest()), 1)
+  const filenameStem =
+    /^attachment; filename="(Covidence_export_covidence_not_matching_export_\d{4}-\d{2}-\d{2})\.zip"$/u.exec(
+      response.headers.get('content-disposition') ?? '',
+    )?.[1]
+  const parts = getZipParts(bytes)
+
+  expect(single.response.headers.get('content-disposition')).toMatch(
+    /^attachment; filename="Covidence_export_covidence_not_matching_export_\d{4}-\d{2}-\d{2}\.ris"$/u,
+  )
+  expect(response.headers.get('content-type')).toBe('application/zip')
+  expect(filenameStem).toBeDefined()
+  expect(
+    parts.map((part) => {
+      return part.name
+    }),
+  ).toEqual([`${filenameStem}_part01_of_02.ris`, `${filenameStem}_part02_of_02.ris`])
+  expect(
+    parts
+      .map((part) => {
+        return part.text
+      })
+      .join(''),
+  ).toBe(single.text)
+})
+
+test('with nothing selected the inverted export is empty too', async () => {
+  const requests: CovidenceExportRequest[] = [
+    {columnSelections: [], invertSelection: true},
+    {
+      columnSelections: [{columnId: getColumnId('llm'), values: []}],
+      conflictResolutionValues: [],
+      invertSelection: true,
+    },
+    {columnSelections: [{columnId: 'llm:retired-model:1100:summary', values: ['yes']}], invertSelection: true},
+  ]
+  const results = await Promise.all(
+    requests.map(async (request) => {
+      const [count, ris] = await Promise.all([postCovidenceExportCount(request), postCovidenceExport(request)])
+
+      return {count: count.body.data?.totalCount, risLength: ris.text.length, status: ris.response.status}
+    }),
+  )
+
+  expect(results).toEqual([
+    {count: 0, risLength: 0, status: 200},
+    {count: 0, risLength: 0, status: 200},
+    {count: 0, risLength: 0, status: 200},
   ])
 })
 

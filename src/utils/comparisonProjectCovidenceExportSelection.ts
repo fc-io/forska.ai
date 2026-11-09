@@ -5,11 +5,13 @@ export type ComparisonProjectCovidenceExportColumnSelection = {columnId: string;
 export type ComparisonProjectCovidenceExportRequest = {
   columnSelections: ComparisonProjectCovidenceExportColumnSelection[]
   conflictResolutionValues?: string[]
+  invertSelection?: boolean
 }
 
 export type ComparisonProjectCovidenceExportSelection = {
   columnSelections: ComparisonProjectCovidenceExportColumnSelection[]
   conflictResolutionValues: string[]
+  invertSelection: boolean
 }
 
 export type ComparisonProjectCovidenceExportCandidateRow = {
@@ -77,6 +79,7 @@ export const getNormalizedComparisonProjectCovidenceExportSelection = (
     conflictResolutionValues: scope.allowConflictResolution
       ? getNormalizedComparisonProjectCovidenceExportValues(request.conflictResolutionValues ?? [])
       : [],
+    invertSelection: request.invertSelection ?? false,
   }
 }
 
@@ -116,6 +119,16 @@ export const getIsComparisonProjectCovidenceExportRowSelected = (
   return getHasSelectedColumnAnswer(row, selection) || getHasSelectedConflictResolution(row, selection)
 }
 
+const getIsComparisonProjectCovidenceExportRowExported = (
+  row: ComparisonProjectCovidenceExportCandidateRow,
+  selection: ComparisonProjectCovidenceExportSelection,
+) => {
+  return (
+    getHasComparisonProjectCovidenceExportSelection(selection)
+    && getIsComparisonProjectCovidenceExportRowSelected(row, selection) !== selection.invertSelection
+  )
+}
+
 export const getComparisonProjectCovidenceExportSelectedRows = <
   TRow extends ComparisonProjectCovidenceExportCandidateRow,
 >(
@@ -127,7 +140,7 @@ export const getComparisonProjectCovidenceExportSelectedRows = <
 
   return rows.filter((row) => {
     const isSelected =
-      !seenArticleIds.has(row.canonicalArticleId) && getIsComparisonProjectCovidenceExportRowSelected(row, selection)
+      !seenArticleIds.has(row.canonicalArticleId) && getIsComparisonProjectCovidenceExportRowExported(row, selection)
 
     if (isSelected) {
       seenArticleIds.add(row.canonicalArticleId)

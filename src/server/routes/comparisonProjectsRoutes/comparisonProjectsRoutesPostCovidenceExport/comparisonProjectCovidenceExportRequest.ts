@@ -13,6 +13,7 @@ export const comparisonProjectCovidenceExportSummaryModeError =
 export const comparisonProjectCovidenceExportBodySchema = t.Object({
   columnSelections: t.Array(t.Object({columnId: t.String(), values: t.Array(t.String())})),
   conflictResolutionValues: t.Optional(t.Array(t.String())),
+  invertSelection: t.Optional(t.Boolean()),
 })
 
 export const getIsComparisonProjectCovidenceExportAvailable = (scope: ComparisonProjectScope) => {

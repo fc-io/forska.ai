@@ -26,6 +26,7 @@ import {
   getCompareProjectCovidenceExportRequestBody,
   getCompareProjectCovidenceExportSelectionWithColumnValues,
   getCompareProjectCovidenceExportSelectionWithConflictResolutionValues,
+  getCompareProjectCovidenceExportSelectionWithInvert,
 } from './compareProjectCovidenceExportUrlState.ts'
 
 type CompareProjectCovidenceExportProject = Pick<
@@ -114,7 +115,7 @@ const CompareProjectCovidenceExportPanel = (props: CompareProjectCovidenceExport
     }
   })
   const hint = () => {
-    return getCompareProjectCovidenceExportHint(hasSelection(), exportCount())
+    return getCompareProjectCovidenceExportHint(hasSelection(), exportCount(), requestBody().invertSelection)
   }
 
   return (
@@ -123,10 +124,12 @@ const CompareProjectCovidenceExportPanel = (props: CompareProjectCovidenceExport
         <h2 class="text-lg font-semibold text-gray-900">Export to Covidence</h2>
         <p class="mt-2 text-sm text-gray-600">
           Downloads a Covidence RIS file (full-text review set) with every article that has a selected answer in at
-          least one column, each article once. Import it in Covidence with 'Import into: Full text review'. Covidence
-          imports at most {covidenceImportMaxReferencesPerFile.toLocaleString()} references per file, so a larger
-          selection downloads as a ZIP of RIS files with at most {covidenceImportMaxReferencesPerFile.toLocaleString()}{' '}
-          articles each. This export ignores the filters above.
+          least one column, each article once. Import it in Covidence with 'Import into: Full text review'. The inverted
+          export (every article that does not match the selection) is meant for 'Import into: Excluded' / 'Irrelevant',
+          the normal one for 'Full text review'. Covidence imports at most{' '}
+          {covidenceImportMaxReferencesPerFile.toLocaleString()} references per file, so a larger selection downloads as
+          a ZIP of RIS files with at most {covidenceImportMaxReferencesPerFile.toLocaleString()} articles each. This
+          export ignores the filters above.
         </p>
       </div>
       <div class="space-y-4">
@@ -170,6 +173,21 @@ const CompareProjectCovidenceExportPanel = (props: CompareProjectCovidenceExport
             </div>
           </Show>
         </div>
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            class="mt-1"
+            checked={props.selection.invert}
+            onChange={(event) => {
+              props.onSelectionChange(
+                getCompareProjectCovidenceExportSelectionWithInvert(props.selection, event.currentTarget.checked),
+              )
+            }}
+          />
+          <span class="text-sm font-medium text-gray-900">
+            Invert: export the articles that do not match the selection above
+          </span>
+        </label>
         <div class="flex flex-wrap items-center gap-3">
           <Button
             type="button"

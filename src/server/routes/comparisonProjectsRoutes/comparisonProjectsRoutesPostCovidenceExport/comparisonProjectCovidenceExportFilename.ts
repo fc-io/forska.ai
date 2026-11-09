@@ -1,11 +1,19 @@
+import type {ComparisonProjectCovidenceExportSelection} from '../../../../utils/comparisonProjectCovidenceExportSelection.ts'
 import type {ComparisonProjectScope} from '../comparisonProjectScopeTypes.ts'
 
 const getComparisonProjectCovidenceExportPartNumber = (partNumber: number, partCount: number) => {
   return String(partNumber).padStart(Math.max(2, String(partCount).length), '0')
 }
 
-export const getComparisonProjectCovidenceExportFilenameStem = (scope: Pick<ComparisonProjectScope, 'name'>) => {
-  return `${scope.name.replace(/[^a-zA-Z0-9]/g, '_')}_covidence_full_text_export_${new Date().toISOString().slice(0, 10)}`
+const getComparisonProjectCovidenceExportKind = (invertSelection: boolean) => {
+  return invertSelection ? 'not_matching' : 'full_text'
+}
+
+export const getComparisonProjectCovidenceExportFilenameStem = (
+  scope: Pick<ComparisonProjectScope, 'name'>,
+  selection: Pick<ComparisonProjectCovidenceExportSelection, 'invertSelection'>,
+) => {
+  return `${scope.name.replace(/[^a-zA-Z0-9]/g, '_')}_covidence_${getComparisonProjectCovidenceExportKind(selection.invertSelection)}_export_${new Date().toISOString().slice(0, 10)}`
 }
 
 export const getComparisonProjectCovidenceExportPartFilename = (

@@ -196,7 +196,7 @@ export const getComparisonProjectCovidenceExportResponse = async (
 ) => {
   const {totalCount} = await getComparisonProjectCovidenceExportCount(scope, selection)
   const plan: ComparisonProjectCovidenceExportPlan = {
-    filenameStem: getComparisonProjectCovidenceExportFilenameStem(scope),
+    filenameStem: getComparisonProjectCovidenceExportFilenameStem(scope, selection),
     maxRecordsPerFile,
     partCount: getCovidenceImportPartCount(totalCount, maxRecordsPerFile),
   }

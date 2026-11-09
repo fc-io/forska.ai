@@ -94,7 +94,7 @@ const renderSection = (options: RenderOptions = {}) => {
             ],
           }}
           comparisonProjectId="comparison-project-1"
-          selection={options.selection ?? {columnValues: {}, conflictResolutionValues: []}}
+          selection={options.selection ?? {columnValues: {}, conflictResolutionValues: [], invert: false}}
           onSelectionChange={options.onSelectionChange ?? vi.fn()}
         />
       </QueryClientProvider>
@@ -105,9 +105,17 @@ const renderSection = (options: RenderOptions = {}) => {
 }
 
 const getLabels = (container: HTMLElement) => {
-  return Array.from(container.querySelectorAll('label')).map((label) => {
-    return label.textContent
-  })
+  return Array.from(container.querySelectorAll('label'))
+    .filter((label) => {
+      return label.querySelector('input[type="checkbox"]') === null
+    })
+    .map((label) => {
+      return label.textContent
+    })
+}
+
+const getInvertCheckbox = (container: HTMLElement) => {
+  return container.querySelector<HTMLInputElement>('input[type="checkbox"]')
 }
 
 const getExportButton = (container: HTMLElement) => {
@@ -164,7 +172,7 @@ describe('CompareProjectCovidenceExportSection', () => {
     try {
       expect(container.querySelector('h2')?.textContent).toBe('Export to Covidence')
       expect(container.querySelector('section p')?.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
-        `Downloads a Covidence RIS file (full-text review set) with every article that has a selected answer in at least one column, each article once. Import it in Covidence with 'Import into: Full text review'. Covidence imports at most ${(15_000).toLocaleString()} references per file, so a larger selection downloads as a ZIP of RIS files with at most ${(15_000).toLocaleString()} articles each. This export ignores the filters above.`,
+        `Downloads a Covidence RIS file (full-text review set) with every article that has a selected answer in at least one column, each article once. Import it in Covidence with 'Import into: Full text review'. The inverted export (every article that does not match the selection) is meant for 'Import into: Excluded' / 'Irrelevant', the normal one for 'Full text review'. Covidence imports at most ${(15_000).toLocaleString()} references per file, so a larger selection downloads as a ZIP of RIS files with at most ${(15_000).toLocaleString()} articles each. This export ignores the filters above.`,
       )
       expect(getLabels(container)).toEqual([
         'Summary - LLM - GPT 5.5 - Title + Abstract:',
@@ -178,6 +186,10 @@ describe('CompareProjectCovidenceExportSection', () => {
       })
       expect(container.querySelector('[aria-label="Summary - Human answer"]')?.textContent).toContain('None')
       expect(container.querySelector('[aria-label="Conflict resolution"]')).not.toBeNull()
+      expect(getInvertCheckbox(container)?.closest('label')?.textContent?.trim()).toBe(
+        'Invert: export the articles that do not match the selection above',
+      )
+      expect(getInvertCheckbox(container)?.checked).toBe(false)
     } finally {
       dispose()
     }
@@ -215,6 +227,7 @@ describe('CompareProjectCovidenceExportSection', () => {
         'llm:retired-model:1100:summary': ['no'],
       },
       conflictResolutionValues: ['yes'],
+      invert: false,
     }
     const expectedBody = {
       columnSelections: [
@@ -222,6 +235,7 @@ describe('CompareProjectCovidenceExportSection', () => {
         {columnId: humanColumn.id, values: ['maybe']},
       ],
       conflictResolutionValues: ['yes'],
+      invertSelection: false,
     }
     const {container, dispose} = renderSection({selection})
 
@@ -256,7 +270,7 @@ describe('CompareProjectCovidenceExportSection', () => {
   test('says the download is a ZIP of RIS files when the count is over the Covidence per-file limit', async () => {
     mockState.fetchComparisonProjectCovidenceExportCount.mockResolvedValueOnce({totalCount: 30_001})
     const {container, dispose} = renderSection({
-      selection: {columnValues: {[humanColumn.id]: ['no']}, conflictResolutionValues: []},
+      selection: {columnValues: {[humanColumn.id]: ['no']}, conflictResolutionValues: [], invert: false},
     })
 
     try {
@@ -274,7 +288,11 @@ describe('CompareProjectCovidenceExportSection', () => {
 
       await waitForCondition(() => {
         expect(mockState.downloadFileFromPost).toHaveBeenCalledWith({
-          body: {columnSelections: [{columnId: humanColumn.id, values: ['no']}], conflictResolutionValues: []},
+          body: {
+            columnSelections: [{columnId: humanColumn.id, values: ['no']}],
+            conflictResolutionValues: [],
+            invertSelection: false,
+          },
           errorMessage: 'Covidence export failed',
           fallbackFilename: 'covidence-export-comparison-project-1.ris',
           path: '/api/comparison-projects/comparison-project-1/covidence-export',
@@ -288,11 +306,85 @@ describe('CompareProjectCovidenceExportSection', () => {
   test('drops conflict resolution values from the request when conflict resolution is off', async () => {
     const {dispose} = renderSection({
       allowConflictResolution: false,
-      selection: {columnValues: {}, conflictResolutionValues: ['yes']},
+      selection: {columnValues: {}, conflictResolutionValues: ['yes'], invert: false},
     })
 
     try {
       await tick()
+      expect(mockState.fetchComparisonProjectCovidenceExportCount).not.toHaveBeenCalled()
+    } finally {
+      dispose()
+    }
+  })
+
+  test('the invert checkbox toggles the invert flag through the selection callback', () => {
+    const onSelectionChange = vi.fn()
+    const selection = {columnValues: {[humanColumn.id]: ['yes', 'maybe']}, conflictResolutionValues: [], invert: false}
+    const unchecked = renderSection({onSelectionChange, selection})
+
+    try {
+      getInvertCheckbox(unchecked.container)?.click()
+      expect(onSelectionChange).toHaveBeenLastCalledWith({...selection, invert: true})
+    } finally {
+      unchecked.dispose()
+    }
+
+    const checked = renderSection({onSelectionChange, selection: {...selection, invert: true}})
+
+    try {
+      expect(getInvertCheckbox(checked.container)?.checked).toBe(true)
+      getInvertCheckbox(checked.container)?.click()
+      expect(onSelectionChange).toHaveBeenLastCalledWith({...selection, invert: false})
+      expect(onSelectionChange).toHaveBeenCalledTimes(2)
+    } finally {
+      checked.dispose()
+    }
+  })
+
+  test('counts and exports the inverted selection and says how many articles do not match', async () => {
+    const selection = {columnValues: {[humanColumn.id]: ['yes', 'maybe']}, conflictResolutionValues: [], invert: true}
+    const expectedBody = {
+      columnSelections: [{columnId: humanColumn.id, values: ['yes', 'maybe']}],
+      conflictResolutionValues: [],
+      invertSelection: true,
+    }
+    const {container, dispose} = renderSection({selection})
+
+    try {
+      await waitForCondition(() => {
+        expect(mockState.fetchComparisonProjectCovidenceExportCount).toHaveBeenCalledWith(
+          'comparison-project-1',
+          expectedBody,
+        )
+        expect(getExportButton(container)?.textContent).toBe('Export 3 articles to Covidence')
+        expect(container.textContent).toContain('Inverted: 3 articles do not match the selection above.')
+      })
+
+      getExportButton(container)?.click()
+
+      await waitForCondition(() => {
+        expect(mockState.downloadFileFromPost).toHaveBeenCalledWith({
+          body: expectedBody,
+          errorMessage: 'Covidence export failed',
+          fallbackFilename: 'covidence-export-comparison-project-1.ris',
+          path: '/api/comparison-projects/comparison-project-1/covidence-export',
+        })
+      })
+    } finally {
+      dispose()
+    }
+  })
+
+  test('an inverted empty selection still has nothing to export', async () => {
+    const {container, dispose} = renderSection({
+      selection: {columnValues: {}, conflictResolutionValues: [], invert: true},
+    })
+
+    try {
+      await tick()
+      expect(getExportButton(container)?.textContent).toBe('Export 0 articles to Covidence')
+      expect(getExportButton(container)?.hasAttribute('disabled')).toBe(true)
+      expect(container.textContent).toContain('Nothing is selected, so there is nothing to export.')
       expect(mockState.fetchComparisonProjectCovidenceExportCount).not.toHaveBeenCalled()
     } finally {
       dispose()
