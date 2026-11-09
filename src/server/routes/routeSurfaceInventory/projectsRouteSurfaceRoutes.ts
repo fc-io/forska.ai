@@ -46,6 +46,9 @@ export const projectsRouteSurfaceRoutes: RouteSurfaceRoute[] = [
   ...ownerDependentMaintenance('ProjectsRoutes.ts', 'Archived project deletion and cleanup.', [
     ['POST', '/api/projects/delete-archived'],
   ]),
+  ...ownerDependentMaintenance('ProjectsRoutes.ts', 'Review-serving human-status repair for one project.', [
+    ['POST', '/api/projects/:id/review-serving/reproject-human-status'],
+  ]),
   ...ownerDependentSensitive('ProjectExportRoutes.ts', 'Project article, judgment, prompt, and metadata exports.', [
     ['POST', '/api/projects/:id/export'],
     ['GET', '/api/projects/:id/export/:jobId'],

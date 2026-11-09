@@ -1,6 +1,8 @@
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {decodeReviewServingJsonRows} from '../test/decodeReviewServingJsonRows.ts'
+import {duckdbEngineCompatibilityOptions} from '../utils/duckdbEngineContract.ts'
 import {type ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
 import {
   projectReviewServingHumanStatusPatches,
@@ -8,6 +10,8 @@ import {
   type ReviewServingHumanStatusProjectorDatabase,
 } from './reviewServingHumanStatusProjector.ts'
 import {
+  getReviewServingProjectPromptConfigRows,
+  getReviewServingProjectReviewSettings,
   getReviewServingReviewConfigHash,
   type ReviewServingProjectReviewSettingsRow,
 } from './reviewServingReviewConfig.ts'
@@ -205,6 +209,7 @@ test('human status review config hash includes model execution identity', async 
 test('summary human answers do not require prompt IDs and update summary-key serving state', async () => {
   const {database, statements} = createHumanStatusDatabase({
     judgmentRows: [humanStatusRow({promptId: null, promptOrSummaryKey: 'summary'})],
+    projectSettingsRows: [projectSettingsRow({humanJudgmentMode: 'summary'})],
   })
 
   const result = await projectReviewServingHumanStatusPatches(projectInput([humanClaim()]), database)
@@ -234,6 +239,7 @@ test('Covidence summary placeholders with null answers remain human-unanswered',
         summaryOrigin: 'covidence_import',
       }),
     ],
+    projectSettingsRows: [projectSettingsRow({humanJudgmentMode: 'summary'})],
   })
 
   const result = await projectReviewServingHumanStatusPatches(projectInput([humanClaim()]), database)
@@ -451,4 +457,320 @@ test('human judgment delta lookup matches claim watermark ranges through one cla
   )
   expect(selectStatement).toContain("('import-route:route-1', 1500, 1501)")
   expect(selectStatement).not.toContain('OR (delta.source_partition')
+})
+
+type DuckdbConnection = Awaited<ReturnType<Awaited<ReturnType<typeof DuckDBInstance.create>>['connect']>>
+
+const duckdbProjectId = 'project-1'
+const duckdbSnapshotId = 'snapshot-1'
+const duckdbProjectionIdentity = 'humanStatus:identity-1'
+
+const getDuckdbHumanStatusDatabase = (
+  connection: DuckdbConnection,
+  options?: {skipArticleScopedRead?: boolean},
+): ReviewServingHumanStatusProjectorDatabase => {
+  const database: ReviewServingHumanStatusProjectorDatabase = {
+    queryJson: async <T>(statement: string) => {
+      if (options?.skipArticleScopedRead === true && statement.includes('FROM article_prompt')) {
+        return [] as T[]
+      }
+
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+    transaction: async (operation) => {
+      return operation(database)
+    },
+  }
+
+  return database
+}
+
+const createDuckdbHumanStatusFixture = async (input: {
+  articleIds: readonly string[]
+  humanJudgmentMode: 'prompt' | 'summary'
+  promptIds: readonly string[]
+}) => {
+  const instance = await DuckDBInstance.create(':memory:', duckdbEngineCompatibilityOptions)
+  const connection = await instance.connect()
+  const sqlList = (values: readonly string[]) => {
+    return values
+      .map((value) => {
+        return `'${value}'`
+      })
+      .join(', ')
+  }
+
+  await connection.run(`
+    CREATE SCHEMA app;
+    CREATE SCHEMA mart;
+    CREATE TABLE app.project (
+      id VARCHAR, human_judgment_mode VARCHAR, model_id VARCHAR, use_title BOOLEAN, use_abstract BOOLEAN,
+      use_fulltext BOOLEAN, use_fulltext_no_images BOOLEAN, system_prompt_variant VARCHAR, use_metadata BOOLEAN,
+      full_text_strategy_id VARCHAR
+    );
+    CREATE TABLE app.model (id VARCHAR, provider_connection_id VARCHAR, remote_model_id VARCHAR, variant VARCHAR, metadata_json VARCHAR);
+    CREATE TABLE app.provider_connection (id VARCHAR, provider_kind VARCHAR, base_url VARCHAR);
+    CREATE TABLE app.prompt (id VARCHAR, content_hash VARCHAR, original_text VARCHAR, archived BOOLEAN);
+    CREATE TABLE app.project_prompt (id VARCHAR, project_id VARCHAR, prompt_id VARCHAR, prompt_order INTEGER, enabled BOOLEAN, archived BOOLEAN);
+    CREATE TABLE app."judgment_human" (
+      id VARCHAR, project_id VARCHAR, article_id VARCHAR, prompt_id VARCHAR, answer VARCHAR,
+      updated_at TIMESTAMPTZ DEFAULT current_timestamp
+    );
+    CREATE TABLE app."judgment_human_summary" (
+      id VARCHAR, project_id VARCHAR, article_id VARCHAR, answer VARCHAR, origin VARCHAR,
+      updated_at TIMESTAMPTZ DEFAULT current_timestamp
+    );
+    CREATE TABLE app.review_change_delta (
+      delta_id VARCHAR, project_id VARCHAR, article_id VARCHAR, prompt_id VARCHAR, change_kind VARCHAR,
+      source_operation VARCHAR, tombstone BOOLEAN, payload_json VARCHAR, source_updated_at TIMESTAMPTZ,
+      human_judgment_key VARCHAR, source_partition VARCHAR, source_high_water_mark BIGINT
+    );
+    CREATE TABLE mart.project_scope_article (
+      project_id VARCHAR, article_id VARCHAR, in_curated_scope BOOLEAN, in_route_scope BOOLEAN,
+      article_created_at TIMESTAMPTZ, article_updated_at TIMESTAMPTZ
+    );
+    CREATE TABLE app.review_serving_snapshot_manifest (
+      project_id VARCHAR, snapshot_id VARCHAR, review_config_hash VARCHAR, snapshot_status VARCHAR, component_state_json VARCHAR
+    );
+    CREATE TABLE mart.review_article_serving_base_v4 (
+      project_id VARCHAR, review_config_hash VARCHAR, snapshot_id VARCHAR, article_id VARCHAR, base_generation BIGINT
+    );
+    CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+      project_id VARCHAR, review_config_hash VARCHAR, snapshot_id VARCHAR, article_id VARCHAR,
+      has_llm_list_mode BOOLEAN, has_human_list_mode BOOLEAN, has_both_list_mode BOOLEAN, has_unassessed_list_mode BOOLEAN,
+      human_status VARCHAR, human_patch_watermark BIGINT, both_patch_watermark BIGINT
+    );
+    INSERT INTO app.project VALUES
+      ('${duckdbProjectId}', '${input.humanJudgmentMode}', NULL, TRUE, TRUE, FALSE, FALSE, 'legacy', FALSE, NULL);
+  `)
+
+  if (input.promptIds.length > 0) {
+    await connection.run(`
+      INSERT INTO app.prompt SELECT id, 'hash-' || id, 'text ' || id, FALSE FROM (SELECT unnest([${sqlList(input.promptIds)}]) AS id);
+      INSERT INTO app.project_prompt
+      SELECT 'pp-' || id, '${duckdbProjectId}', id, row_number() OVER (ORDER BY id), TRUE, FALSE
+      FROM (SELECT unnest([${sqlList(input.promptIds)}]) AS id);
+    `)
+  }
+
+  const database = getDuckdbHumanStatusDatabase(connection)
+  const reviewConfigHash = getReviewServingReviewConfigHash({
+    ...((await getReviewServingProjectReviewSettings(
+      duckdbProjectId,
+      database,
+    )) as ReviewServingProjectReviewSettingsRow),
+    promptConfigRows: await getReviewServingProjectPromptConfigRows(duckdbProjectId, database),
+  })
+
+  await connection.run(`
+    INSERT INTO app.review_serving_snapshot_manifest VALUES (
+      '${duckdbProjectId}', '${duckdbSnapshotId}', '${reviewConfigHash}', 'active',
+      '{"required":[{"component":"humanStatus","projectionIdentity":"${duckdbProjectionIdentity}"}],"optional":[]}'
+    );
+    INSERT INTO mart.project_scope_article
+    SELECT '${duckdbProjectId}', article_id, TRUE, FALSE, TIMESTAMPTZ '2026-11-01 00:00:00+00', NULL
+    FROM (SELECT unnest([${sqlList(input.articleIds)}]) AS article_id);
+    INSERT INTO mart.review_article_serving_base_v4
+    SELECT '${duckdbProjectId}', '${reviewConfigHash}', '${duckdbSnapshotId}', article_id, 5
+    FROM (SELECT unnest([${sqlList(input.articleIds)}]) AS article_id);
+    INSERT INTO mart.review_article_serving_list_mode_state_v4
+    SELECT '${duckdbProjectId}', '${reviewConfigHash}', '${duckdbSnapshotId}', article_id, TRUE, TRUE, TRUE, FALSE, 'unanswered', 0, 0
+    FROM (SELECT unnest([${sqlList(input.articleIds)}]) AS article_id);
+  `)
+
+  const getHumanStatuses = async () => {
+    const reader = await connection.runAndReadAll(`
+      SELECT article_id, human_status
+      FROM mart.review_article_serving_list_mode_state_v4
+      ORDER BY article_id
+    `)
+
+    return Object.fromEntries(
+      (reader.getRowObjectsJson() as Array<{article_id: string; human_status: string | null}>).map((row) => {
+        return [row.article_id, row.human_status]
+      }),
+    )
+  }
+  const close = () => {
+    connection.closeSync()
+  }
+
+  return {close, connection, database, getHumanStatuses}
+}
+
+const duckdbPatchInput = (claims: readonly ReviewServingDirtyWorkClaim[]) => {
+  return {
+    acknowledgeClaims: false,
+    baseGeneration: 5,
+    claims,
+    definitionVersion: 'human-status-v4-test',
+    listModeKeys: ['human', 'both'],
+    projectId: duckdbProjectId,
+    projectionIdentity: duckdbProjectionIdentity,
+  }
+}
+
+const projectScopeClaim = (articleId: string) => {
+  return humanClaim({
+    articleId,
+    dirtyKind: 'projectScope.article.added',
+    scopeId: `${duckdbProjectId}:${articleId}`,
+    sourcePartition: `project:${duckdbProjectId}`,
+  })
+}
+
+test('summary-mode article entering scope with a summary answer is answered even with enabled prompts (DuckDB)', async () => {
+  const fixture = await createDuckdbHumanStatusFixture({
+    articleIds: ['article-1', 'article-2'],
+    humanJudgmentMode: 'summary',
+    promptIds: ['prompt-1', 'prompt-2'],
+  })
+
+  try {
+    await fixture.connection.run(`
+      INSERT INTO app."judgment_human_summary" (id, project_id, article_id, answer, origin) VALUES
+        ('summary-row-1', '${duckdbProjectId}', 'article-1', 'no', 'covidence_import'),
+        ('summary-row-2', '${duckdbProjectId}', 'article-2', NULL, 'covidence_import');
+    `)
+
+    await projectReviewServingHumanStatusPatches(
+      duckdbPatchInput([projectScopeClaim('article-1'), projectScopeClaim('article-2')]),
+      fixture.database,
+    )
+
+    expect(await fixture.getHumanStatuses()).toEqual({'article-1': 'answered', 'article-2': 'unanswered'})
+  } finally {
+    fixture.close()
+  }
+})
+
+test('prompt-mode article status needs every enabled prompt answered and ignores summary rows (DuckDB)', async () => {
+  const fixture = await createDuckdbHumanStatusFixture({
+    articleIds: ['article-1'],
+    humanJudgmentMode: 'prompt',
+    promptIds: ['prompt-1', 'prompt-2'],
+  })
+
+  try {
+    await fixture.connection.run(`
+      INSERT INTO app."judgment_human" (id, project_id, article_id, prompt_id, answer) VALUES
+        ('human-row-1', '${duckdbProjectId}', 'article-1', 'prompt-1', 'yes');
+      INSERT INTO app."judgment_human_summary" (id, project_id, article_id, answer, origin) VALUES
+        ('summary-row-1', '${duckdbProjectId}', 'article-1', NULL, 'covidence_import');
+    `)
+
+    await projectReviewServingHumanStatusPatches(duckdbPatchInput([projectScopeClaim('article-1')]), fixture.database)
+    expect(await fixture.getHumanStatuses()).toEqual({'article-1': 'unanswered'})
+
+    await fixture.connection.run(`
+      INSERT INTO app."judgment_human" (id, project_id, article_id, prompt_id, answer) VALUES
+        ('human-row-2', '${duckdbProjectId}', 'article-1', 'prompt-2', 'no');
+    `)
+    await projectReviewServingHumanStatusPatches(duckdbPatchInput([projectScopeClaim('article-1')]), fixture.database)
+    expect(await fixture.getHumanStatuses()).toEqual({'article-1': 'answered'})
+  } finally {
+    fixture.close()
+  }
+})
+
+test('article leaving project scope gets no human status even with a human answer delta (DuckDB)', async () => {
+  const fixture = await createDuckdbHumanStatusFixture({
+    articleIds: ['article-1'],
+    humanJudgmentMode: 'summary',
+    promptIds: ['prompt-1'],
+  })
+
+  try {
+    await fixture.connection.run(`
+      INSERT INTO app."judgment_human_summary" (id, project_id, article_id, answer, origin) VALUES
+        ('summary-row-1', '${duckdbProjectId}', 'article-1', 'yes', 'manual_override');
+      INSERT INTO app.review_change_delta VALUES (
+        'delta-1', '${duckdbProjectId}', 'article-1', NULL, 'judgment.human.updated', 'upsert', FALSE,
+        '{"answer":"yes"}', TIMESTAMPTZ '2026-11-08 22:13:00+00', '${duckdbProjectId}:article-1:summary',
+        'humanJudgment:${duckdbProjectId}:article-1', 12
+      );
+      DELETE FROM mart.project_scope_article WHERE article_id = 'article-1';
+    `)
+
+    await projectReviewServingHumanStatusPatches(
+      duckdbPatchInput([
+        humanClaim({sourcePartition: `humanJudgment:${duckdbProjectId}:article-1`}),
+        humanClaim({
+          dirtyKind: 'projectScope.article.removed',
+          dirtyWorkId: 'dirty-work-2',
+          sourcePartition: `project:${duckdbProjectId}`,
+        }),
+      ]),
+      fixture.database,
+    )
+
+    expect(await fixture.getHumanStatuses()).toEqual({'article-1': null})
+  } finally {
+    fixture.close()
+  }
+})
+
+test('human answer deltas with composite judgment keys and no payload answer read the answer from the table (DuckDB)', async () => {
+  const fixture = await createDuckdbHumanStatusFixture({
+    articleIds: ['article-1'],
+    humanJudgmentMode: 'summary',
+    promptIds: ['prompt-1'],
+  })
+  const database = getDuckdbHumanStatusDatabase(fixture.connection, {skipArticleScopedRead: true})
+
+  try {
+    await fixture.connection.run(`
+      INSERT INTO app."judgment_human_summary" (id, project_id, article_id, answer, origin) VALUES
+        ('summary-row-id-not-the-delta-key', '${duckdbProjectId}', 'article-1', 'no', 'covidence_import');
+      INSERT INTO app.review_change_delta VALUES (
+        'delta-1', '${duckdbProjectId}', 'article-1', NULL, 'judgment.human.updated', 'upsert', FALSE,
+        '{"origin":"covidence_import"}', TIMESTAMPTZ '2026-11-08 22:13:00+00', '${duckdbProjectId}:article-1:summary',
+        'humanJudgment:${duckdbProjectId}:article-1', 13
+      );
+    `)
+
+    await projectReviewServingHumanStatusPatches(
+      duckdbPatchInput([humanClaim({sourcePartition: `humanJudgment:${duckdbProjectId}:article-1`})]),
+      database,
+    )
+
+    expect(await fixture.getHumanStatuses()).toEqual({'article-1': 'answered'})
+  } finally {
+    fixture.close()
+  }
+})
+
+test('prompt human answer deltas with composite judgment keys read the prompt row by natural key (DuckDB)', async () => {
+  const fixture = await createDuckdbHumanStatusFixture({
+    articleIds: ['article-1'],
+    humanJudgmentMode: 'prompt',
+    promptIds: ['prompt-1'],
+  })
+  const database = getDuckdbHumanStatusDatabase(fixture.connection, {skipArticleScopedRead: true})
+
+  try {
+    await fixture.connection.run(`
+      INSERT INTO app."judgment_human" (id, project_id, article_id, prompt_id, answer) VALUES
+        ('human-row-id', '${duckdbProjectId}', 'article-1', 'prompt-1', 'maybe');
+      INSERT INTO app.review_change_delta VALUES (
+        'delta-1', '${duckdbProjectId}', 'article-1', 'prompt-1', 'judgment.human.updated', 'upsert', FALSE,
+        '{}', TIMESTAMPTZ '2026-11-08 22:13:00+00', '${duckdbProjectId}:article-1:prompt-1',
+        'humanJudgment:${duckdbProjectId}:article-1', 13
+      );
+    `)
+
+    await projectReviewServingHumanStatusPatches(
+      duckdbPatchInput([humanClaim({sourcePartition: `humanJudgment:${duckdbProjectId}:article-1`})]),
+      database,
+    )
+
+    expect(await fixture.getHumanStatuses()).toEqual({'article-1': 'answered'})
+  } finally {
+    fixture.close()
+  }
 })
