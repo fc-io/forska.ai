@@ -823,7 +823,8 @@ test('imported summary-human status rebuild materializes tab-count state from so
         id VARCHAR,
         project_id VARCHAR,
         article_id VARCHAR,
-        prompt_id VARCHAR
+        prompt_id VARCHAR,
+        answer VARCHAR
       );
       CREATE TABLE app."judgment_human_summary" (
         id VARCHAR,

@@ -857,7 +857,7 @@ const getApplyHumanStatusServingRangeReplacementStatements = (input: {
            WHEN COALESCE(project.human_judgment_mode, 'prompt') = 'summary' THEN 'unanswered'
            WHEN COALESCE(enabled_prompt_count.prompt_count, 0) = 0 THEN NULL
            WHEN enabled_prompt_count.prompt_count = COUNT(DISTINCT prompt.id) FILTER (
-             WHERE judgment_human.id IS NOT NULL
+             WHERE NULLIF(TRIM(COALESCE(judgment_human.answer, '')), '') IS NOT NULL
            ) THEN 'answered'
            ELSE 'unanswered'
          END AS human_status

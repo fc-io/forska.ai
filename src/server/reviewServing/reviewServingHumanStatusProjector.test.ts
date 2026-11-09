@@ -774,3 +774,34 @@ test('prompt human answer deltas with composite judgment keys read the prompt ro
     fixture.close()
   }
 })
+
+test('range replacement and patch path agree that a prompt row without an answer is unanswered (DuckDB)', async () => {
+  const fixture = await createDuckdbHumanStatusFixture({
+    articleIds: ['article-1', 'article-2'],
+    humanJudgmentMode: 'prompt',
+    promptIds: ['prompt-1'],
+  })
+
+  try {
+    await fixture.connection.run(`
+      INSERT INTO app."judgment_human" (id, project_id, article_id, prompt_id, answer) VALUES
+        ('human-row-1', '${duckdbProjectId}', 'article-1', 'prompt-1', NULL),
+        ('human-row-2', '${duckdbProjectId}', 'article-2', 'prompt-1', 'yes');
+    `)
+
+    await projectReviewServingHumanStatusRanges(
+      {ranges: [{...duckdbPatchInput([]), chunkEndArticleId: null, chunkStartArticleId: null}]},
+      fixture.database,
+    )
+    expect(await fixture.getHumanStatuses()).toEqual({'article-1': 'unanswered', 'article-2': 'answered'})
+
+    await fixture.connection.run(`UPDATE mart.review_article_serving_list_mode_state_v4 SET human_status = NULL`)
+    await projectReviewServingHumanStatusPatches(
+      duckdbPatchInput([projectScopeClaim('article-1'), projectScopeClaim('article-2')]),
+      fixture.database,
+    )
+    expect(await fixture.getHumanStatuses()).toEqual({'article-1': 'unanswered', 'article-2': 'answered'})
+  } finally {
+    fixture.close()
+  }
+})
