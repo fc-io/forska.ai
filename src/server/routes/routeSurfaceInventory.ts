@@ -22,6 +22,7 @@ export type {
   RouteSurfaceCategory,
   RouteSurfaceEntrypoint,
   RouteSurfaceProxyClassification,
+  RouteSurfaceProxyTimeoutProfile,
   RouteSurfaceRoute,
 } from './routeSurfaceInventory/routeSurfaceInventoryTypes.ts'
 

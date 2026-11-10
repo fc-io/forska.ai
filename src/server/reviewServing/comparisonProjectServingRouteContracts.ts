@@ -38,6 +38,12 @@ export const comparisonProjectServingRouteContracts = [
   },
   {
     handling: 'owner-source-metadata',
+    method: 'POST',
+    migrationTarget: 'judgment provenance context lookups by id stay owner-routed; no judgment row reads belong here',
+    routePath: '/api/comparison-projects/judgment-contexts',
+  },
+  {
+    handling: 'owner-source-metadata',
     method: 'GET',
     migrationTarget: 'edit metadata can stay owner-routed; no judgment row reads belong here',
     routePath: '/api/comparison-projects/:id/edit',
@@ -84,6 +90,13 @@ export const comparisonProjectServingRouteContracts = [
     routePath: '/api/comparison-projects/:id/conflict-resolution/reset',
   },
   {
+    handling: 'owner-write',
+    method: 'POST',
+    migrationTarget:
+      'conflict comment writes stay owner-routed; the target row comes from the active comparison serving generation',
+    routePath: '/api/comparison-projects/:id/conflict-comment',
+  },
+  {
     handling: 'serving-read',
     method: 'POST',
     migrationTarget: 'resolution export must read article identity/identifiers from active comparison serving state',
@@ -125,6 +138,20 @@ export const comparisonProjectServingRouteContracts = [
     migrationTarget: 'normal export must iterate active comparison serving rows only',
     routePath: '/api/comparison-projects/:id/export',
     servingContract: 'comparison.export.activeGeneration',
+  },
+  {
+    handling: 'serving-read',
+    method: 'POST',
+    migrationTarget: 'Covidence export count must count active comparison serving rows only',
+    routePath: '/api/comparison-projects/:id/covidence-export/count',
+    servingContract: 'comparison.covidenceExportCount.activeGeneration',
+  },
+  {
+    handling: 'serving-read',
+    method: 'POST',
+    migrationTarget: 'Covidence export must iterate active comparison serving rows only',
+    routePath: '/api/comparison-projects/:id/covidence-export',
+    servingContract: 'comparison.covidenceExport.activeGeneration',
   },
   {
     handling: 'owner-write-plus-serving-rebuild',

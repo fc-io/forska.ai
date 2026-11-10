@@ -10,9 +10,7 @@ export const getCsvFilenameFromResponse = (response: Response, fallbackFilename:
   return filenameFromHeader ?? fallbackFilename
 }
 
-export const downloadResponseAsCsv = async (response: Response, fallbackFilename: string): Promise<void> => {
-  const filename = getCsvFilenameFromResponse(response, fallbackFilename)
-  const blob = await response.blob()
+const saveBlobAsFile = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
@@ -23,8 +21,29 @@ export const downloadResponseAsCsv = async (response: Response, fallbackFilename
   URL.revokeObjectURL(url)
 }
 
+export const downloadResponseAsCsv = async (response: Response, fallbackFilename: string): Promise<void> => {
+  const filename = getCsvFilenameFromResponse(response, fallbackFilename)
+  const blob = await response.blob()
+
+  saveBlobAsFile(blob, filename)
+}
+
 export const downloadCsvFromPost = async (request: CsvDownloadPostRequest): Promise<void> => {
   return downloadFileFromPost(request)
+}
+
+/** The server's `{error}` message for a failed download, or the caller's generic message when there is none. */
+export const getDownloadErrorMessage = async (response: Response, fallbackMessage: string): Promise<string> => {
+  const body: unknown = await response.json().catch(() => {
+    return null
+  })
+  const error = typeof body === 'object' && body !== null && 'error' in body ? body.error : null
+
+  return typeof error === 'string' && error.trim() !== '' ? error : fallbackMessage
+}
+
+const getErrorReason = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
 }
 
 export const downloadFileFromPost = async (request: FileDownloadPostRequest): Promise<void> => {
@@ -36,10 +55,18 @@ export const downloadFileFromPost = async (request: FileDownloadPostRequest): Pr
   })
 
   if (!response.ok) {
-    throw new Error(request.errorMessage)
+    throw new Error(await getDownloadErrorMessage(response, request.errorMessage))
   }
 
-  await downloadResponseAsCsv(response, request.fallbackFilename)
+  const filename = getCsvFilenameFromResponse(response, request.fallbackFilename)
+  const blob = await response.blob().catch((error: unknown) => {
+    throw new Error(
+      `${request.errorMessage}: the download was interrupted before it finished (${getErrorReason(error)})`,
+      {cause: error},
+    )
+  })
+
+  saveBlobAsFile(blob, filename)
 }
 
 type CsvDownloadPostRequest = FileDownloadPostRequest

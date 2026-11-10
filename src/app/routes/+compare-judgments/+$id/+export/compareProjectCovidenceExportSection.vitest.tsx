@@ -375,6 +375,33 @@ describe('CompareProjectCovidenceExportSection', () => {
     }
   })
 
+  test('a failed export shows the error from the server, not only the generic message', async () => {
+    mockState.downloadFileFromPost.mockRejectedValueOnce(
+      new Error('DuckDB owner proxy target timed out after 600000 ms'),
+    )
+    const {container, dispose} = renderSection({
+      selection: {columnValues: {[humanColumn.id]: ['yes']}, conflictResolutionValues: [], invert: false},
+    })
+
+    try {
+      await waitForCondition(() => {
+        expect(getExportButton(container)?.textContent).toBe('Export 3 articles to Covidence')
+      })
+
+      getExportButton(container)?.click()
+
+      await waitForCondition(() => {
+        expect(mockState.downloadFileFromPost).toHaveBeenCalledWith(
+          expect.objectContaining({errorMessage: 'Covidence export failed'}),
+        )
+        expect(container.textContent).toContain('DuckDB owner proxy target timed out after 600000 ms')
+      })
+      expect(container.textContent).not.toContain('Covidence export failed')
+    } finally {
+      dispose()
+    }
+  })
+
   test('an inverted empty selection still has nothing to export', async () => {
     const {container, dispose} = renderSection({
       selection: {columnValues: {}, conflictResolutionValues: [], invert: true},

@@ -1,6 +1,7 @@
 import {shouldCurrentServerProxyApiToOwner} from '../../utils/serverRuntimeRole.ts'
 import {duckdbOwnerProxyLogger} from './duckdbOwnerProxyLogger.ts'
 import {
+  type DuckdbOwnerProxyClientServer,
   type DuckdbOwnerStreamingProxyRequestTemplate,
   getDuckdbOwnerProxyRequestTemplate,
   getDuckdbOwnerStreamingProxyRequestTemplate,
@@ -52,8 +53,11 @@ const forwardStreamingApiRequestToDuckdbOwner = async (
   }
 }
 
-const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise<Response | null> => {
-  const requestTemplate = await getDuckdbOwnerProxyRequestTemplate(request)
+const forwardBufferedApiRequestToDuckdbOwner = async (
+  request: Request,
+  server: DuckdbOwnerProxyClientServer | null,
+): Promise<Response | null> => {
+  const requestTemplate = await getDuckdbOwnerProxyRequestTemplate(request, server)
 
   if (requestTemplate === null) {
     return null
@@ -108,7 +112,10 @@ const forwardBufferedApiRequestToDuckdbOwner = async (request: Request): Promise
   }
 }
 
-export const forwardApiRequestToDuckdbOwner = async (request: Request): Promise<Response | null> => {
+export const forwardApiRequestToDuckdbOwner = async (
+  request: Request,
+  server: DuckdbOwnerProxyClientServer | null = null,
+): Promise<Response | null> => {
   if (!shouldCurrentServerProxyApiToOwner()) {
     return null
   }
@@ -116,6 +123,6 @@ export const forwardApiRequestToDuckdbOwner = async (request: Request): Promise<
   const streamingRequestTemplate = getDuckdbOwnerStreamingProxyRequestTemplate(request)
 
   return streamingRequestTemplate === null
-    ? forwardBufferedApiRequestToDuckdbOwner(request)
+    ? forwardBufferedApiRequestToDuckdbOwner(request, server)
     : forwardStreamingApiRequestToDuckdbOwner(streamingRequestTemplate)
 }

@@ -48,6 +48,8 @@ test('comparison serving read routes declare active-generation contracts', () =>
       'comparison.conflictResolutionPdfImport.activeGeneration',
     ],
     ['POST', '/api/comparison-projects/:id/export', 'comparison.export.activeGeneration'],
+    ['POST', '/api/comparison-projects/:id/covidence-export/count', 'comparison.covidenceExportCount.activeGeneration'],
+    ['POST', '/api/comparison-projects/:id/covidence-export', 'comparison.covidenceExport.activeGeneration'],
   ])
   expect(
     servingReadEntries.every((entry) => {

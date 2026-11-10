@@ -53,6 +53,22 @@ export const warnDuckdbOwnerProxyFailure = (
   )
 }
 
+/**
+ * headers: no response headers within the budget (the client gets a 504).
+ * body: default route, the total budget ran out while the body streamed (the client gets a truncated download).
+ * body-idle: long-download route, the owner sent no body data for the idle budget.
+ */
+export const warnDuckdbOwnerProxyTimeout = (
+  requestTemplate: DuckdbOwnerProxyRequestTemplate,
+  extra: {elapsedMs: number; phase: 'body' | 'body-idle' | 'headers'; timeoutMs: number | null},
+) => {
+  duckdbOwnerProxyLogger.warn(
+    `api-proxy:duckdb-owner-timeout:${extra.phase}`,
+    '[api-proxy] DuckDB owner proxy target timed out',
+    getDuckdbOwnerProxyDiagnosticContext(requestTemplate, extra),
+  )
+}
+
 export const warnDuckdbOwnerProxyOwnerErrorResponse = async (
   requestTemplate: DuckdbOwnerProxyRequestTemplate,
   response: Response,
