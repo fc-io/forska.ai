@@ -16,6 +16,16 @@ export const routeGroup = (defaults: RouteSurfaceRouteDefaults, routes: readonly
   })
 }
 
+/**
+ * Marks owner-proxied file downloads (Content-Disposition / streamed bodies). They wait up to 10 minutes for headers,
+ * then are cut only when the owner's body stalls (see RouteSurfaceProxyTimeoutProfile).
+ */
+export const longDownload = (routes: readonly RouteSurfaceRoute[]): RouteSurfaceRoute[] => {
+  return routes.map((route) => {
+    return {...route, proxyTimeoutProfile: 'long-download'}
+  })
+}
+
 export const ownerDependentProduct = (routeModule: string, routes: readonly RoutePair[]) => {
   return routeGroup(
     {

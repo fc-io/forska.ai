@@ -1,24 +1,32 @@
 import type {RouteSurfaceRoute} from './routeSurfaceInventoryTypes.ts'
-import {ownerDependentMaintenance, ownerDependentProduct, ownerDependentSensitive} from './routeSurfaceRouteGroups.ts'
+import {
+  longDownload,
+  ownerDependentMaintenance,
+  ownerDependentProduct,
+  ownerDependentSensitive,
+} from './routeSurfaceRouteGroups.ts'
+
+const projectTransferSensitivity = 'Project export/import packages, uploaded archives, and local runtime assets.'
+const projectExportSensitivity = 'Project article, judgment, prompt, and metadata exports.'
 
 export const projectsRouteSurfaceRoutes: RouteSurfaceRoute[] = [
-  ...ownerDependentSensitive(
-    'projectTransferRoutes.ts',
-    'Project export/import packages, uploaded archives, and local runtime assets.',
-    [
-      ['GET', '/api/projects/:id/export-project'],
+  ...longDownload(
+    ownerDependentSensitive('projectTransferRoutes.ts', projectTransferSensitivity, [
       ['POST', '/api/projects/:id/export-project'],
-      ['GET', '/api/projects/export/:exportId'],
       ['GET', '/api/projects/export/:exportId/download'],
-      ['POST', '/api/projects/import/sessions'],
-      ['PUT', '/api/projects/import/:sessionId/upload'],
-      ['POST', '/api/projects/import/:sessionId/analyze'],
-      ['GET', '/api/projects/import/:sessionId'],
-      ['POST', '/api/projects/import/:sessionId/resolve-dependencies'],
-      ['POST', '/api/projects/import/:sessionId/commit'],
-      ['DELETE', '/api/projects/import/:sessionId'],
-    ],
+    ]),
   ),
+  ...ownerDependentSensitive('projectTransferRoutes.ts', projectTransferSensitivity, [
+    ['GET', '/api/projects/:id/export-project'],
+    ['GET', '/api/projects/export/:exportId'],
+    ['POST', '/api/projects/import/sessions'],
+    ['PUT', '/api/projects/import/:sessionId/upload'],
+    ['POST', '/api/projects/import/:sessionId/analyze'],
+    ['GET', '/api/projects/import/:sessionId'],
+    ['POST', '/api/projects/import/:sessionId/resolve-dependencies'],
+    ['POST', '/api/projects/import/:sessionId/commit'],
+    ['DELETE', '/api/projects/import/:sessionId'],
+  ]),
   ...ownerDependentProduct('ProjectsRoutes.ts', [
     ['POST', '/api/articlesreviews'],
     ['POST', '/api/articlesreviewscount'],
@@ -49,12 +57,16 @@ export const projectsRouteSurfaceRoutes: RouteSurfaceRoute[] = [
   ...ownerDependentMaintenance('ProjectsRoutes.ts', 'Review-serving human-status repair for one project.', [
     ['POST', '/api/projects/:id/review-serving/reproject-human-status'],
   ]),
-  ...ownerDependentSensitive('ProjectExportRoutes.ts', 'Project article, judgment, prompt, and metadata exports.', [
+  ...ownerDependentSensitive('ProjectExportRoutes.ts', projectExportSensitivity, [
     ['POST', '/api/projects/:id/export'],
     ['GET', '/api/projects/:id/export/:jobId'],
-    ['GET', '/api/projects/:id/export/:jobId/download'],
-    ['POST', '/api/projects/:id/export-prompts'],
   ]),
+  ...longDownload(
+    ownerDependentSensitive('ProjectExportRoutes.ts', projectExportSensitivity, [
+      ['GET', '/api/projects/:id/export/:jobId/download'],
+      ['POST', '/api/projects/:id/export-prompts'],
+    ]),
+  ),
   ...ownerDependentProduct('ProjectsAddArticlesRoutes.ts', [
     ['POST', '/api/projects/add_articles_by_filter'],
     ['POST', '/api/projects/add_articles_by_ids'],

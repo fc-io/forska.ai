@@ -8,9 +8,23 @@ import {
   shouldApiRouteProxyToDuckdbOwner,
 } from '../apiRouteClassification.ts'
 
+export type DuckdbOwnerProxyClientServer = {timeout: (request: Request, seconds: number) => void}
+
+export type DuckdbOwnerProxyClientConnection = {
+  /**
+   * When a proxied body fails after headers were sent, Bun ends the chunked response cleanly whether the stream
+   * errors or throws, so the client cannot tell a cut download from a complete one. This sets a 1 s idle timeout
+   * instead. The caller then leaves the stream open, Bun drops the socket without the terminating chunk, and the
+   * client sees an interrupted download.
+   */
+  dropWithoutCleanEnd: () => void
+}
+
 export type DuckdbOwnerProxyRequestTemplate = {
   body: ArrayBuffer | null
   classification: ApiRouteClassification
+  /** The client socket of the API request, when the proxy runs inside Bun.serve. */
+  clientConnection?: DuckdbOwnerProxyClientConnection
   failClosedWithoutDuckdbOwner: boolean
   headers: Headers
   method: string
@@ -32,18 +46,34 @@ const getDuckdbOwnerProxyHeaders = (request: Request) => {
   return new Headers({...Object.fromEntries(request.headers.entries()), ...getDuckdbOwnerConnectionProxyHeaders()})
 }
 
+const getDuckdbOwnerProxyClientConnection = (
+  request: Request,
+  server: DuckdbOwnerProxyClientServer | null,
+): DuckdbOwnerProxyClientConnection | undefined => {
+  return server === null
+    ? undefined
+    : {
+        dropWithoutCleanEnd: () => {
+          server.timeout(request, 1)
+        },
+      }
+}
+
 export const getDuckdbOwnerProxyRequestTemplate = async (
   request: Request,
+  server: DuckdbOwnerProxyClientServer | null = null,
 ): Promise<DuckdbOwnerProxyRequestTemplate | null> => {
   const requestUrl = new URL(request.url)
   const classification = classifyApiRoute(requestUrl.pathname, request.method)
   const hasRequestBody = request.method !== 'GET' && request.method !== 'HEAD'
+  const clientConnection = getDuckdbOwnerProxyClientConnection(request, server)
 
   return !shouldApiRouteProxyToDuckdbOwner(classification)
     ? null
     : {
         body: hasRequestBody ? await request.clone().arrayBuffer() : null,
         classification,
+        ...(clientConnection === undefined ? {} : {clientConnection}),
         failClosedWithoutDuckdbOwner: shouldApiRouteFailClosedWithoutDuckdbOwner(classification),
         headers: getDuckdbOwnerProxyHeaders(request),
         method: request.method,

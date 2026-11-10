@@ -1,5 +1,5 @@
 import {runtimeReadyPath} from '../utils/runtimeReadyContract.ts'
-import {findRouteSurfaceRoute} from './routeSurfaceInventory.ts'
+import {findRouteSurfaceRoute, type RouteSurfaceProxyTimeoutProfile} from './routeSurfaceInventory.ts'
 
 export const duckdbOwnerPrivateApiPrefix = '/__duckdb-owner-rpc'
 
@@ -30,6 +30,12 @@ export const classifyApiRoute = (pathname: string, method = 'GET'): ApiRouteClas
     : normalizedPathname === runtimeReadyPath
       ? 'local-bootstrap'
       : (routeSurfaceRoute?.proxyClassification ?? 'unclassified')
+}
+
+export const getApiRouteProxyTimeoutProfile = (pathname: string, method = 'GET'): RouteSurfaceProxyTimeoutProfile => {
+  const normalizedPathname = normalizeApiRoutePathname(pathname)
+
+  return findRouteSurfaceRoute({method, pathname: normalizedPathname})?.proxyTimeoutProfile ?? 'default'
 }
 
 export const shouldApiRouteProxyToDuckdbOwner = (classification: ApiRouteClassification) => {
