@@ -2,6 +2,8 @@ import {readFileSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
+import {projectsRouteSurfaceRoutes} from '../../routes/routeSurfaceInventory/projectsRouteSurfaceRoutes.ts'
+
 const readSource = (relativePath: string) => {
   return readFileSync(new URL(relativePath, import.meta.url), 'utf8').replaceAll('\r\n', '\n')
 }
@@ -135,10 +137,17 @@ test('project transfer production commit streams full judgments into compact sou
 })
 
 test('project transfer keeps source workflows owner-routed and not API-role raw serving', () => {
-  const routeInventorySource = readSource('../../routes/routeSurfaceInventory/projectsRouteSurfaceRoutes.ts')
+  const projectTransferRoutes = projectsRouteSurfaceRoutes.filter((route) => {
+    return route.routeModule === 'projectTransferRoutes.ts'
+  })
   const routeGuardSource = readSource('../../routes/duckdbRouteGuardrails.test.ts')
 
-  expect(routeInventorySource).toContain("ownerDependentSensitive(\n    'projectTransferRoutes.ts'")
+  expect(projectTransferRoutes).toHaveLength(11)
+  expect(
+    projectTransferRoutes.every((route) => {
+      return route.proxyClassification === 'owner-dependent' && route.category === 'sensitive-local-api'
+    }),
+  ).toBe(true)
   expect(routeGuardSource).toContain(
     "'src/server/routes/projectTransferRoutes/getProjectTransferExportSourceProject.ts'",
   )
