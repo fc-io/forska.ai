@@ -341,10 +341,18 @@ const CompareProjectJudgmentsPage = () => {
       hasConflictResolution: showConflictResolutionFilter(),
     })
   })
+  const servedGeneration = () => {
+    return comparisonProjectQuery.data?.activeGeneration ?? null
+  }
+  const servedJudgmentContextId = () => {
+    return comparisonProjectQuery.data?.judgmentContextId ?? null
+  }
   const getCurrentJudgmentsPageQueryKey = () => {
     return [
       'comparison-project-judgments-page',
       comparisonProjectId(),
+      servedGeneration(),
+      servedJudgmentContextId(),
       pageLimit(),
       rowFilters(),
       differenceFilters(),
@@ -358,6 +366,8 @@ const CompareProjectJudgmentsPage = () => {
     return [
       'comparison-project-judgments-count',
       comparisonProjectId(),
+      servedGeneration(),
+      servedJudgmentContextId(),
       pageLimit(),
       rowFilters(),
       differenceFilters(),
@@ -540,6 +550,12 @@ const CompareProjectJudgmentsPage = () => {
       retainedConflictResolutionRowsByArticleId(),
     )
   })
+  const isLoadingJudgmentRows = () => {
+    return (
+      judgmentsPageQuery.isPending
+      || (judgmentsPageQuery.isPlaceholderData && visibleJudgmentRows().length === 0 && !servingUnavailableState())
+    )
+  }
   createEffect(
     on(
       [
@@ -675,36 +691,6 @@ const CompareProjectJudgmentsPage = () => {
       console.error('Failed to refresh comparison project conflict-resolution data', error)
     })
   }
-  const activeServingContextKey = createMemo(() => {
-    const comparisonProject = comparisonProjectQuery.data
-
-    return comparisonProject
-      ? `${comparisonProject.activeGeneration ?? ''}:${comparisonProject.judgmentContextId ?? ''}`
-      : null
-  })
-  const refreshActiveServingContextQueries = () => {
-    const refreshes = [
-      refetchCurrentJudgmentsPage(),
-      refetchComparisonProjectJudgmentsCount(),
-      refetchComparisonProjectStats(),
-      queryClient.invalidateQueries({queryKey: ['comparison-judgment-contexts']}),
-    ]
-
-    void Promise.all(refreshes).catch((error) => {
-      console.error('Failed to refresh comparison project rows after a serving generation change', error)
-    })
-  }
-  createEffect(
-    on(
-      activeServingContextKey,
-      (servingContextKey, previousServingContextKey) => {
-        if (servingContextKey && previousServingContextKey) {
-          refreshActiveServingContextQueries()
-        }
-      },
-      {defer: true},
-    ),
-  )
   const refetchCommittedImportQueries = async () => {
     await Promise.all(
       getConflictResolutionImportRefreshQueryKeys(comparisonProjectId()).map((queryKey) => {
@@ -1035,7 +1021,7 @@ const CompareProjectJudgmentsPage = () => {
                   </div>
                 </div>
 
-                <Show when={judgmentsPageQuery.isPending}>
+                <Show when={isLoadingJudgmentRows()}>
                   <div class="rounded-lg bg-white p-8 text-center text-gray-500 shadow">
                     Loading article judgments...
                   </div>
@@ -1135,7 +1121,7 @@ const CompareProjectJudgmentsPage = () => {
 
                 <Show
                   when={
-                    !judgmentsPageQuery.isPending
+                    !isLoadingJudgmentRows()
                     && !judgmentsPageQuery.isError
                     && orderedColumns().length > 0
                     && visibleJudgmentRows().length === 0

@@ -195,6 +195,32 @@ const getMetadata = (activeGeneration: number, judgmentContextId: string): Compa
   }
 }
 
+const getMaterializingMetadata = (): ComparisonProjectJudgmentsMetadata => {
+  return {
+    ...getMetadata(1, 'context-current'),
+    activeGeneration: null,
+    isServingReady: false,
+    judgmentContext: null,
+    judgmentContextId: null,
+    servingStatus: 'refreshing',
+  }
+}
+
+const getEmptyPage = (metadata: Pick<ComparisonProjectJudgmentsMetadata, 'activeGeneration' | 'servingStatus'>) => {
+  return {
+    activeGeneration: metadata.activeGeneration,
+    data: [],
+    isServingReady: false,
+    limit: 50,
+    nextCursor: null,
+    page: 1,
+    servingStatus: metadata.servingStatus,
+    servingUpdatedAt: null,
+    totalCount: null,
+    totalPages: null,
+  }
+}
+
 const getRow = (articleId: string, contextId: string): ComparisonProjectJudgmentsRow => {
   return {
     articleCreatedAt: null,
@@ -254,11 +280,10 @@ const waitForCondition = async (assertion: () => void, remaining = 50): Promise<
   }
 }
 
-const renderComparePage = async () => {
+const renderComparePage = async (queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})) => {
   const {Route} = await import('./+index.tsx')
   const PageComponent = (Route as unknown as {component: Component & {preload: () => Promise<unknown>}}).component
   await PageComponent.preload()
-  const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
   const container = document.createElement('div')
   document.body.appendChild(container)
   const dispose = render(() => {
@@ -290,7 +315,7 @@ const getPageQueryHashes = (queryClient: QueryClient) => {
 }
 
 const getPageQueryKeyForTest = () => {
-  return ['comparison-project-judgments-page', 'comparison-project-1', 50, [], [], [], [], [], '']
+  return ['comparison-project-judgments-page', 'comparison-project-1', 1, 'context-current', 50, [], [], [], [], [], '']
 }
 
 const typeCommentAndSave = async (container: HTMLElement, comment: string) => {
@@ -431,6 +456,67 @@ describe('Compare project judgments page', () => {
         expect(mockState.fetchComparisonProjectJudgmentsCount.mock.calls.length).toBeGreaterThan(countCallCount)
         expect(mockState.fetchComparisonJudgmentContexts).toHaveBeenLastCalledWith(['context-current', 'context-older'])
       })
+    } finally {
+      dispose()
+      queryClient.clear()
+    }
+  })
+
+  test('loads the rows for the first promoted generation when the metadata was cached before the page effects ran', async () => {
+    mockState.search = {}
+    const serverMetadata = {current: getMaterializingMetadata()}
+    mockState.fetchComparisonProjectJudgmentsMetadata.mockImplementation(async () => {
+      return serverMetadata.current
+    })
+    mockState.fetchComparisonProjectJudgmentsPage.mockImplementation(async () => {
+      return serverMetadata.current.activeGeneration === null
+        ? getEmptyPage(serverMetadata.current)
+        : {
+            activeGeneration: 1,
+            data: [getRow('article-current', 'context-current')],
+            isServingReady: true,
+            limit: 50,
+            nextCursor: null,
+            page: 1,
+            servingStatus: 'ready',
+            servingUpdatedAt: null,
+            totalCount: null,
+            totalPages: null,
+          }
+    })
+    const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    await queryClient.prefetchQuery({
+      queryKey: ['comparison-project-judgments-metadata', 'comparison-project-1'],
+      queryFn: () => {
+        return serverMetadata.current
+      },
+    })
+    const {container, dispose} = await renderComparePage(queryClient)
+
+    try {
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('Comparison data is materializing')
+        expect(mockState.fetchComparisonProjectJudgmentsPage).toHaveBeenCalled()
+      })
+
+      serverMetadata.current = getMetadata(1, 'context-current')
+      await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-metadata']})
+
+      await waitForCondition(() => {
+        expect(container.textContent).toContain('article-current')
+      }, 200)
+      expect(container.textContent).not.toContain('No matching article judgments found.')
+      expect(container.textContent).not.toContain('Comparison data is materializing')
+      expect(mockState.fetchComparisonProjectJudgmentsCount).toHaveBeenLastCalledWith(
+        'comparison-project-1',
+        50,
+        [],
+        [],
+        [],
+        [],
+        '',
+        [],
+      )
     } finally {
       dispose()
       queryClient.clear()
