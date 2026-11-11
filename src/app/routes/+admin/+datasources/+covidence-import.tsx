@@ -19,7 +19,7 @@ import {
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
-type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe'
+type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe' | 'include|exclude'
 type CovidencePromptGrouping = 'per_field' | 'per_section' | 'single_prompt'
 type ModelOption = {
   id: string
@@ -169,6 +169,12 @@ const covidenceWarningPreviewLimit = 25
 const covidenceAnswerSetOptions: Array<{description: string; label: string; value: CovidencePromptAnswerSet}> = [
   {description: 'Use yes and no only.', label: 'Yes / No', value: 'yes|no'},
   {description: 'Allow a maybe answer for borderline studies.', label: 'Yes / No / Maybe', value: 'yes|no|maybe'},
+  {
+    description:
+      'Answer with the screening decision for each criteria part: include or exclude. No maybe; when the record does not settle the question, the study is included and the missing fact is named.',
+    label: 'Include / Exclude',
+    value: 'include|exclude',
+  },
 ]
 const covidencePromptGroupingOptions: Array<{
   description: string

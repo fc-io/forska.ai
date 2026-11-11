@@ -50,7 +50,13 @@ import {getOrCreateImmutablePromptTx, immutablePromptIdentityReviewServingFields
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidenceFileFormat = 'csv' | 'ris'
-type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe' | 'yes_no' | 'yes_no_maybe'
+type CovidencePromptAnswerSet =
+  | 'yes|no'
+  | 'yes|no|maybe'
+  | 'yes_no'
+  | 'yes_no_maybe'
+  | 'include|exclude'
+  | 'include_exclude'
 type CovidencePromptTx = {
   queryJson: <TRow>(statement: string) => Promise<TRow[]>
   run: (statement: string) => Promise<void>
@@ -226,7 +232,7 @@ type CovidencePromptDefinition = {
   criteriaSectionLabel?: string
   originalText: string
   promptHeading: string
-  type: "'yes' | 'no'" | "'yes' | 'no' | 'maybe'"
+  type: "'yes' | 'no'" | "'yes' | 'no' | 'maybe'" | "'include' | 'exclude'"
 }
 type CovidenceEligibilityFieldDisposition = 'include' | 'exclude' | 'combined'
 type CovidencePromptGrouping = 'per_field' | 'per_section' | 'single_prompt'
@@ -375,8 +381,36 @@ const emptyCovidenceRoleCounts = {
   irrelevant: 0,
 } as const satisfies Record<CovidenceFileRole, number>
 
-const getCovidencePromptAnswerValues = (answerSet: CovidencePromptAnswerSet) => {
-  return answerSet === 'yes|no|maybe' || answerSet === 'yes_no_maybe' ? ['yes', 'no', 'maybe'] : ['yes', 'no']
+const covidencePromptTypeByAnswerSet = {
+  include_exclude: "'include' | 'exclude'",
+  'include|exclude': "'include' | 'exclude'",
+  yes_no: "'yes' | 'no'",
+  yes_no_maybe: "'yes' | 'no' | 'maybe'",
+  'yes|no': "'yes' | 'no'",
+  'yes|no|maybe': "'yes' | 'no' | 'maybe'",
+} as const satisfies Record<CovidencePromptAnswerSet, CovidencePromptDefinition['type']>
+
+const isCovidenceIncludeExcludeAnswerSet = (answerSet: CovidencePromptAnswerSet) => {
+  return covidencePromptTypeByAnswerSet[answerSet] === "'include' | 'exclude'"
+}
+
+const hasCovidenceMaybeAnswer = (answerSet: CovidencePromptAnswerSet) => {
+  return covidencePromptTypeByAnswerSet[answerSet] === "'yes' | 'no' | 'maybe'"
+}
+
+const getCovidenceDecisionAnswerWords = (disposition: CovidenceEligibilityFieldDisposition) => {
+  return disposition === 'exclude'
+    ? {matchAnswer: 'exclude', noMatchAnswer: 'include'}
+    : {matchAnswer: 'include', noMatchAnswer: 'exclude'}
+}
+
+const getCovidenceEligibilityAnswerWords = (params: {
+  answerSet: CovidencePromptAnswerSet
+  disposition: CovidenceEligibilityFieldDisposition
+}) => {
+  return isCovidenceIncludeExcludeAnswerSet(params.answerSet)
+    ? getCovidenceDecisionAnswerWords(params.disposition)
+    : {matchAnswer: 'yes', noMatchAnswer: 'no'}
 }
 
 const normalizeCovidenceEligibilitySectionValue = (sectionValue?: string | null) => {
@@ -410,20 +444,21 @@ const getCovidencePromptEligibilityGuidance = (params: {
   sectionLabel: string
 }) => {
   const description = `${params.sectionLabel} ${params.disposition === 'include' ? 'inclusion' : 'exclusion'} criteria`
+  const {matchAnswer, noMatchAnswer} = getCovidenceEligibilityAnswerWords(params)
   const lines =
     params.disposition === 'include'
       ? [
           `Review only the ${description} below.`,
-          `Answer yes if the study matches the ${description}.`,
-          `Answer no if the study does not match the ${description}.`,
+          `Answer ${matchAnswer} if the study matches the ${description}.`,
+          `Answer ${noMatchAnswer} if the study does not match the ${description}.`,
         ]
       : [
           `Review only the ${description} below.`,
-          `Answer yes if the study matches any of the ${description}.`,
-          `Answer no if the study does not match any of the ${description}.`,
+          `Answer ${matchAnswer} if the study matches any of the ${description}.`,
+          `Answer ${noMatchAnswer} if the study does not match any of the ${description}.`,
         ]
 
-  return getCovidencePromptAnswerValues(params.answerSet).includes('maybe')
+  return hasCovidenceMaybeAnswer(params.answerSet)
     ? [...lines, 'Answer maybe if the report does not provide enough information to decide.'].join('\n')
     : lines.join('\n')
 }
@@ -437,10 +472,15 @@ const getCovidencePromptEligibilityCriteriaHeading = (params: {
     : `${params.sectionLabel} exclusion criteria:`
 }
 
-const getCovidenceCombinedPromptQuestion = (sectionLabel: string | null) => {
-  return sectionLabel
-    ? `Question: Does the study meet the ${sectionLabel} criteria below?`
-    : 'Question: Does the study meet the eligibility criteria below?'
+const getCovidenceCombinedPromptQuestion = (params: {
+  answerSet: CovidencePromptAnswerSet
+  sectionLabel: string | null
+}) => {
+  const criteriaLabel = params.sectionLabel ? `${params.sectionLabel} criteria` : 'eligibility criteria'
+
+  return isCovidenceIncludeExcludeAnswerSet(params.answerSet)
+    ? `Question: Based on the ${criteriaLabel} below, should the study be included or excluded?`
+    : `Question: Does the study meet the ${criteriaLabel} below?`
 }
 
 const getCovidenceCombinedPromptCriteriaBlocks = (params: {exclusionCriteria: string; inclusionCriteria: string}) => {
@@ -457,6 +497,7 @@ const getCovidenceCombinedPromptCriteriaBlocks = (params: {exclusionCriteria: st
 }
 
 const getCovidencePromptText = (params: {
+  answerSet: CovidencePromptAnswerSet
   exclusionCriteria: string
   inclusionCriteria: string
   sectionLabel: string | null
@@ -466,14 +507,14 @@ const getCovidencePromptText = (params: {
   const supplementalGuidanceBlocks = supplementalGuidance.length === 0 ? [] : [supplementalGuidance.join('\n')]
 
   return [
-    getCovidenceCombinedPromptQuestion(params.sectionLabel),
+    getCovidenceCombinedPromptQuestion(params),
     ...supplementalGuidanceBlocks,
     ...getCovidenceCombinedPromptCriteriaBlocks(params),
   ].join('\n\n')
 }
 
 const getCovidencePromptType = (answerSet: CovidencePromptAnswerSet): CovidencePromptDefinition['type'] => {
-  return answerSet === 'yes|no|maybe' || answerSet === 'yes_no_maybe' ? "'yes' | 'no' | 'maybe'" : "'yes' | 'no'"
+  return covidencePromptTypeByAnswerSet[answerSet]
 }
 
 const buildCovidencePromptDefinitionForEligibilityField = (params: {
