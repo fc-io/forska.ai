@@ -51,7 +51,14 @@ export const dataSourcesImportRoutes = new Elysia()
         description: t.Optional(t.String()),
         modelId: t.Optional(t.String()),
         answerSet: t.Optional(
-          t.Union([t.Literal('yes|no'), t.Literal('yes|no|maybe'), t.Literal('yes_no'), t.Literal('yes_no_maybe')]),
+          t.Union([
+            t.Literal('yes|no'),
+            t.Literal('yes|no|maybe'),
+            t.Literal('yes_no'),
+            t.Literal('yes_no_maybe'),
+            t.Literal('include|exclude'),
+            t.Literal('include_exclude'),
+          ]),
         ),
         promptGrouping: t.Optional(
           t.Union([t.Literal('per_field'), t.Literal('per_section'), t.Literal('single_prompt')]),

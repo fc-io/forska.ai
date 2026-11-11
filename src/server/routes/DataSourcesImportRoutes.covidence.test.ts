@@ -259,6 +259,7 @@ const covidenceRouteHarnessScript = `
     const formData = new FormData()
     formData.append('title', 'Covidence datasource')
     formData.append('mode', 'title_abstract')
+    formData.append('answerSet', 'include|exclude')
     formData.append('files[0].file', new File(['a,b'], 'all.csv', {type: 'text/csv'}))
     formData.append('files[0].fileRole', 'all')
     formData.append('files[1].file', new File(['a,b'], 'irrelevant.csv', {type: 'text/csv'}))

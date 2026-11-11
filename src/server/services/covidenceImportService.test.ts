@@ -189,6 +189,153 @@ test('deleteCovidencePackageFiles removes the datasource package folder', async 
   expect(existsSync(path.resolve(process.cwd(), firstStoredFile.assetPath))).toBe(false)
 })
 
+test('Covidence include/exclude answer set words every prompt as a screening decision', () => {
+  expect(
+    buildCovidencePromptDefinition({
+      answerSet: 'include|exclude',
+      exclusionCriteria: 'Case reports',
+      inclusionCriteria: 'Adults with confirmed disease',
+      mode: 'title_abstract',
+      sectionLabel: null,
+    }),
+  ).toEqual({
+    criteriaDisposition: 'combined',
+    originalText: [
+      'Question: Based on the eligibility criteria below, should the study be included or excluded?',
+      '',
+      'Inclusion criteria:',
+      'Adults with confirmed disease',
+      '',
+      'Exclusion criteria:',
+      'Case reports',
+    ].join('\n'),
+    promptHeading: 'Covidence title/abstract screening',
+    type: "'include' | 'exclude'",
+  })
+
+  expect(
+    buildCovidencePromptDefinition({
+      answerSet: 'include_exclude',
+      exclusionCriteria: 'Animal studies',
+      inclusionCriteria: 'Randomized trials',
+      mode: 'full_text',
+      sectionLabel: 'Comparator/Context',
+    }),
+  ).toEqual({
+    criteriaDisposition: 'combined',
+    originalText: [
+      'Question: Based on the Comparator/Context criteria below, should the study be included or excluded?',
+      '',
+      'Inclusion criteria:',
+      'Randomized trials',
+      '',
+      'Exclusion criteria:',
+      'Animal studies',
+    ].join('\n'),
+    promptHeading: 'Covidence full-text screening',
+    type: "'include' | 'exclude'",
+  })
+
+  expect(
+    buildCovidencePromptDefinitionsForEligibilityFields({
+      answerSet: 'include|exclude',
+      eligibilityFields: [
+        {disposition: 'include', sectionKey: 'outcome', sectionLabel: 'Outcome', text: '1° outcome: pain reduction'},
+        {disposition: 'exclude', sectionKey: 'other', sectionLabel: 'Other', text: 'Case reports'},
+      ],
+      mode: 'full_text',
+    }),
+  ).toEqual([
+    {
+      criteriaDisposition: 'include',
+      criteriaSectionKey: 'outcome',
+      criteriaSectionLabel: 'Outcome',
+      originalText: [
+        'Review only the Outcome inclusion criteria below.',
+        'Answer include if the study matches the Outcome inclusion criteria.',
+        'Answer exclude if the study does not match the Outcome inclusion criteria.',
+        'For outcome criteria, treat leading 1 markers (1, 1°, 1*, 1-) as primary outcome(s) and leading 2 markers (2, 2°, 2*, 2-) as secondary outcome(s).',
+        '',
+        'Outcome inclusion criteria:',
+        '1° outcome: pain reduction',
+      ].join('\n'),
+      promptHeading: 'Outcome Inclusion',
+      type: "'include' | 'exclude'",
+    },
+    {
+      criteriaDisposition: 'exclude',
+      criteriaSectionKey: 'other',
+      criteriaSectionLabel: 'Other',
+      originalText: [
+        'Review only the Other exclusion criteria below.',
+        'Answer exclude if the study matches any of the Other exclusion criteria.',
+        'Answer include if the study does not match any of the Other exclusion criteria.',
+        '',
+        'Other exclusion criteria:',
+        'Case reports',
+      ].join('\n'),
+      promptHeading: 'Other Exclusion',
+      type: "'include' | 'exclude'",
+    },
+  ])
+
+  expect(
+    buildCovidencePromptDefinitionsForEligibilityFields({
+      answerSet: 'include|exclude',
+      eligibilityFields: [
+        {disposition: 'include', sectionKey: 'population', sectionLabel: 'Population', text: 'Adults'},
+        {disposition: 'exclude', sectionKey: 'population', sectionLabel: 'Population', text: 'Children'},
+      ],
+      mode: 'title_abstract',
+      promptGrouping: 'per_section',
+    }),
+  ).toEqual([
+    {
+      criteriaDisposition: 'combined',
+      criteriaSectionKey: 'population',
+      criteriaSectionLabel: 'Population',
+      originalText: [
+        'Question: Based on the Population criteria below, should the study be included or excluded?',
+        '',
+        'Inclusion criteria:',
+        'Adults',
+        '',
+        'Exclusion criteria:',
+        'Children',
+      ].join('\n'),
+      promptHeading: 'Population Criteria',
+      type: "'include' | 'exclude'",
+    },
+  ])
+
+  expect(
+    buildCovidencePromptDefinitionsForEligibilityFields({
+      answerSet: 'include_exclude',
+      eligibilityFields: [
+        {disposition: 'include', sectionKey: 'population', sectionLabel: 'Population', text: 'Adults'},
+        {disposition: 'exclude', sectionKey: 'other', sectionLabel: 'Other', text: 'Case reports'},
+      ],
+      mode: 'full_text',
+      promptGrouping: 'single_prompt',
+    }),
+  ).toEqual([
+    {
+      criteriaDisposition: 'combined',
+      originalText: [
+        'Question: Based on the eligibility criteria below, should the study be included or excluded?',
+        '',
+        'Inclusion criteria:',
+        'Adults',
+        '',
+        'Exclusion criteria:',
+        'Case reports',
+      ].join('\n'),
+      promptHeading: 'Covidence full-text screening',
+      type: "'include' | 'exclude'",
+    },
+  ])
+})
+
 test('Covidence prompt definition builds section text and reuses matching prompts', async () => {
   expect(
     buildCovidencePromptDefinition({
