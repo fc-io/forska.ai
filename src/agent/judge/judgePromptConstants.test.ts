@@ -19,6 +19,8 @@ import {
 import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV5.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
@@ -671,6 +673,90 @@ describe('screening_v5 prompt constants', () => {
     ]) {
       expect(prompt).not.toContain('full text is read')
       expect(prompt).not.toContain('full text review')
+    }
+  })
+})
+
+const screeningV5IncludeExcludeSubstitutions = [
+  {count: 1, from: 'answer by the inclusion line, or maybe.', to: 'answer by the inclusion line.'},
+  {count: 1, from: '- Answer no only when the record shows it', to: '- Answer exclude only when the record shows it'},
+  {count: 1, from: 'answer maybe and name the missing fact', to: 'answer include and name the missing fact'},
+  {
+    count: 1,
+    from: 'only when the criteria text says that a missing fact counts as no, answer no.',
+    to: 'only when the criteria text says that a missing fact counts as exclude, answer exclude.',
+  },
+  {
+    count: 1,
+    from: '- Answer maybe when the record does not let you decide: a needed fact is missing, the record names what the section asks for without describing it, or an exclusion might apply but is not shown. If the output_type has no maybe, answer yes in those cases.',
+    to: '- Answer include when the record does not let you decide: a needed fact is missing, the record names what the section asks for without describing it, or an exclusion might apply but is not shown; name the missing fact in the explanation.',
+  },
+  {
+    count: 1,
+    from: 'then, only for maybe, "Missing: "',
+    to: 'then, when the record did not let you decide, "Missing: "',
+  },
+  {count: 1, from: 'For a no, quote only text', to: 'For an exclude, quote only text'},
+  {count: 5, from: "output_type: 'yes' | 'no' | 'maybe'", to: "output_type: 'include' | 'exclude'"},
+  {count: 2, from: '"answer": "yes"', to: '"answer": "include"'},
+  {count: 1, from: '"answer": "no"', to: '"answer": "exclude"'},
+  {count: 2, from: '"answer": "maybe"', to: '"answer": "include"'},
+] as const
+
+const getScreeningV5IncludeExcludeRendering = (yesNoPrompt: string) => {
+  return screeningV5IncludeExcludeSubstitutions.reduce((prompt, substitution) => {
+    expect(prompt.split(substitution.from)).toHaveLength(substitution.count + 1)
+
+    return prompt.replaceAll(substitution.from, substitution.to)
+  }, yesNoPrompt)
+}
+
+describe('screening_v5 include/exclude prompt constants', () => {
+  test('keeps both include/exclude renderings byte-identical to the frozen versions', () => {
+    expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE)).toBe(
+      'c8cd60aacdf85f7f0d6724210b9ee07dcd2f16af03524f39051ed991053e9b95',
+    )
+    expect(getSha256(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC)).toBe(
+      'ca7b33b45a985913aae9627960f33cbe7c2263cd75aa16fd7efc9d12be230257',
+    )
+  })
+
+  test('differs from the yes/no rendering only by the enumerated vocabulary substitutions', () => {
+    expect(getScreeningV5IncludeExcludeRendering(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5)).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+    )
+    expect(getScreeningV5IncludeExcludeRendering(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC)).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
+    )
+  })
+
+  test('keeps the screening_v5 openings', () => {
+    expect(getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE).intro).toBe(
+      getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5).intro,
+    )
+    expect(getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC).intro).toBe(
+      getScreeningV4PromptParts(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC).intro,
+    )
+  })
+
+  test('never offers maybe, yes or no as an answer', () => {
+    for (const prompt of [
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
+    ]) {
+      expect(prompt).not.toContain('maybe')
+      expect(prompt).not.toContain("'yes'")
+      expect(prompt).not.toContain('"yes"')
+      expect(prompt).not.toContain('"no"')
+      expect(prompt.match(/"answer": "(include|exclude)"/g)).toEqual([
+        '"answer": "include"',
+        '"answer": "exclude"',
+        '"answer": "include"',
+        '"answer": "include"',
+        '"answer": "include"',
+      ])
+      expect(prompt).toContain('Missing: country"')
+      expect(prompt).toContain('Missing: results"')
     }
   })
 })

@@ -44,7 +44,7 @@ export const getSinglePromptJudgmentRequest = ({
   renderedFullText?: string | null
   systemPromptVariant?: SystemPromptVariant | null
 }) => {
-  const systemPrompt = getSinglePromptSystemPromptForArticle(article, provider, systemPromptVariant)
+  const systemPrompt = getSinglePromptSystemPromptForArticle(article, provider, systemPromptVariant, prompt.type)
   const userPrompt =
     renderedFullText === null
       ? judgeGetSinglePrompt(article, prompt, contentSettings, provider)

@@ -2388,7 +2388,12 @@ export const getProjectTransferExportJudgmentInputSignature = ({
   })
   const articleRecord = getProjectTransferExportArticleRecordForSignature(article, fullTextProcessing.fullText)
   const resolvedSystemPromptVariant = getSystemPromptVariant(systemPromptVariant)
-  const systemPrompt = getSinglePromptSystemPromptForArticle(articleRecord, providerKind, resolvedSystemPromptVariant)
+  const systemPrompt = getSinglePromptSystemPromptForArticle(
+    articleRecord,
+    providerKind,
+    resolvedSystemPromptVariant,
+    prompt.type,
+  )
   const evidenceSystemPromptDigest = chunkingStrategy
     ? getProjectTransferLegacyEvidenceSystemPromptDigest(articleRecord, providerKind)
     : null

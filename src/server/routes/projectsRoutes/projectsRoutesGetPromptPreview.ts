@@ -138,6 +138,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
           getScientificArticlePlaceholderRecord(),
           provider,
           systemPromptVariant,
+          promptRow.type,
         ),
         systemPromptVariant,
       })
@@ -165,6 +166,7 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
           getScientificArticlePlaceholderRecord(),
           provider,
           systemPromptVariant,
+          promptRow.type,
         ),
         systemPromptVariant,
       })
@@ -191,7 +193,12 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         articleTitle: firstArticle.articleTitle,
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         reason: 'no_fulltext',
-        systemPrompt: getSinglePromptSystemPromptForArticle(firstArticle, provider, systemPromptVariant),
+        systemPrompt: getSinglePromptSystemPromptForArticle(
+          firstArticle,
+          provider,
+          systemPromptVariant,
+          promptRow.type,
+        ),
         systemPromptVariant,
       })
     }
@@ -215,7 +222,12 @@ export const projectsRoutesGetPromptPreview = new Elysia().get(
         detail: fullTextPreparation.message,
         diagnostics: previewArticleRead.status === 'accepted' ? previewArticleRead.diagnostics : null,
         reason: 'full_text_not_ready',
-        systemPrompt: getSinglePromptSystemPromptForArticle(firstArticle, provider, systemPromptVariant),
+        systemPrompt: getSinglePromptSystemPromptForArticle(
+          firstArticle,
+          provider,
+          systemPromptVariant,
+          promptRow.type,
+        ),
         systemPromptVariant,
       })
     }

@@ -23,6 +23,8 @@ import {
 import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV5.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
@@ -196,6 +198,42 @@ describe('judge prompt selection', () => {
     expect(getSinglePromptSystemPromptForArticle(article, 'anthropic', 'screening_v5')).toBe(
       SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
     )
+  })
+
+  test('uses the screening_v5 include/exclude rendering only for include/exclude prompt types', () => {
+    const article = buildArticle()
+
+    expect(getSinglePromptSystemPromptForArticle(article, 'openai', 'screening_v5', "'include' | 'exclude'")).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, null, 'screening_v5', '"exclude"|"include"')).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, 'anthropic', 'screening_v5', "'include' | 'exclude'")).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
+    )
+    expect(
+      ["'yes' | 'no'", "'yes' | 'no' | 'maybe'", "'include' | 'include'", "'include' | 'exclude' | 'maybe'", null].map(
+        (promptType) => {
+          return getSinglePromptSystemPromptForArticle(article, 'openai', 'screening_v5', promptType)
+        },
+      ),
+    ).toEqual(
+      Array.from({length: 5}, () => {
+        return SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5
+      }),
+    )
+    expect(getSinglePromptSystemPromptForArticle(article, 'openai', 'screening_v4', "'include' | 'exclude'")).toBe(
+      SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4,
+    )
+    expect(
+      getSinglePromptSystemPromptForArticle(
+        buildArticle({articleId: 'fhir:patient-1'}),
+        'openai',
+        'screening_v5',
+        "'include' | 'exclude'",
+      ),
+    ).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT)
   })
 
   test('treats a missing or legacy variant as the legacy system prompt', () => {
