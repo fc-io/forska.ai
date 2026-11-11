@@ -86,3 +86,20 @@ test('does not recover nested answer when answer is not valid JSON', () => {
     parseSinglePromptJudgment(response, enumPromptType)
   }).toThrow('answer must be')
 })
+
+test('validates include/exclude answers against the include/exclude prompt type', () => {
+  const includeExcludePromptType = "'include' | 'exclude'"
+
+  expect(
+    parseSinglePromptJudgment(
+      JSON.stringify({answer: 'exclude', explanation: 'Exclusion line: children.', quotes: ['pupils aged 13']}),
+      includeExcludePromptType,
+    ),
+  ).toEqual({answer: 'exclude', explanation: 'Exclusion line: children.', quotes: ['pupils aged 13']})
+  expect(() => {
+    return parseSinglePromptJudgment(
+      JSON.stringify({answer: 'maybe', explanation: 'Missing: country', quotes: []}),
+      includeExcludePromptType,
+    )
+  }).toThrow()
+})
