@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getNormalizedPromptSummaryAnswerSql} from '../utils/getNormalizedPromptSummaryAnswerSql.ts'
 import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
 import {getReviewServingArticlesInRunningRebuildChunks} from './reviewServingCandidateRebuildCoverage.ts'
 import {postingUpstreamReviewServingComponents} from './reviewServingContracts.ts'
@@ -425,13 +426,10 @@ const getFullRebuildPostingContributionRowsStatement = (
         llm_summary_detail AS (
           SELECT
             summary_answer_value.*,
-            CASE
-              WHEN lower(trim(array_to_string(summary_answer_value.answer_values, chr(10)))) IN ('yes', 'no', 'maybe')
-                THEN lower(trim(array_to_string(summary_answer_value.answer_values, chr(10))))
-              WHEN NULLIF(trim(array_to_string(summary_answer_value.answer_values, chr(10))), '') IS NOT NULL
-                THEN 'maybe'
-              ELSE NULL
-            END AS normalized_summary_answer
+            ${getNormalizedPromptSummaryAnswerSql({
+              criteriaDispositionExpression: 'summary_prompt.criteria_disposition',
+              expression: 'array_to_string(summary_answer_value.answer_values, chr(10))',
+            })} AS normalized_summary_answer
           FROM (
             SELECT
               json_answer.*,
@@ -478,6 +476,8 @@ const getFullRebuildPostingContributionRowsStatement = (
               ) array_answer
             ) json_answer
           ) summary_answer_value
+          LEFT JOIN enabled_prompt summary_prompt
+            ON summary_prompt.prompt_id = summary_answer_value.prompt_id
         ),
         human_detail AS (
           SELECT

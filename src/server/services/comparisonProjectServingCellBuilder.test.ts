@@ -41,6 +41,7 @@ type MaterializedModelOrderResult = {
 const comparisonProjectId = 'comparison-project-prompt-cells'
 const summaryModeComparisonProjectId = 'comparison-project-summary-cells'
 const missingMetadataComparisonProjectId = 'comparison-project-summary-missing-metadata'
+const combinedDecisionComparisonProjectId = 'comparison-project-summary-combined-decision'
 const contentSettings = {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
 const contentKey = getComparisonProjectContentKey(contentSettings)
 const summaryPromptId = 'summary'
@@ -602,7 +603,8 @@ const getSummaryModeServingCellsScript = () => {
         use_fulltext_no_images
       ) VALUES
         ('source-project-a', 'Source Project A', NULL, 'model-a', 'summary', TRUE, TRUE, FALSE, FALSE),
-        ('source-project-b', 'Source Project B', NULL, 'model-b', 'summary', TRUE, TRUE, FALSE, FALSE)
+        ('source-project-b', 'Source Project B', NULL, 'model-b', 'summary', TRUE, TRUE, FALSE, FALSE),
+        ('source-project-c', 'Source Project C', NULL, 'model-a', 'summary', TRUE, TRUE, FALSE, FALSE)
     \`)
 
     await database.run(\`
@@ -612,7 +614,8 @@ const getSummaryModeServingCellsScript = () => {
         ('prompt-a-exclude', 'Prompt A Exclude', 'Prompt A Exclude', NULL, 'prompt-a-exclude-hash', TIMESTAMPTZ '2026-04-02T00:00:00.000Z'),
         ('prompt-b-include', 'Prompt B Include', 'Prompt B Include', NULL, 'prompt-b-include-hash', TIMESTAMPTZ '2026-04-03T00:00:00.000Z'),
         ('prompt-b-exclude', 'Prompt B Exclude', 'Prompt B Exclude', NULL, 'prompt-b-exclude-hash', TIMESTAMPTZ '2026-04-04T00:00:00.000Z'),
-        ('prompt-missing-metadata', 'Prompt Missing Metadata', 'Prompt Missing Metadata', NULL, 'prompt-missing-metadata-hash', TIMESTAMPTZ '2026-04-05T00:00:00.000Z')
+        ('prompt-missing-metadata', 'Prompt Missing Metadata', 'Prompt Missing Metadata', NULL, 'prompt-missing-metadata-hash', TIMESTAMPTZ '2026-04-05T00:00:00.000Z'),
+        ('prompt-c-combined', 'Prompt C Combined', 'Prompt C Combined', $$'include' | 'exclude'$$, 'prompt-c-combined-hash', TIMESTAMPTZ '2026-04-06T00:00:00.000Z')
     \`)
 
     await database.run(\`
@@ -629,7 +632,8 @@ const getSummaryModeServingCellsScript = () => {
         ('source-a-include', 'source-project-a', 'prompt-a-include', 0, TRUE, 'include', 'population', 'Population'),
         ('source-a-exclude', 'source-project-a', 'prompt-a-exclude', 1, TRUE, 'exclude', 'exclusion', 'Exclusion'),
         ('source-b-include', 'source-project-b', 'prompt-b-include', 0, TRUE, 'include', 'population', 'Population'),
-        ('source-b-exclude', 'source-project-b', 'prompt-b-exclude', 1, TRUE, 'exclude', 'exclusion', 'Exclusion')
+        ('source-b-exclude', 'source-project-b', 'prompt-b-exclude', 1, TRUE, 'exclude', 'exclusion', 'Exclusion'),
+        ('source-c-combined', 'source-project-c', 'prompt-c-combined', 0, TRUE, 'combined', NULL, NULL)
     \`)
 
     await database.run(\`
@@ -646,7 +650,13 @@ const getSummaryModeServingCellsScript = () => {
         ('article-summary-no-exclude', 'external-summary-no-exclude', 'Article Summary No Exclude', 'Summary No Exclude', TIMESTAMPTZ '2026-04-12T00:00:00.000Z', TIMESTAMPTZ '2026-04-12T01:00:00.000Z'),
         ('article-summary-maybe', 'external-summary-maybe', 'Article Summary Maybe', 'Summary Maybe', TIMESTAMPTZ '2026-04-13T00:00:00.000Z', TIMESTAMPTZ '2026-04-13T01:00:00.000Z'),
         ('article-summary-missing', 'external-summary-missing', 'Article Summary Missing', 'Summary Missing', TIMESTAMPTZ '2026-04-14T00:00:00.000Z', TIMESTAMPTZ '2026-04-14T01:00:00.000Z'),
-        ('article-summary-metadata', 'external-summary-metadata', 'Article Summary Metadata', 'Summary Metadata', TIMESTAMPTZ '2026-04-15T00:00:00.000Z', TIMESTAMPTZ '2026-04-15T01:00:00.000Z')
+        ('article-summary-metadata', 'external-summary-metadata', 'Article Summary Metadata', 'Summary Metadata', TIMESTAMPTZ '2026-04-15T00:00:00.000Z', TIMESTAMPTZ '2026-04-15T01:00:00.000Z'),
+        ('article-decision-include', 'external-decision-include', 'Article Decision Include', 'Decision Include', TIMESTAMPTZ '2026-04-16T00:00:00.000Z', TIMESTAMPTZ '2026-04-16T01:00:00.000Z'),
+        ('article-decision-exclusion-met', 'external-decision-exclusion-met', 'Article Decision Exclusion Met', 'Decision Exclusion Met', TIMESTAMPTZ '2026-04-16T00:00:00.000Z', TIMESTAMPTZ '2026-04-16T01:00:00.000Z'),
+        ('article-decision-inclusion-missed', 'external-decision-inclusion-missed', 'Article Decision Inclusion Missed', 'Decision Inclusion Missed', TIMESTAMPTZ '2026-04-16T00:00:00.000Z', TIMESTAMPTZ '2026-04-16T01:00:00.000Z'),
+        ('article-decision-multi', 'external-decision-multi', 'Article Decision Multi', 'Decision Multi', TIMESTAMPTZ '2026-04-16T00:00:00.000Z', TIMESTAMPTZ '2026-04-16T01:00:00.000Z'),
+        ('article-decision-combined-include', 'external-decision-combined-include', 'Article Decision Combined Include', 'Decision Combined Include', TIMESTAMPTZ '2026-04-16T00:00:00.000Z', TIMESTAMPTZ '2026-04-16T01:00:00.000Z'),
+        ('article-decision-combined-exclude', 'external-decision-combined-exclude', 'Article Decision Combined Exclude', 'Decision Combined Exclude', TIMESTAMPTZ '2026-04-16T00:00:00.000Z', TIMESTAMPTZ '2026-04-16T01:00:00.000Z')
     \`)
 
     await database.run(\`
@@ -657,7 +667,13 @@ const getSummaryModeServingCellsScript = () => {
         ('source-a-article-no-exclude', 'source-project-a', 'article-summary-no-exclude'),
         ('source-a-article-maybe', 'source-project-a', 'article-summary-maybe'),
         ('source-a-article-missing', 'source-project-a', 'article-summary-missing'),
-        ('source-b-article-yes', 'source-project-b', 'article-summary-yes')
+        ('source-b-article-yes', 'source-project-b', 'article-summary-yes'),
+        ('source-a-article-decision-include', 'source-project-a', 'article-decision-include'),
+        ('source-a-article-decision-exclusion-met', 'source-project-a', 'article-decision-exclusion-met'),
+        ('source-a-article-decision-inclusion-missed', 'source-project-a', 'article-decision-inclusion-missed'),
+        ('source-a-article-decision-multi', 'source-project-a', 'article-decision-multi'),
+        ('source-c-article-decision-combined-include', 'source-project-c', 'article-decision-combined-include'),
+        ('source-c-article-decision-combined-exclude', 'source-project-c', 'article-decision-combined-exclude')
     \`)
 
     await database.run(\`
@@ -699,6 +715,19 @@ const getSummaryModeServingCellsScript = () => {
           TRUE,
           FALSE,
           FALSE
+        ),
+        (
+          '${combinedDecisionComparisonProjectId}',
+          'Comparison Summary Combined Decision',
+          NULL,
+          ['model-a'],
+          TRUE,
+          'summary',
+          'source-project-c',
+          TRUE,
+          TRUE,
+          FALSE,
+          FALSE
         )
     \`)
 
@@ -714,7 +743,8 @@ const getSummaryModeServingCellsScript = () => {
       ) VALUES
         ('comparison-summary-a-include', '${summaryModeComparisonProjectId}', 'prompt-a-include', 0, 'include', 'population', 'Population'),
         ('comparison-summary-a-exclude', '${summaryModeComparisonProjectId}', 'prompt-a-exclude', 1, 'exclude', 'exclusion', 'Exclusion'),
-        ('comparison-missing-metadata', '${missingMetadataComparisonProjectId}', 'prompt-missing-metadata', 0, NULL, 'population', 'Population')
+        ('comparison-missing-metadata', '${missingMetadataComparisonProjectId}', 'prompt-missing-metadata', 0, NULL, 'population', 'Population'),
+        ('comparison-combined-decision', '${combinedDecisionComparisonProjectId}', 'prompt-c-combined', 0, 'combined', NULL, NULL)
     \`)
 
     await database.run(\`
@@ -725,7 +755,8 @@ const getSummaryModeServingCellsScript = () => {
         created_at
       ) VALUES
         ('comparison-source-a', '${summaryModeComparisonProjectId}', 'source-project-a', TIMESTAMPTZ '2026-04-01T00:00:00.000Z'),
-        ('comparison-source-b', '${summaryModeComparisonProjectId}', 'source-project-b', TIMESTAMPTZ '2026-04-02T00:00:00.000Z')
+        ('comparison-source-b', '${summaryModeComparisonProjectId}', 'source-project-b', TIMESTAMPTZ '2026-04-02T00:00:00.000Z'),
+        ('comparison-source-c', '${combinedDecisionComparisonProjectId}', 'source-project-c', TIMESTAMPTZ '2026-04-03T00:00:00.000Z')
     \`)
 
     await database.run(\`
@@ -756,7 +787,17 @@ const getSummaryModeServingCellsScript = () => {
         ('judgment-summary-maybe-include', 'article-summary-maybe', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, 'unclear', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-23T00:00:00.000Z', TIMESTAMPTZ '2026-04-23T01:00:00.000Z'),
         ('judgment-summary-maybe-exclude', 'article-summary-maybe', 'prompt-a-exclude', 'model-a', 'source-project-a', TRUE, 'no', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-23T00:00:00.000Z', TIMESTAMPTZ '2026-04-23T01:00:00.000Z'),
         ('judgment-summary-missing-include', 'article-summary-missing', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-24T00:00:00.000Z', TIMESTAMPTZ '2026-04-24T01:00:00.000Z'),
-        ('judgment-summary-metadata', 'article-summary-metadata', 'prompt-missing-metadata', 'model-a', 'source-project-a', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z')
+        ('judgment-summary-metadata', 'article-summary-metadata', 'prompt-missing-metadata', 'model-a', 'source-project-a', TRUE, 'yes', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-include-include', 'article-decision-include', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, 'include', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-include-exclude', 'article-decision-include', 'prompt-a-exclude', 'model-a', 'source-project-a', TRUE, 'include', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-exclusion-met-include', 'article-decision-exclusion-met', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, 'include', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-exclusion-met-exclude', 'article-decision-exclusion-met', 'prompt-a-exclude', 'model-a', 'source-project-a', TRUE, 'exclude', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-inclusion-missed-include', 'article-decision-inclusion-missed', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, ' Exclude ', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-inclusion-missed-exclude', 'article-decision-inclusion-missed', 'prompt-a-exclude', 'model-a', 'source-project-a', TRUE, 'include', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-multi-include', 'article-decision-multi', 'prompt-a-include', 'model-a', 'source-project-a', TRUE, NULL, ['include', 'exclude'], TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-multi-exclude', 'article-decision-multi', 'prompt-a-exclude', 'model-a', 'source-project-a', TRUE, 'include', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-combined-include', 'article-decision-combined-include', 'prompt-c-combined', 'model-a', 'source-project-c', TRUE, 'include', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z'),
+        ('judgment-decision-combined-exclude', 'article-decision-combined-exclude', 'prompt-c-combined', 'model-a', 'source-project-c', TRUE, 'exclude', NULL, TRUE, TRUE, FALSE, FALSE, TIMESTAMPTZ '2026-04-25T00:00:00.000Z', TIMESTAMPTZ '2026-04-25T01:00:00.000Z')
     \`)
 
     await database.run(\`
@@ -777,6 +818,10 @@ const getSummaryModeServingCellsScript = () => {
     )
     await builder.insertSummaryModeComparisonProjectLlmCells(
       {comparisonProjectId: '${missingMetadataComparisonProjectId}', generation: 1},
+      {queryJson: database.queryJson, run: database.run},
+    )
+    await builder.insertSummaryModeComparisonProjectLlmCells(
+      {comparisonProjectId: '${combinedDecisionComparisonProjectId}', generation: 1},
       {queryJson: database.queryJson, run: database.run},
     )
 
@@ -849,6 +894,10 @@ test('summary-mode serving cells derive LLM summaries and normalized human summa
   expect(summaryCells['article-summary-no-exclude']?.[sourceAColumnId]).toBe('no')
   expect(summaryCells['article-summary-maybe']?.[sourceAColumnId]).toBe('maybe')
   expect(summaryCells['article-summary-missing']?.[sourceAColumnId]).toBeUndefined()
+  expect(summaryCells['article-decision-include']?.[sourceAColumnId]).toBe('yes')
+  expect(summaryCells['article-decision-exclusion-met']?.[sourceAColumnId]).toBe('no')
+  expect(summaryCells['article-decision-inclusion-missed']?.[sourceAColumnId]).toBe('no')
+  expect(summaryCells['article-decision-multi']?.[sourceAColumnId]).toBe('maybe')
   expect(summaryCells['article-summary-yes']?.[humanSummaryColumnId]).toBe('maybe')
   expect(summaryCells['article-summary-no-include']?.[humanSummaryColumnId]).toBe('no')
   expect(
@@ -884,6 +933,14 @@ test('summary-mode serving cells derive LLM summaries and normalized human summa
     rowsByProjectArticleAndColumn.get(`${summaryModeComparisonProjectId}:article-summary-yes:${humanSummaryColumnId}`)
       ?.columnOrder,
   ).toBe(2)
+
+  expect(
+    ['article-decision-combined-include', 'article-decision-combined-exclude'].map((articleId) => {
+      return rowsByProjectArticleAndColumn.get(
+        `${combinedDecisionComparisonProjectId}:${articleId}:${fallbackColumnId}`,
+      )?.displayAnswer
+    }),
+  ).toEqual(['yes', 'no'])
 })
 
 test('generated cell insert SQL constrains source rows by article_batch', () => {

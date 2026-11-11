@@ -7,6 +7,80 @@ import {
   getReviewServingPromptAnswerPostingCacheWriteSqls,
 } from './reviewServingLazyPromptAnswerPostingSql.ts'
 
+const lazyPostingSchemaSql = `
+  CREATE SCHEMA app;
+  CREATE SCHEMA mart;
+  CREATE TABLE app.project (
+    id VARCHAR,
+    model_id VARCHAR,
+    use_title BOOLEAN,
+    use_abstract BOOLEAN,
+    use_fulltext BOOLEAN,
+    use_fulltext_no_images BOOLEAN,
+    human_judgment_mode VARCHAR,
+    system_prompt_variant VARCHAR,
+    use_metadata BOOLEAN,
+    full_text_strategy_id VARCHAR
+  );
+  CREATE TABLE app.prompt (
+    id VARCHAR,
+    archived BOOLEAN
+  );
+  CREATE TABLE app.project_prompt (
+    project_id VARCHAR,
+    prompt_id VARCHAR,
+    enabled BOOLEAN,
+    archived BOOLEAN,
+    criteria_disposition VARCHAR
+  );
+  CREATE TABLE app."judgment" (
+    id VARCHAR,
+    article_id VARCHAR,
+    prompt_id VARCHAR,
+    model_id VARCHAR,
+    use_title BOOLEAN,
+    use_abstract BOOLEAN,
+    use_fulltext BOOLEAN,
+    use_fulltext_no_images BOOLEAN,
+    answered_original VARCHAR,
+    answered_original_as_array VARCHAR[],
+    created_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ,
+    system_prompt_variant VARCHAR NOT NULL DEFAULT 'legacy',
+    use_metadata BOOLEAN NOT NULL DEFAULT FALSE,
+    full_text_strategy_id VARCHAR NOT NULL DEFAULT 'fts-none'
+  );
+  CREATE TABLE app."judgment_human" (
+    article_id VARCHAR,
+    project_id VARCHAR,
+    prompt_id VARCHAR,
+    answer VARCHAR
+  );
+  CREATE TABLE app."judgment_human_summary" (
+    article_id VARCHAR,
+    project_id VARCHAR,
+    answer VARCHAR
+  );
+  CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
+    project_id VARCHAR,
+    review_config_hash VARCHAR,
+    snapshot_id VARCHAR,
+    article_id VARCHAR,
+    has_llm_list_mode BOOLEAN,
+    has_human_list_mode BOOLEAN,
+    has_both_list_mode BOOLEAN
+  );
+  CREATE TABLE mart.review_article_filter_posting_serving_v4 (
+    project_id VARCHAR,
+    review_config_hash VARCHAR,
+    snapshot_id VARCHAR,
+    article_ids VARCHAR[],
+    filter_kind VARCHAR,
+    filter_value VARCHAR,
+    list_mode_key VARCHAR
+  );
+`
+
 test('lazy prompt-answer fallback reads eager judgment sources and preserves list-mode semantics', () => {
   const sql = getReviewServingLazyPromptAnswerPostingSourceSql({
     listModeSql: "'human'",
@@ -297,77 +371,7 @@ test('lazy prompt-answer cache write executes against compact article_ids postin
 
   try {
     await connection.run(`
-      CREATE SCHEMA app;
-      CREATE SCHEMA mart;
-      CREATE TABLE app.project (
-        id VARCHAR,
-        model_id VARCHAR,
-        use_title BOOLEAN,
-        use_abstract BOOLEAN,
-        use_fulltext BOOLEAN,
-        use_fulltext_no_images BOOLEAN,
-        human_judgment_mode VARCHAR,
-        system_prompt_variant VARCHAR,
-        use_metadata BOOLEAN,
-        full_text_strategy_id VARCHAR
-      );
-      CREATE TABLE app.prompt (
-        id VARCHAR,
-        archived BOOLEAN
-      );
-      CREATE TABLE app.project_prompt (
-        project_id VARCHAR,
-        prompt_id VARCHAR,
-        enabled BOOLEAN,
-        archived BOOLEAN,
-        criteria_disposition VARCHAR
-      );
-      CREATE TABLE app."judgment" (
-        id VARCHAR,
-        article_id VARCHAR,
-        prompt_id VARCHAR,
-        model_id VARCHAR,
-        use_title BOOLEAN,
-        use_abstract BOOLEAN,
-        use_fulltext BOOLEAN,
-        use_fulltext_no_images BOOLEAN,
-        answered_original VARCHAR,
-        answered_original_as_array VARCHAR[],
-        created_at TIMESTAMPTZ,
-        deleted_at TIMESTAMPTZ,
-        system_prompt_variant VARCHAR NOT NULL DEFAULT 'legacy',
-        use_metadata BOOLEAN NOT NULL DEFAULT FALSE,
-        full_text_strategy_id VARCHAR NOT NULL DEFAULT 'fts-none'
-      );
-      CREATE TABLE app."judgment_human" (
-        article_id VARCHAR,
-        project_id VARCHAR,
-        prompt_id VARCHAR,
-        answer VARCHAR
-      );
-      CREATE TABLE app."judgment_human_summary" (
-        article_id VARCHAR,
-        project_id VARCHAR,
-        answer VARCHAR
-      );
-      CREATE TABLE mart.review_article_serving_list_mode_state_v4 (
-        project_id VARCHAR,
-        review_config_hash VARCHAR,
-        snapshot_id VARCHAR,
-        article_id VARCHAR,
-        has_llm_list_mode BOOLEAN,
-        has_human_list_mode BOOLEAN,
-        has_both_list_mode BOOLEAN
-      );
-      CREATE TABLE mart.review_article_filter_posting_serving_v4 (
-        project_id VARCHAR,
-        review_config_hash VARCHAR,
-        snapshot_id VARCHAR,
-        article_ids VARCHAR[],
-        filter_kind VARCHAR,
-        filter_value VARCHAR,
-        list_mode_key VARCHAR
-      );
+      ${lazyPostingSchemaSql}
       INSERT INTO app.project VALUES ('project-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'prompt', NULL, NULL, NULL);
       INSERT INTO app.prompt VALUES ('prompt-1', FALSE), ('prompt-2', FALSE);
       INSERT INTO app.project_prompt VALUES
@@ -432,6 +436,80 @@ test('lazy prompt-answer cache write executes against compact article_ids postin
       {articleIds: ['article-1'], filterValue: 'review:promptAnswer:summary:yes'},
     ])
     expect(secondResult).toMatchObject({missingFilterValues: [], status: 'cacheHit', writtenBucketCount: 0})
+  } finally {
+    connection.closeSync()
+    duckdbInstance.closeSync()
+  }
+})
+
+test('lazy summary postings derive the screening decision from include/exclude answers by criteria disposition', async () => {
+  const duckdbInstance = await DuckDBInstance.create(':memory:')
+  const connection = await duckdbInstance.connect()
+  const database = {
+    queryJson: async <T>(statement: string): Promise<T[]> => {
+      const reader = await connection.runAndReadAll(statement)
+
+      return reader.getRowObjectsJson() as T[]
+    },
+    run: async (statement: string) => {
+      await connection.run(statement)
+    },
+  }
+  const getJudgmentValuesSql = (articleId: string, answers: Record<string, string>) => {
+    return Object.entries(answers)
+      .map(([promptId, answer]) => {
+        return `('${articleId}-${promptId}', '${articleId}', '${promptId}', 'model-1', TRUE, TRUE, FALSE, FALSE, '${answer}', NULL, TIMESTAMPTZ '2026-01-01T00:00:00Z', NULL, 'screening_v5', FALSE, 'fts-none')`
+      })
+      .join(',\n')
+  }
+
+  try {
+    await connection.run(`
+      ${lazyPostingSchemaSql}
+      INSERT INTO app.project VALUES ('project-1', 'model-1', TRUE, TRUE, FALSE, FALSE, 'summary', 'screening_v5', NULL, NULL);
+      INSERT INTO app.prompt VALUES ('inclusion', FALSE), ('exclusion', FALSE), ('combined', FALSE);
+      INSERT INTO app.project_prompt VALUES
+        ('project-1', 'inclusion', TRUE, FALSE, 'include'),
+        ('project-1', 'exclusion', TRUE, FALSE, 'exclude'),
+        ('project-1', 'combined', TRUE, FALSE, 'combined');
+      INSERT INTO mart.review_article_serving_list_mode_state_v4
+      SELECT 'project-1', 'review-config-1', 'snapshot-1', 'article-' || article_number, TRUE, FALSE, FALSE
+      FROM range(1, 7) article(article_number);
+      INSERT INTO app."judgment" VALUES
+        ${getJudgmentValuesSql('article-1', {combined: 'include', exclusion: 'include', inclusion: 'include'})},
+        ${getJudgmentValuesSql('article-2', {combined: 'include', exclusion: 'exclude', inclusion: 'include'})},
+        ${getJudgmentValuesSql('article-3', {combined: 'include', exclusion: 'include', inclusion: 'exclude'})},
+        ${getJudgmentValuesSql('article-4', {combined: 'exclude', exclusion: 'include', inclusion: 'include'})},
+        ${getJudgmentValuesSql('article-5', {combined: '["include"]', exclusion: ' Include ', inclusion: 'INCLUDE'})},
+        ${getJudgmentValuesSql('article-6', {combined: 'include', exclusion: 'include', inclusion: '["include","exclude"]'})};
+    `)
+
+    const result = await ensureReviewServingLazyPromptAnswerPostingBuckets({
+      database,
+      filterValues: [
+        'review:promptAnswer:summary:yes',
+        'review:promptAnswer:summary:no',
+        'review:promptAnswer:summary:maybe',
+        'review:promptAnswer:exclusion:exclude',
+      ],
+      listModeKey: 'llm',
+      projectId: 'project-1',
+      reviewConfigHash: 'review-config-1',
+      snapshotId: 'snapshot-1',
+    })
+    const postingReader = await connection.runAndReadAll(`
+      SELECT filter_value AS filterValue, list_sort(article_ids) AS articleIds
+      FROM mart.review_article_filter_posting_serving_v4
+      ORDER BY filter_value
+    `)
+
+    expect(result).toMatchObject({status: 'cacheWritten', writtenBucketCount: 4})
+    expect(postingReader.getRowObjectsJson()).toEqual([
+      {articleIds: ['article-2'], filterValue: 'review:promptAnswer:exclusion:exclude'},
+      {articleIds: ['article-6'], filterValue: 'review:promptAnswer:summary:maybe'},
+      {articleIds: ['article-2', 'article-3', 'article-4'], filterValue: 'review:promptAnswer:summary:no'},
+      {articleIds: ['article-1', 'article-5'], filterValue: 'review:promptAnswer:summary:yes'},
+    ])
   } finally {
     connection.closeSync()
     duckdbInstance.closeSync()

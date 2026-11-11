@@ -1050,6 +1050,56 @@ test('both review route service derives displayed LLM summaries with criteria se
   expect(result.data[0]?.judgments[0]).not.toHaveProperty('criteriaDisposition')
 })
 
+const getBothReviewLlmSummaryForDecisions = async (answers: {excludePrompt: string; includePrompt: string}) => {
+  const reader = createReaderDatabase({
+    humanRows: [],
+    llmRows: [
+      {
+        article_id: 'article-1',
+        prompt_id: 'include-prompt',
+        judgment_id: 'llm-include',
+        answered_original: answers.includePrompt,
+        answered_original_as_array: [],
+        detail_updated_at: '2026-01-03T00:00:00.000Z',
+        explanation: 'because',
+        judgment_model_id: 'model-1',
+        prompt_criteria_disposition: 'include',
+        quotes: [],
+      },
+      {
+        article_id: 'article-1',
+        prompt_id: 'exclude-prompt',
+        judgment_id: 'llm-exclude',
+        answered_original: answers.excludePrompt,
+        answered_original_as_array: [],
+        detail_updated_at: '2026-01-03T00:00:00.000Z',
+        explanation: 'because',
+        judgment_model_id: 'model-1',
+        prompt_criteria_disposition: 'exclude',
+        quotes: [],
+      },
+    ],
+    promptCount: 2,
+    projectHumanJudgmentMode: 'summary',
+  })
+  const result = await getBothReviewArticlesFromServing(
+    {projectId: 'project-1', page: 1, limit: 50, prompts: {}},
+    {
+      currentReviewConfigHash: 'config-1',
+      database: reader.database,
+      manifestDatabase: createManifestDatabase('active'),
+    },
+  )
+
+  return result.data[0]?.llmSummaryAnswer
+}
+
+test('both review route service derives displayed LLM summaries from include/exclude answers by criteria disposition', async () => {
+  expect(await getBothReviewLlmSummaryForDecisions({excludePrompt: 'include', includePrompt: 'include'})).toBe('yes')
+  expect(await getBothReviewLlmSummaryForDecisions({excludePrompt: 'exclude', includePrompt: 'include'})).toBe('no')
+  expect(await getBothReviewLlmSummaryForDecisions({excludePrompt: 'include', includePrompt: 'exclude'})).toBe('no')
+})
+
 test('both review route service chunks judgment hydration at reader article-set bounds', async () => {
   const reader = createChunkedHydrationReaderDatabase(250, 100)
 

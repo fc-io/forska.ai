@@ -101,8 +101,29 @@ export const normalizeSummaryAnswerValue = (value: string | null | undefined): J
   return normalizedValue.length > 0 ? 'maybe' : null
 }
 
-export const getNormalizedSummaryAnswer = (answer: JudgmentAnswerShape): JudgmentHumanSummaryAnswer | null => {
-  return normalizeSummaryAnswerValue(getNormalizedJudgmentAnswerKey(answer))
+const getCriterionMatchAnswerForDecision = (
+  decision: 'include' | 'exclude',
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null | undefined,
+): JudgmentHumanSummaryAnswer => {
+  return (decision === 'exclude') === (criteriaDisposition === 'exclude') ? 'yes' : 'no'
+}
+
+export const normalizePromptSummaryAnswerValue = (
+  value: string | null | undefined,
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null | undefined,
+): JudgmentHumanSummaryAnswer | null => {
+  const normalizedValue = value?.trim().toLowerCase() ?? ''
+
+  return normalizedValue === 'include' || normalizedValue === 'exclude'
+    ? getCriterionMatchAnswerForDecision(normalizedValue, criteriaDisposition)
+    : normalizeSummaryAnswerValue(normalizedValue)
+}
+
+export const getNormalizedSummaryAnswer = (
+  answer: JudgmentAnswerShape,
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null | undefined,
+): JudgmentHumanSummaryAnswer | null => {
+  return normalizePromptSummaryAnswerValue(getNormalizedJudgmentAnswerKey(answer), criteriaDisposition)
 }
 
 export const deriveStrictSummaryAnswer = (

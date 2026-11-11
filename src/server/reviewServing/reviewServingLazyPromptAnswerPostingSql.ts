@@ -1,4 +1,5 @@
 import {getProjectFullTextStrategyIdSql} from '../fullText/fullTextStrategy.ts'
+import {getNormalizedPromptSummaryAnswerSql} from '../utils/getNormalizedPromptSummaryAnswerSql.ts'
 
 export const reviewServingPromptAnswerFilterKind = 'promptAnswer'
 
@@ -109,6 +110,7 @@ export const getReviewServingLazyPromptAnswerPostingSourceSql = (input: {
             judgment.prompt_id,
             judgment.answered_original,
             judgment.answered_original_as_array,
+            prompt.criteria_disposition,
             ROW_NUMBER() OVER (
               PARTITION BY judgment.article_id, judgment.prompt_id
               ORDER BY judgment.created_at DESC NULLS LAST, judgment.id DESC
@@ -135,13 +137,10 @@ export const getReviewServingLazyPromptAnswerPostingSourceSql = (input: {
       latest_llm_summary_answer AS (
         SELECT
           summary_answer_value.*,
-          CASE
-            WHEN lower(trim(array_to_string(summary_answer_value.answer_values, chr(10)))) IN ('yes', 'no', 'maybe')
-              THEN lower(trim(array_to_string(summary_answer_value.answer_values, chr(10))))
-            WHEN NULLIF(trim(array_to_string(summary_answer_value.answer_values, chr(10))), '') IS NOT NULL
-              THEN 'maybe'
-            ELSE NULL
-          END AS normalized_summary_answer
+          ${getNormalizedPromptSummaryAnswerSql({
+            criteriaDispositionExpression: 'summary_answer_value.criteria_disposition',
+            expression: 'array_to_string(summary_answer_value.answer_values, chr(10))',
+          })} AS normalized_summary_answer
         FROM (
           SELECT
             json_answer.*,
