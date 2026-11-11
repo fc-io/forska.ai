@@ -3,6 +3,7 @@ import {getProjectFullTextStrategyIdSql} from '../../fullText/fullTextStrategy.t
 import {assertStoredProviderModelRuntimeMatch} from '../../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {assertProjectPromptTypesMatchSystemPromptVariant} from '../../services/assertProjectPromptTypesMatchSystemPromptVariant.ts'
 import {deleteJudgmentJobSafelyTx} from '../../services/judgmentJobDeleteService.ts'
 import {assertModelContextWindowResolvable} from '../../services/judgmentJobModelContextWindow.ts'
 import type {JudgmentJobSqliteHealthProjectionReader} from '../../services/judgmentJobSqliteHealthProjectionService.ts'
@@ -56,6 +57,7 @@ export const judgmentsJobsRoutesPostJob = async ({body}: {body: {projectId: stri
   await assertJudgingRuntimeCanRun()
   await assertProjectRuntimeModelMatch(body.projectId)
   await assertProjectModelContextWindow(body.projectId)
+  await assertProjectPromptTypesMatchSystemPromptVariant(body.projectId)
   await assertProjectFullTextCanJudge(body.projectId)
 
   const [job] = await getAppDatabaseService().queryJson<{

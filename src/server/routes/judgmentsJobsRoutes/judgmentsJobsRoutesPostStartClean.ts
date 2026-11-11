@@ -12,6 +12,7 @@ import {getJudgmentJobRepairMode} from '../../cron/judgmentsJobs/judgmentJobStor
 import {assertStoredProviderModelRuntimeMatch} from '../../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {assertProjectPromptTypesMatchSystemPromptVariant} from '../../services/assertProjectPromptTypesMatchSystemPromptVariant.ts'
 import {assertModelContextWindowResolvable} from '../../services/judgmentJobModelContextWindow.ts'
 import {HttpError} from '../../utils/httpError.ts'
 import {assertJudgmentJobStopConditionsAllowResume} from './assertJudgmentJobStopConditionsAllowResume.ts'
@@ -68,6 +69,7 @@ export const judgmentsJobsRoutesPostStartClean = async ({params}: {params: {id: 
   await assertJudgmentJobStopConditionsAllowResume({jobId: params.id, update: {}})
   await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
   await assertModelContextWindowResolvable(projectModelId)
+  await assertProjectPromptTypesMatchSystemPromptVariant(job.projectId)
   await assertProjectFullTextCanJudge(job.projectId)
   await resetJudgmentJobLocalSqliteState({jobId: params.id, storageState: job.storageState})
   await sqliteService.initializeJob(params.id)
