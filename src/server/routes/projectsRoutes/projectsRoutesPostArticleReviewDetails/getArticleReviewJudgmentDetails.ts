@@ -42,6 +42,11 @@ export const getArticleReviewJudgmentDetails = async ({
   const summaryCriteria = enabledPromptRows.map((row) => {
     return {promptId: row.id, criteriaDisposition: row.criteriaDisposition}
   })
+  const criteriaDispositionByPromptId = new Map(
+    projectPromptRows.map((row) => {
+      return [row.id, row.criteriaDisposition] as const
+    }),
+  )
   const promptOrderMap = projectPromptRows.reduce(
     (acc, p, idx) => {
       const ord = p.order ?? idx
@@ -113,7 +118,13 @@ export const getArticleReviewJudgmentDetails = async ({
           summaryCriteria,
           Array.from(latestArticleJudgmentsByPrompt.values()).reduce<Record<string, 'yes' | 'no' | 'maybe' | null>>(
             (answerMap, row) => {
-              return {...answerMap, [row.judgment.promptId]: getNormalizedSummaryAnswer(row.judgment)}
+              return {
+                ...answerMap,
+                [row.judgment.promptId]: getNormalizedSummaryAnswer(
+                  row.judgment,
+                  criteriaDispositionByPromptId.get(row.judgment.promptId),
+                ),
+              }
             },
             {},
           ),

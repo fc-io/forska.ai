@@ -1,22 +1,90 @@
 import {expect, test} from 'bun:test'
 
-import {deriveStrictSummaryAnswer, getNormalizedSummaryAnswer, normalizeSummaryAnswerValue} from './judgmentAnswers.ts'
+import {
+  deriveStrictSummaryAnswer,
+  getNormalizedSummaryAnswer,
+  normalizePromptSummaryAnswerValue,
+  normalizeSummaryAnswerValue,
+} from './judgmentAnswers.ts'
 
 test('normalizeSummaryAnswerValue normalizes summary answers conservatively', () => {
   expect(normalizeSummaryAnswerValue(' yes ')).toBe('yes')
   expect(normalizeSummaryAnswerValue('NO')).toBe('no')
   expect(normalizeSummaryAnswerValue('maybe')).toBe('maybe')
   expect(normalizeSummaryAnswerValue('  custom ')).toBe('maybe')
+  expect(normalizeSummaryAnswerValue('include')).toBe('maybe')
   expect(normalizeSummaryAnswerValue('   ')).toBeNull()
   expect(normalizeSummaryAnswerValue(null)).toBeNull()
 })
 
 test('getNormalizedSummaryAnswer reuses judgment answer parsing before summary normalization', () => {
-  expect(getNormalizedSummaryAnswer({answeredOriginal: ' yes '})).toBe('yes')
-  expect(getNormalizedSummaryAnswer({answeredOriginal: '["no"]'})).toBe('no')
-  expect(getNormalizedSummaryAnswer({answeredOriginal: '["unexpected"]'})).toBe('maybe')
-  expect(getNormalizedSummaryAnswer({answeredOriginal: null, answeredOriginalAsArray: [' maybe ']})).toBe('maybe')
-  expect(getNormalizedSummaryAnswer({answeredOriginal: null})).toBeNull()
+  expect(getNormalizedSummaryAnswer({answeredOriginal: ' yes '}, 'include')).toBe('yes')
+  expect(getNormalizedSummaryAnswer({answeredOriginal: '["no"]'}, 'exclude')).toBe('no')
+  expect(getNormalizedSummaryAnswer({answeredOriginal: '["unexpected"]'}, 'combined')).toBe('maybe')
+  expect(getNormalizedSummaryAnswer({answeredOriginal: null, answeredOriginalAsArray: [' maybe ']}, 'include')).toBe(
+    'maybe',
+  )
+  expect(getNormalizedSummaryAnswer({answeredOriginal: null}, 'include')).toBeNull()
+})
+
+test('normalizePromptSummaryAnswerValue keeps yes, no and maybe whatever the disposition', () => {
+  expect(
+    (['include', 'exclude', 'combined', null] as const).map((criteriaDisposition) => {
+      return ['yes', ' NO ', 'maybe', 'custom', '  '].map((value) => {
+        return normalizePromptSummaryAnswerValue(value, criteriaDisposition)
+      })
+    }),
+  ).toEqual([
+    ['yes', 'no', 'maybe', 'maybe', null],
+    ['yes', 'no', 'maybe', 'maybe', null],
+    ['yes', 'no', 'maybe', 'maybe', null],
+    ['yes', 'no', 'maybe', 'maybe', null],
+  ])
+})
+
+test('normalizePromptSummaryAnswerValue maps include and exclude into criterion-match answers by disposition', () => {
+  expect(normalizePromptSummaryAnswerValue('include', 'include')).toBe('yes')
+  expect(normalizePromptSummaryAnswerValue(' Exclude ', 'include')).toBe('no')
+  expect(normalizePromptSummaryAnswerValue('include', 'combined')).toBe('yes')
+  expect(normalizePromptSummaryAnswerValue('exclude', 'combined')).toBe('no')
+  expect(normalizePromptSummaryAnswerValue('include', 'exclude')).toBe('no')
+  expect(normalizePromptSummaryAnswerValue('EXCLUDE', 'exclude')).toBe('yes')
+  expect(normalizePromptSummaryAnswerValue('include', null)).toBe('yes')
+  expect(normalizePromptSummaryAnswerValue('exclude', null)).toBe('no')
+})
+
+test('getNormalizedSummaryAnswer keeps multi-valued include/exclude answers as maybe', () => {
+  expect(getNormalizedSummaryAnswer({answeredOriginal: '["include","exclude"]'}, 'include')).toBe('maybe')
+  expect(getNormalizedSummaryAnswer({answeredOriginal: null, answeredOriginalAsArray: ['exclude']}, 'exclude')).toBe(
+    'yes',
+  )
+})
+
+test('deriveStrictSummaryAnswer derives the screening decision from include/exclude answers', () => {
+  const criteria = [
+    {promptId: 'inclusion', criteriaDisposition: 'include'},
+    {promptId: 'exclusion', criteriaDisposition: 'exclude'},
+    {promptId: 'combined', criteriaDisposition: 'combined'},
+  ] as const
+  const getSummary = (answers: Record<(typeof criteria)[number]['promptId'], string>) => {
+    return deriveStrictSummaryAnswer(
+      [...criteria],
+      criteria.reduce((answerMap, criterion) => {
+        return {
+          ...answerMap,
+          [criterion.promptId]: normalizePromptSummaryAnswerValue(
+            answers[criterion.promptId],
+            criterion.criteriaDisposition,
+          ),
+        }
+      }, {}),
+    )
+  }
+
+  expect(getSummary({combined: 'include', exclusion: 'include', inclusion: 'include'})).toBe('yes')
+  expect(getSummary({combined: 'include', exclusion: 'exclude', inclusion: 'include'})).toBe('no')
+  expect(getSummary({combined: 'include', exclusion: 'include', inclusion: 'exclude'})).toBe('no')
+  expect(getSummary({combined: 'exclude', exclusion: 'include', inclusion: 'include'})).toBe('no')
 })
 
 test('deriveStrictSummaryAnswer returns no for exclusion yes', () => {

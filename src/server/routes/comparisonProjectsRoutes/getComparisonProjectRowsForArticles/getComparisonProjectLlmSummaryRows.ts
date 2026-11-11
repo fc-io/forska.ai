@@ -115,12 +115,21 @@ const getComparisonProjectLlmSummaryRow = (
     return null
   }
 
+  const summaryCriteria = getSummaryCriteria(summaryPromptGroup.prompts)
+  const criteriaDispositionByPromptId = new Map(
+    summaryCriteria.map((criterion) => {
+      return [criterion.promptId, criterion.criteriaDisposition] as const
+    }),
+  )
   const normalizedAnswers = Array.from(getLatestComparisonProjectLlmRowsByPromptId(groupRows).values()).reduce<
     Record<string, 'yes' | 'no' | 'maybe' | null>
   >((answerMap, row) => {
-    return {...answerMap, [row.promptId]: getNormalizedSummaryAnswer(row)}
+    return {
+      ...answerMap,
+      [row.promptId]: getNormalizedSummaryAnswer(row, criteriaDispositionByPromptId.get(row.promptId)),
+    }
   }, {})
-  const summaryAnswer = deriveStrictSummaryAnswer(getSummaryCriteria(summaryPromptGroup.prompts), normalizedAnswers)
+  const summaryAnswer = deriveStrictSummaryAnswer(summaryCriteria, normalizedAnswers)
 
   return summaryAnswer
     ? {

@@ -1,3 +1,4 @@
+import {getNormalizedPromptSummaryAnswerSql} from '../utils/getNormalizedPromptSummaryAnswerSql.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
 import {recordComparisonJudgmentContextForGenerationConfig} from './comparisonJudgmentContextDerivation.ts'
@@ -436,7 +437,6 @@ const getNormalizedSummaryAnswerSql = (expression: string) => {
     END
   `
 }
-
 const getNormalizedCellCteSql = () => {
   return `
     normalized_cell AS (
@@ -722,7 +722,10 @@ const getSummaryModeComparisonProjectLlmCellServingInsertSql = ({
         summary_prompt_group.source_project_id,
         summary_prompt_group.source_project_order,
         summary_prompt_group.criteria_disposition,
-        ${getNormalizedSummaryAnswerSql('normalized_cell.display_answer')} AS normalized_summary_answer,
+        ${getNormalizedPromptSummaryAnswerSql({
+          criteriaDispositionExpression: 'summary_prompt_group.criteria_disposition',
+          expression: 'normalized_cell.display_answer',
+        })} AS normalized_summary_answer,
         ROW_NUMBER() OVER (
           PARTITION BY
             normalized_cell.article_id,

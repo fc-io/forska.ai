@@ -790,3 +790,157 @@ test('a posting patch keeps an llm status written between its source read and it
     llmStatus: 'answered',
   })
 })
+
+const summaryFilterValues = ['yes', 'no', 'maybe'].map((summaryAnswer) => {
+  return `review:promptAnswer:summary:${summaryAnswer}`
+})
+
+const cacheSummaryPostings = async (input: SnapshotInput) => {
+  const {ensureReviewServingLazyPromptAnswerPostingBuckets} =
+    await import('./reviewServingLazyPromptAnswerPostingSql.ts')
+
+  await cachedListModes.reduce<Promise<void>>(async (previous, listModeKey) => {
+    await previous
+    await ensureReviewServingLazyPromptAnswerPostingBuckets({
+      database: getDatabase(),
+      filterValues: summaryFilterValues,
+      listModeKey,
+      projectId: input.projectId,
+      reviewConfigHash: input.reviewConfigHash,
+      snapshotId: input.snapshotId,
+    })
+  }, Promise.resolve())
+}
+
+const getLazySummaryRows = async (input: SnapshotInput) => {
+  const {getReviewServingLazyPromptAnswerPostingRowsSql} = await import('./reviewServingLazyPromptAnswerPostingSql.ts')
+  const filterValuesSql = `[${summaryFilterValues
+    .map((filterValue) => {
+      return `'${filterValue}'`
+    })
+    .join(', ')}]`
+
+  return getDatabase().queryJson<PostingRow>(`
+    ${cachedListModes
+      .map((listModeKey) => {
+        return `SELECT filter_kind AS filterKind, filter_value AS filterValue, list_mode_key AS listModeKey, article_ids AS articleIds
+          FROM (${getReviewServingLazyPromptAnswerPostingRowsSql({
+            filterValuesSql,
+            listModeSql: `'${listModeKey}'`,
+            projectIdSql: `'${input.projectId}'`,
+            reviewConfigHashSql: `'${input.reviewConfigHash}'`,
+            snapshotIdSql: `'${input.snapshotId}'`,
+          })})`
+      })
+      .join(' UNION ALL ')}
+    ORDER BY filterKind, filterValue, listModeKey
+  `)
+}
+
+const setupIncludeExcludeSnapshot = async (input: {criteriaDisposition: 'exclude' | 'include'; projectId: string}) => {
+  await insertProject(input.projectId)
+  await getDatabase().run(`
+    UPDATE app.project_prompt
+    SET criteria_disposition = '${input.criteriaDisposition}'
+    WHERE project_id = '${input.projectId}'
+  `)
+  const reviewConfigHash = await getCurrentReviewConfigHash(input.projectId)
+  const snapshot = {projectId: input.projectId, reviewConfigHash, snapshotId: `snapshot-${input.projectId}`}
+
+  await upsertProjectionManifests({postingBaseGeneration: 0, projectId: input.projectId, reviewConfigHash})
+  await insertSnapshot({...snapshot, status: 'active'})
+  await insertServingBaseRows(snapshot)
+  await articleIds.reduce<Promise<void>>(async (previous, articleId) => {
+    await previous
+    await insertJudgment({
+      answer: 'include',
+      articleId,
+      judgmentId: `${input.projectId}-${articleId}-old`,
+      projectId: input.projectId,
+    })
+  }, Promise.resolve())
+  await projectPayloadRows(snapshot)
+  await projectFullPostings(snapshot)
+  await cacheSummaryPostings(snapshot)
+
+  return snapshot
+}
+
+const changeAnswers = async (input: {
+  answers: Partial<Record<(typeof articleIds)[number], string>>
+  projectId: string
+  sourceHighWaterMark: number
+}) => {
+  await Object.entries(input.answers).reduce<Promise<void>>(async (previous, [articleId, answer]) => {
+    await previous
+    await insertJudgment({
+      answer,
+      articleId,
+      judgmentId: `${input.projectId}-${articleId}-new`,
+      projectId: input.projectId,
+    })
+    await upsertDirtyWork({
+      articleId,
+      component: 'payload',
+      projectId: input.projectId,
+      sourceHighWaterMark: input.sourceHighWaterMark,
+    })
+    await upsertDirtyWork({
+      articleId,
+      component: 'posting',
+      projectId: input.projectId,
+      sourceHighWaterMark: input.sourceHighWaterMark,
+    })
+  }, Promise.resolve())
+}
+
+const projectDirtyPayloadAndPostings = async () => {
+  expect((await wake('payload')).failures).toEqual([])
+  expect((await wake('posting')).failures).toEqual([])
+}
+
+const getSummaryPostingArticleIds = async (input: SnapshotInput) => {
+  const rows = await getPostingRows(input)
+
+  return summaryFilterValues.map((filterValue) => {
+    return getPostingArticleIds(rows, `promptAnswer|${filterValue}|llm`)
+  })
+}
+
+const getSummaryPostingRows = async (input: SnapshotInput) => {
+  return (await getPostingRows(input)).filter((row) => {
+    return row.filterValue.startsWith('review:promptAnswer:summary:')
+  })
+}
+
+test('summary postings derive the screening decision from include/exclude answers by criteria disposition', async () => {
+  const exclusionSnapshot = await setupIncludeExcludeSnapshot({
+    criteriaDisposition: 'exclude',
+    projectId: 'project-decision-exclusion',
+  })
+  const inclusionSnapshot = await setupIncludeExcludeSnapshot({
+    criteriaDisposition: 'include',
+    projectId: 'project-decision-inclusion',
+  })
+
+  expect(await getSummaryPostingArticleIds(exclusionSnapshot)).toEqual([[...articleIds], [], []])
+  expect(await getSummaryPostingArticleIds(inclusionSnapshot)).toEqual([[...articleIds], [], []])
+
+  await changeAnswers({
+    answers: {'article-a': 'exclude', 'article-x': '["include","exclude"]'},
+    projectId: exclusionSnapshot.projectId,
+    sourceHighWaterMark: 20,
+  })
+  await projectDirtyPayloadAndPostings()
+  await changeAnswers({
+    answers: {'article-a': 'Exclude', 'article-b': ' include '},
+    projectId: inclusionSnapshot.projectId,
+    sourceHighWaterMark: 30,
+  })
+  await projectDirtyPayloadAndPostings()
+
+  expect(await getSummaryPostingArticleIds(exclusionSnapshot)).toEqual([['article-b'], ['article-a'], ['article-x']])
+  expect(await getSummaryPostingArticleIds(inclusionSnapshot)).toEqual([['article-b', 'article-x'], ['article-a'], []])
+  expect(await getSummaryPostingRows(exclusionSnapshot)).toEqual(await getLazySummaryRows(exclusionSnapshot))
+  expect(await getSummaryPostingRows(inclusionSnapshot)).toEqual(await getLazySummaryRows(inclusionSnapshot))
+})

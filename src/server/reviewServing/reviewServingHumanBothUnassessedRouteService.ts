@@ -798,7 +798,7 @@ const getLlmSummaryAnswer = (judgments: readonly BothLlmJudgmentWithCriteria[]):
       return {criteriaDisposition: judgment.criteriaDisposition, promptId: judgment.promptId}
     }),
     latestJudgments.reduce<Record<string, 'maybe' | 'no' | 'yes' | null>>((acc, judgment) => {
-      return {...acc, [judgment.promptId]: getNormalizedSummaryAnswer(judgment)}
+      return {...acc, [judgment.promptId]: getNormalizedSummaryAnswer(judgment, judgment.criteriaDisposition)}
     }, {}),
     () => {},
   )
