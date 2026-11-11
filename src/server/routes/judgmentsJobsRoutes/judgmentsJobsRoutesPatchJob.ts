@@ -10,6 +10,7 @@ import {getFullTextStrategyLabelsById} from '../../fullText/fullTextStrategyRepo
 import {assertStoredProviderModelRuntimeMatch} from '../../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {assertProjectPromptTypesMatchSystemPromptVariant} from '../../services/assertProjectPromptTypesMatchSystemPromptVariant.ts'
 import {assertModelContextWindowResolvable} from '../../services/judgmentJobModelContextWindow.ts'
 import {resetJudgmentJobProviderHealthForResume} from '../../services/judgmentJobProviderHealthService.ts'
 import {HttpError} from '../../utils/httpError.ts'
@@ -107,6 +108,7 @@ export const judgmentsJobsRoutesPatchJob = async ({
     const {job, projectFullTextStrategyId, projectModelId} = await getJobContext({jobId: params.id})
     await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
     await assertModelContextWindowResolvable(projectModelId)
+    await assertProjectPromptTypesMatchSystemPromptVariant(job.projectId)
     await assertProjectFullTextCanJudge(job.projectId)
 
     if (!sqliteService.hasJob(params.id)) {
