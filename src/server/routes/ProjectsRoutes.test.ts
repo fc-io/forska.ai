@@ -4,6 +4,12 @@ import {fileURLToPath} from 'node:url'
 import {afterAll, beforeAll, expect, mock, setDefaultTimeout, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
+} from '../../agent/judge/judgeSinglePromptSystemPromptScreeningV5.ts'
 import {getCurrentReviewConfigHash} from '../services/reviewServingProjectConfigIdentity.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
@@ -550,11 +556,12 @@ afterAll(async () => {
 const insertReadyPromptPreviewFixture = async (input: {
   key: string
   promptText: string
+  promptType?: string
   secondArticle?: {doi?: string; fullText?: string; publicationStatus?: string; pubmedId?: string}
   secondArticleCreatedAt?: string | null
   secondArticleImportMetadata?: Record<string, unknown>
   secondArticleSourceMetadata?: Record<string, unknown>
-  systemPromptVariant?: 'legacy' | 'screening_v1'
+  systemPromptVariant?: 'legacy' | 'screening_v1' | 'screening_v5'
   useFulltext?: boolean
   useMetadata?: boolean
 }) => {
@@ -599,15 +606,17 @@ const insertReadyPromptPreviewFixture = async (input: {
       full_text_strategy_id = ${input.useFulltext ? `'${previewFullTextStrategyId}'` : 'NULL'}
     WHERE id = '${projectId}'
   `)
+  const promptType = input.promptType ?? `'yes' | 'no' | 'unsure'`
+
   await insertProjectPromptFixture({
-    contentHash: computePromptContentHash(input.promptText, null, 'Healthcare', `'yes' | 'no' | 'unsure'`),
+    contentHash: computePromptContentHash(input.promptText, null, 'Healthcare', promptType),
     originalText: input.promptText,
     originProjectId: projectId,
     projectId,
     projectPromptId: `project-prompt-preview-${input.key}`,
     promptHeading: 'Healthcare',
     promptId,
-    type: `'yes' | 'no' | 'unsure'`,
+    type: promptType,
   })
   await insertProjectArticleFixture({
     articleId: secondArticleId,
@@ -875,6 +884,39 @@ test('project prompt preview shows the system prompt of the project system promp
   expect(screeningPreview.payload.data.previewText).toContain('You are screening records for a systematic review')
   expect(screeningPreview.payload.data.userPrompt).toContain(
     'Is this study about screening variants in the screening project?',
+  )
+})
+
+test('project prompt preview shows the screening_v5 rendering of the prompt answer vocabulary', async () => {
+  const includeExcludeFixture = await insertReadyPromptPreviewFixture({
+    key: 'variant-include-exclude',
+    promptText: 'Question: Based on the eligibility criteria below, should the study be included or excluded?',
+    promptType: "'include' | 'exclude'",
+    systemPromptVariant: 'screening_v5',
+  })
+  const yesNoFixture = await insertReadyPromptPreviewFixture({
+    key: 'variant-v5-yes-no',
+    promptText: 'Question: Does the study meet the eligibility criteria below?',
+    promptType: "'yes' | 'no' | 'maybe'",
+    systemPromptVariant: 'screening_v5',
+  })
+  const includeExcludePreview = await requestPromptPreview(
+    includeExcludeFixture.projectId,
+    includeExcludeFixture.promptId,
+  )
+  const yesNoPreview = await requestPromptPreview(yesNoFixture.projectId, yesNoFixture.promptId)
+
+  expect(includeExcludePreview.status).toBe(200)
+  expect(includeExcludePreview.payload.data.status).toBe('ready')
+  expect(includeExcludePreview.payload.data.systemPromptVariant).toBe('screening_v5')
+  expect([
+    SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+    SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
+  ]).toContain(includeExcludePreview.payload.data.systemPrompt ?? '')
+  expect(includeExcludePreview.payload.data.userPrompt).toContain("output_type: 'include' | 'exclude'")
+  expect(yesNoPreview.status).toBe(200)
+  expect([SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5, SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC]).toContain(
+    yesNoPreview.payload.data.systemPrompt ?? '',
   )
 })
 

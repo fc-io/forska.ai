@@ -7,7 +7,12 @@ import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V1_ANTHROPIC} from './judgeSingleP
 import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V2_ANTHROPIC} from './judgeSinglePromptSystemPromptScreeningV2.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V3} from './judgeSinglePromptSystemPromptScreeningV3.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V4_ANTHROPIC} from './judgeSinglePromptSystemPromptScreeningV4.ts'
-import {SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC} from './judgeSinglePromptSystemPromptScreeningV5.ts'
+import {
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
+} from './judgeSinglePromptSystemPromptScreeningV5.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
 const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => {
@@ -358,4 +363,45 @@ test('getSinglePromptJudgmentRequest keeps none available out of the screening_v
 
   expect(result.userPrompt).toContain('none available')
   expect(result.recordText).toBe('Title\n\nSummary\n\n')
+})
+
+const getScreeningV5Request = (provider: string, promptType: string) => {
+  return getSinglePromptJudgmentRequest({
+    article: buildArticle({articleTitle: 'Screening title', articleSummary: 'Screening summary'}),
+    contentSettings: {
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useMetadata: false,
+      useTitle: true,
+    },
+    prompt: {
+      id: 'prompt-1',
+      originalText: 'Question: Based on the Population criteria below, should the study be included or excluded?',
+      order: 1,
+      promptHeading: 'Population Criteria',
+      type: promptType,
+    },
+    provider,
+    systemPromptVariant: 'screening_v5',
+  })
+}
+
+test('getSinglePromptJudgmentRequest renders screening_v5 in the prompt answer vocabulary', () => {
+  const includeExcludeRequest = getScreeningV5Request('openai', "'include' | 'exclude'")
+  const yesNoRequest = getScreeningV5Request('openai', "'yes' | 'no' | 'maybe'")
+
+  expect(includeExcludeRequest.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE)
+  expect(getScreeningV5Request('anthropic', "'include' | 'exclude'").systemPrompt).toBe(
+    SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
+  )
+  expect(yesNoRequest.systemPrompt).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5)
+  expect(getScreeningV5Request('anthropic', "'yes' | 'no'").systemPrompt).toBe(
+    SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+  )
+  expect(includeExcludeRequest.userPrompt).toContain("output_type: 'include' | 'exclude'")
+  expect(includeExcludeRequest.userPrompt.replace("'include' | 'exclude'", "'yes' | 'no' | 'maybe'")).toBe(
+    yesNoRequest.userPrompt,
+  )
+  expect(includeExcludeRequest.recordText).toBe(yesNoRequest.recordText)
 })

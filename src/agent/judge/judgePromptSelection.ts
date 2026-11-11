@@ -1,5 +1,6 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {isImportedFileRoute} from '../../utils/importRouteUtils.ts'
+import {isIncludeExcludePromptType} from './isIncludeExcludePromptType.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT, SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptSystemPromptPatient.ts'
 import {
@@ -21,6 +22,8 @@ import {
 import {
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5,
   SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_ANTHROPIC,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+  SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
 } from './judgeSinglePromptSystemPromptScreeningV5.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 import {getSystemPromptVariant, type SystemPromptVariant} from './systemPromptVariant.ts'
@@ -49,6 +52,11 @@ const singlePromptSystemPromptByVariant = {
   },
 } as const satisfies Record<SystemPromptVariant, {anthropic: string; default: string}>
 
+const screeningV5IncludeExcludeSystemPrompts = {
+  anthropic: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE_ANTHROPIC,
+  default: SINGLE_PROMPT_SYSTEM_PROMPT_SCREENING_V5_INCLUDE_EXCLUDE,
+} as const satisfies {anthropic: string; default: string}
+
 export const isFhirEhrPatientArticle = (article: ArticleRecord): boolean => {
   const articleId = article.articleId ?? ''
   const importRoute = article.importRoute ?? ''
@@ -63,11 +71,23 @@ const isAnthropicProvider = (provider: string | null | undefined): boolean => {
   return provider?.toLowerCase() === 'anthropic'
 }
 
+const getScientificArticleSystemPrompts = (
+  systemPromptVariant: SystemPromptVariant | null | undefined,
+  promptType: string | null | undefined,
+) => {
+  const resolvedSystemPromptVariant = getSystemPromptVariant(systemPromptVariant)
+
+  return resolvedSystemPromptVariant === 'screening_v5' && isIncludeExcludePromptType(promptType)
+    ? screeningV5IncludeExcludeSystemPrompts
+    : singlePromptSystemPromptByVariant[resolvedSystemPromptVariant]
+}
+
 const getScientificArticleSystemPrompt = (
   provider: string | null | undefined,
   systemPromptVariant: SystemPromptVariant | null | undefined,
+  promptType: string | null | undefined,
 ): string => {
-  const prompts = singlePromptSystemPromptByVariant[getSystemPromptVariant(systemPromptVariant)]
+  const prompts = getScientificArticleSystemPrompts(systemPromptVariant, promptType)
   return isAnthropicProvider(provider) ? prompts.anthropic : prompts.default
 }
 
@@ -75,10 +95,11 @@ export const getSinglePromptSystemPromptForArticle = (
   article: ArticleRecord,
   provider?: string | null,
   systemPromptVariant?: SystemPromptVariant | null,
+  promptType?: string | null,
 ): string => {
   return isFhirEhrPatientArticle(article)
     ? SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT
     : isStructuredImportArticle(article)
       ? SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT
-      : getScientificArticleSystemPrompt(provider, systemPromptVariant)
+      : getScientificArticleSystemPrompt(provider, systemPromptVariant, promptType)
 }
