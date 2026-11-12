@@ -4,41 +4,41 @@
 version: 'v0.0.3'
 workflows:
     '.github/workflows/actions-security.yml':
-        - 'actions/checkout@v4.4.0'
+        - 'actions/checkout@v7.0.1'
         - 'zizmorcore/zizmor-action@v0.8.1'
     '.github/workflows/duckdb-distribution.yml':
-        - 'actions/checkout@v4.4.0'
+        - 'actions/checkout@v7.0.1'
         - 'oven-sh/setup-bun@v2.2.0'
     '.github/workflows/duckdb-native-build.yml':
-        - 'actions/cache@v4.3.0'
-        - 'actions/checkout@v4.4.0'
-        - 'actions/setup-python@v5.6.0'
-        - 'actions/upload-artifact@v4.6.2'
+        - 'actions/cache@v6.1.0'
+        - 'actions/checkout@v7.0.1'
+        - 'actions/setup-python@v7.1.0'
+        - 'actions/upload-artifact@v7.0.2'
         - 'ilammy/msvc-dev-cmd@v1.13.0'
         - 'oven-sh/setup-bun@v2.2.0'
     '.github/workflows/judgment-workflow-topology.yml':
-        - 'actions/checkout@v4.4.0'
-        - 'actions/upload-artifact@v4.6.2'
+        - 'actions/checkout@v7.0.1'
+        - 'actions/upload-artifact@v7.0.2'
         - 'oven-sh/setup-bun@v2.2.0'
 dependencies:
-    'actions/cache@v4.3.0':
-        ref: 'v4.3.0'
-        commit: 'sha1-0057852bfaa89a56745cba8c7296529d2fc39830'
+    'actions/cache@v6.1.0':
+        ref: 'v6.1.0'
+        commit: 'sha1-55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
         owner_id: 44036562
         repo_id: 215566462
-    'actions/checkout@v4.4.0':
-        ref: 'v4.4.0'
-        commit: 'sha1-11d5960a326750d5838078e36cf38b85af677262'
+    'actions/checkout@v7.0.1':
+        ref: 'v7.0.1'
+        commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
-    'actions/setup-python@v5.6.0':
-        ref: 'v5.6.0'
-        commit: 'sha1-a26af69be951a213d495a4c3e4e4022e16d87065'
+    'actions/setup-python@v7.1.0':
+        ref: 'v7.1.0'
+        commit: 'sha1-6d4fd22b20465ccc0f7354476588e8df7c9ca0e0'
         owner_id: 44036562
         repo_id: 192625525
-    'actions/upload-artifact@v4.6.2':
-        ref: 'v4.6.2'
-        commit: 'sha1-ea165f8d65b6e75b540449e92b4886f43607fa02'
+    'actions/upload-artifact@v7.0.2':
+        ref: 'v7.0.2'
+        commit: 'sha1-cf430e030ddbb5b0abf93d22962f4752f3646cd9'
         owner_id: 44036562
         repo_id: 192625955
     'github/codeql-action@9b3254085494b55a0f7c4c2b3d2d52cc712ce370':
