@@ -1,9 +1,5 @@
 export type ReviewServingInterruptionEvidenceArea =
-  | 'projectorResume'
-  | 'bulkJobResume'
-  | 'searchJobResume'
-  | 'cleanupResume'
-  | 'lowMemoryDefaults'
+  'projectorResume' | 'bulkJobResume' | 'searchJobResume' | 'cleanupResume' | 'lowMemoryDefaults'
 
 export type ReviewServingInterruptionEvidenceEntry = {
   area: ReviewServingInterruptionEvidenceArea

@@ -35,7 +35,7 @@ const fetchDuckdbAppendMetrics = async (): Promise<AppendMetrics> => {
     throw new Error('Failed to fetch DuckDB append metrics')
   }
 
-  return response.data as AppendMetrics
+  return response.data
 }
 
 const formatNumber = (value: number | null | undefined) => {

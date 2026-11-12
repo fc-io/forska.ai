@@ -199,8 +199,7 @@ export type CodexAppServerClient = {
 export const codexTurnImageDetail = 'high'
 
 export type CodexTurnInputItem =
-  | {detail: typeof codexTurnImageDetail; type: 'image'; url: string}
-  | {text: string; type: 'text'}
+  {detail: typeof codexTurnImageDetail; type: 'image'; url: string} | {text: string; type: 'text'}
 
 export const getCodexTurnInput = ({
   inputImageUrls = [],
@@ -1059,8 +1058,7 @@ export const createCodexAppServerClient = ({
 
           if (isNotification(msg) && msg.method === 'turn/completed') {
             const completionParams = msg.params as
-              | {error?: unknown; turn?: {error?: unknown; id?: unknown; status?: unknown}}
-              | undefined
+              {error?: unknown; turn?: {error?: unknown; id?: unknown; status?: unknown}} | undefined
             const completedTurnId = completionParams?.turn?.id
             const status = completionParams?.turn?.status
             if (completedTurnId !== turnId) return

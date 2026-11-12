@@ -1,11 +1,6 @@
 export type CovidenceEligibilityDisposition = 'include' | 'exclude'
 export type CovidenceEligibilitySectionKey =
-  | 'population'
-  | 'interventionExposure'
-  | 'comparatorContext'
-  | 'outcome'
-  | 'studyCharacteristics'
-  | 'other'
+  'population' | 'interventionExposure' | 'comparatorContext' | 'outcome' | 'studyCharacteristics' | 'other'
 export type CovidenceEligibilitySectionValues = Record<
   CovidenceEligibilitySectionKey,
   Record<CovidenceEligibilityDisposition, string>

@@ -278,7 +278,7 @@ beforeAll(async () => {
 
   const appDatabase = getAppDatabaseService()
 
-  database = appDatabase as ReviewServingChunkManifestRepositoryDatabase
+  database = appDatabase
   closeDatabase = () => {
     return appDatabase.close()
   }
@@ -847,7 +847,7 @@ test('a request whose summary buckets are unpublished stays admitted when its la
         },
         writeOutput: input.writeOutput,
       },
-      getDatabase() as never,
+      getDatabase(),
     )
   }
 

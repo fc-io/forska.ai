@@ -308,11 +308,10 @@ const insertReviewSourceChangeOutbox = async (projectId: string, status: 'pendin
   `)
 }
 
-const insertReviewServingRow = async (projectId: string, articleId: string) => {
+const insertReviewServingRow = async (projectId: string, _articleId: string) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
-  void articleId
 
   await runDatabase(`
     INSERT INTO app.project_review_serving_generation (project_id, active_generation)

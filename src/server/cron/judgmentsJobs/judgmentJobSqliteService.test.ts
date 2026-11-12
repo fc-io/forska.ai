@@ -29,8 +29,7 @@ let getExistingFileByteSize: Awaited<typeof import('./judgmentJobSqliteService.t
 let JudgmentJobLeaseError: Awaited<typeof import('./judgmentJobSqliteService.ts')>['JudgmentJobLeaseError'] | null =
   null
 let isRetryableJudgmentJobFileDeleteError:
-  | Awaited<typeof import('./judgmentJobSqliteService.ts')>['isRetryableJudgmentJobFileDeleteError']
-  | null = null
+  Awaited<typeof import('./judgmentJobSqliteService.ts')>['isRetryableJudgmentJobFileDeleteError'] | null = null
 
 type QueueCountRow = {count: number; status: string}
 

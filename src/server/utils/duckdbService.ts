@@ -5990,7 +5990,7 @@ const runDuckdbStartupWalPreflight = async (runtimeConfig: DuckdbRuntimeConfig) 
 
   await clearStaleDuckdbStartupRepairWork(runtimeConfig)
 
-  for (let recoveryAttempt = 0; recoveryAttempt < 3; ) {
+  for (let recoveryAttempt = 0; recoveryAttempt < 3;) {
     const hadWalBeforePreflight = hasNonEmptyDuckdbWal(runtimeConfig.databasePath)
     const error = getDuckdbStartupPreflightError(runtimeConfig, hadWalBeforePreflight)
 

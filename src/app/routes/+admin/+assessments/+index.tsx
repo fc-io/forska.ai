@@ -17,10 +17,7 @@ export const AdminAssessments = () => {
       queryKey: ['human-assessments-overview'],
       queryFn: async () => {
         const response = await apiClient.api.humanassessment.overview.get()
-        const result = handleApiResponse<{data: OverviewData}>(
-          response as {data?: {data: OverviewData}; error?: unknown},
-          'Failed to fetch assessments overview',
-        )
+        const result = handleApiResponse<{data: OverviewData}>(response, 'Failed to fetch assessments overview')
         return result.data
       },
       staleTime: 10_000,
@@ -33,7 +30,7 @@ export const AdminAssessments = () => {
       queryFn: async () => {
         const response = await apiClient.api.humanassessment['overview-both-projects'].get()
         const result = handleApiResponse<{data: Array<BothProjectsRow>}>(
-          response as {data?: {data: Array<BothProjectsRow>}; error?: unknown},
+          response,
           'Failed to fetch both-assessed per-project counts',
         )
         return result.data

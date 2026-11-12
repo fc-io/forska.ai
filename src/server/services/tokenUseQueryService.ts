@@ -744,7 +744,7 @@ const insertTokenUsesOnce = async (
 
   return getAppDatabaseService().transaction(async (tx) => {
     return insertTokenUsesOnceWithRunner(tx, insertValuesList)
-  }, tokenUseInsertOnceBatchWorkloadContext) as Promise<{conflicts: TokenUseIdempotencyConflictError[]}>
+  }, tokenUseInsertOnceBatchWorkloadContext)
 }
 
 const getLargestSingleRequestRows = async (orderColumn: 'total_prompt_tokens' | 'total_completion_tokens') => {

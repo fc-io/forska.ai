@@ -36,13 +36,7 @@ import {
 } from './jobStopConditionMenuViews.tsx'
 
 type StopConditionMenuView =
-  | 'articles'
-  | 'articlesCustom'
-  | 'deadline'
-  | 'deadlinePick'
-  | 'root'
-  | 'tokens'
-  | 'tokensCustom'
+  'articles' | 'articlesCustom' | 'deadline' | 'deadlinePick' | 'root' | 'tokens' | 'tokensCustom'
 
 type StopConditionMenuKeyAction = 'back' | 'next' | 'open' | 'previous' | null
 

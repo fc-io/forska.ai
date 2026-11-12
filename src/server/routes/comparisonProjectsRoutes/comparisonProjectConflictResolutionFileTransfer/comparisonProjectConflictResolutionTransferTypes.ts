@@ -2,11 +2,7 @@ import type {HumanJudgmentMode} from '../../../../db/schemaTypes.ts'
 
 export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' | 'doi' | 'pmid'
 export type ComparisonProjectConflictResolutionTransferMatchKind =
-  | ComparisonProjectConflictResolutionTransferIdentifierKind
-  | 'article-id'
-  | 'covidence-id-title'
-  | 'id-title'
-  | 'title'
+  ComparisonProjectConflictResolutionTransferIdentifierKind | 'article-id' | 'covidence-id-title' | 'id-title' | 'title'
 
 export type ComparisonProjectConflictResolutionTransferSourceRow = {
   arxivId?: string | null

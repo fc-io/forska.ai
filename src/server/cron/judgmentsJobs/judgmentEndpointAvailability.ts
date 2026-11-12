@@ -15,12 +15,7 @@ export const judgmentEndpointProbeStaleThresholdMs = 120_000
 const endpointAvailabilityLogger = createRateLimitedLogger({windowMs: 30_000})
 
 type JudgmentEndpointFailureKind =
-  | 'network_unavailable'
-  | 'endpoint_unavailable'
-  | 'endpoint_misconfigured'
-  | 'rate_limited'
-  | 'circuit_open'
-  | 'other'
+  'network_unavailable' | 'endpoint_unavailable' | 'endpoint_misconfigured' | 'rate_limited' | 'circuit_open' | 'other'
 
 export type JudgmentEndpointAvailabilityStatus = 'healthy' | 'cooldown' | 'probing' | 'misconfigured'
 

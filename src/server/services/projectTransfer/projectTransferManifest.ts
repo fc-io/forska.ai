@@ -139,7 +139,7 @@ const assertManifestPayload = (
   key: ProjectTransferPackagePayloadKey,
   value: unknown,
 ): ProjectTransferManifestPayload => {
-  const payload = projectTransferManifestPayloadShape.assert(value) as ProjectTransferManifestPayload
+  const payload = projectTransferManifestPayloadShape.assert(value)
 
   assertChecksum(key, payload.checksumSha256)
   assertManifestPayloadPath(schemaVersion, key, payload.path)
@@ -248,7 +248,7 @@ const assertManifestProjectSummary = (
   }
 
   return {
-    counts: counts as Partial<Record<ProjectTransferPackagePayloadKey, number>>,
+    counts: counts,
     currentModel: {
       modelName: typeof currentModel.modelName === 'string' ? currentModel.modelName : null,
       remoteModelId: typeof currentModel.remoteModelId === 'string' ? currentModel.remoteModelId : null,
@@ -261,7 +261,7 @@ const assertManifestProjectSummary = (
 }
 
 const assertManifestWarning = (warning: unknown): ProjectTransferManifestWarning => {
-  const parsed = projectTransferManifestWarningShape.assert(warning) as ProjectTransferManifestWarning
+  const parsed = projectTransferManifestWarningShape.assert(warning)
   const invalidTextField = ['action', 'code', 'message', 'scope'].find((field) => {
     return (
       parsed[field as keyof Pick<ProjectTransferManifestWarning, 'action' | 'code' | 'message' | 'scope'>].trim() === ''
@@ -295,7 +295,7 @@ export const getProjectTransferManifestPayloadEntry = ({
     format,
     path,
     recordCount,
-  }) as ProjectTransferManifestPayload
+  })
 }
 
 export const assertProjectTransferManifest = (value: unknown): ProjectTransferManifest => {

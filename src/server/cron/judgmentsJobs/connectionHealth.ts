@@ -8,12 +8,7 @@ import {
 import type {ProviderKeyInput} from './providerKey.ts'
 
 export type ConnectionFailureKind =
-  | 'network_unavailable'
-  | 'endpoint_unavailable'
-  | 'endpoint_misconfigured'
-  | 'rate_limited'
-  | 'circuit_open'
-  | 'other'
+  'network_unavailable' | 'endpoint_unavailable' | 'endpoint_misconfigured' | 'rate_limited' | 'circuit_open' | 'other'
 
 export type ConnectionFailure = {
   effectiveBaseURL: string

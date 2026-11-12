@@ -97,7 +97,7 @@ const fetchInvalidJudgments = async (): Promise<InvalidJudgment[]> => {
 
   const data = response.data?.data
   if (!Array.isArray(data)) return []
-  return data as InvalidJudgment[]
+  return data
 }
 
 const DeduplicatePrompts = () => {

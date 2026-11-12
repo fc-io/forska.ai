@@ -95,13 +95,7 @@ export type ComparisonProjectConflictResolutionImportSource = {
 }
 
 export type ConflictResolutionImportMatchKind =
-  | 'doi'
-  | 'pmid'
-  | 'arxiv'
-  | 'article-id'
-  | 'covidence-id-title'
-  | 'id-title'
-  | 'title'
+  'doi' | 'pmid' | 'arxiv' | 'article-id' | 'covidence-id-title' | 'id-title' | 'title'
 
 export type ConflictResolutionImportWarningCode =
   | 'ambiguous-target-match'
@@ -222,13 +216,7 @@ export type ComparisonProjectJudgmentsColumn = ComparisonProjectDifferenceColumn
 export type ComparisonProjectContentVariant = {key: string; label: string}
 
 export type ComparisonProjectServingProgressPhase =
-  | 'cleanup'
-  | 'prompt_cells'
-  | 'promoting'
-  | 'queued'
-  | 'ready'
-  | 'rollups'
-  | 'summary_cells'
+  'cleanup' | 'prompt_cells' | 'promoting' | 'queued' | 'ready' | 'rollups' | 'summary_cells'
 
 export type ComparisonProjectServingProgress = {
   completedAt: Date | string | null
@@ -537,11 +525,7 @@ export type ComparisonProjectJudgmentsCountRequest = ComparisonProjectRowsReques
 export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters & {format?: 'csv' | 'pdf'}
 export type ComparisonProjectConflictResolutionTransferIdentifierKind = 'arxiv' | 'doi' | 'pmid'
 export type ComparisonProjectConflictResolutionTransferMatchKind =
-  | ComparisonProjectConflictResolutionTransferIdentifierKind
-  | 'article-id'
-  | 'covidence-id-title'
-  | 'id-title'
-  | 'title'
+  ComparisonProjectConflictResolutionTransferIdentifierKind | 'article-id' | 'covidence-id-title' | 'id-title' | 'title'
 export type ComparisonProjectConflictResolutionTransferIdentifier = {
   sourceIdentifierId: string
   kind: ComparisonProjectConflictResolutionTransferIdentifierKind
@@ -811,8 +795,7 @@ const getComparisonProjectConflictResolutionPdfImportFormData = (
 
 const readComparisonProjectConflictResolutionImportResponse = async <
   T extends
-    | ComparisonProjectConflictResolutionImportAnalyzePreview
-    | ComparisonProjectConflictResolutionImportCommitResponse,
+    ComparisonProjectConflictResolutionImportAnalyzePreview | ComparisonProjectConflictResolutionImportCommitResponse,
 >(
   response: Response,
   errorMessage: string,

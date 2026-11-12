@@ -9,11 +9,7 @@ export const getUnavailablePromptPreview = (input: {
   detail?: string | null
   diagnostics?: ReviewServingReaderResult<PromptPreviewServingRow>['diagnostics'] | null
   reason:
-    | 'full_text_not_ready'
-    | 'model_context_window_missing'
-    | 'no_articles'
-    | 'no_fulltext'
-    | ReviewServingFreshnessState
+    'full_text_not_ready' | 'model_context_window_missing' | 'no_articles' | 'no_fulltext' | ReviewServingFreshnessState
   systemPrompt: string
   systemPromptVariant: SystemPromptVariant
 }) => {

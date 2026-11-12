@@ -391,8 +391,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
       if (existing.status === expectedStatus) {
         const lifecycleReason =
           (statement.match(/lifecycle_reason\s*=\s*'((?:''|[^'])*)'/u)?.[1] as
-            | FakeDirtyWorkRow['lifecycleReason']
-            | undefined) ?? existing.lifecycleReason
+            FakeDirtyWorkRow['lifecycleReason'] | undefined) ?? existing.lifecycleReason
 
         dirtyWork.set(existing.dirtyWorkId, {...existing, lifecycleReason, status, updatedAt: getClock(statements)})
       }
@@ -602,8 +601,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
 
       const lifecycleReason =
         (statement.match(/lifecycle_reason\s*=\s*'((?:''|[^'])*)'/u)?.[1] as
-          | FakeDirtyWorkRow['lifecycleReason']
-          | undefined) ?? current.lifecycleReason
+          FakeDirtyWorkRow['lifecycleReason'] | undefined) ?? current.lifecycleReason
       const updated = {...current, lifecycleReason, status, updatedAt: getClock(statements)}
       dirtyWork.set(current.dirtyWorkId, updated)
 
@@ -921,8 +919,7 @@ const createFakeDirtyWorkDatabase = (options: {barrier?: FakeOutboxBarrier; befo
         if (existing.status !== 'completed') {
           const lifecycleReason =
             (statement.match(/lifecycle_reason\s*=\s*'((?:''|[^'])*)'/u)?.[1] as
-              | FakeDirtyWorkRow['lifecycleReason']
-              | undefined) ?? existing.lifecycleReason
+              FakeDirtyWorkRow['lifecycleReason'] | undefined) ?? existing.lifecycleReason
 
           dirtyWork.set(existing.dirtyWorkId, {
             ...existing,

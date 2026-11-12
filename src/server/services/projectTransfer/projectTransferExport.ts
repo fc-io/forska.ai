@@ -3856,7 +3856,7 @@ const getSchemaVNextPayloadKeyByCurrentPayloadPath = (payloadFile: string): Proj
     throw new Error(`Project transfer export asset reference has unsupported payload file: ${payloadFile}`)
   }
 
-  return key as ProjectTransferSchemaVNextPayloadKey
+  return key
 }
 
 const getSchemaVNextAssetReferencePayload = ({

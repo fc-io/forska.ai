@@ -82,7 +82,7 @@ test('articles reviews human returns serving summary-mode overall judgments', as
     }),
   )
   const body = (await response.json()) as {data: Array<Record<string, unknown>>; humanJudgmentMode: string}
-  const firstArticle = body.data[0] as Record<string, unknown> | undefined
+  const firstArticle = body.data[0]
   const firstJudgment = (firstArticle?.judgments as Array<Record<string, unknown>> | undefined)?.[0]
 
   expect(response.status).toBe(200)

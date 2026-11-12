@@ -129,7 +129,7 @@ const toIsoFromDateString = (date?: string): string => {
   if (!date) return toIsoDate()
   const parts = date.split('-')
   if (parts.length === 3) return `${parts[0]}-${parts[1]}-${parts[2]}T00:00:00.000Z`
-  if (parts.length === 2) return toIsoDate(parts[0] as unknown as number, parts[1] as unknown as number, 1)
+  if (parts.length === 2) return toIsoDate(parts[0], parts[1], 1)
   return toIsoDate(Number.parseInt(parts[0] ?? '1970', 10), 1, 1)
 }
 

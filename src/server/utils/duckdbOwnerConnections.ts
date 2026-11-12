@@ -67,11 +67,7 @@ export type WorkerRegistryThroughputProfile = {
 }
 
 export type WorkerRegistryOwnerFreshnessState =
-  | 'owner_dead'
-  | 'owner_fresh'
-  | 'owner_missing'
-  | 'owner_stale'
-  | 'owner_unknown'
+  'owner_dead' | 'owner_fresh' | 'owner_missing' | 'owner_stale' | 'owner_unknown'
 
 export type WorkerRegistryTakeoverIntent = 'none' | 'standby' | 'takeover_in_progress'
 

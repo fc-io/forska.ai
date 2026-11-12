@@ -25,8 +25,7 @@ let closeDatabase: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let appendLlmJudgmentReviewServingDeltasOverride:
-  | ((...args: AppendLlmJudgmentReviewServingDeltasArgs) => Promise<void>)
-  | null = null
+  ((...args: AppendLlmJudgmentReviewServingDeltasArgs) => Promise<void>) | null = null
 
 void mock.module(llmJudgmentReviewServingDeltaServiceModulePath, () => {
   return {

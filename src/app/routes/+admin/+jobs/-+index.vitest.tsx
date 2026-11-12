@@ -44,7 +44,7 @@ vi.mock('../../../../services/apiClient.ts', () => {
       },
       {
         apply: (_target, _thisArg, args: unknown[]) => {
-          return createEdenNode([...segments, `:${Object.values((args[0] ?? {}) as object).join(',')}`])
+          return createEdenNode([...segments, `:${Object.values(args[0] ?? {}).join(',')}`])
         },
         get: (_target, property) => {
           return typeof property !== 'string' || property === 'then'

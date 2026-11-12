@@ -139,8 +139,7 @@ const getNormalizedQuotes = (judgment: Judgment | undefined): string[] => {
 }
 
 type PendingScrollRequest =
-  | {type: 'highlightIndex'; index: number; judgmentId?: string}
-  | {type: 'quote'; quote: string; judgmentId?: string}
+  {type: 'highlightIndex'; index: number; judgmentId?: string} | {type: 'quote'; quote: string; judgmentId?: string}
 
 type QuoteCycleState = {anchorIndex: number; nextIndex: number}
 
@@ -375,7 +374,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     const text = sanitizedFulltext()
     if (lastFulltextSentToWorker === text) return
     lastFulltextSentToWorker = text
-    return worker.postMessage({type: 'setText', text} as FulltextHighlightWorkerRequest)
+    return worker.postMessage({type: 'setText', text} satisfies FulltextHighlightWorkerRequest)
   })
 
   createEffect(() => {
@@ -421,7 +420,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       kind: 'title',
       text,
       quotes,
-    } as FulltextHighlightWorkerRequest)
+    } satisfies FulltextHighlightWorkerRequest)
   })
 
   createEffect(() => {
@@ -467,7 +466,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       kind: 'summary',
       text,
       quotes,
-    } as FulltextHighlightWorkerRequest)
+    } satisfies FulltextHighlightWorkerRequest)
   })
 
   createEffect(() => {
@@ -507,7 +506,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       kind: 'metadata',
       text,
       quotes,
-    } as FulltextHighlightWorkerRequest)
+    } satisfies FulltextHighlightWorkerRequest)
   })
 
   createEffect(() => {
@@ -554,7 +553,12 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     setHighlightedFulltextHtml(undefined)
 
     highlightDebounceTimeout = window.setTimeout(() => {
-      return worker?.postMessage({type: 'highlight', requestId, cacheKey, quotes} as FulltextHighlightWorkerRequest)
+      return worker?.postMessage({
+        type: 'highlight',
+        requestId,
+        cacheKey,
+        quotes,
+      } satisfies FulltextHighlightWorkerRequest)
     }, 75)
   })
 
@@ -569,7 +573,7 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       window.cancelAnimationFrame(scheduledScrollInnerFrame)
     }
     if (fulltextHighlightWorker) {
-      fulltextHighlightWorker.postMessage({type: 'clear'} as FulltextHighlightWorkerRequest)
+      fulltextHighlightWorker.postMessage({type: 'clear'} satisfies FulltextHighlightWorkerRequest)
       fulltextHighlightWorker.terminate()
     }
   })
@@ -613,7 +617,8 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
     }
 
     el.classList.remove(clickFlashClass)
-    void el.offsetWidth
+    // Reading offsetWidth forces a reflow, so re-adding the class restarts the flash animation.
+    el.offsetWidth
     el.classList.add(clickFlashClass)
 
     const timeout = window.setTimeout(() => {
@@ -916,9 +921,9 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
       requestScrollToQuote(quoteToScroll, judgmentId)
     }
 
-    window.addEventListener(reviewArticleDetailsScrollToQuoteEventName, handleScrollToQuoteEvent as EventListener)
+    window.addEventListener(reviewArticleDetailsScrollToQuoteEventName, handleScrollToQuoteEvent)
     onCleanup(() => {
-      window.removeEventListener(reviewArticleDetailsScrollToQuoteEventName, handleScrollToQuoteEvent as EventListener)
+      window.removeEventListener(reviewArticleDetailsScrollToQuoteEventName, handleScrollToQuoteEvent)
     })
 
     if (enableSticky()) {

@@ -14,7 +14,6 @@ type ProjectTransferHistoryRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run?: (statement: string) => Promise<void>
 }
-type ProjectTransferHistoryWriterRunner = ProjectTransferHistoryRunner & {run: (statement: string) => Promise<void>}
 
 type ProjectTransferPayloadCounts = Record<string, number>
 
@@ -279,7 +278,7 @@ const createProjectTransferHistory = async (params: CreateProjectTransferHistory
   return params.runner
     ? createProjectTransferHistoryTx({...params, runner: params.runner})
     : getAppDatabaseService().transaction((tx) => {
-        return createProjectTransferHistoryTx({...params, runner: tx as ProjectTransferHistoryWriterRunner})
+        return createProjectTransferHistoryTx({...params, runner: tx})
       }, projectTransferCommitTransactionWorkloadContext)
 }
 

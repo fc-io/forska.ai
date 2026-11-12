@@ -28,7 +28,7 @@ const mockState = vi.hoisted(() => {
     navigate: vi.fn((_options: {search: Record<string, string>}) => {
       return Promise.resolve()
     }),
-    search: {} as Record<string, unknown>,
+    search: {},
     setComparisonProjectConflictComment: vi.fn(),
   }
 })
@@ -182,7 +182,7 @@ const getMetadata = (activeGeneration: number, judgmentContextId: string): Compa
       startedAt: null,
       totalArticleCount: null,
       totalCellCount: null,
-    } as ComparisonProjectJudgmentsMetadata['servingProgress'],
+    },
     servingStatus: 'ready',
     servingUpdatedAt: null,
     sourceProjects: [],

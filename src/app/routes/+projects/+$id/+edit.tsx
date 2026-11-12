@@ -353,7 +353,7 @@ const formatDateForInput = (value: string | Date | null): string => {
 
 const EditProject = (): JSX.Element => {
   const params = Route.useParams()
-  const projectId = (params() as {id: string}).id
+  const projectId = params().id
   const navigate = useNavigate()
   const queryClient = appQueryClient
   const projectAccessQuery = useProjectAccessQuery(
@@ -414,10 +414,7 @@ const EditProject = (): JSX.Element => {
         queryKey: ['models'],
         queryFn: async () => {
           const response = await apiClient.api.models.get()
-          const result = handleApiResponse<ModelsResponse>(
-            response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
-            'Failed to load models',
-          )
+          const result = handleApiResponse<ModelsResponse>(response, 'Failed to load models')
           return result.data ?? []
         },
         staleTime: 1000 * 60 * 5,
@@ -716,10 +713,7 @@ const EditProject = (): JSX.Element => {
         ...(payload.recordCurrentFullTextStrategy ? {recordCurrentFullTextStrategy: true} : {}),
       })
 
-    const result = handleApiResponse<ProjectUpdateResponse>(
-      response as unknown as {data?: ProjectUpdateResponse; error?: unknown; status?: number},
-      'Failed to update project',
-    ).data
+    const result = handleApiResponse<ProjectUpdateResponse>(response, 'Failed to update project').data
     setProjectName(result.project.name)
     setDescription(result.project.description ?? '')
     setDateFrom(formatDateForInput(result.project.dateFrom))

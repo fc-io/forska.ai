@@ -10,8 +10,7 @@ export type DuckdbWalCheckpointRuntimeState = {runtimeOpen: boolean; walBytes: n
 export type DuckdbWalCheckpointSkipReason = 'below-threshold' | 'min-interval' | 'runtime-closed' | 'writes-in-flight'
 
 export type DuckdbWalCheckpointDecision =
-  | {action: 'checkpoint'}
-  | {action: 'skip'; reason: DuckdbWalCheckpointSkipReason}
+  {action: 'checkpoint'} | {action: 'skip'; reason: DuckdbWalCheckpointSkipReason}
 
 export type DuckdbIdleWalCheckpointOutcome = 'completed' | 'skipped-writes-in-flight'
 

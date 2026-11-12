@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
-import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
+import {getStableReviewServingJson} from './reviewProjectionIdentity.ts'
 import {
   namedReviewFastCountDefinitions,
   type NamedReviewFastCountKey,
@@ -260,7 +260,7 @@ const getSummaryDefinitionVersion = (identity: Pick<SummaryContributionIdentity,
 }
 
 const getSummaryContributionKey = (row: SummaryContributionIdentity) => {
-  return getStableReviewServingJson(row as unknown as ReviewServingIdentityValue)
+  return getStableReviewServingJson(row)
 }
 
 const parseSummaryContributionKey = (contributionKey: string): SummaryContributionIdentity | null => {
@@ -1734,7 +1734,7 @@ export const patchReviewServingSummaryLedgerBuckets = async (
 
 export const projectReviewServingSummaries = async (
   input: ProjectReviewServingSummariesInput,
-  database: ReviewServingSummaryProjectorDatabase = getAppDatabaseService() as ReviewServingSummaryProjectorDatabase,
+  database: ReviewServingSummaryProjectorDatabase = getAppDatabaseService(),
 ) => {
   const phaseTimings: Record<string, number> = {}
   const measure = async <T>(phase: string, operation: () => Promise<T>) => {

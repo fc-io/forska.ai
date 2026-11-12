@@ -116,8 +116,7 @@ export type ProviderAdmissionLeaseReleaseResult = {released: true} | {released: 
 export type ProviderAdmissionLeaseHeartbeatInput = ProviderAdmissionLeaseReleaseInput & {nowMs?: number; ttlMs?: number}
 
 export type ProviderAdmissionLeaseHeartbeatResult =
-  | {heartbeat: true; lease: ProviderAdmissionLeaseRecord}
-  | {heartbeat: false; reason: 'missing' | 'notHolder'}
+  {heartbeat: true; lease: ProviderAdmissionLeaseRecord} | {heartbeat: false; reason: 'missing' | 'notHolder'}
 
 export type ProviderAdmissionLeaseExpiryInput = {nowMs?: number; providerKey: string}
 
@@ -1320,7 +1319,7 @@ const reconcileProviderAdmissionLeasesForProvider = async ({
         suspectFreshHolderLeaseCount,
         suspectFreshProofLeaseCount,
       }
-    }, providerAdmissionLeaseReconcileWorkloadContext) as Promise<ProviderAdmissionLeaseReconciliationResult>
+    }, providerAdmissionLeaseReconcileWorkloadContext)
   })
 }
 
@@ -1668,7 +1667,7 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
         providerLimitVersion: currentSnapshot.providerLimitVersion,
         staleProviderLimitSnapshot: false,
       }
-    }, providerAdmissionLeaseAcquireWorkloadContext) as Promise<ProviderAdmissionLeaseAcquireResult>
+    }, providerAdmissionLeaseAcquireWorkloadContext)
   })
 }
 
@@ -1722,7 +1721,7 @@ export const heartbeatProviderAdmissionLeaseOnCurrentOwner = async (
       const reason = existingLease !== null && existingLease.providerKey === input.providerKey ? 'notHolder' : 'missing'
 
       return {heartbeat: false, reason}
-    }, providerAdmissionLeaseHeartbeatWorkloadContext) as Promise<ProviderAdmissionLeaseHeartbeatResult>
+    }, providerAdmissionLeaseHeartbeatWorkloadContext)
   })
 }
 
@@ -1763,7 +1762,7 @@ export const releaseProviderAdmissionLeaseWithResultOnCurrentOwner = async (
       const reason = existingLease !== null && existingLease.providerKey === input.providerKey ? 'notHolder' : 'missing'
 
       return {released: false, reason}
-    }, providerAdmissionLeaseReleaseWorkloadContext) as Promise<ProviderAdmissionLeaseReleaseResult>
+    }, providerAdmissionLeaseReleaseWorkloadContext)
   })
 }
 
@@ -1807,7 +1806,7 @@ export const expireProviderAdmissionLeasesOnCurrentOwner = async (
       })
 
       return {expiredLeaseCount}
-    }, providerAdmissionLeaseExpireWorkloadContext) as Promise<ProviderAdmissionLeaseExpiryResult>
+    }, providerAdmissionLeaseExpireWorkloadContext)
   })
 }
 

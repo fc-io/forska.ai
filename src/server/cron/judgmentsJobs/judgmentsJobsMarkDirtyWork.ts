@@ -640,5 +640,5 @@ export const commitJudgmentSqliteOutboxImportDirtyWork = async ({
       importedRows: getImportedRows(unmarkedImportableEntries, insertedJudgmentIds),
       importableRows: getOutboxImportRows(importableEntries),
     }
-  }) as Promise<JudgmentSqliteOutboxDirtyWorkResult>
+  })
 }

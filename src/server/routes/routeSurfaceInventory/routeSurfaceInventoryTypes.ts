@@ -7,10 +7,7 @@ export type RouteSurfaceCategory =
   | 'supported-local-api'
 
 export type RouteSurfaceProxyClassification =
-  | 'duckdb-owner-diagnostics'
-  | 'local-bootstrap'
-  | 'owner-dependent'
-  | 'ownerless-readable-diagnostics'
+  'duckdb-owner-diagnostics' | 'local-bootstrap' | 'owner-dependent' | 'ownerless-readable-diagnostics'
 
 /**
  * How long the API process waits on the DuckDB owner when it proxies this route.

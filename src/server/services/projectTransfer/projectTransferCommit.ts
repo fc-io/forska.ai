@@ -80,7 +80,6 @@ import {resolveProjectTransferTempWritablePath} from './projectTransferPaths.ts'
 import {
   assertProjectTransferPayloadRow,
   parseProjectTransferPayload,
-  type ProjectTransferPayload,
   type ProjectTransferPayloadByKey,
   type ProjectTransferPayloadRecord,
 } from './projectTransferPayloadSchemas.ts'
@@ -557,9 +556,9 @@ const readExtractedPayloads = async (
       )
     }
 
-    payloads[key] = (await (input.retainCompactJudgments && key === 'judgments'
+    payloads[key] = await (input.retainCompactJudgments && key === 'judgments'
       ? readCompactExtractedJudgments(input)
-      : readExtractedPayload({...input, key}))) as ProjectTransferPayload
+      : readExtractedPayload({...input, key}))
 
     await input.onPayloadRead?.({completedItems: index + 1, totalItems})
 

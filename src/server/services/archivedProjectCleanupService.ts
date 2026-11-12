@@ -8,12 +8,7 @@ import {
 
 type AppRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 type CleanupPhase =
-  | 'final_delete'
-  | 'idle'
-  | 'mart_cleanup'
-  | 'runtime_state_cleanup'
-  | 'source_cleanup'
-  | 'tombstone_cleanup'
+  'final_delete' | 'idle' | 'mart_cleanup' | 'runtime_state_cleanup' | 'source_cleanup' | 'tombstone_cleanup'
 type CleanupMutation = {
   optional?: boolean
   phase: CleanupPhase
@@ -489,7 +484,7 @@ const cleanupComparisonProjectSummarySourceReferences = async (
   })
   const comparisonProjectIdsSql = getQuotedStringList(comparisonProjectIds).join(', ')
 
-  return (await getAppDatabaseService().transaction(async (tx) => {
+  return await getAppDatabaseService().transaction(async (tx) => {
     await tx.run(`
         UPDATE app.comparison_project
         SET summary_source_project_id = NULL,
@@ -503,7 +498,7 @@ const cleanupComparisonProjectSummarySourceReferences = async (
       projectId,
       tableName: 'app.comparison_project',
     }
-  }, archivedProjectCleanupWorkloadContext)) as ArchivedProjectCleanupBatchResult | null
+  }, archivedProjectCleanupWorkloadContext)
 }
 
 const getRemainingProjectForeignKeyRowsTx = async (tx: AppRunner, projectId: string) => {
@@ -579,7 +574,7 @@ const finalDeleteProject = async (projectId: string): Promise<ArchivedProjectCle
     `)
 
     return {deletedRowCount: 1, phase: 'final_delete', projectId, tableName: 'app.project'}
-  }, archivedProjectCleanupWorkloadContext) as Promise<ArchivedProjectCleanupBatchResult | null>
+  }, archivedProjectCleanupWorkloadContext)
 }
 
 const recordTombstoneCleanupResult = async (result: ArchivedProjectCleanupBatchResult) => {

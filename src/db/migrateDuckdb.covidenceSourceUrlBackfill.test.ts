@@ -20,8 +20,7 @@ const migrationSql = readFileSync(resolve(import.meta.dir, 'duckdbMigrations', m
 let database: ReturnType<typeof getAppDatabaseService> | null = null
 let migrateDuckdb: typeof import('./migrateDuckdb.ts').migrateDuckdb | null = null
 let getCovidenceBibliographicMetadata:
-  | typeof import('../server/services/covidenceImportService.ts').getCovidenceBibliographicMetadata
-  | null = null
+  typeof import('../server/services/covidenceImportService.ts').getCovidenceBibliographicMetadata | null = null
 
 type MetadataRow = {id: string; metadata: Record<string, unknown> | unknown[] | null}
 

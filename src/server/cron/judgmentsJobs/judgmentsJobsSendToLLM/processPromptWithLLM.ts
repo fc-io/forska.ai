@@ -399,12 +399,12 @@ const getCachedArticle = async ({
     })
 
     return article
-      ? ({
+      ? {
           ...article,
           createdAt: article.createdAt ?? new Date(0),
           updatedAt: article.updatedAt ?? new Date(0),
           publicationStatus: article.publicationStatus as PublicationStatus | null,
-        } as ArticleRecord)
+        }
       : null
   })
 }

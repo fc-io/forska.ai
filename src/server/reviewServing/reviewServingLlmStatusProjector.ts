@@ -1164,14 +1164,14 @@ const projectReviewServingLlmStatusClaimlessRanges = async (
 
 export const projectReviewServingLlmStatusRanges = async (
   input: ProjectReviewServingLlmStatusRangesInput,
-  database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService() as ReviewServingLlmStatusProjectorDatabase,
+  database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService(),
 ) => {
   return projectReviewServingLlmStatusClaimlessRanges(input, database)
 }
 
 export const projectReviewServingLlmStatusPatches = async (
   input: ProjectReviewServingLlmStatusInput,
-  database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService() as ReviewServingLlmStatusProjectorDatabase,
+  database: ReviewServingLlmStatusProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, measureSync, phaseTimings} = getTimedProjector()
   const patchWatermark = getPatchWatermark(input.claims)

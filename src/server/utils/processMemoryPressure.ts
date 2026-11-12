@@ -36,7 +36,7 @@ const getProcPidRusage = () => {
       proc_pid_rusage: {args: [FFIType.i32, FFIType.i32, FFIType.ptr], returns: FFIType.i32},
     })
 
-    procPidRusage = library.symbols.proc_pid_rusage as ProcPidRusage
+    procPidRusage = library.symbols.proc_pid_rusage
   } catch {
     procPidRusage = null
   }

@@ -493,11 +493,7 @@ export type PromptCompletionAck = {
 export type PromptNoRequestSuccessReason = 'alreadyJudged'
 
 export type PromptCloseoutReason =
-  | 'articleMissing'
-  | 'ownerCompletionFailed'
-  | 'promptMissing'
-  | 'recoverableRequestFailureExhausted'
-  | 'requestFailure'
+  'articleMissing' | 'ownerCompletionFailed' | 'promptMissing' | 'recoverableRequestFailureExhausted' | 'requestFailure'
 
 type PromptCompletionAckRow = {
   claimId: string

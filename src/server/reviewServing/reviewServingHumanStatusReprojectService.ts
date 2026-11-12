@@ -129,7 +129,7 @@ const getHumanStatusCounts = async (
 // reader gates on it, so neither direction can regress or block a later write.
 export const reprojectReviewServingHumanStatus = async (
   input: {projectId: string},
-  database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService() as ReviewServingHumanStatusProjectorDatabase,
+  database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService(),
 ): Promise<ReviewServingHumanStatusReprojectResult> => {
   const startedAtMs = Date.now()
   const [project] = await database.queryJson<{humanJudgmentMode: string | null}>(`

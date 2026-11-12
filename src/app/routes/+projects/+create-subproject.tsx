@@ -69,10 +69,7 @@ const CreateSubproject = () => {
       queryKey: ['subproject-sources'],
       queryFn: async () => {
         const response = await apiClient.api.subprojects.sources.get()
-        const result = handleApiResponse<SourcesResponse>(
-          response as {data?: SourcesResponse; error?: unknown; status?: number},
-          'Failed to load project sources',
-        )
+        const result = handleApiResponse<SourcesResponse>(response, 'Failed to load project sources')
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,
@@ -84,10 +81,7 @@ const CreateSubproject = () => {
       queryKey: ['models'],
       queryFn: async () => {
         const response = await apiClient.api.models.get()
-        const result = handleApiResponse<ModelsResponse>(
-          response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
-          'Failed to load models',
-        )
+        const result = handleApiResponse<ModelsResponse>(response, 'Failed to load models')
         return result.data ?? []
       },
       staleTime: 1000 * 60 * 5,

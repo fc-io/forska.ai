@@ -70,13 +70,11 @@ const CompareProjectExportPage = () => {
   const params = Route.useParams()
   const search = Route.useSearch()
   const navigate = useNavigate()
-  const initialUrlState = getInitialCompareProjectExportUrlState(search() as Record<string, unknown>)
+  const initialUrlState = getInitialCompareProjectExportUrlState(search())
   const [covidenceExportSelection, setCovidenceExportSelection] =
-    createSignal<CompareProjectCovidenceExportUrlSelection>(
-      getInitialCompareProjectCovidenceExportSelection(search() as Record<string, unknown>),
-    )
+    createSignal<CompareProjectCovidenceExportUrlSelection>(getInitialCompareProjectCovidenceExportSelection(search()))
   const comparisonProjectId = () => {
-    return getComparisonProjectId(params() as Record<string, string> | undefined)
+    return getComparisonProjectId(params())
   }
   const [pageLimit] = createSignal(initialUrlState.pageLimit)
   const [rowFilters, setRowFilters] = createSignal<ComparisonProjectRowFilter[]>(initialUrlState.rowFilters)

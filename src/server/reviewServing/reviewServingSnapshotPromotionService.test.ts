@@ -89,14 +89,7 @@ const queueManifest = {
 const getManifestKey = (manifest: {
   projectId: string
   projectionComponent:
-    | 'display'
-    | 'humanStatus'
-    | 'llmStatus'
-    | 'payload'
-    | 'projectScope'
-    | 'queue'
-    | 'search'
-    | 'selectedImport'
+    'display' | 'humanStatus' | 'llmStatus' | 'payload' | 'projectScope' | 'queue' | 'search' | 'selectedImport'
   projectionIdentity: string
 }) => {
   return getReviewServingProjectionComponentIdentityKey(manifest)

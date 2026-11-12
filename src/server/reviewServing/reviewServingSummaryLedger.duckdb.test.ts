@@ -261,7 +261,7 @@ const projectPayloadRows = async (input: SnapshotInput) => {
       useMetadata: false,
       useTitle: true,
     },
-    getDatabase() as never,
+    getDatabase(),
   )
 }
 
@@ -350,7 +350,7 @@ const runSummaryChunk = async (input: SnapshotInput & {index: number}) => {
       chunkStartArticleId: chunk?.chunkStartKey,
       requestId: getRequestId(input.projectId),
     },
-    getDatabase() as never,
+    getDatabase(),
   )
   await getDatabase().run(`
     UPDATE app.review_rebuild_chunk_manifest
@@ -371,7 +371,7 @@ const finalizeSummaryRebuild = async (input: SnapshotInput) => {
       requestId: getRequestId(input.projectId),
       snapshots: [{...input, hasSummaryRebuildChunks: true}],
     },
-    getDatabase() as never,
+    getDatabase(),
   )
 }
 
@@ -463,11 +463,7 @@ const wakeSummary = async (dependencies: Partial<ReviewServingProjectorServiceDe
 
   return wakeReviewServingProjectorService(
     {batchSize: 64, componentOrder: ['summary'], maxRowsPerWake: 64, maxWakeMs: 600_000, wakeId: 'wake-summary'},
-    {
-      database: getDatabase(),
-      runners: getDefaultReviewServingProjectorRunners(getDatabase() as never),
-      ...dependencies,
-    },
+    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase()), ...dependencies},
   )
 }
 
@@ -534,7 +530,7 @@ const getFullRecomputeRows = async (input: SnapshotInput) => {
   }, Promise.resolve())
   await projectReviewServingSummaries(
     getSummaryProjectorInput({...input, snapshotId: referenceSnapshotId}),
-    getDatabase() as never,
+    getDatabase(),
   )
 
   return getSummaryRows({projectId: input.projectId, snapshotId: referenceSnapshotId})
@@ -659,9 +655,9 @@ test('running the same summary bucket patch twice leaves the ledger and the serv
 
   await assessArticleX(snapshot)
 
-  const firstPatch = await patchReviewServingSummaryLedgerBuckets(patchInput, getDatabase() as never)
+  const firstPatch = await patchReviewServingSummaryLedgerBuckets(patchInput, getDatabase())
   const afterFirst = {ledger: await getLedgerRows(snapshot), serving: await getSummaryRows(snapshot)}
-  const secondPatch = await patchReviewServingSummaryLedgerBuckets(patchInput, getDatabase() as never)
+  const secondPatch = await patchReviewServingSummaryLedgerBuckets(patchInput, getDatabase())
   const afterSecond = {ledger: await getLedgerRows(snapshot), serving: await getSummaryRows(snapshot)}
 
   expect(firstPatch).toMatchObject({bucketCount: 1, publishedBucketCount: 1})
@@ -756,7 +752,7 @@ test('summary claims take a requested-only bootstrap when no snapshot has a buck
   await upsertProjectionManifests({projectId, reviewConfigHash})
   await insertSnapshot({...live, hasSummary: true, status: 'active'})
   await insertUpstreamRows(live)
-  await projectReviewServingSummaries(getSummaryProjectorInput(live), getDatabase() as never)
+  await projectReviewServingSummaries(getSummaryProjectorInput(live), getDatabase())
   await insertSnapshot({...candidate, hasSummary: true, status: 'candidate'})
   await insertUpstreamRows(candidate)
   await insertSummaryRebuild({

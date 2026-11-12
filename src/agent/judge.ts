@@ -1205,9 +1205,7 @@ type JudgeCallContext = {
 }
 
 type JudgeCallValidation<T> =
-  | {kind: 'valid'; value: T}
-  | {error: string; kind: 'requeue'}
-  | {error: string; kind: 'retry'; nextPrompt: string}
+  {kind: 'valid'; value: T} | {error: string; kind: 'requeue'} | {error: string; kind: 'retry'; nextPrompt: string}
 
 type JudgeCallConnectionError = {
   baseURL: string

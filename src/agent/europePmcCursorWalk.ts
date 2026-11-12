@@ -38,8 +38,7 @@ type EuropePmcCursorWalkInput<Item> = {
 type SettledEuropePmcPage<Item> = {error: unknown; ok: false} | {fetched: EuropePmcFetchedPage<Item>; ok: true}
 
 type EuropePmcWalkStep =
-  | {endReason: EuropePmcWalkEndReason; nextCursorMark: null}
-  | {endReason: null; nextCursorMark: string}
+  {endReason: EuropePmcWalkEndReason; nextCursorMark: null} | {endReason: null; nextCursorMark: string}
 
 const europePmcPageSize = 1000
 const europePmcRequestGapMs = 100

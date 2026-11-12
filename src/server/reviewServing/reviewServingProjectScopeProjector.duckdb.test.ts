@@ -103,7 +103,7 @@ const projectScopeClaims = async (claims: readonly ReviewServingDirtyWorkClaim[]
       projectId,
       projectionIdentity: projectScopeIdentity,
     },
-    getDatabase() as never,
+    getDatabase(),
   )
 }
 

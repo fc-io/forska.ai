@@ -445,7 +445,7 @@ const getFinalizationCycleDependencies = (): ReviewServingProjectorWorkerDepende
       return {failedSnapshots: [], projectIds: [], remainingStaleCandidateCount: 0, skippedSnapshotCount: 0}
     },
     getDatabase: () => {
-      return getDatabase() as never
+      return getDatabase()
     },
     rebuildChunkService: {
       claimChunk: unexpectedChunkWork,
@@ -564,7 +564,7 @@ afterAll(async () => {
 test('queue patches skip candidate rows that a pending rebuild chunk will rebuild and still reach every other snapshot', async () => {
   const {getDefaultReviewServingProjectorRunners} = await import('./reviewServingProjectorWorker.ts')
   const {projectReviewServingQueueRebuildRows} = await import('../reviewServing/reviewServingQueueProjector.ts')
-  const runner = getDefaultReviewServingProjectorRunners(getDatabase() as never).queue
+  const runner = getDefaultReviewServingProjectorRunners(getDatabase()).queue
 
   await runner?.({
     claims: [getQueueClaim('article-10'), getQueueClaim('article-50')],
@@ -701,7 +701,7 @@ test('a selectedImport dirty-work chunk refreshes shared serving rows without cl
     throw new Error('selectedImport dirty-work chunk was not inserted')
   }
 
-  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk({chunk, leaseOwner}, getDatabase() as never)
+  const result = await runReviewServingProjectorWorkerClaimedRebuildChunk({chunk, leaseOwner}, getDatabase())
 
   expect(result).toEqual({status: 'completed'})
   expect(await getSharedImportServingRows()).toEqual(
@@ -1151,7 +1151,7 @@ test('an in-place rebuild of a snapshot the project no longer serves under its c
     VALUES ('${projectId}', '${projectId}', 'model-queue', TRUE, TRUE, FALSE, FALSE)
   `)
 
-  const currentReviewConfigHash = await getCurrentReviewServingReviewConfigHash(projectId, getDatabase() as never)
+  const currentReviewConfigHash = await getCurrentReviewServingReviewConfigHash(projectId, getDatabase())
   const snapshots = [
     ['snapshot-current-config', currentReviewConfigHash],
     ['snapshot-before-config-edit', 'review-config-before-edit'],

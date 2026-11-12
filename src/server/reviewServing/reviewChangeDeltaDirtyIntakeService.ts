@@ -483,7 +483,7 @@ export const intakeReviewChangeDeltaRangeToDirtyWork = async (
 
 export const intakeReviewChangeDeltasToDirtyWork = async (
   params: IntakeReviewChangeDeltaDirtyWorkParams,
-  database: ReviewChangeDeltaDirtyIntakeDatabase = getAppDatabaseService() as ReviewChangeDeltaDirtyIntakeDatabase,
+  database: ReviewChangeDeltaDirtyIntakeDatabase = getAppDatabaseService(),
 ): Promise<ReviewChangeDeltaDirtyIntakeResult> => {
   const rows = await getReviewChangeDeltaRows(database, params)
   const validated = await getValidatedReviewChangeDeltaRows(rows, database)

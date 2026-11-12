@@ -209,7 +209,7 @@ const getTargetsOfCurrentReviewConfig = async (
   const currentHashes = new Map(
     await Promise.all(
       projectIds.map(async (projectId) => {
-        return [projectId, await getCurrentReviewServingReviewConfigHash(projectId, database as never)] as const
+        return [projectId, await getCurrentReviewServingReviewConfigHash(projectId, database)] as const
       }),
     ),
   )
@@ -440,7 +440,7 @@ export type RetireReviewServingRebuiltDirtyWorkResult = {retiredCount: number; s
 
 export const retireReviewServingDirtyWorkRebuiltByChunks = async (
   input: {nowMs?: number; projectId?: string | null} = {},
-  database: ReviewServingRetirementDatabase = getAppDatabaseService() as ReviewServingRetirementDatabase,
+  database: ReviewServingRetirementDatabase = getAppDatabaseService(),
 ): Promise<RetireReviewServingRebuiltDirtyWorkResult> => {
   const nowMs = input.nowMs ?? Date.now()
 

@@ -17,11 +17,7 @@ export const legacyCompletionEvidenceQuarantinedReason = 'legacyCompletionEviden
 export const legacyRolloutImportedCloseoutReason = 'legacyRolloutImported'
 
 export type LegacyCompletionEvidenceSurface =
-  | 'completion_ack'
-  | 'completion_outbox'
-  | 'judgment_outbox'
-  | 'pending_token_use'
-  | 'token_use'
+  'completion_ack' | 'completion_outbox' | 'judgment_outbox' | 'pending_token_use' | 'token_use'
 
 export type LegacyDurableRowRef = {
   surface: LegacyCompletionEvidenceSurface

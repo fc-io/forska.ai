@@ -29,12 +29,7 @@ export type ReviewServingChunkManifestRepositoryDatabase = ReviewServingChunkMan
 export type ReviewServingRebuildChunkTimingSink = Record<string, number>
 
 export type ReviewServingRebuildChunkStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'blocked_over_budget'
-  | 'quarantined'
+  'pending' | 'running' | 'completed' | 'failed' | 'blocked_over_budget' | 'quarantined'
 
 export type ReviewServingRebuildChunkAdmissionState = 'admitted' | 'blocked_over_budget' | 'pending'
 export type ReviewServingRebuildChunkWorkloadClass = 'bulk' | 'critical'

@@ -2717,7 +2717,7 @@ const appendReviewServingV4SnapshotComponents = async (
       composedIdentity: {
         ...composedIdentity,
         componentSet: getCanonicalReviewServingComponents([...snapshotComponentSet, ...input.addedComponents]),
-      } as ReviewServingIdentityValue,
+      },
       projectId: input.projectId,
       snapshotId: snapshot.snapshotId,
     },
@@ -3112,7 +3112,7 @@ const getReviewServingV4CoalescePlan = (input: {
 // in-place requests that train already covers (readmission would otherwise rebuild them from older watermarks).
 export const coalesceReviewServingV4BootstrapTrains = async (
   input: {nowMs?: number; projectId?: string | null},
-  database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase,
+  database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService(),
 ): Promise<readonly CoalescedReviewServingV4BootstrapTrain[]> => {
   const nowMs = input.nowMs ?? Date.now()
   const projectRows = await database.queryJson<{projectId: string}>(`
@@ -4256,7 +4256,7 @@ const requestReviewServingV4RebuildWithDirtyWorkReuse = async (
 
 export const requestReviewServingV4RebuildEffect = (
   input: RequestReviewServingV4RebuildInput,
-  database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService() as ReviewServingChunkManifestRepositoryDatabase,
+  database: ReviewServingChunkManifestRepositoryDatabase = getAppDatabaseService(),
 ) => {
   return Effect.tryPromise(() => {
     return requestReviewServingV4RebuildWithDirtyWorkReuse(input, database)

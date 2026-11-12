@@ -13,8 +13,10 @@ type MockLinkProps = ParentProps<{class?: string; params?: {id?: string}; to: st
 const mockState = vi.hoisted(() => {
   return {
     calls: [] as Array<{args: unknown[]; path: string}>,
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: the assertion sets the inferred mock state type; tsc fails without it
     job: {} as Record<string, unknown>,
     jobId: 'job-limited',
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: the assertion sets the inferred mock state type; tsc fails without it
     responses: {} as Record<string, unknown>,
   }
 })
@@ -68,7 +70,7 @@ vi.mock('../../../../../services/apiClient.ts', () => {
       },
       {
         apply: (_target, _thisArg, args: unknown[]) => {
-          return createEdenNode([...segments, `:${Object.values((args[0] ?? {}) as object).join(',')}`])
+          return createEdenNode([...segments, `:${Object.values(args[0] ?? {}).join(',')}`])
         },
         get: (_target, property) => {
           return typeof property !== 'string' || property === 'then'

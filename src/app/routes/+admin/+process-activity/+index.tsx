@@ -34,7 +34,7 @@ const fetchProcessActivity = async (): Promise<ProcessActivityResponse> => {
     throw new Error('Failed to fetch process activity')
   }
 
-  return response.data.data as ProcessActivityResponse
+  return response.data.data
 }
 
 const parseTimestamp = (value: ProcessActivityTimestamp | null | undefined) => {

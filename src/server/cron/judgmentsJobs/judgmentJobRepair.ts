@@ -17,13 +17,7 @@ import {
 import {getJudgmentJobRepairMode} from './judgmentJobStoragePolicy.ts'
 
 export type JudgmentJobRepairAction =
-  | 'checkpoint'
-  | 'drain'
-  | 'preflight'
-  | 'quarantine'
-  | 'repair'
-  | 'repair_orphaned_queue'
-  | 'unquarantine'
+  'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'repair_orphaned_queue' | 'unquarantine'
 
 type JudgmentJobRepairJobState = {
   id: string

@@ -318,12 +318,12 @@ test('maintenance-worker treats EPERM pid checks as an active process', () => {
   const originalKill = process.kill.bind(process)
   const seenCalls: Array<[number, number | undefined]> = []
 
-  process.kill = ((pid: number, signal?: number) => {
+  process.kill = (pid: number, signal?: number) => {
     seenCalls.push([pid, signal])
     const error = new Error('Operation not permitted') as Error & {code?: string}
     error.code = 'EPERM'
     throw error
-  }) as typeof process.kill
+  }
 
   try {
     const isAlive = isDuckdbOwnerLeaseProcessAlive({

@@ -6,11 +6,7 @@ import {
 } from './reviewServingContracts.ts'
 
 export type ReviewServingDeltaUpdateMode =
-  | 'appendPatch'
-  | 'componentPatch'
-  | 'componentRebuild'
-  | 'contributionDiff'
-  | 'promptScopedRebuild'
+  'appendPatch' | 'componentPatch' | 'componentRebuild' | 'contributionDiff' | 'promptScopedRebuild'
 
 export type ReviewServingInvalidationRule = {
   affectedComponents: readonly ReviewServingProjectionComponent[]

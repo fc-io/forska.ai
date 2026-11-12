@@ -29,7 +29,20 @@ export const insertSubproject = async ({
 }) => {
   const appDatabaseService = getAppDatabaseService()
   const batchSize = 5000
-  const newProject = (await appDatabaseService.transaction(async (tx) => {
+  const newProject = await appDatabaseService.transaction<{
+    id: string
+    name: string
+    description: string | null
+    modelId: string
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    useMetadata: boolean
+    dateFrom: unknown
+    dateTo: unknown
+    updatedAt: Date | string
+  }>(async (tx) => {
     const newProjectId = crypto.randomUUID()
     const [createdProject] = await tx.queryJson<{
       id: string
@@ -178,20 +191,7 @@ export const insertSubproject = async ({
     }
 
     return createdProject
-  })) as {
-    id: string
-    name: string
-    description: string | null
-    modelId: string
-    useTitle: boolean
-    useAbstract: boolean
-    useFulltext: boolean
-    useFulltextNoImages: boolean
-    useMetadata: boolean
-    dateFrom: unknown
-    dateTo: unknown
-    updatedAt: Date | string
-  }
+  })
 
   return newProject
 }

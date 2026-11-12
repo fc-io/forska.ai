@@ -27,8 +27,7 @@ let closeDatabase: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let getRealSqliteService:
-  | Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService']
-  | null = null
+  Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
 
 beforeAll(async () => {
   const [
@@ -1288,7 +1287,7 @@ test('filters out locally judged SQLite prompt pairs before adding ready prompts
   const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async (...args) => {
-      addReadyPromptsCalls.push(args[1] as Array<{articleId: string; promptId: string}>)
+      addReadyPromptsCalls.push(args[1])
       return 1
     },
     ensureOwnedLease: async () => {

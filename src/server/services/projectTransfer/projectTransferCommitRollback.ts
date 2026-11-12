@@ -466,12 +466,12 @@ const isMissingFileError = (error: unknown) => {
     typeof error === 'object'
     && error !== null
     && 'code' in error
-    && ((error as {code: unknown}).code === 'ENOENT' || (error as {code: unknown}).code === 'ENOTDIR')
+    && (error.code === 'ENOENT' || error.code === 'ENOTDIR')
   )
 }
 
 const isExistingFileError = (error: unknown) => {
-  return typeof error === 'object' && error !== null && 'code' in error && (error as {code: unknown}).code === 'EEXIST'
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST'
 }
 
 const getExtractedAssetPath = ({

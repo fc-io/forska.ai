@@ -142,8 +142,7 @@ const FailedRequestDetail = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment */}
-      <Link to={'/admin/failed_requests' as any} class="text-blue-600 hover:underline mb-4 inline-block">
+      <Link to={'/admin/failed_requests'} class="text-blue-600 hover:underline mb-4 inline-block">
         &larr; Back to Failed Requests
       </Link>
       <h1 class="text-2xl font-bold mb-6">Failed Request Details</h1>
@@ -186,7 +185,7 @@ const FailedRequestDetail = () => {
                       <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
                         <Show when={request().judgmentsJobId} fallback="N/A">
                           <Link
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unnecessary-type-assertion -- dynamic paths are not typed routes; tsc fails without the cast
                             to={`/admin/jobs/${request().judgmentsJobId}` as any}
                             class="text-blue-600 hover:underline"
                           >
@@ -200,7 +199,7 @@ const FailedRequestDetail = () => {
                       <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
                         <Show when={request().projectId} fallback="N/A">
                           <Link
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unnecessary-type-assertion -- dynamic paths are not typed routes; tsc fails without the cast
                             to={`/projects/${request().projectId}` as any}
                             class="text-blue-600 hover:underline"
                           >
@@ -250,7 +249,7 @@ const FailedRequestDetail = () => {
                                 <dd class="mt-1 text-sm text-gray-900">
                                   <Show when={request().projectId} fallback={detail.articleId}>
                                     <Link
-                                      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+                                      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unnecessary-type-assertion -- dynamic paths are not typed routes; tsc fails without the cast
                                       to={`/projects/${request().projectId}/reviews-llm/${detail.articleId}` as any}
                                       class="text-blue-600 hover:underline"
                                     >
@@ -264,7 +263,7 @@ const FailedRequestDetail = () => {
                                 <dd class="mt-1 text-sm text-gray-900">
                                   <Show when={request().projectId} fallback={getPromptIdsLabel(detail)}>
                                     <Link
-                                      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+                                      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unnecessary-type-assertion -- dynamic paths are not typed routes; tsc fails without the cast
                                       to={`/projects/${request().projectId}` as any}
                                       class="text-blue-600 hover:underline"
                                     >

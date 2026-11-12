@@ -6,14 +6,6 @@ import {createSignal, For, Show} from 'solid-js'
 import {Button} from '../../../../../components/ui/button'
 import {apiClient} from '../../../../../services/apiClient.ts'
 
-type StructuredFileConfig = {
-  assetPath: string
-  boundaryDisplayPath: string
-  boundaryPointer: string
-  format: 'json' | 'xml'
-  sourceFileName: string
-}
-
 const formatImportTimestamp = (value: string | null) => {
   return value ? formatDate(new Date(value), 'yyyy-MM-dd HH:mm') : 'Never imported'
 }
@@ -40,7 +32,7 @@ const fetchArchivedDataSources = async () => {
       lastImportAt: entry.lastImportAt ? String(entry.lastImportAt) : null,
       itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
       importRoute: entry.importRoute ?? null,
-      structuredFileConfig: (entry.structuredFileConfig ?? null) as StructuredFileConfig | null,
+      structuredFileConfig: entry.structuredFileConfig ?? null,
     }
   })
 }

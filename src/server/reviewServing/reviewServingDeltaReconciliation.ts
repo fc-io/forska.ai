@@ -98,8 +98,7 @@ type ReviewServingImportRunArticleRecoveryPayload = Omit<
 > & {deltaTable: 'import_run_article_delta'; sourceMutationKey: string; typedKey: ReviewServingIdentityValue}
 
 type ReviewServingOutboxRecoveryPayload =
-  | ReviewServingImportRunArticleRecoveryPayload
-  | ReviewServingReviewChangeRecoveryPayload
+  ReviewServingImportRunArticleRecoveryPayload | ReviewServingReviewChangeRecoveryPayload
 
 const terminalOutboxStatuses: readonly string[] = ['operator_terminal', 'reconciled']
 

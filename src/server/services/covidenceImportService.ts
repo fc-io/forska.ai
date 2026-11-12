@@ -51,12 +51,7 @@ type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidenceFileFormat = 'csv' | 'ris'
 type CovidencePromptAnswerSet =
-  | 'yes|no'
-  | 'yes|no|maybe'
-  | 'yes_no'
-  | 'yes_no_maybe'
-  | 'include|exclude'
-  | 'include_exclude'
+  'yes|no' | 'yes|no|maybe' | 'yes_no' | 'yes_no_maybe' | 'include|exclude' | 'include_exclude'
 type CovidencePromptTx = {
   queryJson: <TRow>(statement: string) => Promise<TRow[]>
   run: (statement: string) => Promise<void>
@@ -161,8 +156,7 @@ type CovidenceCsvParseError = {
 type CovidenceCsvParseResult = {ok: true; rows: CovidenceReferenceRow[]} | {error: CovidenceCsvParseError; ok: false}
 type CovidenceCsvHeaderResult = {normalizedHeaders: string[]; ok: true} | {error: CovidenceCsvParseError; ok: false}
 type CovidenceRisRecordParseResult =
-  | {ok: true; records: Array<Record<string, string[]>>}
-  | {error: CovidenceCsvParseError; ok: false}
+  {ok: true; records: Array<Record<string, string[]>>} | {error: CovidenceCsvParseError; ok: false}
 export type CovidencePackageConfig = {
   kind: 'covidence_import'
   version: 1

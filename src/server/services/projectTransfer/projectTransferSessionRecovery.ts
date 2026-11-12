@@ -83,10 +83,7 @@ type ProjectTransferSessionRecoveryParams = ProjectTransferSessionRecoveryRuntim
 }
 
 type ProjectTransferRecoveryKind =
-  | 'expired_or_terminal'
-  | 'stale_import_analysis'
-  | 'stale_import_commit'
-  | 'stale_import_upload'
+  'expired_or_terminal' | 'stale_import_analysis' | 'stale_import_commit' | 'stale_import_upload'
 
 type ProjectTransferRecoveryCandidate = {
   direction: ProjectTransferDirection
@@ -1268,7 +1265,7 @@ const isMissingFileError = (error: unknown) => {
     typeof error === 'object'
     && error !== null
     && 'code' in error
-    && ((error as {code: unknown}).code === 'ENOENT' || (error as {code: unknown}).code === 'ENOTDIR')
+    && (error.code === 'ENOENT' || error.code === 'ENOTDIR')
   )
 }
 

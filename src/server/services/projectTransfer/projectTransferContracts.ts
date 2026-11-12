@@ -346,8 +346,7 @@ export type ProjectTransferExportReadyPayload = {
 }
 
 export type ProjectTransferCompletionPayload =
-  | ProjectTransferExportReadyPayload
-  | ProjectTransferImportCompletionPayload
+  ProjectTransferExportReadyPayload | ProjectTransferImportCompletionPayload
 
 export type ProjectTransferSessionResponse = {
   commitId: string | null

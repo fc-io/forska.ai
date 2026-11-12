@@ -493,7 +493,7 @@ export const getReviewServingPayloadPatchManifest = (
 
 export const projectReviewServingDisplayBaseRows = async (
   input: ProjectReviewServingDisplayBaseInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, measureSync, phaseTimings} = getTimedProjector()
   const rows = await measure('sourceQueryMs', async () => {
@@ -529,7 +529,7 @@ const getDisplayBaseRowsStatements = (input: ProjectReviewServingDisplayBaseInpu
 
 export const projectReviewServingDisplayBaseRanges = async (
   input: ProjectReviewServingDisplayBaseRangesInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {
@@ -552,7 +552,7 @@ export const projectReviewServingDisplayBaseRanges = async (
 
 export const projectReviewServingDisplayPatches = async (
   input: ProjectReviewServingDisplayPatchInput,
-  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingDisplayPayloadProjectorDatabase,
+  database: ReviewServingDisplayPayloadProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, measureSync, phaseTimings} = getTimedProjector()
   const rows = await measure('sourceQueryMs', async () => {

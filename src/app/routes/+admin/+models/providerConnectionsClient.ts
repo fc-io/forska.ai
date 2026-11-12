@@ -334,11 +334,7 @@ const postProviderAuthLifecycle = async ({
 export const fetchProviderConnections = async () => {
   const response = await apiClient.api['provider-connections'].get()
   const result = handleApiResponse<ProviderConnectionsPayload | ProviderConnectionsResponse>(
-    response as unknown as {
-      data?: ProviderConnectionsPayload | ProviderConnectionsResponse | null
-      error?: unknown
-      status?: number
-    },
+    response,
     'Failed to load provider connections',
   )
 

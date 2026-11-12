@@ -17,8 +17,7 @@ const DATA_SOURCE_IMPORT_RESUME_INTERVAL = '*/30 * * * * *'
 const START_DELAY_MS = 15_000
 
 export type DataSourceImportResumeCronWakeResult =
-  | {reason: 'maintenance-role'; status: 'skipped'}
-  | {result: DataSourceImportResumerWakeResult; status: 'ran'}
+  {reason: 'maintenance-role'; status: 'skipped'} | {result: DataSourceImportResumerWakeResult; status: 'ran'}
 
 const logCronError = (error: unknown) => {
   if (isExpectedDuckdbOwnerRoleLossError(error)) {

@@ -23,11 +23,7 @@ import {getProjectUsesFullText} from './projectsRoutesPatchEdit/getProjectUsesFu
 import {getRecordedProjectFullTextResolution} from './projectsRoutesPatchEdit/getRecordedProjectFullTextResolution.ts'
 import {hasSameStringSet} from './projectsRoutesPatchEdit/hasSameStringSet.ts'
 import {hasSystemPromptVariantEditChanged} from './projectsRoutesPatchEdit/hasSystemPromptVariantEditChanged.ts'
-import type {
-  ProjectEditCurrentProject,
-  ProjectEditJudgmentJob,
-  ProjectEditPromptPayload,
-} from './projectsRoutesPatchEdit/projectEditTypes.ts'
+import type {ProjectEditCurrentProject, ProjectEditJudgmentJob} from './projectsRoutesPatchEdit/projectEditTypes.ts'
 import {runProjectEditTransaction} from './projectsRoutesPatchEdit/runProjectEditTransaction.ts'
 import type {projectsRoutesPatchEditBody} from './projectsRoutesPatchEditBody.ts'
 
@@ -143,7 +139,7 @@ export const projectsRoutesPatchEdit = async ({
 
   const hasPromptChanges = getHasProjectPromptEditChanges({
     existingPrompts: existingPromptComparisonRows,
-    submittedPrompts: body.prompts as ProjectEditPromptPayload[] | undefined,
+    submittedPrompts: body.prompts,
   })
 
   if (job && hasPromptChanges && !(await canEditPromptsWithJudgmentJob(getAppDatabaseService(), job))) {

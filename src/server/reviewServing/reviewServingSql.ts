@@ -8,8 +8,7 @@ import {reviewServingReadContractList} from './reviewServingReadContracts.ts'
 import {reviewServingSqlForbiddenPatterns} from './reviewServingSqlForbiddenPatterns.ts'
 
 export type ReviewServingSqlShapeResult =
-  | {ok: true; violations: []}
-  | {ok: false; violations: readonly {label: string; pattern: string}[]}
+  {ok: true; violations: []} | {ok: false; violations: readonly {label: string; pattern: string}[]}
 
 export type ReviewServingSqlShapeOptions = {
   allowCanonicalPromptAnswerFallback?: boolean

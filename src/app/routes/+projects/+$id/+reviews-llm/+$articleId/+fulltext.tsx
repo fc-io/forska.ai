@@ -23,8 +23,8 @@ import {
 
 export const ReviewDetailFulltext = () => {
   const params = Route.useParams()
-  const projectId = (params() as {id: string; articleId: string}).id
-  const articleId = (params() as {id: string; articleId: string}).articleId
+  const projectId = params().id
+  const articleId = params().articleId
   const [articleViewToShow, setArticleViewToShow] = createSignal<string | undefined>(undefined)
 
   const articleQuery = useQuery(() => {

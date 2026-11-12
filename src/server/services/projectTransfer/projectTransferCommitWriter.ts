@@ -127,13 +127,7 @@ type ProjectTransferCommitWriterDatabase = ProjectTransferCommitWriterTx & {
 }
 
 type ProjectTransferCommitWriterStepKey =
-  | 'articles'
-  | 'history'
-  | 'humanReviews'
-  | 'judgments'
-  | 'prepare'
-  | 'projectArticles'
-  | 'routes'
+  'articles' | 'history' | 'humanReviews' | 'judgments' | 'prepare' | 'projectArticles' | 'routes'
 
 export type ProjectTransferCommitWriterInput = {
   commitId: string
@@ -833,7 +827,7 @@ const getCreatedArticleValuesSql = ({
 }
 
 const getDependencyResolutionState = (plan: ProjectTransferImportPlanArtifact): DependencyResolutionState => {
-  return isRecord(plan.dependencyResolution) ? (plan.dependencyResolution as DependencyResolutionState) : {}
+  return isRecord(plan.dependencyResolution) ? plan.dependencyResolution : {}
 }
 
 const getImportedTargetProviderConnectionId = (sourceProviderConnectionId: string) => {
@@ -7417,7 +7411,7 @@ export const writeProjectTransferCommitAppTables = async ({
   const transaction = await measureProjectTransferPhase('appTableWrites', () => {
     return database.transaction((tx) => {
       return writeProjectTransferCommitAppTablesTx({...input, tx})
-    }, projectTransferCommitTransactionWorkloadContext) as Promise<ProjectTransferCommitAppWriteResult>
+    }, projectTransferCommitTransactionWorkloadContext)
   })
   const transactionMetrics = getProjectTransferPerformanceMetrics({
     benchmark: {writerTransactionMs: transaction.timing.durationMs},

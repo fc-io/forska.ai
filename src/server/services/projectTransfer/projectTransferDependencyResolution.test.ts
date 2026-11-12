@@ -165,7 +165,7 @@ const getBasePlan = (): ProjectTransferImportPlanArtifact => {
   return {
     blockers: [],
     canCommit: true,
-    packageCounts: summary.packageCounts as ProjectTransferImportPlanArtifact['packageCounts'],
+    packageCounts: summary.packageCounts,
     packageFingerprint: 'package-fingerprint-1',
     packageWarnings: [],
     planRevision: 1,
@@ -1428,13 +1428,7 @@ test('project transfer dependency resolution ignores unmarked local provider and
     const payloads = getProjectTransferPayloadFixtureMap()
     const targetModel = getTargetModel({metadataJson: {options: {thinking: 'medium'}}})
     const targetConnection = getTargetConnection(
-      {
-        config: {
-          disabledModelIds: [],
-          manualWorkerUrls: [],
-          workerUrlMode: 'manual',
-        } as ProviderConnectionForAdmin['config'],
-      },
+      {config: {disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'}},
       [targetModel],
     )
     const layout = await writeProjectTransferArtifacts({cwd, payloads, plan: getBasePlan()})
@@ -1692,11 +1686,7 @@ test('project transfer dependency resolution auto-resolves Codex dependencies to
             getTargetConnection(
               {
                 authMode: 'codex-cli',
-                config: {
-                  disabledModelIds: [],
-                  manualWorkerUrls: [],
-                  workerUrlMode: 'manual',
-                } as ProviderConnectionForAdmin['config'],
+                config: {disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
                 id: 'target-codex-provider-1',
                 label: 'Codex target',
                 providerKind: 'codex',

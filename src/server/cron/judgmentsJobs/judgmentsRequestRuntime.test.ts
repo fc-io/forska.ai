@@ -2420,8 +2420,7 @@ test('judge-worker prompt execution for a use_metadata project sends title, meta
   })
 
   const firstJudgeCall = judgeSinglePrompt.mock.calls[0]?.[0] as
-    | (Parameters<typeof getSinglePromptJudgmentRequest>[0] & {modelConfig: {provider: string}})
-    | undefined
+    (Parameters<typeof getSinglePromptJudgmentRequest>[0] & {modelConfig: {provider: string}}) | undefined
 
   if (!firstJudgeCall) {
     throw new Error('Expected the judge to be called')

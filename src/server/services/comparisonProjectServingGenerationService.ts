@@ -21,8 +21,7 @@ type ComparisonProjectServingGenerationMartCleanupTableName =
   | 'mart.comparison_judgment_context_serving'
   | 'mart.comparison_system_prompt_variant_serving'
 type ComparisonProjectServingGenerationCleanupTableName =
-  | ComparisonProjectServingGenerationMartCleanupTableName
-  | 'app.comparison_project_serving_generation'
+  ComparisonProjectServingGenerationMartCleanupTableName | 'app.comparison_project_serving_generation'
 
 type ComparisonProjectServingGenerationCleanupResult = {
   deletedRowCount: number

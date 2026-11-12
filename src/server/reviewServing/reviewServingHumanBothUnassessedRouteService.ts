@@ -18,7 +18,6 @@ import {
   getReviewServingFilteredCountComponentIdentities,
   getReviewServingFilteredCountSignature,
   getReviewServingFilteredCountValue,
-  type ReviewServingFilteredCountDatabase,
 } from './reviewServingFilteredCountService.ts'
 import {
   ensureReviewServingLazyPromptAnswerPostingBuckets,
@@ -280,8 +279,7 @@ const hasDynamicFilters = (
 }
 
 const getManifest = async (projectId: string, dependencies?: ReviewServingRouteDependencies) => {
-  const manifestDatabase =
-    dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
+  const manifestDatabase = dependencies?.manifestDatabase ?? getAppDatabaseService()
   const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
   const active = await getActiveReviewServingSnapshotManifest(
     {componentStateMode: 'available', projectId, reviewConfigHash},
@@ -566,7 +564,7 @@ const createRetryingRouteDatabase = (database: ReviewServingReaderDatabase): Rev
 }
 
 const getRouteDatabase = (dependencies?: ReviewServingRouteDependencies) => {
-  return createRetryingRouteDatabase(dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase))
+  return createRetryingRouteDatabase(dependencies?.database ?? getAppDatabaseService())
 }
 
 const shouldCountDirectServingState = (input: {
@@ -593,7 +591,7 @@ const getFilteredCountValue = async (
     throw getCountIndexingError(indexingReason)
   }
 
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingFilteredCountDatabase)
+  const database = dependencies?.database ?? getAppDatabaseService()
   const filters = getRouteFilters(params, mode)
   const promptAnswerPostingFilterGroups = getPromptAnswerPostingFilterGroups(params, mode)
   const searchTokenPrefixes = filters.searchTokenPrefix ? getSearchTokenPrefixes(params.search) : []
@@ -680,7 +678,7 @@ const getUnassessedQueueCountValue = async (
   manifest: ReviewServingSnapshotManifest,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<number> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = dependencies?.database ?? getAppDatabaseService()
   const [row] = await queryRouteRowsWithRetry<{totalCount: number}>(
     database,
     `
@@ -816,7 +814,7 @@ const getEnabledPromptCount = async (
   projectId: string,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<number> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = dependencies?.database ?? getAppDatabaseService()
   const [row] = await database.queryJson<{promptCount?: number | null; prompt_count?: number | null}>(`
     SELECT COUNT(*)::INTEGER AS promptCount
     FROM app.project_prompt project_prompt
@@ -835,7 +833,7 @@ const getProjectHumanJudgmentMode = async (
   projectId: string,
   dependencies?: ReviewServingRouteDependencies,
 ): Promise<'prompt' | 'summary'> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = dependencies?.database ?? getAppDatabaseService()
   const [row] = await database.queryJson<{humanJudgmentMode?: 'prompt' | 'summary' | null}>(`
     SELECT human_judgment_mode AS humanJudgmentMode
     FROM app.project
@@ -941,10 +939,7 @@ const readRowsPage = async <T>(input: ReviewServingRowsPageInput): Promise<Revie
 
   const rows = rowsResult.rows.slice(0, input.limit)
   const lastRow = rows[rows.length - 1]
-  const nextCursor =
-    rowsResult.rows.length > input.limit && lastRow
-      ? rowsResult.getCursorForRow(lastRow as Record<string, unknown>)
-      : null
+  const nextCursor = rowsResult.rows.length > input.limit && lastRow ? rowsResult.getCursorForRow(lastRow) : null
 
   return {
     detailReadiness: getResponseDetailReadiness(rowsResult.diagnostics.manifest.detailReadiness),

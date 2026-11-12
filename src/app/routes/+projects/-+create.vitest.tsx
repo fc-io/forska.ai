@@ -31,6 +31,7 @@ const mockState = vi.hoisted(() => {
   return {
     createPayloads: [] as unknown[],
     fullTextPreviewPayloads: [] as unknown[],
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: the assertion sets the inferred mock state type; tsc fails without it
     fullTextValidationErrorsByModelId: {} as Record<string, string[]>,
     fullTextValidationWarnings: [] as string[],
     imageTransportsMissing: false,

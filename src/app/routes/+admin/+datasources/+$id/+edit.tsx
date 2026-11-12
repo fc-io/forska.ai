@@ -192,7 +192,7 @@ export const AdminEditDataSource = () => {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const dataSourceId = () => {
-    return (params() as {id: string}).id
+    return params().id
   }
 
   const dataSourceQuery = useQuery(() => {

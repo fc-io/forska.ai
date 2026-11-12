@@ -326,7 +326,7 @@ export const Navigation = () => {
                           Data Sources
                         </Link>
                         <Link
-                          to={'/providers' as never}
+                          to={'/providers'}
                           class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                           onClick={closeAdminMenu}
                         >

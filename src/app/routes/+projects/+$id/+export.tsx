@@ -125,7 +125,7 @@ const parseArktypeOptions = (typeStr: string | null): string[] => {
 
 const ExportData = () => {
   const params = Route.useParams()
-  const projectId = (params() as {id: string}).id
+  const projectId = params().id
   const projectAccessQuery = useProjectAccessQuery(() => {
     return projectId
   })

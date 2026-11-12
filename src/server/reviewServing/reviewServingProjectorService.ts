@@ -159,8 +159,7 @@ export type IntakeReviewServingProjectorDirtyWorkInput = {
 }
 
 export type IntakeReviewServingProjectorDirtyWorkResult =
-  | {reason: string; status: 'failed'}
-  | {dirtyWorkCount: number; status: 'queued'}
+  {reason: string; status: 'failed'} | {dirtyWorkCount: number; status: 'queued'}
 
 export type WakeReviewServingProjectorServiceInput = {
   alternateClaimOrder?: boolean
@@ -487,7 +486,7 @@ const getComponentBatchSize = (
 }
 
 const getDefaultDatabase = (): ReviewServingProjectorServiceDatabase => {
-  return getAppDatabaseService() as ReviewServingProjectorServiceDatabase
+  return getAppDatabaseService()
 }
 
 const getDirtyWorkIds = (claims: readonly ReviewServingDirtyWorkClaim[]) => {

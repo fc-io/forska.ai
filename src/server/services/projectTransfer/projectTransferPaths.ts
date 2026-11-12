@@ -31,8 +31,7 @@ export type ProjectTransferPathValidationError = {
 }
 
 export type ProjectTransferPathValidationResult<TValue> =
-  | {ok: true; value: TValue}
-  | {error: ProjectTransferPathValidationError; ok: false}
+  {ok: true; value: TValue} | {error: ProjectTransferPathValidationError; ok: false}
 
 export type ProjectTransferValidatedPath = {collisionKey: string; path: string}
 

@@ -16,17 +16,9 @@ export type JudgmentsJobStatus =
 export type JudgmentsJobStorageState = 'missing' | 'active' | 'draining' | 'drained' | 'quarantined'
 
 export type JudgmentsJobsPromptsStatus =
-  | 'ready'
-  | 'sent'
-  | 'judged'
-  | 'judged_and_ready_to_remove_from_queue'
-  | 'skipped'
+  'ready' | 'sent' | 'judged' | 'judged_and_ready_to_remove_from_queue' | 'skipped'
 export type JudgmentsJobsPromptsSkipReason =
-  | 'no_fulltext'
-  | 'conversion_failed'
-  | 'fulltext_too_large'
-  | 'fulltext_figure_too_large'
-  | 'provider_refusal'
+  'no_fulltext' | 'conversion_failed' | 'fulltext_too_large' | 'fulltext_figure_too_large' | 'provider_refusal'
 export type JudgmentsJobsPromptsContentSkipReason = Exclude<JudgmentsJobsPromptsSkipReason, 'provider_refusal'>
 export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_greedy' | 'article_paragraph_greedy'
 export type JudgmentFullTextMode = 'single' | 'chunked'
@@ -44,10 +36,7 @@ export type ProjectPromptCriteriaDisposition = 'include' | 'exclude' | 'combined
 export type JudgmentHumanSummaryAnswer = 'yes' | 'no' | 'maybe'
 export type JudgmentHumanSummaryOrigin = 'covidence_import' | 'manual_override'
 export type ProjectMartLargeRebuildPhase =
-  | 'project_scope_article'
-  | 'judgment_fact'
-  | 'prompt_answer_fact'
-  | 'review_answer_dictionary'
+  'project_scope_article' | 'judgment_fact' | 'prompt_answer_fact' | 'review_answer_dictionary'
 export type ProjectTransferDirection = 'import' | 'export'
 export type ProjectTransferImportState =
   | 'awaiting_upload'

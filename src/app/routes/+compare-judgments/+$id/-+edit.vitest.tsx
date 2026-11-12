@@ -70,6 +70,7 @@ const buildSource = ({
 }
 
 const mockState = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: the assertion sets the inferred mock state type; tsc fails without it
   return {editFormData: null as unknown, navigate: vi.fn(), sources: [] as unknown[], updateComparisonProject: vi.fn()}
 })
 

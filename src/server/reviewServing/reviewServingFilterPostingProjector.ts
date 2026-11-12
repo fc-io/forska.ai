@@ -1215,7 +1215,7 @@ const getPromptAnswerCacheStatements = (
 
 export const projectReviewServingFilterPostings = async (
   input: ProjectReviewServingFilterPostingsInput,
-  database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService() as ReviewServingFilterPostingProjectorDatabase,
+  database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService(),
 ) => {
   const phaseTimings: Record<string, number> = {}
   const measure = async <T>(phase: string, operation: () => Promise<T>) => {
@@ -1364,7 +1364,7 @@ export const projectReviewServingFilterPostings = async (
 
 export const projectReviewServingFilterPostingRanges = async (
   input: ProjectReviewServingFilterPostingRangesInput,
-  database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService() as ReviewServingFilterPostingProjectorDatabase,
+  database: ReviewServingFilterPostingProjectorDatabase = getAppDatabaseService(),
 ) => {
   const phaseTimings: Record<string, number> = {}
   const measure = async <T>(phase: string, operation: () => Promise<T>) => {

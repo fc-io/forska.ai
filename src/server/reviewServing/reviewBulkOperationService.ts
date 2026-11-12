@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getStableReviewServingJson, type ReviewServingIdentityValue} from './reviewProjectionIdentity.ts'
-import type {ReviewServingProjectionComponent, ReviewServingReadContractKey} from './reviewServingContracts.ts'
+import type {ReviewServingProjectionComponent} from './reviewServingContracts.ts'
 import {getReviewServingFilterSignature, type ReviewServingFilterSignatureValue} from './reviewServingCursor.ts'
 import {
   getActiveReviewServingSnapshotManifest,
@@ -18,16 +18,12 @@ import {
 } from './reviewServingSnapshotPinRepository.ts'
 
 export type ReviewBulkOperationJobKind =
-  | 'review.bulk.selection'
-  | 'review.bulk.substringSelection'
-  | 'review.export.selection'
-  | 'review.pdf.selection'
+  'review.bulk.selection' | 'review.bulk.substringSelection' | 'review.export.selection' | 'review.pdf.selection'
 
 export type ReviewBulkOperationSearchMode = 'none' | 'substring' | 'tokenPrefix'
 
 export type ReviewBulkOperationSnapshotSemantics =
-  | {expiresAt?: Date | string; snapshotId: string; type: 'pinned'}
-  | {type: 'latest'}
+  {expiresAt?: Date | string; snapshotId: string; type: 'pinned'} | {type: 'latest'}
 
 export type ReviewBulkOperationCriteria = {
   articleIds?: readonly string[]
@@ -154,10 +150,7 @@ const getBulkOperationJobId = (input: {
   snapshotId: string | null
   snapshotSemantics: 'latest' | 'pinned'
 }) => {
-  const hash = createHash('sha256')
-    .update(getStableReviewServingJson(input as ReviewServingIdentityValue))
-    .digest('hex')
-    .slice(0, 24)
+  const hash = createHash('sha256').update(getStableReviewServingJson(input)).digest('hex').slice(0, 24)
 
   return `review-bulk-${hash}`
 }
@@ -333,7 +326,7 @@ const verifyPersistedJobWithContract = async (input: {
 }) => {
   const result = await readReviewServingRows<{job_id: string}>(
     {
-      contractKey: input.request.jobKind as ReviewServingReadContractKey,
+      contractKey: input.request.jobKind,
       jobFilterSignature: input.filterSignature,
       jobState: {
         jobId: '',
@@ -370,10 +363,7 @@ export const assertArticleIdOnlyBulkOperationCaps = (articleIds: readonly string
     throw new Error(`Bulk article ID operation exceeds cap of ${reviewBulkOperationArticleIdCap}`)
   }
 
-  if (
-    Buffer.byteLength(getStableReviewServingJson(articleIds as ReviewServingIdentityValue), 'utf8')
-    > reviewBulkOperationPayloadByteCap
-  ) {
+  if (Buffer.byteLength(getStableReviewServingJson(articleIds), 'utf8') > reviewBulkOperationPayloadByteCap) {
     throw new Error(`Bulk article ID operation payload exceeds cap of ${reviewBulkOperationPayloadByteCap} bytes`)
   }
 }
@@ -383,7 +373,7 @@ export const createReviewBulkOperationJob = async (
   dependencies?: ReviewBulkOperationServiceDependencies,
 ): Promise<ReviewBulkOperationJobResult> => {
   const database = dependencies?.database ?? getDatabase()
-  const manifestDatabase = dependencies?.manifestDatabase ?? (database as ReviewServingManifestRepositoryDatabase)
+  const manifestDatabase = dependencies?.manifestDatabase ?? database
   const searchMode = request.searchMode ?? 'none'
   const searchText = request.searchText ?? null
   const filterSignature = getBulkOperationFilterSignature(request)
