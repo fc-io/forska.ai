@@ -7,6 +7,23 @@ import {afterEach, describe, expect, test, vi} from 'vitest'
 import {type ArticleWithHumanJudgments, ReviewsArticlesHumanTable} from './reviewsArticlesHumanTable'
 import {type ArticleWithJudgments, ReviewsArticlesTable} from './reviewsArticlesTable'
 
+vi.hoisted(() => {
+  const getNodeNameOwner = (prototype: object | null): object | null => {
+    return prototype === null || prototype === Node.prototype || Object.hasOwn(prototype, 'nodeName')
+      ? prototype
+      : getNodeNameOwner(Object.getPrototypeOf(prototype) as object | null)
+  }
+
+  Object.defineProperty(Node.prototype, 'nodeName', {
+    configurable: true,
+    get(this: Node) {
+      const owner = getNodeNameOwner(Object.getPrototypeOf(this) as object | null)
+
+      return owner === null || owner === Node.prototype ? '' : (Reflect.get(owner, 'nodeName', this) as string)
+    },
+  })
+})
+
 vi.mock('@tanstack/solid-router', () => {
   return {
     Link: (props: {children: unknown; class?: string; params?: {articleId?: string; id?: string}; to: string}) => {

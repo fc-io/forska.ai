@@ -2419,4 +2419,4 @@ const ProviderDetailPage = () => {
   )
 }
 
-export const Route = createFileRoute('/providers/$id/' as never)({component: ProviderDetailPage})
+export const Route = createFileRoute('/providers/$id/')({component: ProviderDetailPage})

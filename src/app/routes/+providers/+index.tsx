@@ -350,4 +350,4 @@ const AdminModels = () => {
   )
 }
 
-export const Route = createFileRoute('/providers/' as never)({component: AdminModels})
+export const Route = createFileRoute('/providers/')({component: AdminModels})
