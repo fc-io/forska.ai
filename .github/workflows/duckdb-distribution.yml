@@ -49,8 +49,10 @@ jobs:
           - {platform: win32, arch: x64, runner: windows-2025}
           - {platform: win32, arch: arm64, runner: windows-11-arm}
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version: 1.3.13
       - name: Confirm native runner architecture
