@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Keeps the exact `uses:` versions and .github/workflows/actions.lock current.
+  # The cooldown skips releases younger than 7 days so a hijacked tag has time
+  # to be noticed upstream before it is proposed here.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - '*'

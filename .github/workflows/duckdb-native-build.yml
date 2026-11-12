@@ -46,14 +46,16 @@ jobs:
       CCACHE_COMPRESS: 'true'
       SOURCE_DATE_EPOCH: '0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
       - name: Install Linux build tools
         if: matrix.platform == 'linux'
         run: dnf install -y cmake ninja-build ccache git tar gzip
       - name: Install macOS build tools
         if: matrix.platform == 'darwin'
         run: brew install ninja ccache
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5.6.0
         if: matrix.platform == 'win32'
         with:
           python-version: '3.13'
@@ -61,16 +63,16 @@ jobs:
       - name: Install Windows Ninja
         if: matrix.platform == 'win32'
         run: python -m pip install ninja==1.13.0
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
         if: matrix.platform == 'win32'
         with:
           arch: ${{ matrix.arch }}
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version: 1.3.13
       - name: Confirm native architecture
         run: bun -e "if (process.platform !== '${{ matrix.platform }}' || process.arch !== '${{ matrix.arch }}') throw new Error('Runner architecture mismatch')"
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v4.3.0
         id: compiler-cache
         if: matrix.cache != ''
         with:
@@ -94,19 +96,19 @@ jobs:
         if: always()
         run: >-
           bun -e "import {existsSync,cpSync} from 'node:fs'; if(existsSync('.native-verification/evidence')) cpSync('.native-verification/evidence','native-artifacts/candidate-verification/evidence',{recursive:true});"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4.6.2
         if: always()
         with:
           name: patched-duckdb-${{ matrix.platform }}-${{ matrix.arch }}
           path: native-artifacts
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v4.3.0
         if: always() && matrix.cache != '' && steps.compiler-cache.outputs.cache-hit != 'true' && hashFiles('.native-ccache/**') != ''
         with:
           path: .native-ccache
           key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4.6.2
         if: matrix.platform == 'linux' && matrix.arch == 'x64'
         with:
           name: patched-duckdb-source-input
