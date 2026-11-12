@@ -56,6 +56,7 @@ matching `SKILL.md` file directly before starting that kind of work.
 - Use only relevant gates: `bun run lint`, targeted `bun test` or `bun test <file>`, `bun run build` for UI, `bun run db:mig` for schema work, server/app output checks, and browser verification for UI flows.
 - In PRs and commits, note touched layers: server, client, database, docs.
 - List commands you ran. If you skip an obvious command, say why.
+- After changing any `uses:` line under `.github/workflows/`, run `gh actions-lock` (gh extension `github/gh-actions-lock`) and commit `.github/workflows/actions.lock`. The Actions security workflow fails on a stale lockfile or a zizmor finding. Dependabot bumps the pins and the lockfile together.
 
 ## Testing
 
