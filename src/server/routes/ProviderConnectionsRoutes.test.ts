@@ -77,6 +77,7 @@ const state = {
     return [
       {
         authMode: 'api-key',
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: widens the mock field to string | null; tsc fails without it
         baseURL: 'https://api.example.com/v1' as string | null,
         config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
         createdAt: null,
@@ -89,6 +90,7 @@ const state = {
         maxInflightRequests: null,
         models: [],
         providerKind: 'openrouter',
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: widens the mock field to string | null; tsc fails without it
         secretRef: 'keychain:provider-connection:test' as string | null,
         updatedAt: null,
       },

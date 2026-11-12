@@ -534,7 +534,7 @@ const getDeleteFilterOptionRowsStatement = (input: ProjectReviewServingFilterOpt
 
 export const projectReviewServingFilterOptions = async (
   input: ProjectReviewServingFilterOptionsInput,
-  database: ReviewServingFilterOptionProjectorDatabase = getAppDatabaseService() as ReviewServingFilterOptionProjectorDatabase,
+  database: ReviewServingFilterOptionProjectorDatabase = getAppDatabaseService(),
 ) => {
   const sourceRows = await getFilterOptionSourceRows(input, database)
   const records = sourceRows.map((row) => {

@@ -72,6 +72,7 @@ export const HumanAssessment = () => {
 
   const form = createForm(() => {
     return {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: sets the createForm value type; tsc fails without it
       defaultValues: {} as Record<string, string>,
       onSubmit: async ({value}) => {
         await submitMutation.mutateAsync(value)

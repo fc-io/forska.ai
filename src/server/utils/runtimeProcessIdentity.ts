@@ -24,8 +24,7 @@ export type RuntimeProcessIdentity = {
 }
 
 export type RuntimeProcessLogIdentity =
-  | RuntimeProcessIdentity
-  | (RuntimeProcessIdentity & {serverRole: RuntimeProcessServerRole})
+  RuntimeProcessIdentity | (RuntimeProcessIdentity & {serverRole: RuntimeProcessServerRole})
 
 type RuntimeProcessIdentityOptions = {
   envValues?: Record<string, string | undefined>

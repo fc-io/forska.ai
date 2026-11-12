@@ -726,7 +726,7 @@ test('commit writer NDJSON temp tables keep empty-table schemas and load values 
           articleFieldFills: [
             {field: 'fullText', sourceArticleId: 'source-large', targetArticleId: 'target-large', value: largeValue},
           ],
-        } as unknown as ProjectTransferCommitPromotionResult,
+        },
         tables: getCommitWriterTempTables('temp_table_large'),
         tx: runner,
       })

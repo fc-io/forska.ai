@@ -10,13 +10,7 @@ import {getJsonValue} from './appQueryHelpers.ts'
 
 export type DataSourceTrackingSpoolRunKind = 'incremental' | DataSourceReconciliationRunKind
 export type DataSourceTrackingSpoolWindowStatus =
-  | 'fetching'
-  | 'ready'
-  | 'ingesting'
-  | 'ingested'
-  | 'fetch_failed'
-  | 'ingest_failed'
-  | 'rejected'
+  'fetching' | 'ready' | 'ingesting' | 'ingested' | 'fetch_failed' | 'ingest_failed' | 'rejected'
 
 export type DataSourceTrackingSpoolWindowRecord = {
   id: string
@@ -511,17 +505,13 @@ export const createDataSourceTrackingSpoolRepository = (
             return '?'
           })
           .join(', ')
-        const keysResult = database
-          .query(`DELETE FROM tracking_spool_source_record_key WHERE window_id IN (${placeholders})`)
-          .run(...ids) as {changes?: number}
+        database.query(`DELETE FROM tracking_spool_source_record_key WHERE window_id IN (${placeholders})`).run(...ids)
         const pagesResult = database
           .query(`DELETE FROM tracking_spool_page WHERE window_id IN (${placeholders})`)
           .run(...ids) as {changes?: number}
         const windowsResult = database
           .query(`DELETE FROM tracking_spool_window WHERE id IN (${placeholders})`)
           .run(...ids) as {changes?: number}
-
-        void keysResult
 
         return {pagesDeleted: pagesResult.changes ?? 0, windowsDeleted: windowsResult.changes ?? 0}
       })()

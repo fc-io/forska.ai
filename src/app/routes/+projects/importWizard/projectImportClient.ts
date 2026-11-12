@@ -326,9 +326,18 @@ export const resolveProjectImportDependencies = async (
 ) => {
   const response = await apiClient.api.projects
     .import({sessionId: input.sessionId})
-    [
-      'resolve-dependencies'
-    ].post({autoResolve: input.autoResolve, codexSetupState: input.codexSetupState, createdProviderConnections: input.createdProviderConnections, materializedModels: input.materializedModels, modelMaterializationRequests: input.modelMaterializationRequests, planRevision: input.planRevision, selectedModels: input.selectedModels, selectedProviderConnections: input.selectedProviderConnections, unresolvedModels: input.unresolvedModels, unresolvedProviders: input.unresolvedProviders})
+    ['resolve-dependencies'].post({
+      autoResolve: input.autoResolve,
+      codexSetupState: input.codexSetupState,
+      createdProviderConnections: input.createdProviderConnections,
+      materializedModels: input.materializedModels,
+      modelMaterializationRequests: input.modelMaterializationRequests,
+      planRevision: input.planRevision,
+      selectedModels: input.selectedModels,
+      selectedProviderConnections: input.selectedProviderConnections,
+      unresolvedModels: input.unresolvedModels,
+      unresolvedProviders: input.unresolvedProviders,
+    })
   const envelope = handleApiResponse<ProjectImportApiResponse<ProjectImportSession>>(
     response as unknown as {data?: ProjectImportApiResponse<ProjectImportSession>; error?: unknown; status?: number},
     'Failed to resolve project import dependencies',

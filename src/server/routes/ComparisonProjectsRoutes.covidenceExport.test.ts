@@ -525,7 +525,7 @@ test('the export ignores the comparison page filters', async () => {
   const withPageFilters = await postCovidenceExportCount({
     ...getUnionRequest(),
     ...({differenceFilter: ['human-vs-llm'], rowFilter: ['fully-answered']} as Record<string, unknown>),
-  } as CovidenceExportRequest)
+  })
 
   expect(withPageFilters.response.status).toBe(200)
   expect(withPageFilters.body.data).toEqual(unfiltered.body.data)

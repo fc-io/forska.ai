@@ -2,13 +2,7 @@ import {apiClient} from './apiClient.ts'
 import {handleApiResponse} from './utils/handleApiResponse'
 
 export type JudgmentJobRepairAction =
-  | 'checkpoint'
-  | 'drain'
-  | 'preflight'
-  | 'quarantine'
-  | 'repair'
-  | 'repair_orphaned_queue'
-  | 'unquarantine'
+  'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'repair_orphaned_queue' | 'unquarantine'
 export type JudgmentJobPromptStats = {claimed: number; judged: number; ready: number; running: number; skipped: number}
 export type JudgmentJobConvergenceDiagnostics = {
   activeHigherPriorityStopRules: string[]

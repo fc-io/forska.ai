@@ -674,7 +674,7 @@ const projectReviewServingJudgmentPayloadRowsDirect = async (
 
 export const projectReviewServingJudgmentPayloadRows = async (
   input: ProjectReviewServingJudgmentPayloadInput,
-  database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingJudgmentPayloadProjectorDatabase,
+  database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService(),
 ) => {
   const phaseTimings: Record<string, number> = {}
   const measure = async <T>(phase: string, operation: () => Promise<T>) => {
@@ -722,7 +722,7 @@ export const ensureReviewServingJudgmentPayloadRowsForArticleSet = async (
     reviewConfigHash: string
     snapshotId: string
   },
-  database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingJudgmentPayloadProjectorDatabase,
+  database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService(),
 ) => {
   const articleIds = [...new Set(input.articleIds)].filter((articleId) => {
     return articleId.trim().length > 0
@@ -823,7 +823,7 @@ const canUseSetBasedJudgmentPayloadRangeInsert = (
 
 export const projectReviewServingJudgmentPayloadArticleRanges = async (
   params: {ranges: readonly ProjectReviewServingJudgmentPayloadArticleRangeInput[]},
-  database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService() as ReviewServingJudgmentPayloadProjectorDatabase,
+  database: ReviewServingJudgmentPayloadProjectorDatabase = getAppDatabaseService(),
 ) => {
   const [firstRange] = params.ranges
 

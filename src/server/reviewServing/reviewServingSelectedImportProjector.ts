@@ -1152,7 +1152,7 @@ const getSelectedImportProjectionManifest = (input: {
 
 export const projectReviewServingSelectedImportBatch = async (
   params: ProjectReviewServingSelectedImportBatchInput,
-  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
+  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService(),
 ): Promise<ReviewServingSelectedImportProjectorBatchResult> => {
   const {measure, measureSync, phaseTimings} = getTimedProjector()
   const selectedImportSnapshotId =
@@ -1231,7 +1231,7 @@ export const projectReviewServingSelectedImportBatch = async (
 
 export const projectReviewServingSelectedImportArticleRange = async (
   params: ProjectReviewServingSelectedImportArticleRangeInput,
-  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
+  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {
@@ -1284,7 +1284,7 @@ export const projectReviewServingSelectedImportArticleRange = async (
 
 export const projectReviewServingSelectedImportArticleRanges = async (
   params: {ranges: readonly ProjectReviewServingSelectedImportArticleRangeInput[]},
-  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
+  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService(),
 ) => {
   const [firstRange] = params.ranges
 
@@ -1354,7 +1354,7 @@ export const refreshReviewServingSelectedImportServingArticleRange = async (
     servingBaseGeneration: number
     servingProjectionIdentity: string
   },
-  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportProjectorDatabase,
+  database: ReviewServingSelectedImportProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {

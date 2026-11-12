@@ -24,8 +24,7 @@ type ComparisonProjectConflictResolutionCommentProps = {
   onSave?: (
     comment: string | null,
   ) =>
-    | ComparisonProjectConflictResolutionCommentSaveResult
-    | Promise<ComparisonProjectConflictResolutionCommentSaveResult>
+    ComparisonProjectConflictResolutionCommentSaveResult | Promise<ComparisonProjectConflictResolutionCommentSaveResult>
 }
 
 const secondaryButtonClass =

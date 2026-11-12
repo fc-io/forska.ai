@@ -25,13 +25,7 @@ export type JobHealthBadge =
   | 'Retained Outbox'
   | 'Stale Import'
 export type JudgmentJobProviderFailureKind =
-  | 'auth'
-  | 'endpoint_unavailable'
-  | 'network'
-  | 'other'
-  | 'rate_limited'
-  | 'timeout'
-  | 'usage_limit'
+  'auth' | 'endpoint_unavailable' | 'network' | 'other' | 'rate_limited' | 'timeout' | 'usage_limit'
 export type JudgmentJobProviderHealth = {
   consecutiveFailureCount: number
   failureCode: string | null
@@ -68,12 +62,7 @@ export type JobsProviderHealthBanner = {
 }
 type ProviderHealthBannerSourceJob = {id: string; projectName?: string | null; status?: string | null}
 export type JobHealthFilter =
-  | 'draining'
-  | 'quarantined'
-  | 'orphanedLocalQueue'
-  | 'retainedOutbox'
-  | 'largeWal'
-  | 'staleImport'
+  'draining' | 'quarantined' | 'orphanedLocalQueue' | 'retainedOutbox' | 'largeWal' | 'staleImport'
 export type JudgmentsJobsData = Awaited<ReturnType<typeof fetchJudgmentsJobs>>
 export type JudgmentsJobListItem = JudgmentsJobsData[number]
 

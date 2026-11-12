@@ -18,7 +18,6 @@ import {
   markCandidateReviewServingSnapshotManifestFailed,
   retireObsoleteReviewServingSnapshotManifests,
   type ReviewServingManifestRepositoryDatabase,
-  type ReviewServingManifestRepositoryTransaction,
   type ReviewServingProjectionIdentityManifest,
   type ReviewServingSnapshotManifest,
   upsertReviewServingProjectionIdentityManifest,
@@ -1515,7 +1514,7 @@ test('retire obsolete manifests updates status without deleting snapshot rows', 
 
   await retireObsoleteReviewServingSnapshotManifests(
     {keepSnapshotIds: ['snapshot-kept'], projectId: 'project-1', reviewConfigHash: 'review-config-1'},
-    database as ReviewServingManifestRepositoryTransaction,
+    database,
   )
 
   expect(snapshots.size).toBe(2)

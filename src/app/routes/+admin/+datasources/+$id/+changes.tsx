@@ -29,7 +29,7 @@ const getHashSummary = (item: DataSourceTrackingChangeLogItem) => {
 export const AdminDataSourceTrackingChanges = () => {
   const params = Route.useParams()
   const dataSourceId = () => {
-    return (params() as {id: string}).id
+    return params().id
   }
   const [changeKind, setChangeKind] = createSignal('')
   const [runKind, setRunKind] = createSignal('')

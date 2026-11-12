@@ -16,8 +16,7 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 let closeDatabase: (() => Promise<void>) | null = null
 let tokenUseQueryService: Awaited<typeof import('./tokenUseQueryService.ts')>['tokenUseQueryService'] | null = null
 let TokenUseIdempotencyConflictErrorClass:
-  | typeof import('./tokenUseQueryService.ts').TokenUseIdempotencyConflictError
-  | null = null
+  typeof import('./tokenUseQueryService.ts').TokenUseIdempotencyConflictError | null = null
 
 const buildFailedRequestDetail = (promptIds: string[]) => {
   return {

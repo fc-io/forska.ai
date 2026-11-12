@@ -41,8 +41,7 @@ type ProjectTransferExportReadySession = {
 }
 type ProjectTransferExportSession = ProjectTransferExportPendingSession | ProjectTransferExportReadySession
 type ProjectTransferExportStartResult =
-  | {session: ProjectTransferExportSession; status: 'session'}
-  | {status: 'downloaded'}
+  {session: ProjectTransferExportSession; status: 'session'} | {status: 'downloaded'}
 export type ProjectTransferRawArticleProvenanceMode = 'include' | 'omit'
 export type ProjectTransferExportSummary = {
   articleCount: number
@@ -156,7 +155,7 @@ const isProjectTransferExportPendingStatus = (value: unknown): value is ProjectT
 }
 
 const getProjectTransferExportProgress = (value: unknown): ProjectTransferExportProgress | null => {
-  return isRecord(value) ? (value as ProjectTransferExportProgress) : null
+  return isRecord(value) ? value : null
 }
 
 const getProjectTransferExportPendingSession = (

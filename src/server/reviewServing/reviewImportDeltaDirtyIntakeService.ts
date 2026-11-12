@@ -40,8 +40,7 @@ type ReviewImportDeltaDirtyIntakeConvertedResult = {
 type ReviewImportDeltaDirtyIntakeFailedResult = {deltaId: string; reason: string; status: 'failed'}
 
 export type ReviewImportDeltaDirtyIntakeResult =
-  | ReviewImportDeltaDirtyIntakeConvertedResult
-  | ReviewImportDeltaDirtyIntakeFailedResult
+  ReviewImportDeltaDirtyIntakeConvertedResult | ReviewImportDeltaDirtyIntakeFailedResult
 
 type ReviewImportDeltaWindowCursor = {deltaId: string; sourceHighWaterMark: number}
 
@@ -485,7 +484,7 @@ const intakeRemainingReviewImportDeltaWindows = async (
 
 export const intakeReviewImportDeltasToDirtyWork = async (
   params: IntakeReviewImportDeltaDirtyWorkParams,
-  database: ReviewImportDeltaDirtyIntakeDatabase = getAppDatabaseService() as ReviewImportDeltaDirtyIntakeDatabase,
+  database: ReviewImportDeltaDirtyIntakeDatabase = getAppDatabaseService(),
 ): Promise<ReviewImportDeltaDirtyIntakeResult> => {
   return intakeRemainingReviewImportDeltaWindows(params, database, {
     cursor: null,

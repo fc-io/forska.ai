@@ -106,7 +106,7 @@ const updateComparisonProjectWithRelinkedLinks = async (params: {
     }
 
     return updatedComparisonProjectRecord
-  }) as Promise<ComparisonProjectRecordRow | null>
+  })
 }
 
 export const comparisonProjectsRoutesPatchUpdate = new Elysia().patch(

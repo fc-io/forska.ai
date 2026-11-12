@@ -16,10 +16,7 @@ export const readAllReviewServingRows = async <T>(
 
   const rows = [...previousRows, ...result.rows]
   const lastRow = result.rows[result.rows.length - 1]
-  const nextCursor =
-    result.rows.length === detailReaderPageSize && lastRow
-      ? result.getCursorForRow(lastRow as Record<string, unknown>)
-      : null
+  const nextCursor = result.rows.length === detailReaderPageSize && lastRow ? result.getCursorForRow(lastRow) : null
 
   return nextCursor ? readAllReviewServingRows(request, nextCursor, rows) : rows
 }

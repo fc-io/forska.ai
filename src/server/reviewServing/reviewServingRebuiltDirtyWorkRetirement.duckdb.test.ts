@@ -65,7 +65,7 @@ const getCurrentReviewConfigHash = async (projectId: string) => {
     WHERE NOT EXISTS (SELECT 1 FROM app.project WHERE id = '${projectId}')
   `)
 
-  const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(projectId, getDatabase() as never)
+  const reviewConfigHash = await getCurrentReviewServingReviewConfigHash(projectId, getDatabase())
 
   if (reviewConfigHash === null) {
     throw new Error(`expected a review config hash for ${projectId}`)

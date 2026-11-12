@@ -12,7 +12,6 @@ import {
   getJudgmentsJobsQuery,
   getStatusColor,
   isRiskyJudgmentJob,
-  type JobHealthBadge,
   type JobHealthFilter,
   jobMatchesHealthFilter,
   judgmentJobsHealthFilterLabels,
@@ -273,7 +272,7 @@ const HealthJobsPage = () => {
                       </td>
                       <td class="px-6 py-4 text-sm text-gray-900">
                         <div class="flex flex-wrap gap-2">
-                          <For each={job.health.badges as JobHealthBadge[]}>
+                          <For each={job.health.badges}>
                             {(badge) => {
                               return (
                                 <span

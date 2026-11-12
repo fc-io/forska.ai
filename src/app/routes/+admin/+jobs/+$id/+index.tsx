@@ -300,13 +300,7 @@ type JobData = {
 }
 
 type JobRepairAction =
-  | 'checkpoint'
-  | 'drain'
-  | 'preflight'
-  | 'quarantine'
-  | 'repair'
-  | 'repair_orphaned_queue'
-  | 'unquarantine'
+  'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'repair_orphaned_queue' | 'unquarantine'
 
 const activeJudgmentsJobStatuses = new Set([
   'not_started',

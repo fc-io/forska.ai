@@ -244,7 +244,7 @@ const CompareProjectJudgmentsPage = () => {
   const search = Route.useSearch()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const initialUrlState = getInitialCompareProjectJudgmentsUrlState(search() as Record<string, unknown>)
+  const initialUrlState = getInitialCompareProjectJudgmentsUrlState(search())
   const comparisonProjectId = () => {
     const routeParams = params()
 

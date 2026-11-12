@@ -299,11 +299,7 @@ const wakePayload = async (dependencies: Partial<ReviewServingProjectorServiceDe
 
   return wakeReviewServingProjectorService(
     {batchSize: 64, componentOrder: ['payload'], maxRowsPerWake: 64, maxWakeMs: 600_000, wakeId: 'wake-payload'},
-    {
-      database: getDatabase(),
-      runners: getDefaultReviewServingProjectorRunners(getDatabase() as never),
-      ...dependencies,
-    },
+    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase()), ...dependencies},
   )
 }
 
@@ -340,7 +336,7 @@ const getFullRecomputeRows = async (input: {projectId: string; reviewConfigHash:
       useMetadata: false,
       useTitle: true,
     },
-    getDatabase() as never,
+    getDatabase(),
   )
 
   return getDetailRows({projectId: input.projectId, snapshotId})
@@ -377,7 +373,7 @@ const runPayloadChunk = async (input: {
         },
       ],
     },
-    getDatabase() as never,
+    getDatabase(),
   )
   await getDatabase().run(`
     UPDATE app.review_rebuild_chunk_manifest
@@ -391,7 +387,7 @@ const runPayloadChunk = async (input: {
 const promoteSnapshot = async (input: {projectId: string; snapshotId: string}) => {
   const {promoteReviewServingProjectorSnapshot} = await import('./reviewServingProjectorWriter.ts')
 
-  return promoteReviewServingProjectorSnapshot(input, getDatabase() as never)
+  return promoteReviewServingProjectorSnapshot(input, getDatabase())
 }
 
 const getPayloadDirtyWork = async (projectId: string) => {

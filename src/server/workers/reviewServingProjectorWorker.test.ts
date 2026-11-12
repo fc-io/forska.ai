@@ -10076,7 +10076,7 @@ test('worker adopts requestless summary chunks into request finalization before 
   }
 
   globalThis.setInterval = setIntervalMock as unknown as typeof setInterval
-  globalThis.clearInterval = clearIntervalMock as unknown as typeof clearInterval
+  globalThis.clearInterval = clearIntervalMock
 
   const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies).finally(() => {
     globalThis.setInterval = originalSetInterval
@@ -10177,7 +10177,7 @@ test('worker adopts requestless bootstrap chunks into one rebuild request before
   }
 
   globalThis.setInterval = setIntervalMock as unknown as typeof setInterval
-  globalThis.clearInterval = clearIntervalMock as unknown as typeof clearInterval
+  globalThis.clearInterval = clearIntervalMock
 
   const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies).finally(() => {
     globalThis.setInterval = originalSetInterval
@@ -10295,7 +10295,7 @@ test('worker adopts requestless bootstrap chunks through existing request withou
   }
 
   globalThis.setInterval = setIntervalMock as unknown as typeof setInterval
-  globalThis.clearInterval = clearIntervalMock as unknown as typeof clearInterval
+  globalThis.clearInterval = clearIntervalMock
 
   const result = await runReviewServingProjectorWorkerOnce({workerId: 'worker-1'}, harness.dependencies).finally(() => {
     globalThis.setInterval = originalSetInterval

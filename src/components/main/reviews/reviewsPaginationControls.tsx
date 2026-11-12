@@ -129,7 +129,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
         if (!response.data) {
           throw new Error('Failed to fetch projects without jobs')
         }
-        return response.data.data as Array<{id: string; name: string; description?: string | null}>
+        return response.data.data
       },
     }
   })
@@ -216,6 +216,7 @@ export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps)
                 articleIds: args.articleIds,
               })
 
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: sets the inferred mutation result type (providedTotal); tsc fails without it
         return handleApiResponse(response, 'Failed to start add-to-project job') as AddArticlesJobResponse
       },
       onSuccess: (data, args) => {

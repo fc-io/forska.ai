@@ -2,11 +2,7 @@ import type {HumanJudgmentMode} from '../../../../db/schemaTypes.ts'
 import type {ArticleStrongIdentifierKind} from '../../../../utils/articleIdentifierNormalization.ts'
 
 export type ComparisonProjectConflictResolutionImportMatchKind =
-  | ArticleStrongIdentifierKind
-  | 'article-id'
-  | 'covidence-id-title'
-  | 'id-title'
-  | 'title'
+  ArticleStrongIdentifierKind | 'article-id' | 'covidence-id-title' | 'id-title' | 'title'
 
 export type ComparisonProjectConflictResolutionImportIdentifier = {
   kind: ArticleStrongIdentifierKind

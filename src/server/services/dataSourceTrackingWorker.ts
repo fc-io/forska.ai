@@ -42,12 +42,7 @@ export type DataSourceTrackingWorkerSourceResult =
       dataSourceId: string
       pageCount?: number
       reason:
-        | 'fetched'
-        | 'already-ingested'
-        | 'already-ready'
-        | 'already-rejected'
-        | 'already-ingesting'
-        | 'retry-not-due'
+        'fetched' | 'already-ingested' | 'already-ready' | 'already-rejected' | 'already-ingesting' | 'retry-not-due'
       status: 'spooled' | 'skipped'
       windowId: string
     }
@@ -60,12 +55,7 @@ export type DataSourceTrackingWorkerReconciliationResult =
       dataSourceId: string
       pageCount?: number
       reason:
-        | 'fetched'
-        | 'already-ingested'
-        | 'already-ready'
-        | 'already-rejected'
-        | 'already-ingesting'
-        | 'retry-not-due'
+        'fetched' | 'already-ingested' | 'already-ready' | 'already-rejected' | 'already-ingesting' | 'retry-not-due'
       status: 'spooled' | 'skipped'
       windowId: string
       workId: string

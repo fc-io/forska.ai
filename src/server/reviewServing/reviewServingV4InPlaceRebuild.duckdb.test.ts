@@ -393,7 +393,7 @@ const wakeProjector = async (component: ReviewServingProjectionComponent, projec
 
   return wakeReviewServingProjectorService(
     {batchSize: 64, componentOrder: [component], maxRowsPerWake: 64, maxWakeMs: 600_000, wakeId: `wake-${component}`},
-    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase() as never)},
+    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase())},
   )
 }
 
@@ -1400,7 +1400,7 @@ test('title search rebuild ranges replace the rows a snapshot already holds for 
         },
       ],
     },
-    getDatabase() as Parameters<typeof projectReviewServingTitleSearchRebuildRanges>[1],
+    getDatabase(),
   )
 
   const rows = await getDatabase().queryJson<{articleIds: string; snapshotId: string; token: string}>(`
@@ -1476,7 +1476,7 @@ test('judgment payload rebuild ranges replace a snapshot range only when asked t
           },
         ],
       },
-      getDatabase() as Parameters<typeof projectReviewServingJudgmentPayloadArticleRanges>[1],
+      getDatabase(),
     )
   }
   const getJudgmentIds = async () => {

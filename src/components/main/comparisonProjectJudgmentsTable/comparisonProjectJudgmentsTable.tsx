@@ -30,8 +30,7 @@ type ComparisonProjectJudgmentsTableProps = {
     articleId: string,
     comment: string | null,
   ) =>
-    | ComparisonProjectConflictResolutionCommentSaveResult
-    | Promise<ComparisonProjectConflictResolutionCommentSaveResult>
+    ComparisonProjectConflictResolutionCommentSaveResult | Promise<ComparisonProjectConflictResolutionCommentSaveResult>
   onConflictResolutionReset?: (articleId: string) => void | Promise<void>
   onConflictResolutionSelect?: (articleId: string, value: string) => void | Promise<void>
   rows: ComparisonProjectJudgmentsRow[]

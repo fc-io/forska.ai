@@ -22,16 +22,13 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
 let importOutboxBatch:
-  | (typeof import('./judgmentJobSqliteOutboxImport.ts'))['importJudgmentJobSqliteOutboxBatch']
-  | null = null
+  (typeof import('./judgmentJobSqliteOutboxImport.ts'))['importJudgmentJobSqliteOutboxBatch'] | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let repairLegacyTokenUseEvidenceForJob:
-  | (typeof import('./judgmentLegacyEvidenceRepair.ts'))['repairLegacyTokenUseEvidenceForJob']
-  | null = null
+  (typeof import('./judgmentLegacyEvidenceRepair.ts'))['repairLegacyTokenUseEvidenceForJob'] | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let runStartupJudgmentRolloutCleanup:
-  | (typeof import('./judgmentStartupRolloutCleanup.ts'))['runStartupJudgmentRolloutCleanup']
-  | null = null
+  (typeof import('./judgmentStartupRolloutCleanup.ts'))['runStartupJudgmentRolloutCleanup'] | null = null
 let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
 let getJudgmentJobSqlitePath: (typeof import('./judgmentJobPaths.ts'))['getJudgmentJobSqlitePath'] | null = null
 let legacyCompletionEvidenceQuarantinedReason: string | null = null

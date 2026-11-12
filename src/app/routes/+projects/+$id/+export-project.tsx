@@ -38,7 +38,7 @@ const getProjectAccessErrorMessage = (error: unknown) => {
 
 export const ExportProject = () => {
   const params = Route.useParams()
-  const projectId = (params() as {id: string}).id
+  const projectId = params().id
   const projectAccessQuery = useProjectAccessQuery(() => {
     return projectId
   })

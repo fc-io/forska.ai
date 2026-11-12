@@ -259,10 +259,7 @@ test('import delta intake reconciles deltas without queueing dirty work for arch
     sourcePartition,
   })
 
-  const result = await intake(
-    {limit: 1_024, sourcePartition, startSourceHighWaterMark: 7_001},
-    getDatabase() as ReviewImportDeltaDirtyIntakeDatabase,
-  )
+  const result = await intake({limit: 1_024, sourcePartition, startSourceHighWaterMark: 7_001}, getDatabase())
 
   expect(result).toEqual({
     dirtyWorkCount: 20 * importComponentCount,
@@ -322,10 +319,7 @@ test('a rank-field delta followed by the same article being added in the window 
     watermark: 9_004,
   })
 
-  const result = await intake(
-    {limit: 1_024, sourcePartition, startSourceHighWaterMark: 9_001},
-    getDatabase() as ReviewImportDeltaDirtyIntakeDatabase,
-  )
+  const result = await intake({limit: 1_024, sourcePartition, startSourceHighWaterMark: 9_001}, getDatabase())
 
   expect(result).toEqual({
     dirtyWorkCount: 2 * importComponentCount + 4,
@@ -366,7 +360,7 @@ test('a spent intake deadline commits one bounded transaction and leaves the res
     sourcePartition,
   })
 
-  const first = await intake({...params, deadlineAtMs: 0}, getDatabase() as ReviewImportDeltaDirtyIntakeDatabase)
+  const first = await intake({...params, deadlineAtMs: 0}, getDatabase())
 
   expect(first).toEqual({
     dirtyWorkCount: deltasPerGroup * 4 * importComponentCount,
@@ -383,7 +377,7 @@ test('a spent intake deadline commits one bounded transaction and leaves the res
     mismatched: 0,
   })
 
-  const rest = await intake(params, getDatabase() as ReviewImportDeltaDirtyIntakeDatabase)
+  const rest = await intake(params, getDatabase())
 
   expect(rest).toEqual({
     dirtyWorkCount: (150 - deltasPerGroup) * 4 * importComponentCount,
@@ -443,10 +437,7 @@ test('a later import delta reopens completed dirty work and its claim state like
 
   await insertRoute({projectId: 'project-reopen', routeId: 'route-reopen'})
   await insertAddedDeltas({count: 2, deltaPrefix: 'reopen-a', firstWatermark: 2_001, routeId: 'route-reopen'})
-  await intake(
-    {limit: 512, sourcePartition, startSourceHighWaterMark: 2_001},
-    getDatabase() as ReviewImportDeltaDirtyIntakeDatabase,
-  )
+  await intake({limit: 512, sourcePartition, startSourceHighWaterMark: 2_001}, getDatabase())
   await getDatabase().run(`
     UPDATE app.review_serving_dirty_work SET status = 'completed', lifecycle_reason = 'done'
     WHERE source_partition = '${sourcePartition}'
@@ -457,10 +448,7 @@ test('a later import delta reopens completed dirty work and its claim state like
   `)
   await insertAddedDeltas({count: 1, deltaPrefix: 'reopen-b', firstWatermark: 2_010, routeId: 'route-reopen'})
 
-  const result = await intake(
-    {limit: 512, sourcePartition, startSourceHighWaterMark: 2_010},
-    getDatabase() as ReviewImportDeltaDirtyIntakeDatabase,
-  )
+  const result = await intake({limit: 512, sourcePartition, startSourceHighWaterMark: 2_010}, getDatabase())
   const rows = await getDatabase().queryJson<{
     articleId: string
     claimLatest: number

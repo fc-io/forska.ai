@@ -65,5 +65,5 @@ export const handleApiResponse = <T>(
     throw new Error('No data returned')
   }
 
-  return response.data as NonNullable<T>
+  return response.data
 }

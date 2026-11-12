@@ -26,8 +26,6 @@ export type TokenTimelineData = {
   count: number
 }
 
-type UsageStat = {timestamp: string; totalTokens: number}
-
 type TokenUsageTimelineProps = {projectId?: string; allJobs?: boolean}
 
 type TokenTimelineBucket = {
@@ -217,11 +215,11 @@ const TokenUsageTimelineStats = (props: TokenUsageTimelineStatsProps) => {
   })
 
   const highestUsageStat = createMemo(() => {
-    return (tokenStats.data?.highestUsage ?? null) as UsageStat | null
+    return tokenStats.data?.highestUsage ?? null
   })
 
   const p90UsageStat = createMemo(() => {
-    return (tokenStats.data?.p90Usage ?? null) as UsageStat | null
+    return tokenStats.data?.p90Usage ?? null
   })
 
   return (

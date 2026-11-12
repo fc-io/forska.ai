@@ -1361,12 +1361,7 @@ const getProjectTransferZipInflateMaxOutputLength = (entry: ProjectTransferZipCe
 }
 
 const isProjectTransferZipInflateOutputTooLargeError = (error: unknown) => {
-  return (
-    typeof error === 'object'
-    && error !== null
-    && 'code' in error
-    && (error as {code: unknown}).code === 'ERR_BUFFER_TOO_LARGE'
-  )
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ERR_BUFFER_TOO_LARGE'
 }
 
 const readProjectTransferZipCentralDirectoryEntryBytes = (

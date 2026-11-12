@@ -1728,7 +1728,7 @@ const getClaimStateWindow = async (input: ClaimStateWindowInput, database: Revie
 
 export const claimReviewServingDirtyWork = async (
   params: ClaimReviewServingDirtyWorkParams,
-  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,
+  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService(),
 ) => {
   const limit = getNormalizedLimit(params)
   const claimNowSql = getClaimNowSql(params)
@@ -2295,7 +2295,7 @@ export const getReviewServingDirtyWorkRecordFromRow = (row: unknown) => {
 
 export const completeReviewServingDirtyWorkClaimsAndAdvanceWatermark = async (
   input: {claims: readonly ReviewServingDirtyWorkClaim[]; watermark: ReviewServingProjectorWatermarkAdvanceInput},
-  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,
+  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService(),
 ) => {
   return database.transaction(async (tx) => {
     await assertReviewServingProjectorWatermarkCanAdvance(tx, input.watermark)
@@ -2625,7 +2625,7 @@ const coalesceReviewServingDirtyWorkHighWaterRows = async (
 
 export const cleanupReviewServingDirtyWorkRetention = async (
   params: CleanupReviewServingDirtyWorkRetentionParams = {},
-  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService() as ReviewServingDirtyWorkDatabase,
+  database: ReviewServingDirtyWorkDatabase = getAppDatabaseService(),
 ): Promise<CleanupReviewServingDirtyWorkRetentionResult> => {
   const coalesceDirtyWorkLimit = getNormalizedCleanupLimit(params.coalesceDirtyWorkLimit, defaultCoalesceDirtyWorkLimit)
   const dirtyWorkDeleteLimit = getNormalizedCleanupLimit(

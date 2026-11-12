@@ -129,8 +129,7 @@ export const projectsRoutesPostCreate = async ({body}: {body: typeof projectsRou
 
       for (let index = 0; index < submittedPrompts.length; index++) {
         const prompt = submittedPrompts[index] as
-          | string
-          | {content: string; promptHeading?: string; type?: string; order: number}
+          string | {content: string; promptHeading?: string; type?: string; order: number}
         const content = typeof prompt === 'string' ? prompt : prompt.content
         const heading = typeof prompt === 'object' ? prompt.promptHeading || null : null
         const typeVal = typeof prompt === 'object' ? prompt.type || null : null

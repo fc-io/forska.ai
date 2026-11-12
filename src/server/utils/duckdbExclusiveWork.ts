@@ -4,12 +4,7 @@ import {randomUUID} from 'node:crypto'
 export type DuckdbExclusiveWorkKind = 'project_transfer_import'
 export type DuckdbExclusiveWorkPhase = 'analyze' | 'commit'
 export type DuckdbExclusiveWorkAdmissionState =
-  | 'requested'
-  | 'draining'
-  | 'recycling'
-  | 'ready'
-  | 'running'
-  | 'releasing'
+  'requested' | 'draining' | 'recycling' | 'ready' | 'running' | 'releasing'
 
 export type DuckdbExclusiveWorkBlockedBy = {
   activeMaintenance?: string[]

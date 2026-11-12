@@ -447,12 +447,10 @@ type ReviewServingProjectorWorkerStaleCandidateCleanupResult =
   | {error: string; status: 'failed'}
 
 type ReviewServingProjectorWorkerSnapshotPurgeResult =
-  | (ReviewServingSnapshotPurgeResult & {status: 'completed'})
-  | {error: string; status: 'failed'}
+  (ReviewServingSnapshotPurgeResult & {status: 'completed'}) | {error: string; status: 'failed'}
 
 type ReviewServingProjectorWorkerStaleRequestCleanupResult =
-  | (CloseStaleReviewServingRebuildRequestsResult & {status: 'completed'})
-  | {error: string; status: 'failed'}
+  (CloseStaleReviewServingRebuildRequestsResult & {status: 'completed'}) | {error: string; status: 'failed'}
 
 type ReviewServingProjectorWorkerCleanupResult =
   | {
@@ -1182,7 +1180,7 @@ const getChunkProjectorDatabase = (
         : async (operation) => {
             return operation(database)
           },
-  } as ReviewServingProjectorWorkerDatabase
+  }
 }
 
 const getRebuildChunkExecutionDatabase = (
@@ -5828,7 +5826,7 @@ const defaultReviewServingProjectorWorkerDependencies: ReviewServingProjectorWor
   cleanupDirtyWorkRetention: cleanupReviewServingDirtyWorkRetention,
   cleanupStaleCandidateSnapshots: cleanupStaleCandidateReviewServingSnapshotManifests,
   closeStaleRebuildRequests: closeStaleReviewServingRebuildRequests,
-  getDatabase: getAppDatabaseService as ReviewServingProjectorWorkerDependencies['getDatabase'],
+  getDatabase: getAppDatabaseService,
   getAppendQueueDepth: () => {
     return getDuckdbAppendRuntimeMetrics().queueDepth
   },
@@ -6452,7 +6450,7 @@ const failStaleInPlaceRebuildRequests = async (input: {
           }),
         ),
       ].map(async (projectId) => {
-        return [projectId, await getCurrentReviewServingReviewConfigHash(projectId, input.database as never)] as const
+        return [projectId, await getCurrentReviewServingReviewConfigHash(projectId, input.database)] as const
       }),
     ),
   )
@@ -7553,9 +7551,7 @@ const getReviewServingProjectorWorkerDatabase = (
         ? transactionBackground(operation, transactionWorkloadContext ?? workloadContext)
         : database.transaction(operation, transactionWorkloadContext ?? workloadContext)
     },
-  } as ReviewServingProjectorWorkerDatabase
-    & ReviewServingChunkManifestRepositoryDatabase
-    & ReviewServingSnapshotPurgeDatabase
+  }
 }
 
 const getWakeInput = (input: {
@@ -10907,8 +10903,7 @@ const getJobDrivenDirtyWorkComponentOrder = (
 }
 
 type DeltaIntakePartitionRunner =
-  | typeof intakeReviewChangeDeltasToDirtyWork
-  | typeof intakeReviewImportDeltasToDirtyWork
+  typeof intakeReviewChangeDeltasToDirtyWork | typeof intakeReviewImportDeltasToDirtyWork
 
 const isDeltaIntakeBudgetSpent = (input: {
   deadlineAtMs: number

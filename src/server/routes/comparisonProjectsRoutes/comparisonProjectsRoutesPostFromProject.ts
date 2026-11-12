@@ -87,7 +87,10 @@ export const comparisonProjectsRoutesPostFromProject = new Elysia().post(
         'Conflict resolution imports require summary mode and allow conflict resolution to be enabled',
       )
     }
-    const createResult = (await appDatabaseService.transaction(async (tx) => {
+    const createResult = await appDatabaseService.transaction<{
+      createdComparisonProject: Awaited<ReturnType<typeof createComparisonProjectRecord>>
+      conflictResolutionImportSummary: ComparisonProjectConflictResolutionImportSummary | null
+    }>(async (tx) => {
       await validateConflictResolutionImportSources(tx, conflictResolutionImportSourceComparisonProjectIds)
 
       const createdComparisonProject = await createComparisonProjectRecord(tx, {
@@ -130,10 +133,7 @@ export const comparisonProjectsRoutesPostFromProject = new Elysia().post(
         : null
 
       return {createdComparisonProject, conflictResolutionImportSummary}
-    })) as {
-      createdComparisonProject: Awaited<ReturnType<typeof createComparisonProjectRecord>>
-      conflictResolutionImportSummary: ComparisonProjectConflictResolutionImportSummary | null
-    }
+    })
     const createdComparisonProject = createResult.createdComparisonProject
     await checkpointComparisonProjectMutation()
     await markComparisonProjectServingStaleAndQueueRebuild(createdComparisonProject.id)

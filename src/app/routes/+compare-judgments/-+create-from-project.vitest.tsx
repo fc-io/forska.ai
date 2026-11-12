@@ -274,7 +274,7 @@ const getCreateFromProjectInput = (): CreateFromProjectInput => {
     throw new Error('Create-from-project input not found')
   }
 
-  return input as CreateFromProjectInput
+  return input
 }
 
 const fillSummaryConflictResolutionForm = async (container: HTMLElement) => {

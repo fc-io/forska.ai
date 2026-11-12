@@ -46,13 +46,7 @@ type ComparisonProjectServingRebuildDependencies = {
 type ComparisonProjectServingRebuildDependencyOverrides = Partial<ComparisonProjectServingRebuildDependencies>
 
 type ComparisonProjectServingProgressPhase =
-  | 'cleanup'
-  | 'prompt_cells'
-  | 'promoting'
-  | 'queued'
-  | 'ready'
-  | 'rollups'
-  | 'summary_cells'
+  'cleanup' | 'prompt_cells' | 'promoting' | 'queued' | 'ready' | 'rollups' | 'summary_cells'
 
 type ComparisonProjectServingProgress = {
   completedAt: Date | null

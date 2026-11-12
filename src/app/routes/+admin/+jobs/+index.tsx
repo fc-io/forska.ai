@@ -23,7 +23,6 @@ import {
   getProviderHealthToneClass,
   getStatusColor,
   isHealthyBadge,
-  type JobHealthBadge,
   truncateProviderFailureMessage,
 } from './jobsPageShared'
 
@@ -480,7 +479,7 @@ const JudgmentsJobsTable = () => {
                         </td>
                         <td class="px-6 py-4 text-sm text-gray-900">
                           <div class="flex flex-wrap gap-2">
-                            <For each={job.health.badges as JobHealthBadge[]}>
+                            <For each={job.health.badges}>
                               {(badge) => {
                                 const badgeClass = `inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${getHealthBadgeColor(
                                   badge,

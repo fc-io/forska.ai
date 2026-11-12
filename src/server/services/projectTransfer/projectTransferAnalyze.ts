@@ -2539,7 +2539,7 @@ const getStagedPackageMetadata = ({
       payloadDigests,
       schemaVNextPayloadDigests,
     }),
-    payloads: stagedPayloadsWithDigests as Record<string, ProjectTransferStagedPayloadMetadata>,
+    payloads: stagedPayloadsWithDigests,
     rowCounts: getMetadataNumberRecord(manifest.schemaVersion, stagedPayloadsWithDigests, 'recordCount'),
     sourceProject: {
       exportedAt: manifest.exportedAt,

@@ -105,8 +105,7 @@ export type PromoteReviewServingProjectorSnapshotInput = {
 }
 
 export type PromoteReviewServingProjectorSnapshotResult =
-  | {error: string; promoted: false; snapshotId: string}
-  | {promoted: true; snapshotId: string}
+  {error: string; promoted: false; snapshotId: string} | {promoted: true; snapshotId: string}
 
 export type ActivateReviewServingProjectorSnapshotResult =
   | {error: string; promoted: false; snapshotId: string}
@@ -1001,7 +1000,7 @@ export const activateReviewServingProjectorSnapshot = async (
 
 export const promoteReviewServingProjectorSnapshot = async (
   input: PromoteReviewServingProjectorSnapshotInput,
-  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
 ): Promise<PromoteReviewServingProjectorSnapshotResult> => {
   return database.transaction(async (tx) => {
     const result = await activateReviewServingProjectorSnapshot(input, tx)
@@ -1232,7 +1231,7 @@ export const writeReviewServingTitleSearchRebuildRows = async (
 
 export const writeReviewServingTitleSearchRebuildRanges = async (
   input: WriteReviewServingTitleSearchRebuildRangesInput,
-  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
 ) => {
   const phaseTimings: Record<string, number> = {}
   const startedAtMs = Date.now()
@@ -1377,7 +1376,7 @@ export const writeReviewServingQueueRebuildRows = async (
 
 export const writeReviewServingQueueRebuildRanges = async (
   input: WriteReviewServingQueueRebuildRangesInput,
-  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
 ) => {
   return writeReviewServingProjectorComponent(
     {
@@ -1394,7 +1393,7 @@ export const writeReviewServingQueueRebuildRanges = async (
 
 export const writeReviewServingProjectorComponent = async (
   input: WriteReviewServingProjectorComponentInput,
-  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService() as ReviewServingProjectorWriterDatabase,
+  database: ReviewServingProjectorWriterDatabase = getAppDatabaseService(),
 ) => {
   assertSelectedImportCompatibilityViewIsReadOnly(input)
   assertSelectedImportPublishedMutationsAreOwned(input)

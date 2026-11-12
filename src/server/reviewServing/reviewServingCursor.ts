@@ -51,20 +51,17 @@ export type ReviewServingCursorValidationFailureReason =
   | 'sortKeyMismatch'
 
 export type ReviewServingCursorFailureReason =
-  | ReviewServingCursorDecodeFailureReason
-  | ReviewServingCursorValidationFailureReason
+  ReviewServingCursorDecodeFailureReason | ReviewServingCursorValidationFailureReason
 
 export type ReviewServingCursorDecodeResult =
-  | {payload: ReviewServingCursorPayload; valid: true}
-  | {reason: ReviewServingCursorDecodeFailureReason; valid: false}
+  {payload: ReviewServingCursorPayload; valid: true} | {reason: ReviewServingCursorDecodeFailureReason; valid: false}
 
 export type ReviewServingCursorValidationResult =
   | {payload: ReviewServingCursorPayload; valid: true}
   | {reason: ReviewServingCursorValidationFailureReason; valid: false}
 
 export type ReviewServingCursorParseResult =
-  | {payload: ReviewServingCursorPayload; valid: true}
-  | {reason: ReviewServingCursorFailureReason; valid: false}
+  {payload: ReviewServingCursorPayload; valid: true} | {reason: ReviewServingCursorFailureReason; valid: false}
 
 export type ReviewServingFilterSignaturePrimitive = boolean | null | number | string
 

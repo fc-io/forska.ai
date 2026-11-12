@@ -1,11 +1,7 @@
 export type ArticleStrongIdentifierKind = 'doi' | 'pmid' | 'arxiv'
 export type ArticleMetadataIdentifierKind = 'pmcid'
 export type ArticleIdentifierInputKind =
-  | ArticleStrongIdentifierKind
-  | ArticleMetadataIdentifierKind
-  | 'biorxiv'
-  | 'medrxiv'
-  | 'url'
+  ArticleStrongIdentifierKind | ArticleMetadataIdentifierKind | 'biorxiv' | 'medrxiv' | 'url'
 export type ArticleIdentifierRejectionReason = 'empty' | 'malformed' | 'unsupported-url'
 
 type ArticlePreprintSourceKind = 'biorxiv' | 'medrxiv'

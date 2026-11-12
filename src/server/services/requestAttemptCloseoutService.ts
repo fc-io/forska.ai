@@ -60,8 +60,7 @@ export type RequestAttemptCloseoutOnlineRebuildInput = {
   runner?: RequestAttemptCloseoutDatabaseRunner
 }
 export type RequestAttemptCloseoutRebuildInput =
-  | RequestAttemptCloseoutMaintenanceRebuildInput
-  | RequestAttemptCloseoutOnlineRebuildInput
+  RequestAttemptCloseoutMaintenanceRebuildInput | RequestAttemptCloseoutOnlineRebuildInput
 export type RequestAttemptCloseoutBackfillCycleInput = {
   batchSize?: number
   runner?: RequestAttemptCloseoutDatabaseRunner
@@ -810,7 +809,7 @@ const recordRequestAttemptCloseoutBackfillState = async ({
 
 export const recordRequestAttemptCloseoutBackfillFailure = async ({
   error,
-  runner = getAppDatabaseService() as RequestAttemptCloseoutRunner,
+  runner = getAppDatabaseService(),
 }: RequestAttemptCloseoutBackfillFailureInput): Promise<void> => {
   await runner.run(
     `
@@ -1061,7 +1060,7 @@ export const rebuildRequestAttemptCloseouts = async (
 
 export const runRequestAttemptCloseoutBackfillCycle = async ({
   batchSize,
-  runner = getAppDatabaseService() as RequestAttemptCloseoutDatabaseRunner,
+  runner = getAppDatabaseService(),
 }: RequestAttemptCloseoutBackfillCycleInput = {}): Promise<RequestAttemptCloseoutStartupBackfillResult> => {
   const initialState = await getRequestAttemptCloseoutBackfillState(runner)
   const state = await getRequestAttemptCloseoutBackfillStateForCycle({runner, state: initialState})

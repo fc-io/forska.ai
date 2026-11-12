@@ -92,8 +92,8 @@ export const createDuckdbInstance = async ({
     } catch (error) {
       try {
         connection.closeSync()
-      } catch (closeError) {
-        void closeError
+      } catch {
+        // A close failure must not hide the original error, which is rethrown below.
       }
 
       throw error
@@ -103,8 +103,8 @@ export const createDuckdbInstance = async ({
   } catch (error) {
     try {
       instance.closeSync()
-    } catch (closeError) {
-      void closeError
+    } catch {
+      // A close failure must not hide the original error, which is rethrown below.
     }
 
     throw error

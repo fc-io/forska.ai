@@ -15,7 +15,7 @@ describe('createArticlesReviewsCountQueryOptions', () => {
     fromDateStr: accessor(''),
     pageLimit: accessor(100),
     projectId: 'project-1',
-    promptFilters: accessor({} as Record<string, string[] | null>),
+    promptFilters: accessor({}),
     providerRefusalOnly: accessor(false),
     searchTitleApplied: accessor(''),
     toDateStr: accessor(''),

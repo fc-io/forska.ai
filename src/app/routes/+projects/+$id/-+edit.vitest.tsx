@@ -55,6 +55,7 @@ const mockState = vi.hoisted(() => {
     },
     editPatchResponse: null as {data?: unknown; error?: unknown; status?: number} | null,
     editPayloads: [] as unknown[],
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: the assertion sets the inferred mock state type; tsc fails without it
     fullTextPreview: null as unknown,
     fullTextPreviewForPayload: null as ((payload: unknown) => unknown) | null,
     fullTextPreviewPayloads: [] as unknown[],
@@ -75,7 +76,9 @@ const mockState = vi.hoisted(() => {
         version: null,
       },
     ],
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: the assertion sets the inferred mock state type; tsc fails without it
     projectAccessById: {} as Record<string, MockProjectAccess>,
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: the assertion sets the inferred mock state type; tsc fails without it
     projectDetailsById: {} as Record<string, MockProjectDetails>,
     providerConnectionsPayload: {
       catalog: [],

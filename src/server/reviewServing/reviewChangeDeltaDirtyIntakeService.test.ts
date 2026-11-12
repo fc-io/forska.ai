@@ -38,7 +38,7 @@ const parseProjectionKey = (statement: string): ProjectionKey => {
 
   const parsed = JSON.parse(projectionKey) as unknown
 
-  return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as ProjectionKey) : {}
+  return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
 }
 
 const getDirtyKind = (statement: string) => {

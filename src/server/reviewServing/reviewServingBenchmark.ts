@@ -182,9 +182,7 @@ export type ReviewServingBenchmarkRunResult = {
 export type ReviewServingFilterPostingRepresentation = 'compactArrayUnnest' | 'explodedTempCandidates'
 
 export type ReviewServingFilterPostingProofOperationKey =
-  | 'singleFilterExpansion'
-  | 'multiFilterIntersection'
-  | 'countStyleArticleIds'
+  'singleFilterExpansion' | 'multiFilterIntersection' | 'countStyleArticleIds'
 
 export type ReviewServingFilterPostingProofPosting = {articleIds: readonly string[]; filterKey: string}
 

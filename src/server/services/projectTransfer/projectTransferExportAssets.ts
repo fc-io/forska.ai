@@ -35,10 +35,7 @@ export type ProjectTransferExportAssetArticle = ProjectTransferArticlePayloadRec
 }
 
 export type ProjectTransferExportAssetErrorCode =
-  | 'invalid_asset_reference'
-  | 'missing_runtime_asset'
-  | 'unsafe_runtime_asset'
-  | 'unstable_runtime_asset'
+  'invalid_asset_reference' | 'missing_runtime_asset' | 'unsafe_runtime_asset' | 'unstable_runtime_asset'
 
 export type ProjectTransferExportAssetError = Error & {
   code: ProjectTransferExportAssetErrorCode
@@ -953,7 +950,7 @@ export const getProjectTransferExportAssetReferenceCollectionForArticles = (
   articles: ProjectTransferArticlePayloadRecord[],
 ): ProjectTransferExportArticleAssetReferenceCollection => {
   const articleReferences = articles.map((article, articleIndex) => {
-    return getArticleAssetReferences(article as ProjectTransferExportAssetArticle, articleIndex)
+    return getArticleAssetReferences(article, articleIndex)
   })
 
   return {

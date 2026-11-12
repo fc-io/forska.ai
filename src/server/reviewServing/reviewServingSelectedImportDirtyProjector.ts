@@ -946,7 +946,7 @@ const getPublishSelectedImportDirtyStatements = (
 
 export const projectReviewServingSelectedImportDirty = async (
   input: ProjectReviewServingSelectedImportDirtyInput,
-  database: ReviewServingSelectedImportDirtyProjectorDatabase = getAppDatabaseService() as ReviewServingSelectedImportDirtyProjectorDatabase,
+  database: ReviewServingSelectedImportDirtyProjectorDatabase = getAppDatabaseService(),
 ) => {
   const rows = await getSelectedImportDirtyRows(input, database)
   const {coversEverySnapshot, templates} = await getSelectedImportServingTemplates(input, database)

@@ -44,8 +44,8 @@ let getAndUpdateReadyPrompts:
     >)
   | null = null
 let getReadyPromptRuntime:
-  | ((jobId: string) => Promise<{modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]} | null>)
-  | null = null
+  ((jobId: string) => Promise<{modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]} | null>) | null =
+  null
 
 beforeAll(async () => {
   void mock.module(appReadOnlyDatabaseServiceModulePath, () => {

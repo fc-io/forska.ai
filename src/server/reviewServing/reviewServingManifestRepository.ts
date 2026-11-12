@@ -759,7 +759,7 @@ export const createCandidateReviewServingSnapshotManifest = async (
       'candidate',
       ${getSqlLiteral(input.reviewConfigHash ?? null)},
       ${getReviewServingJsonLiteral(input.composedIdentity)},
-      ${getReviewServingJsonLiteral(input.componentState as unknown as ReviewServingIdentityValue)},
+      ${getReviewServingJsonLiteral(input.componentState)},
       ${getReviewServingJsonLiteral(input.componentRequirements.requiredComponents)},
       ${getReviewServingJsonLiteral(input.componentRequirements.optionalComponents)},
       ${getReviewServingJsonLiteral(input.sourceWatermarks)},
@@ -813,7 +813,7 @@ export const appendReviewServingSnapshotManifestComponents = async (
     UPDATE app.review_serving_snapshot_manifest
     SET
       composed_identity_json = ${getReviewServingJsonLiteral(input.composedIdentity)},
-      component_state_json = ${getReviewServingJsonLiteral(input.componentState as unknown as ReviewServingIdentityValue)},
+      component_state_json = ${getReviewServingJsonLiteral(input.componentState)},
       required_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.requiredComponents)},
       optional_components_json = ${getReviewServingJsonLiteral(input.componentRequirements.optionalComponents)},
       updated_at = current_timestamp

@@ -89,12 +89,7 @@ type ClaudeCodeTokenCounts = {
 }
 
 type ClaudeCodeFailureKind =
-  | 'content_refusal'
-  | 'not_logged_in'
-  | 'rate_limited'
-  | 'request_failed'
-  | 'transient'
-  | 'usage_limit'
+  'content_refusal' | 'not_logged_in' | 'rate_limited' | 'request_failed' | 'transient' | 'usage_limit'
 
 type ClaudeCodeInvocationContext = {effort: string | null; modelName: string}
 
@@ -351,7 +346,7 @@ const parseJsonSafely = (text: string): unknown => {
 const getClaudeCodeResultRecord = (text: string): ClaudeCodeCliResult | null => {
   const record = getRecord(parseJsonSafely(text))
 
-  return record?.type === 'result' ? (record as ClaudeCodeCliResult) : null
+  return record?.type === 'result' ? record : null
 }
 
 export const parseClaudeCodeCliResult = (stdout: string): ClaudeCodeCliResult | null => {

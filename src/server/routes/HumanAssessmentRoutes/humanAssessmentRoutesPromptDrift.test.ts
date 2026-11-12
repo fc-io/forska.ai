@@ -13,11 +13,9 @@ process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let humanAssessmentRoutesPostInit:
-  | typeof import('./humanAssessmentRoutesPostInit.ts').humanAssessmentRoutesPostInit
-  | null = null
+  typeof import('./humanAssessmentRoutesPostInit.ts').humanAssessmentRoutesPostInit | null = null
 let humanAssessmentRoutesPostSubmit:
-  | typeof import('./humanAssessmentRoutesPostSubmit.ts').humanAssessmentRoutesPostSubmit
-  | null = null
+  typeof import('./humanAssessmentRoutesPostSubmit.ts').humanAssessmentRoutesPostSubmit | null = null
 let database: {
   close: () => Promise<void>
   queryJson: <T>(statement: string) => Promise<T[]>

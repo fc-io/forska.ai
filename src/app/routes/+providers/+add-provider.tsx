@@ -104,7 +104,7 @@ const getConnectionFormState = (catalogEntry: ProviderCatalogOption | null): Con
 }
 
 const getCodexProviderState = (value: unknown): CodexAuthProviderState | null => {
-  return typeof value === 'object' && value !== null ? (value as CodexAuthProviderState) : null
+  return typeof value === 'object' && value !== null ? value : null
 }
 
 const getAuthMessageClass = (status: ProviderAuthLifecycleResult['status'] | null | undefined) => {
@@ -388,7 +388,7 @@ const AddProviderPage = () => {
               Create a provider connection here. Models are added later from the main Providers page.
             </p>
           </div>
-          <Button as={Link} to={'/providers' as never} variant="outline">
+          <Button as={Link} to={'/providers'} variant="outline">
             Back to Providers
           </Button>
         </div>

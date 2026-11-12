@@ -12,10 +12,7 @@ import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
 import {getJudgmentsCleanupStaleCronActivity, type JudgmentsCleanupStaleCronActivity} from './judgmentsJobsCronState.ts'
 
 export type CronRuntimeClassName =
-  | 'heavyMaintenanceCrons'
-  | 'importOnlyCrons'
-  | 'judgingCrons'
-  | 'operationalJudgmentCrons'
+  'heavyMaintenanceCrons' | 'importOnlyCrons' | 'judgingCrons' | 'operationalJudgmentCrons'
 
 export type CronRuntimeInactiveReason =
   | 'covered-by-operational-judgment-crons'

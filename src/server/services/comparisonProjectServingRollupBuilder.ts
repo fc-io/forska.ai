@@ -1087,12 +1087,9 @@ const insertComparisonProjectArticleRollups = async (
 }
 
 const insertComparisonProjectFilterMembers = (
-  params: ComparisonProjectServingRollupBuilderParams,
-  dependencies: ComparisonProjectServingRollupBuilderDependencies = getDefaultComparisonProjectServingRollupBuilderDependencies(),
+  _params: ComparisonProjectServingRollupBuilderParams,
+  _dependencies: ComparisonProjectServingRollupBuilderDependencies = getDefaultComparisonProjectServingRollupBuilderDependencies(),
 ) => {
-  void params
-  void dependencies
-
   return Promise.resolve()
 }
 

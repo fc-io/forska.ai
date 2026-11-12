@@ -22,8 +22,7 @@ export type ProjectTransferExportSessionReadyResponse = ProjectTransferExportPac
   status: 'ready'
 }
 export type ProjectTransferExportSessionData =
-  | ProjectTransferExportSessionPendingResponse
-  | ProjectTransferExportSessionReadyResponse
+  ProjectTransferExportSessionPendingResponse | ProjectTransferExportSessionReadyResponse
 export type ProjectTransferImportSessionData = ProjectTransferSessionResponse & {
   analyzeUrl: string
   blockers: string[]

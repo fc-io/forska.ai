@@ -143,8 +143,7 @@ const getSearchTokenPrefix = (search: string | null | undefined) => {
 }
 
 const getManifest = async (projectId: string, dependencies?: ReviewServingFilterRouteDependencies) => {
-  const manifestDatabase =
-    dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
+  const manifestDatabase = dependencies?.manifestDatabase ?? getAppDatabaseService()
   const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
   const active = await getActiveReviewServingSnapshotManifest(
     {componentStateMode: 'available', projectId, reviewConfigHash},
@@ -719,7 +718,7 @@ const readMaterializedPromptAnswerPostingRows = async (input: {
   promptRows: readonly PromptRow[]
   dependencies?: ReviewServingFilterRouteDependencies
 }) => {
-  const database = input.dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = input.dependencies?.database ?? getAppDatabaseService()
   const filterValues = [...new Set(getPromptAnswerPostingProbeValues(input))]
 
   if (filterValues.length === 0 || !hasComponentState(input.manifest, 'posting')) {

@@ -932,7 +932,7 @@ const projectReviewServingQueueProjectScopeChunks = async (
 
 export const projectReviewServingQueuePatches = async (
   input: ProjectReviewServingQueueInput,
-  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService() as ReviewServingQueueProjectorDatabase,
+  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService(),
 ) => {
   if (
     hasProjectScopedClaim(input.claims)
@@ -1058,7 +1058,7 @@ const getReviewServingQueueRebuildWriterInput = (input: ProjectReviewServingQueu
 
 export const projectReviewServingQueueRebuildRanges = async (
   input: ProjectReviewServingQueueRebuildRangesInput,
-  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService() as ReviewServingQueueProjectorDatabase,
+  database: ReviewServingQueueProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {

@@ -35,7 +35,7 @@ const getEarlierDate = (left: DateFilterCandidate | null, right: DateFilterCandi
 
 export const getEffectiveReviewServingDateFilters = async (
   params: {from?: string | null; projectId: string; to?: string | null},
-  database: Pick<ReviewServingReaderDatabase, 'queryJson'> = getAppDatabaseService() as ReviewServingReaderDatabase,
+  database: Pick<ReviewServingReaderDatabase, 'queryJson'> = getAppDatabaseService(),
 ) => {
   const [project] = await database.queryJson<ProjectDateBounds>(`
     SELECT date_from AS dateFrom, date_to AS dateTo

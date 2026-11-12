@@ -107,7 +107,7 @@ export const CompareProjectImportResolutionsPage = () => {
   const params = Route.useParams()
   const queryClient = useQueryClient()
   const comparisonProjectId = () => {
-    return getComparisonProjectId(params() as Record<string, string> | undefined)
+    return getComparisonProjectId(params())
   }
   const [selectedFileName, setSelectedFileName] = createSignal<string | null>(null)
   const [parsedArtifact, setParsedArtifact] = createSignal<ComparisonProjectConflictResolutionTransferArtifact | null>(

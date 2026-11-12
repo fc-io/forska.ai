@@ -68,6 +68,7 @@ const seedModel = async (id: string, metadataJson: unknown) => {
 }
 
 const stringContaining = (text: string): string => {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: expect.stringContaining returns any; no-unsafe-return fires without it
   return expect.stringContaining(text) as unknown as string
 }
 

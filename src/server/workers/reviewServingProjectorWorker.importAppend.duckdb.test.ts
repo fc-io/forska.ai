@@ -197,7 +197,7 @@ const intakeDeltas = async (input: {end: number; start: number}) => {
 
   return intakeReviewImportDeltasToDirtyWork(
     {endSourceHighWaterMark: input.end, limit: 512, sourcePartition, startSourceHighWaterMark: input.start},
-    getDatabase() as never,
+    getDatabase(),
   )
 }
 
@@ -209,7 +209,7 @@ const wake = async (wakeId: string) => {
 
   return wakeReviewServingProjectorService(
     {batchSize: 64, componentOrder: adversarialComponentOrder, maxRowsPerWake: 512, maxWakeMs: 600_000, wakeId},
-    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase() as never)},
+    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase())},
   )
 }
 
@@ -596,7 +596,7 @@ test('selectedImport patches snapshots that share a selected import once and sti
         maxWakeMs: 600_000,
         wakeId: `wake-shared-selected-import-${component}`,
       },
-      {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(countingDatabase as never)},
+      {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(countingDatabase)},
     )
   }, Promise.resolve())
 
@@ -661,7 +661,7 @@ const wakeVisibilityBacklog = async (input: {
       maxWakeMs: 600_000,
       wakeId: input.wakeId,
     },
-    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase() as never)},
+    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase())},
   )
 }
 
@@ -786,7 +786,7 @@ test('newest-first claims still leave status and queue work for an article until
       maxWakeMs: 600_000,
       wakeId: 'wake-newest-first-gates',
     },
-    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase() as never)},
+    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase())},
   )
   const statusRows = await getDatabase().queryJson<{projectionComponent: string; status: string}>(`
     SELECT projection_component AS projectionComponent, status

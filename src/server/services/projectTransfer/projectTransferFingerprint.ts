@@ -54,8 +54,7 @@ type ProjectTransferSchemaVNextLogicalPackageFingerprintDigestInput = {
 type ProjectTransferSchemaVNextLogicalPackageFingerprintPayloadInput = ProjectTransferLogicalPackageFingerprintInput
 
 type ProjectTransferCanonicalPayloadChecksumInput =
-  | {format: 'json'; value: unknown}
-  | {format: 'ndjson'; records: readonly unknown[]}
+  {format: 'json'; value: unknown} | {format: 'ndjson'; records: readonly unknown[]}
 
 const textEncoder = new TextEncoder()
 

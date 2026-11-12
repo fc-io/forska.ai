@@ -989,7 +989,7 @@ const ProviderDetailPage = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
   const providerId = () => {
-    return (params() as {id: string}).id
+    return params().id
   }
   const providerConnectionsQuery = useQuery(() => {
     return {
@@ -1048,7 +1048,7 @@ const ProviderDetailPage = () => {
       mutationFn: deleteProviderConnection,
       onSuccess: async () => {
         await providerConnectionsQuery.refetch()
-        void navigate({to: '/providers' as never})
+        void navigate({to: '/providers'})
       },
     }
   })
@@ -1686,7 +1686,7 @@ const ProviderDetailPage = () => {
                 {isSavingChanges() ? 'Saving...' : 'Save Changes'}
               </Button>
             </Show>
-            <Button as={Link} to={'/providers' as never} variant="outline">
+            <Button as={Link} to={'/providers'} variant="outline">
               Back to Providers
             </Button>
           </div>
@@ -1731,7 +1731,7 @@ const ProviderDetailPage = () => {
                 <p class="mt-2 text-sm text-gray-500">
                   This provider connection does not exist anymore or has been removed.
                 </p>
-                <Button as={Link} class="mt-4" to={'/providers' as never} variant="outline">
+                <Button as={Link} class="mt-4" to={'/providers'} variant="outline">
                   Back to Providers
                 </Button>
               </div>

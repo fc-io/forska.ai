@@ -3,13 +3,7 @@ import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 
 export type JudgmentJobProviderFailureKind =
-  | 'auth'
-  | 'endpoint_unavailable'
-  | 'network'
-  | 'other'
-  | 'rate_limited'
-  | 'timeout'
-  | 'usage_limit'
+  'auth' | 'endpoint_unavailable' | 'network' | 'other' | 'rate_limited' | 'timeout' | 'usage_limit'
 
 export type JudgmentJobProviderHealthStatus = 'failing' | 'recovered'
 

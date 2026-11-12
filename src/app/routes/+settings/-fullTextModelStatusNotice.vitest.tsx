@@ -7,6 +7,7 @@ import {afterEach, describe, expect, test, vi} from 'vitest'
 import type {FullTextModelRole, FullTextModelStatus} from './-fullTextModelStatusNotice.tsx'
 
 const statusState = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- false positive: the assertion sets the inferred mock state type; tsc fails without it
   return {requests: [] as unknown[], statusesByModelId: {} as Record<string, unknown>}
 })
 

@@ -365,7 +365,7 @@ export const getReviewServingSearchAvailabilityFromManifest = (input: {
 
 export const projectReviewServingTitleSearchRows = async (
   input: ProjectReviewServingTitleSearchInput,
-  database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
+  database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, measureSync, phaseTimings} = getTimedProjector()
   const claims = input.claims ?? []
@@ -413,7 +413,7 @@ export const projectReviewServingTitleSearchRows = async (
 
 export const projectReviewServingTitleSearchRebuildRows = async (
   input: ProjectReviewServingTitleSearchRebuildInput,
-  database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
+  database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {
@@ -448,7 +448,7 @@ const getReviewServingTitleSearchRebuildWriterInput = (input: ProjectReviewServi
 
 export const projectReviewServingTitleSearchRebuildRanges = async (
   input: ProjectReviewServingTitleSearchRebuildRangesInput,
-  database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService() as ReviewServingTitleSearchProjectorDatabase,
+  database: ReviewServingTitleSearchProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, phaseTimings} = getTimedProjector()
   const writer = await measure('writerMs', async () => {

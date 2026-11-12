@@ -7,17 +7,13 @@ import {
 } from './articleCanonicalFieldResolver.ts'
 
 const getResolverMetadata = (value: unknown) => {
-  return value && typeof value === 'object' && 'canonicalResolver' in value
-    ? (value as {canonicalResolver: unknown}).canonicalResolver
-    : null
+  return value && typeof value === 'object' && 'canonicalResolver' in value ? value.canonicalResolver : null
 }
 
 const getWarnings = (value: unknown) => {
   const metadata = getResolverMetadata(value)
 
-  return metadata && typeof metadata === 'object' && 'warnings' in metadata
-    ? (metadata as {warnings: unknown}).warnings
-    : null
+  return metadata && typeof metadata === 'object' && 'warnings' in metadata ? metadata.warnings : null
 }
 
 test('resolveCanonicalArticleFields applies source trust before input order', () => {

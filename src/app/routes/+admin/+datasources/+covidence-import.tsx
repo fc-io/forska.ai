@@ -270,10 +270,7 @@ const getCovidencePromptCount = (
 
 const fetchModels = async (): Promise<ModelOption[]> => {
   const response = await apiClient.api.models.get()
-  const result = handleApiResponse<ModelsResponse>(
-    response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
-    'Failed to load models',
-  )
+  const result = handleApiResponse<ModelsResponse>(response, 'Failed to load models')
   const models = result.data ?? []
   const normalizeProvider = (provider: string | null): string => {
     const value = String(provider ?? '')

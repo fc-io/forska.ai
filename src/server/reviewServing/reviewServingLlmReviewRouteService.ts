@@ -16,7 +16,6 @@ import {
   getReviewServingFilteredCountComponentIdentities,
   getReviewServingFilteredCountSignature,
   getReviewServingFilteredCountValue,
-  type ReviewServingFilteredCountDatabase,
 } from './reviewServingFilteredCountService.ts'
 import {
   ensureReviewServingLazyPromptAnswerPostingBuckets,
@@ -157,8 +156,7 @@ const getMissingManifestComponents = (
 }
 
 const getManifest = async (projectId: string, dependencies?: ReviewServingLlmReviewRouteDependencies) => {
-  const manifestDatabase =
-    dependencies?.manifestDatabase ?? (getAppDatabaseService() as ReviewServingManifestRepositoryDatabase)
+  const manifestDatabase = dependencies?.manifestDatabase ?? getAppDatabaseService()
   const reviewConfigHash = dependencies?.currentReviewConfigHash ?? (await getCurrentReviewConfigHash(projectId))
   return getActiveOrLastKnownGoodReviewServingSnapshotManifest(
     {componentStateMode: 'available', projectId, requiredComponents: llmCountRequiredComponents, reviewConfigHash},
@@ -377,7 +375,7 @@ const getFilteredCountValue = async (
     throw getCountIndexingError(indexingReason)
   }
 
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingFilteredCountDatabase)
+  const database = dependencies?.database ?? getAppDatabaseService()
   const filters = getRouteFilters(params)
   const promptAnswerPostingFilterGroups = getPromptAnswerPostingFilterGroups(params.prompts)
   const searchTokenPrefixes = getSearchTokenPrefixes(params.search)
@@ -523,7 +521,7 @@ const getEnabledPromptCount = async (
   projectId: string,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ): Promise<number> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = dependencies?.database ?? getAppDatabaseService()
   const [row] = await database.queryJson<{promptCount?: number | null; prompt_count?: number | null}>(`
     SELECT COUNT(*)::INTEGER AS promptCount
     FROM app.project_prompt project_prompt
@@ -706,7 +704,7 @@ export const getLlmReviewArticlesFromServing = async (
   params: ArticlesReviewsParams,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ): Promise<ArticlesReviewsResponse> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = dependencies?.database ?? getAppDatabaseService()
   const effectiveParams = await getParamsWithEffectiveDateFilters(params, database)
   const page = getPage(effectiveParams.page)
   const limit = getLimit(effectiveParams.limit)
@@ -761,7 +759,7 @@ export const getLlmReviewArticlesFromServing = async (
     page,
     limit,
     totalPages: totalCount === null ? null : Math.ceil(totalCount / limit),
-    nextCursor: hasNextPage && lastRow ? rowsResult.getCursorForRow(lastRow as Record<string, unknown>) : null,
+    nextCursor: hasNextPage && lastRow ? rowsResult.getCursorForRow(lastRow) : null,
   }
 }
 
@@ -769,7 +767,7 @@ export const countLlmReviewArticlesFromServing = async (
   params: ArticlesReviewsParams,
   dependencies?: ReviewServingLlmReviewRouteDependencies,
 ): Promise<ArticlesReviewsCountResponse> => {
-  const database = dependencies?.database ?? (getAppDatabaseService() as ReviewServingReaderDatabase)
+  const database = dependencies?.database ?? getAppDatabaseService()
   const effectiveParams = await getParamsWithEffectiveDateFilters(params, database)
   const manifest = await getManifest(params.projectId, dependencies)
   const limit = getLimit(effectiveParams.limit)

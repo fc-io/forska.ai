@@ -26,15 +26,13 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
 let getAppDatabaseService:
-  | Awaited<typeof import('../../services/appDatabaseService.ts')>['getAppDatabaseService']
-  | null = null
+  Awaited<typeof import('../../services/appDatabaseService.ts')>['getAppDatabaseService'] | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let importOutboxBatch: (() => Promise<number>) | null = null
 let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
 let storeSinglePromptJudgment:
-  | (typeof import('../../../agent/judge/storeSinglePromptJudgment.ts'))['storeSinglePromptJudgment']
-  | null = null
+  (typeof import('../../../agent/judge/storeSinglePromptJudgment.ts'))['storeSinglePromptJudgment'] | null = null
 
 const getLastJsonLine = (stdout: string) => {
   const lines = stdout

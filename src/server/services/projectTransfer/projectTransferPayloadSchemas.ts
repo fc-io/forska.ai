@@ -157,10 +157,7 @@ export type ProjectTransferArticlePayloadRecord = ProjectTransferPayloadRecord
   }
 
 export type ProjectTransferAssetReferenceKind =
-  | 'fullTextAssets'
-  | 'fullTextConversionMetadata'
-  | 'fullTextHtml'
-  | 'fullTextPdf'
+  'fullTextAssets' | 'fullTextConversionMetadata' | 'fullTextHtml' | 'fullTextPdf'
 
 export type ProjectTransferAssetReference = JsonRecord & {
   fieldPath?: string
@@ -240,16 +237,13 @@ export type ProjectTransferPackagePayloadByKey = ProjectTransferPayloadByKey
 export type ProjectTransferPayload = ProjectTransferPayloadByKey[ProjectTransferPayloadKey]
 
 export type ProjectTransferPayloadValidationResult<TKey extends ProjectTransferPayloadKey> =
-  | {ok: true; value: ProjectTransferPayloadByKey[TKey]}
-  | {error: Error; ok: false}
+  {ok: true; value: ProjectTransferPayloadByKey[TKey]} | {error: Error; ok: false}
 
 export type ProjectTransferPackagePayloadValidationResult<TKey extends ProjectTransferPackagePayloadKey> =
-  | {ok: true; value: ProjectTransferPackagePayloadByKey[TKey]}
-  | {error: Error; ok: false}
+  {ok: true; value: ProjectTransferPackagePayloadByKey[TKey]} | {error: Error; ok: false}
 
 export type ProjectTransferPayloadRowValidationResult =
-  | {ok: true; value: ProjectTransferPayloadRecord}
-  | {error: Error; ok: false}
+  {ok: true; value: ProjectTransferPayloadRecord} | {error: Error; ok: false}
 
 export type ProjectTransferPackagePayloadRowValidationResult = {ok: true; value: JsonRecord} | {error: Error; ok: false}
 
@@ -1526,10 +1520,7 @@ const assertProjectTransferAssetManifestPayload = (value: unknown): ProjectTrans
 
   assertFieldPresent(payload, 'entries', 'assetManifest payload')
 
-  return {
-    ...payload,
-    entries: assertArray(payload.entries, 'assetManifest.entries').map(assertAssetEntry),
-  } as ProjectTransferAssetManifestPayload
+  return {...payload, entries: assertArray(payload.entries, 'assetManifest.entries').map(assertAssetEntry)}
 }
 
 const assertProjectTransferPayloadByContract = (key: ProjectTransferPayloadKey, value: unknown) => {
@@ -2205,7 +2196,7 @@ export const projectTransferPayloadFixtures: ProjectTransferPayloadByKey = {
 export const getProjectTransferPayloadFixture = <TKey extends ProjectTransferPayloadKey>(
   key: TKey,
 ): ProjectTransferPayloadByKey[TKey] => {
-  return structuredClone(projectTransferPayloadFixtures[key]) as ProjectTransferPayloadByKey[TKey]
+  return structuredClone<ProjectTransferPayloadByKey[TKey]>(projectTransferPayloadFixtures[key])
 }
 
 export const getProjectTransferPayloadFixtureMap = (): ProjectTransferPayloadByKey => {

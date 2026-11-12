@@ -64,7 +64,7 @@ const getDefinedEntries = (update: Record<string, unknown>): JudgmentJobStopCond
     Object.entries(update).filter(([, value]) => {
       return value !== undefined
     }),
-  ) as JudgmentJobStopConditionUpdate
+  )
 }
 
 export const parseJudgmentJobStopConditionUpdate = (

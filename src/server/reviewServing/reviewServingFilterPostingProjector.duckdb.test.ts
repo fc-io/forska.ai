@@ -5,7 +5,6 @@ import type {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {reviewServingListModes} from './reviewServingContracts.ts'
 import type {ReviewServingDirtyWorkClaim} from './reviewServingDirtyWorkService.ts'
-import type {ReviewServingFilterPostingProjectorDatabase} from './reviewServingFilterPostingProjector.ts'
 import type {ReviewServingProjectorServiceDependencies} from './reviewServingProjectorService.ts'
 
 setDefaultTimeout(120_000)
@@ -229,7 +228,7 @@ const projectPayloadRows = async (input: SnapshotInput) => {
       useMetadata: false,
       useTitle: true,
     },
-    getDatabase() as never,
+    getDatabase(),
   )
 }
 
@@ -256,7 +255,7 @@ const getPostingProjectorInput = (
 const projectFullPostings = async (input: SnapshotInput) => {
   const {projectReviewServingFilterPostings} = await import('./reviewServingFilterPostingProjector.ts')
 
-  await projectReviewServingFilterPostings(getPostingProjectorInput(input), getDatabase() as never)
+  await projectReviewServingFilterPostings(getPostingProjectorInput(input), getDatabase())
 }
 
 const cachePromptAnswerPostings = async (input: SnapshotInput) => {
@@ -322,11 +321,7 @@ const wake = async (
 
   return wakeReviewServingProjectorService(
     {batchSize: 64, componentOrder: [component], maxRowsPerWake: 64, maxWakeMs: 600_000, wakeId: `wake-${component}`},
-    {
-      database: getDatabase(),
-      runners: getDefaultReviewServingProjectorRunners(getDatabase() as never),
-      ...dependencies,
-    },
+    {database: getDatabase(), runners: getDefaultReviewServingProjectorRunners(getDatabase()), ...dependencies},
   )
 }
 
@@ -600,7 +595,7 @@ const runPostingChunk = async (input: SnapshotInput & {end: string; start: strin
 
   await projectReviewServingFilterPostingRanges(
     {ranges: [getPostingProjectorInput({...input, chunkEndArticleId: input.end, chunkStartArticleId: input.start})]},
-    getDatabase() as never,
+    getDatabase(),
   )
   await getDatabase().run(`
     UPDATE app.review_rebuild_chunk_manifest
@@ -739,7 +734,7 @@ const getInterleavingDatabase = (onContributionRead: () => Promise<void>) => {
       return realDatabase.run(statement)
     },
     transaction: realDatabase.transaction.bind(realDatabase),
-  } as unknown as ReviewServingFilterPostingProjectorDatabase
+  }
 }
 
 const getPostingClaim = (projectId: string): ReviewServingDirtyWorkClaim => {

@@ -1003,9 +1003,9 @@ test('refreshes the atomic progress artifact while target analysis remains pendi
     intervalDurations.push(intervalMs ?? 0)
     return {unref: () => {}}
   }) as typeof setInterval
-  globalThis.clearInterval = (() => {
+  globalThis.clearInterval = () => {
     clearedIntervalCount += 1
-  }) as typeof clearInterval
+  }
 
   try {
     const {layout, uploadMetadata, zipModule} = await writeAnalyzeUpload({cwd, useZipModule: false})

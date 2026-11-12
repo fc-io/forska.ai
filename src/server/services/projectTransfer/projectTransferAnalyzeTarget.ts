@@ -2251,7 +2251,7 @@ const getAssetPromotionPlan = ({
       return match.action === 'create'
     })
     .flatMap((match) => {
-      const article = articlesBySource[match.sourceArticleId] as ProjectTransferArticlePayloadRecord | undefined
+      const article = articlesBySource[match.sourceArticleId]
       const assetPathsByField = article ? getArticleFieldAssetPaths(article) : {}
 
       return Object.entries(assetPathsByField).flatMap(([field, assetPaths]) => {

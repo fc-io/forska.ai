@@ -62,10 +62,7 @@ export type ComparisonProjectConflictResolutionImportAnalyzeSummary = {
 }
 
 export type ComparisonProjectConflictResolutionImportAnalyzeRowReason =
-  | 'importable'
-  | 'same-value'
-  | 'overwrite-candidate'
-  | ComparisonProjectConflictResolutionImportSkipReason
+  'importable' | 'same-value' | 'overwrite-candidate' | ComparisonProjectConflictResolutionImportSkipReason
 
 export type ComparisonProjectConflictResolutionImportAnalyzeRow = {
   sourceTitle: string | null

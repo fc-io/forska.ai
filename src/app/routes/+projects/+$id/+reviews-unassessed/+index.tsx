@@ -14,7 +14,7 @@ import {useArchivedProjectRedirect, useProjectAccessQuery} from '../../projectAc
 const ReviewsUnassessed = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
-  const projectId = (params() as {id: string}).id
+  const projectId = params().id
   const queryClient = useQueryClient()
   const [archivingProject, setArchivingProject] = createSignal(false)
   const projectAccessQuery = useProjectAccessQuery(() => {

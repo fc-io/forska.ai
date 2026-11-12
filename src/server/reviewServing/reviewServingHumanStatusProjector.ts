@@ -947,14 +947,14 @@ const projectReviewServingHumanStatusClaimlessRanges = async (
 
 export const projectReviewServingHumanStatusRanges = async (
   input: ProjectReviewServingHumanStatusRangesInput,
-  database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService() as ReviewServingHumanStatusProjectorDatabase,
+  database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService(),
 ) => {
   return projectReviewServingHumanStatusClaimlessRanges(input, database)
 }
 
 export const projectReviewServingHumanStatusPatches = async (
   input: ProjectReviewServingHumanStatusInput,
-  database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService() as ReviewServingHumanStatusProjectorDatabase,
+  database: ReviewServingHumanStatusProjectorDatabase = getAppDatabaseService(),
 ) => {
   const {measure, measureSync, phaseTimings} = getTimedProjector()
   const patchWatermark = getPatchWatermark(input.claims)
