@@ -10,95 +10,89 @@
 
 import { Route as rootRouteImport } from './routes/+__root'
 import { Route as IndexRouteImport } from './routes/+index'
-import { Route as ProvidersAddProviderRouteImport } from './routes/+providers/+add-provider'
-import { Route as ProjectsImportRouteImport } from './routes/+projects/+import'
-import { Route as ProjectsCreateSubprojectRouteImport } from './routes/+projects/+create-subproject'
-import { Route as ProjectsCreateRouteImport } from './routes/+projects/+create'
-import { Route as CompareJudgmentsCreateFromProjectRouteImport } from './routes/+compare-judgments/+create-from-project'
-import { Route as CompareJudgmentsCreateRouteImport } from './routes/+compare-judgments/+create'
-import { Route as SettingsIndexRouteImport } from './routes/+settings/+index'
-import { Route as ProvidersIndexRouteImport } from './routes/+providers/+index'
-import { Route as PromptsIndexRouteImport } from './routes/+prompts/+index'
-import { Route as ProjectsIndexRouteImport } from './routes/+projects/+index'
-import { Route as LoginIndexRouteImport } from './routes/+login/+index'
-import { Route as CompareJudgmentsIndexRouteImport } from './routes/+compare-judgments/+index'
 import { Route as ArticlesIndexRouteImport } from './routes/+articles/+index'
-import { Route as ProjectsIdHumanAssessmentRouteImport } from './routes/+projects/+$id/+humanAssessment'
-import { Route as ProjectsIdExportProjectRouteImport } from './routes/+projects/+$id/+export-project'
-import { Route as ProjectsIdExportRouteImport } from './routes/+projects/+$id/+export'
-import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
-import { Route as CompareJudgmentsIdImportResolutionsRouteImport } from './routes/+compare-judgments/+$id/+import-resolutions'
-import { Route as CompareJudgmentsIdExportRouteImport } from './routes/+compare-judgments/+$id/+export'
-import { Route as CompareJudgmentsIdEditRouteImport } from './routes/+compare-judgments/+$id/+edit'
-import { Route as ArticlesIdFulltextRouteImport } from './routes/+articles/+$id/+fulltext'
-import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
-import { Route as AdminJobsHealthRouteImport } from './routes/+admin/+jobs/+health'
-import { Route as AdminDatasourcesStructuredFileImportRouteImport } from './routes/+admin/+datasources/+structured-file-import'
-import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
-import { Route as AdminDatasourcesCovidenceImportRouteImport } from './routes/+admin/+datasources/+covidence-import'
-import { Route as ProvidersIdIndexRouteImport } from './routes/+providers/+$id/+index'
-import { Route as PromptsArchivedIndexRouteImport } from './routes/+prompts/+archived/+index'
-import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
-import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
-import { Route as CompareJudgmentsArchivedIndexRouteImport } from './routes/+compare-judgments/+archived/+index'
-import { Route as CompareJudgmentsIdIndexRouteImport } from './routes/+compare-judgments/+$id/+index'
-import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+index'
-import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin/+unexpected-answers/+index'
-import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
-import { Route as AdminProcessActivityIndexRouteImport } from './routes/+admin/+process-activity/+index'
-import { Route as AdminPdfResetIndexRouteImport } from './routes/+admin/+pdf-reset/+index'
-import { Route as AdminPdfConversionsIndexRouteImport } from './routes/+admin/+pdf-conversions/+index'
-import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
-import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
-import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
-import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
-import { Route as AdminDuckdbOwnerConnectionsIndexRouteImport } from './routes/+admin/+duckdb-owner-connections/+index'
-import { Route as AdminDuckdbAppendIndexRouteImport } from './routes/+admin/+duckdb-append/+index'
-import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
+import { Route as CompareJudgmentsIndexRouteImport } from './routes/+compare-judgments/+index'
+import { Route as CompareJudgmentsCreateRouteImport } from './routes/+compare-judgments/+create'
+import { Route as CompareJudgmentsCreateFromProjectRouteImport } from './routes/+compare-judgments/+create-from-project'
+import { Route as LoginIndexRouteImport } from './routes/+login/+index'
+import { Route as ProjectsIndexRouteImport } from './routes/+projects/+index'
+import { Route as ProjectsCreateRouteImport } from './routes/+projects/+create'
+import { Route as ProjectsCreateSubprojectRouteImport } from './routes/+projects/+create-subproject'
+import { Route as ProjectsImportRouteImport } from './routes/+projects/+import'
+import { Route as PromptsIndexRouteImport } from './routes/+prompts/+index'
+import { Route as ProvidersIndexRouteImport } from './routes/+providers/+index'
+import { Route as ProvidersAddProviderRouteImport } from './routes/+providers/+add-provider'
+import { Route as SettingsIndexRouteImport } from './routes/+settings/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
-import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
-import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
+import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
+import { Route as AdminDatasourcesCovidenceImportRouteImport } from './routes/+admin/+datasources/+covidence-import'
+import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
+import { Route as AdminDatasourcesStructuredFileImportRouteImport } from './routes/+admin/+datasources/+structured-file-import'
+import { Route as AdminDuckdbAppendIndexRouteImport } from './routes/+admin/+duckdb-append/+index'
+import { Route as AdminDuckdbOwnerConnectionsIndexRouteImport } from './routes/+admin/+duckdb-owner-connections/+index'
+import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
+import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
+import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
+import { Route as AdminJobsHealthRouteImport } from './routes/+admin/+jobs/+health'
+import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
+import { Route as AdminPdfConversionsIndexRouteImport } from './routes/+admin/+pdf-conversions/+index'
+import { Route as AdminPdfResetIndexRouteImport } from './routes/+admin/+pdf-reset/+index'
+import { Route as AdminProcessActivityIndexRouteImport } from './routes/+admin/+process-activity/+index'
+import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
+import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
+import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin/+unexpected-answers/+index'
+import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+index'
+import { Route as ArticlesIdFulltextRouteImport } from './routes/+articles/+$id/+fulltext'
+import { Route as CompareJudgmentsIdIndexRouteImport } from './routes/+compare-judgments/+$id/+index'
+import { Route as CompareJudgmentsIdEditRouteImport } from './routes/+compare-judgments/+$id/+edit'
+import { Route as CompareJudgmentsIdExportRouteImport } from './routes/+compare-judgments/+$id/+export'
+import { Route as CompareJudgmentsIdImportResolutionsRouteImport } from './routes/+compare-judgments/+$id/+import-resolutions'
+import { Route as CompareJudgmentsArchivedIndexRouteImport } from './routes/+compare-judgments/+archived/+index'
+import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+index'
+import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edit'
+import { Route as ProjectsIdExportRouteImport } from './routes/+projects/+$id/+export'
+import { Route as ProjectsIdExportProjectRouteImport } from './routes/+projects/+$id/+export-project'
+import { Route as ProjectsIdHumanAssessmentRouteImport } from './routes/+projects/+$id/+humanAssessment'
+import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
+import { Route as PromptsArchivedIndexRouteImport } from './routes/+prompts/+archived/+index'
+import { Route as ProvidersIdIndexRouteImport } from './routes/+providers/+$id/+index'
 import { Route as AdminDatasourcesIdChangesRouteImport } from './routes/+admin/+datasources/+$id/+changes'
-import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
-import { Route as ProjectsIdReviewsUnassessedIndexRouteImport } from './routes/+projects/+$id/+reviews-unassessed/+index'
-import { Route as ProjectsIdReviewsLlmIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+index'
-import { Route as ProjectsIdReviewsHumanIndexRouteImport } from './routes/+projects/+$id/+reviews-human/+index'
-import { Route as ProjectsIdReviewsBothIndexRouteImport } from './routes/+projects/+$id/+reviews-both/+index'
-import { Route as AdminUnexpectedAnswersAllPromptsIndexRouteImport } from './routes/+admin/+unexpected-answers/+all-prompts/+index'
-import { Route as AdminUnexpectedAnswersProjectIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+$projectId/+index'
-import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
-import { Route as AdminFailed_requestsIdIndexRouteImport } from './routes/+admin/+failed_requests/+$id/+index'
+import { Route as AdminDatasourcesIdEditRouteImport } from './routes/+admin/+datasources/+$id/+edit'
 import { Route as AdminDatasourcesArchivedIndexRouteImport } from './routes/+admin/+datasources/+archived/+index'
+import { Route as AdminFailed_requestsIdIndexRouteImport } from './routes/+admin/+failed_requests/+$id/+index'
+import { Route as AdminJobsIdIndexRouteImport } from './routes/+admin/+jobs/+$id/+index'
+import { Route as AdminJobsIdUnassessed_articlesRouteImport } from './routes/+admin/+jobs/+$id/+unassessed_articles'
+import { Route as AdminUnexpectedAnswersProjectIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+$projectId/+index'
+import { Route as AdminUnexpectedAnswersAllPromptsIndexRouteImport } from './routes/+admin/+unexpected-answers/+all-prompts/+index'
+import { Route as ProjectsIdReviewsBothIndexRouteImport } from './routes/+projects/+$id/+reviews-both/+index'
+import { Route as ProjectsIdReviewsHumanIndexRouteImport } from './routes/+projects/+$id/+reviews-human/+index'
+import { Route as ProjectsIdReviewsLlmIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+index'
+import { Route as ProjectsIdReviewsUnassessedIndexRouteImport } from './routes/+projects/+$id/+reviews-unassessed/+index'
+import { Route as ProjectsIdReviewsIndexRouteImport } from './routes/+projects/+$id/+reviews/+index'
+import { Route as AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+$projectId/+$promptId/+index'
+import { Route as AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+all-prompts/+$promptId/+index'
+import { Route as ProjectsIdReviewsLlmArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+index'
 import { Route as ProjectsIdReviewsLlmArticleIdFulltextRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+fulltext'
 import { Route as ProjectsIdReviewsArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews/+$articleId/+index'
-import { Route as ProjectsIdReviewsLlmArticleIdIndexRouteImport } from './routes/+projects/+$id/+reviews-llm/+$articleId/+index'
-import { Route as AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+all-prompts/+$promptId/+index'
-import { Route as AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport } from './routes/+admin/+unexpected-answers/+$projectId/+$promptId/+index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProvidersAddProviderRoute = ProvidersAddProviderRouteImport.update({
-  id: '/providers/add-provider',
-  path: '/providers/add-provider',
+const ArticlesIndexRoute = ArticlesIndexRouteImport.update({
+  id: '/articles/',
+  path: '/articles/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsImportRoute = ProjectsImportRouteImport.update({
-  id: '/projects/import',
-  path: '/projects/import',
+const CompareJudgmentsIndexRoute = CompareJudgmentsIndexRouteImport.update({
+  id: '/compare-judgments/',
+  path: '/compare-judgments/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsCreateSubprojectRoute =
-  ProjectsCreateSubprojectRouteImport.update({
-    id: '/projects/create-subproject',
-    path: '/projects/create-subproject',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ProjectsCreateRoute = ProjectsCreateRouteImport.update({
-  id: '/projects/create',
-  path: '/projects/create',
+const CompareJudgmentsCreateRoute = CompareJudgmentsCreateRouteImport.update({
+  id: '/compare-judgments/create',
+  path: '/compare-judgments/create',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CompareJudgmentsCreateFromProjectRoute =
@@ -107,24 +101,9 @@ const CompareJudgmentsCreateFromProjectRoute =
     path: '/compare-judgments/create-from-project',
     getParentRoute: () => rootRouteImport,
   } as any)
-const CompareJudgmentsCreateRoute = CompareJudgmentsCreateRouteImport.update({
-  id: '/compare-judgments/create',
-  path: '/compare-judgments/create',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsIndexRoute = SettingsIndexRouteImport.update({
-  id: '/settings/',
-  path: '/settings/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProvidersIndexRoute = ProvidersIndexRouteImport.update({
-  id: '/providers/',
-  path: '/providers/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PromptsIndexRoute = PromptsIndexRouteImport.update({
-  id: '/prompts/',
-  path: '/prompts/',
+const LoginIndexRoute = LoginIndexRouteImport.update({
+  id: '/login/',
+  path: '/login/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
@@ -132,83 +111,50 @@ const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
   path: '/projects/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LoginIndexRoute = LoginIndexRouteImport.update({
-  id: '/login/',
-  path: '/login/',
+const ProjectsCreateRoute = ProjectsCreateRouteImport.update({
+  id: '/projects/create',
+  path: '/projects/create',
   getParentRoute: () => rootRouteImport,
 } as any)
-const CompareJudgmentsIndexRoute = CompareJudgmentsIndexRouteImport.update({
-  id: '/compare-judgments/',
-  path: '/compare-judgments/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ArticlesIndexRoute = ArticlesIndexRouteImport.update({
-  id: '/articles/',
-  path: '/articles/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProjectsIdHumanAssessmentRoute =
-  ProjectsIdHumanAssessmentRouteImport.update({
-    id: '/projects/$id/humanAssessment',
-    path: '/projects/$id/humanAssessment',
+const ProjectsCreateSubprojectRoute =
+  ProjectsCreateSubprojectRouteImport.update({
+    id: '/projects/create-subproject',
+    path: '/projects/create-subproject',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ProjectsIdExportProjectRoute = ProjectsIdExportProjectRouteImport.update({
-  id: '/projects/$id/export-project',
-  path: '/projects/$id/export-project',
+const ProjectsImportRoute = ProjectsImportRouteImport.update({
+  id: '/projects/import',
+  path: '/projects/import',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsIdExportRoute = ProjectsIdExportRouteImport.update({
-  id: '/projects/$id/export',
-  path: '/projects/$id/export',
+const PromptsIndexRoute = PromptsIndexRouteImport.update({
+  id: '/prompts/',
+  path: '/prompts/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
-  id: '/projects/$id/edit',
-  path: '/projects/$id/edit',
+const ProvidersIndexRoute = ProvidersIndexRouteImport.update({
+  id: '/providers/',
+  path: '/providers/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const CompareJudgmentsIdImportResolutionsRoute =
-  CompareJudgmentsIdImportResolutionsRouteImport.update({
-    id: '/compare-judgments/$id/import-resolutions',
-    path: '/compare-judgments/$id/import-resolutions',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const CompareJudgmentsIdExportRoute =
-  CompareJudgmentsIdExportRouteImport.update({
-    id: '/compare-judgments/$id/export',
-    path: '/compare-judgments/$id/export',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const CompareJudgmentsIdEditRoute = CompareJudgmentsIdEditRouteImport.update({
-  id: '/compare-judgments/$id/edit',
-  path: '/compare-judgments/$id/edit',
+const ProvidersAddProviderRoute = ProvidersAddProviderRouteImport.update({
+  id: '/providers/add-provider',
+  path: '/providers/add-provider',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ArticlesIdFulltextRoute = ArticlesIdFulltextRouteImport.update({
-  id: '/articles/$id/fulltext',
-  path: '/articles/$id/fulltext',
+const SettingsIndexRoute = SettingsIndexRouteImport.update({
+  id: '/settings/',
+  path: '/settings/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
-  id: '/admin/prompts/deduplicate',
-  path: '/admin/prompts/deduplicate',
+const AdminAssessmentsIndexRoute = AdminAssessmentsIndexRouteImport.update({
+  id: '/admin/assessments/',
+  path: '/admin/assessments/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminJobsHealthRoute = AdminJobsHealthRouteImport.update({
-  id: '/admin/jobs/health',
-  path: '/admin/jobs/health',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminDatasourcesStructuredFileImportRoute =
-  AdminDatasourcesStructuredFileImportRouteImport.update({
-    id: '/admin/datasources/structured-file-import',
-    path: '/admin/datasources/structured-file-import',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
-  id: '/admin/datasources/create',
-  path: '/admin/datasources/create',
+const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
+  id: '/admin/datasources/',
+  path: '/admin/datasources/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminDatasourcesCovidenceImportRoute =
@@ -217,62 +163,52 @@ const AdminDatasourcesCovidenceImportRoute =
     path: '/admin/datasources/covidence-import',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ProvidersIdIndexRoute = ProvidersIdIndexRouteImport.update({
-  id: '/providers/$id/',
-  path: '/providers/$id/',
+const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
+  id: '/admin/datasources/create',
+  path: '/admin/datasources/create',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PromptsArchivedIndexRoute = PromptsArchivedIndexRouteImport.update({
-  id: '/prompts/archived/',
-  path: '/prompts/archived/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProjectsArchivedIndexRoute = ProjectsArchivedIndexRouteImport.update({
-  id: '/projects/archived/',
-  path: '/projects/archived/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProjectsIdIndexRoute = ProjectsIdIndexRouteImport.update({
-  id: '/projects/$id/',
-  path: '/projects/$id/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CompareJudgmentsArchivedIndexRoute =
-  CompareJudgmentsArchivedIndexRouteImport.update({
-    id: '/compare-judgments/archived/',
-    path: '/compare-judgments/archived/',
+const AdminDatasourcesStructuredFileImportRoute =
+  AdminDatasourcesStructuredFileImportRouteImport.update({
+    id: '/admin/datasources/structured-file-import',
+    path: '/admin/datasources/structured-file-import',
     getParentRoute: () => rootRouteImport,
   } as any)
-const CompareJudgmentsIdIndexRoute = CompareJudgmentsIdIndexRouteImport.update({
-  id: '/compare-judgments/$id/',
-  path: '/compare-judgments/$id/',
+const AdminDuckdbAppendIndexRoute = AdminDuckdbAppendIndexRouteImport.update({
+  id: '/admin/duckdb-append/',
+  path: '/admin/duckdb-append/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ArticlesIdIndexRoute = ArticlesIdIndexRouteImport.update({
-  id: '/articles/$id/',
-  path: '/articles/$id/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminUnexpectedAnswersIndexRoute =
-  AdminUnexpectedAnswersIndexRouteImport.update({
-    id: '/admin/unexpected-answers/',
-    path: '/admin/unexpected-answers/',
+const AdminDuckdbOwnerConnectionsIndexRoute =
+  AdminDuckdbOwnerConnectionsIndexRouteImport.update({
+    id: '/admin/duckdb-owner-connections/',
+    path: '/admin/duckdb-owner-connections/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminSetup_statsIndexRoute = AdminSetup_statsIndexRouteImport.update({
-  id: '/admin/setup_stats/',
-  path: '/admin/setup_stats/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminProcessActivityIndexRoute =
-  AdminProcessActivityIndexRouteImport.update({
-    id: '/admin/process-activity/',
-    path: '/admin/process-activity/',
+const AdminFailed_requestsIndexRoute =
+  AdminFailed_requestsIndexRouteImport.update({
+    id: '/admin/failed_requests/',
+    path: '/admin/failed_requests/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminPdfResetIndexRoute = AdminPdfResetIndexRouteImport.update({
-  id: '/admin/pdf-reset/',
-  path: '/admin/pdf-reset/',
+const AdminGpuIndexRoute = AdminGpuIndexRouteImport.update({
+  id: '/admin/gpu/',
+  path: '/admin/gpu/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminJobsIndexRoute = AdminJobsIndexRouteImport.update({
+  id: '/admin/jobs/',
+  path: '/admin/jobs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminJobsHealthRoute = AdminJobsHealthRouteImport.update({
+  id: '/admin/jobs/health',
+  path: '/admin/jobs/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminLlmIndexRoute = AdminLlmIndexRouteImport.update({
+  id: '/admin/llm/',
+  path: '/admin/llm/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminPdfConversionsIndexRoute =
@@ -281,57 +217,110 @@ const AdminPdfConversionsIndexRoute =
     path: '/admin/pdf-conversions/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminLlmIndexRoute = AdminLlmIndexRouteImport.update({
-  id: '/admin/llm/',
-  path: '/admin/llm/',
+const AdminPdfResetIndexRoute = AdminPdfResetIndexRouteImport.update({
+  id: '/admin/pdf-reset/',
+  path: '/admin/pdf-reset/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminJobsIndexRoute = AdminJobsIndexRouteImport.update({
-  id: '/admin/jobs/',
-  path: '/admin/jobs/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminGpuIndexRoute = AdminGpuIndexRouteImport.update({
-  id: '/admin/gpu/',
-  path: '/admin/gpu/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminFailed_requestsIndexRoute =
-  AdminFailed_requestsIndexRouteImport.update({
-    id: '/admin/failed_requests/',
-    path: '/admin/failed_requests/',
+const AdminProcessActivityIndexRoute =
+  AdminProcessActivityIndexRouteImport.update({
+    id: '/admin/process-activity/',
+    path: '/admin/process-activity/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminDuckdbOwnerConnectionsIndexRoute =
-  AdminDuckdbOwnerConnectionsIndexRouteImport.update({
-    id: '/admin/duckdb-owner-connections/',
-    path: '/admin/duckdb-owner-connections/',
+const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
+  id: '/admin/prompts/deduplicate',
+  path: '/admin/prompts/deduplicate',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminSetup_statsIndexRoute = AdminSetup_statsIndexRouteImport.update({
+  id: '/admin/setup_stats/',
+  path: '/admin/setup_stats/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminUnexpectedAnswersIndexRoute =
+  AdminUnexpectedAnswersIndexRouteImport.update({
+    id: '/admin/unexpected-answers/',
+    path: '/admin/unexpected-answers/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminDuckdbAppendIndexRoute = AdminDuckdbAppendIndexRouteImport.update({
-  id: '/admin/duckdb-append/',
-  path: '/admin/duckdb-append/',
+const ArticlesIdIndexRoute = ArticlesIdIndexRouteImport.update({
+  id: '/articles/$id/',
+  path: '/articles/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminDatasourcesIndexRoute = AdminDatasourcesIndexRouteImport.update({
-  id: '/admin/datasources/',
-  path: '/admin/datasources/',
+const ArticlesIdFulltextRoute = ArticlesIdFulltextRouteImport.update({
+  id: '/articles/$id/fulltext',
+  path: '/articles/$id/fulltext',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminAssessmentsIndexRoute = AdminAssessmentsIndexRouteImport.update({
-  id: '/admin/assessments/',
-  path: '/admin/assessments/',
+const CompareJudgmentsIdIndexRoute = CompareJudgmentsIdIndexRouteImport.update({
+  id: '/compare-judgments/$id/',
+  path: '/compare-judgments/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminJobsIdUnassessed_articlesRoute =
-  AdminJobsIdUnassessed_articlesRouteImport.update({
-    id: '/admin/jobs/$id/unassessed_articles',
-    path: '/admin/jobs/$id/unassessed_articles',
+const CompareJudgmentsIdEditRoute = CompareJudgmentsIdEditRouteImport.update({
+  id: '/compare-judgments/$id/edit',
+  path: '/compare-judgments/$id/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CompareJudgmentsIdExportRoute =
+  CompareJudgmentsIdExportRouteImport.update({
+    id: '/compare-judgments/$id/export',
+    path: '/compare-judgments/$id/export',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminDatasourcesIdEditRoute = AdminDatasourcesIdEditRouteImport.update({
-  id: '/admin/datasources/$id/edit',
-  path: '/admin/datasources/$id/edit',
+const CompareJudgmentsIdImportResolutionsRoute =
+  CompareJudgmentsIdImportResolutionsRouteImport.update({
+    id: '/compare-judgments/$id/import-resolutions',
+    path: '/compare-judgments/$id/import-resolutions',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const CompareJudgmentsArchivedIndexRoute =
+  CompareJudgmentsArchivedIndexRouteImport.update({
+    id: '/compare-judgments/archived/',
+    path: '/compare-judgments/archived/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ProjectsIdIndexRoute = ProjectsIdIndexRouteImport.update({
+  id: '/projects/$id/',
+  path: '/projects/$id/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIdEditRoute = ProjectsIdEditRouteImport.update({
+  id: '/projects/$id/edit',
+  path: '/projects/$id/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIdExportRoute = ProjectsIdExportRouteImport.update({
+  id: '/projects/$id/export',
+  path: '/projects/$id/export',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIdExportProjectRoute = ProjectsIdExportProjectRouteImport.update({
+  id: '/projects/$id/export-project',
+  path: '/projects/$id/export-project',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIdHumanAssessmentRoute =
+  ProjectsIdHumanAssessmentRouteImport.update({
+    id: '/projects/$id/humanAssessment',
+    path: '/projects/$id/humanAssessment',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ProjectsArchivedIndexRoute = ProjectsArchivedIndexRouteImport.update({
+  id: '/projects/archived/',
+  path: '/projects/archived/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PromptsArchivedIndexRoute = PromptsArchivedIndexRouteImport.update({
+  id: '/prompts/archived/',
+  path: '/prompts/archived/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProvidersIdIndexRoute = ProvidersIdIndexRouteImport.update({
+  id: '/providers/$id/',
+  path: '/providers/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminDatasourcesIdChangesRoute =
@@ -340,39 +329,32 @@ const AdminDatasourcesIdChangesRoute =
     path: '/admin/datasources/$id/changes',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ProjectsIdReviewsIndexRoute = ProjectsIdReviewsIndexRouteImport.update({
-  id: '/projects/$id/reviews/',
-  path: '/projects/$id/reviews/',
+const AdminDatasourcesIdEditRoute = AdminDatasourcesIdEditRouteImport.update({
+  id: '/admin/datasources/$id/edit',
+  path: '/admin/datasources/$id/edit',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsIdReviewsUnassessedIndexRoute =
-  ProjectsIdReviewsUnassessedIndexRouteImport.update({
-    id: '/projects/$id/reviews-unassessed/',
-    path: '/projects/$id/reviews-unassessed/',
+const AdminDatasourcesArchivedIndexRoute =
+  AdminDatasourcesArchivedIndexRouteImport.update({
+    id: '/admin/datasources/archived/',
+    path: '/admin/datasources/archived/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ProjectsIdReviewsLlmIndexRoute =
-  ProjectsIdReviewsLlmIndexRouteImport.update({
-    id: '/projects/$id/reviews-llm/',
-    path: '/projects/$id/reviews-llm/',
+const AdminFailed_requestsIdIndexRoute =
+  AdminFailed_requestsIdIndexRouteImport.update({
+    id: '/admin/failed_requests/$id/',
+    path: '/admin/failed_requests/$id/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ProjectsIdReviewsHumanIndexRoute =
-  ProjectsIdReviewsHumanIndexRouteImport.update({
-    id: '/projects/$id/reviews-human/',
-    path: '/projects/$id/reviews-human/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ProjectsIdReviewsBothIndexRoute =
-  ProjectsIdReviewsBothIndexRouteImport.update({
-    id: '/projects/$id/reviews-both/',
-    path: '/projects/$id/reviews-both/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const AdminUnexpectedAnswersAllPromptsIndexRoute =
-  AdminUnexpectedAnswersAllPromptsIndexRouteImport.update({
-    id: '/admin/unexpected-answers/all-prompts/',
-    path: '/admin/unexpected-answers/all-prompts/',
+const AdminJobsIdIndexRoute = AdminJobsIdIndexRouteImport.update({
+  id: '/admin/jobs/$id/',
+  path: '/admin/jobs/$id/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminJobsIdUnassessed_articlesRoute =
+  AdminJobsIdUnassessed_articlesRouteImport.update({
+    id: '/admin/jobs/$id/unassessed_articles',
+    path: '/admin/jobs/$id/unassessed_articles',
     getParentRoute: () => rootRouteImport,
   } as any)
 const AdminUnexpectedAnswersProjectIdIndexRoute =
@@ -381,21 +363,57 @@ const AdminUnexpectedAnswersProjectIdIndexRoute =
     path: '/admin/unexpected-answers/$projectId/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminJobsIdIndexRoute = AdminJobsIdIndexRouteImport.update({
-  id: '/admin/jobs/$id/',
-  path: '/admin/jobs/$id/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminFailed_requestsIdIndexRoute =
-  AdminFailed_requestsIdIndexRouteImport.update({
-    id: '/admin/failed_requests/$id/',
-    path: '/admin/failed_requests/$id/',
+const AdminUnexpectedAnswersAllPromptsIndexRoute =
+  AdminUnexpectedAnswersAllPromptsIndexRouteImport.update({
+    id: '/admin/unexpected-answers/all-prompts/',
+    path: '/admin/unexpected-answers/all-prompts/',
     getParentRoute: () => rootRouteImport,
   } as any)
-const AdminDatasourcesArchivedIndexRoute =
-  AdminDatasourcesArchivedIndexRouteImport.update({
-    id: '/admin/datasources/archived/',
-    path: '/admin/datasources/archived/',
+const ProjectsIdReviewsBothIndexRoute =
+  ProjectsIdReviewsBothIndexRouteImport.update({
+    id: '/projects/$id/reviews-both/',
+    path: '/projects/$id/reviews-both/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ProjectsIdReviewsHumanIndexRoute =
+  ProjectsIdReviewsHumanIndexRouteImport.update({
+    id: '/projects/$id/reviews-human/',
+    path: '/projects/$id/reviews-human/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ProjectsIdReviewsLlmIndexRoute =
+  ProjectsIdReviewsLlmIndexRouteImport.update({
+    id: '/projects/$id/reviews-llm/',
+    path: '/projects/$id/reviews-llm/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ProjectsIdReviewsUnassessedIndexRoute =
+  ProjectsIdReviewsUnassessedIndexRouteImport.update({
+    id: '/projects/$id/reviews-unassessed/',
+    path: '/projects/$id/reviews-unassessed/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ProjectsIdReviewsIndexRoute = ProjectsIdReviewsIndexRouteImport.update({
+  id: '/projects/$id/reviews/',
+  path: '/projects/$id/reviews/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminUnexpectedAnswersProjectIdPromptIdIndexRoute =
+  AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport.update({
+    id: '/admin/unexpected-answers/$projectId/$promptId/',
+    path: '/admin/unexpected-answers/$projectId/$promptId/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute =
+  AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport.update({
+    id: '/admin/unexpected-answers/all-prompts/$promptId/',
+    path: '/admin/unexpected-answers/all-prompts/$promptId/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ProjectsIdReviewsLlmArticleIdIndexRoute =
+  ProjectsIdReviewsLlmArticleIdIndexRouteImport.update({
+    id: '/projects/$id/reviews-llm/$articleId/',
+    path: '/projects/$id/reviews-llm/$articleId/',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ProjectsIdReviewsLlmArticleIdFulltextRoute =
@@ -408,24 +426,6 @@ const ProjectsIdReviewsArticleIdIndexRoute =
   ProjectsIdReviewsArticleIdIndexRouteImport.update({
     id: '/projects/$id/reviews/$articleId/',
     path: '/projects/$id/reviews/$articleId/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ProjectsIdReviewsLlmArticleIdIndexRoute =
-  ProjectsIdReviewsLlmArticleIdIndexRouteImport.update({
-    id: '/projects/$id/reviews-llm/$articleId/',
-    path: '/projects/$id/reviews-llm/$articleId/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const AdminUnexpectedAnswersAllPromptsPromptIdIndexRoute =
-  AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport.update({
-    id: '/admin/unexpected-answers/all-prompts/$promptId/',
-    path: '/admin/unexpected-answers/all-prompts/$promptId/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const AdminUnexpectedAnswersProjectIdPromptIdIndexRoute =
-  AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport.update({
-    id: '/admin/unexpected-answers/$projectId/$promptId/',
-    path: '/admin/unexpected-answers/$projectId/$promptId/',
     getParentRoute: () => rootRouteImport,
   } as any)
 
@@ -912,81 +912,11 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/providers/add-provider': {
-      id: '/providers/add-provider'
-      path: '/providers/add-provider'
-      fullPath: '/providers/add-provider'
-      preLoaderRoute: typeof ProvidersAddProviderRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/import': {
-      id: '/projects/import'
-      path: '/projects/import'
-      fullPath: '/projects/import'
-      preLoaderRoute: typeof ProjectsImportRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/create-subproject': {
-      id: '/projects/create-subproject'
-      path: '/projects/create-subproject'
-      fullPath: '/projects/create-subproject'
-      preLoaderRoute: typeof ProjectsCreateSubprojectRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/create': {
-      id: '/projects/create'
-      path: '/projects/create'
-      fullPath: '/projects/create'
-      preLoaderRoute: typeof ProjectsCreateRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/compare-judgments/create-from-project': {
-      id: '/compare-judgments/create-from-project'
-      path: '/compare-judgments/create-from-project'
-      fullPath: '/compare-judgments/create-from-project'
-      preLoaderRoute: typeof CompareJudgmentsCreateFromProjectRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/compare-judgments/create': {
-      id: '/compare-judgments/create'
-      path: '/compare-judgments/create'
-      fullPath: '/compare-judgments/create'
-      preLoaderRoute: typeof CompareJudgmentsCreateRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings/': {
-      id: '/settings/'
-      path: '/settings'
-      fullPath: '/settings/'
-      preLoaderRoute: typeof SettingsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/providers/': {
-      id: '/providers/'
-      path: '/providers'
-      fullPath: '/providers/'
-      preLoaderRoute: typeof ProvidersIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/prompts/': {
-      id: '/prompts/'
-      path: '/prompts'
-      fullPath: '/prompts/'
-      preLoaderRoute: typeof PromptsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/': {
-      id: '/projects/'
-      path: '/projects'
-      fullPath: '/projects/'
-      preLoaderRoute: typeof ProjectsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login/': {
-      id: '/login/'
-      path: '/login'
-      fullPath: '/login/'
-      preLoaderRoute: typeof LoginIndexRouteImport
+    '/articles/': {
+      id: '/articles/'
+      path: '/articles'
+      fullPath: '/articles/'
+      preLoaderRoute: typeof ArticlesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/compare-judgments/': {
@@ -996,235 +926,81 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof CompareJudgmentsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/articles/': {
-      id: '/articles/'
-      path: '/articles'
-      fullPath: '/articles/'
-      preLoaderRoute: typeof ArticlesIndexRouteImport
+    '/compare-judgments/create': {
+      id: '/compare-judgments/create'
+      path: '/compare-judgments/create'
+      fullPath: '/compare-judgments/create'
+      preLoaderRoute: typeof CompareJudgmentsCreateRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$id/humanAssessment': {
-      id: '/projects/$id/humanAssessment'
-      path: '/projects/$id/humanAssessment'
-      fullPath: '/projects/$id/humanAssessment'
-      preLoaderRoute: typeof ProjectsIdHumanAssessmentRouteImport
+    '/compare-judgments/create-from-project': {
+      id: '/compare-judgments/create-from-project'
+      path: '/compare-judgments/create-from-project'
+      fullPath: '/compare-judgments/create-from-project'
+      preLoaderRoute: typeof CompareJudgmentsCreateFromProjectRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$id/export-project': {
-      id: '/projects/$id/export-project'
-      path: '/projects/$id/export-project'
-      fullPath: '/projects/$id/export-project'
-      preLoaderRoute: typeof ProjectsIdExportProjectRouteImport
+    '/login/': {
+      id: '/login/'
+      path: '/login'
+      fullPath: '/login/'
+      preLoaderRoute: typeof LoginIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$id/export': {
-      id: '/projects/$id/export'
-      path: '/projects/$id/export'
-      fullPath: '/projects/$id/export'
-      preLoaderRoute: typeof ProjectsIdExportRouteImport
+    '/projects/': {
+      id: '/projects/'
+      path: '/projects'
+      fullPath: '/projects/'
+      preLoaderRoute: typeof ProjectsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$id/edit': {
-      id: '/projects/$id/edit'
-      path: '/projects/$id/edit'
-      fullPath: '/projects/$id/edit'
-      preLoaderRoute: typeof ProjectsIdEditRouteImport
+    '/projects/create': {
+      id: '/projects/create'
+      path: '/projects/create'
+      fullPath: '/projects/create'
+      preLoaderRoute: typeof ProjectsCreateRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/compare-judgments/$id/import-resolutions': {
-      id: '/compare-judgments/$id/import-resolutions'
-      path: '/compare-judgments/$id/import-resolutions'
-      fullPath: '/compare-judgments/$id/import-resolutions'
-      preLoaderRoute: typeof CompareJudgmentsIdImportResolutionsRouteImport
+    '/projects/create-subproject': {
+      id: '/projects/create-subproject'
+      path: '/projects/create-subproject'
+      fullPath: '/projects/create-subproject'
+      preLoaderRoute: typeof ProjectsCreateSubprojectRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/compare-judgments/$id/export': {
-      id: '/compare-judgments/$id/export'
-      path: '/compare-judgments/$id/export'
-      fullPath: '/compare-judgments/$id/export'
-      preLoaderRoute: typeof CompareJudgmentsIdExportRouteImport
+    '/projects/import': {
+      id: '/projects/import'
+      path: '/projects/import'
+      fullPath: '/projects/import'
+      preLoaderRoute: typeof ProjectsImportRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/compare-judgments/$id/edit': {
-      id: '/compare-judgments/$id/edit'
-      path: '/compare-judgments/$id/edit'
-      fullPath: '/compare-judgments/$id/edit'
-      preLoaderRoute: typeof CompareJudgmentsIdEditRouteImport
+    '/prompts/': {
+      id: '/prompts/'
+      path: '/prompts'
+      fullPath: '/prompts/'
+      preLoaderRoute: typeof PromptsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/articles/$id/fulltext': {
-      id: '/articles/$id/fulltext'
-      path: '/articles/$id/fulltext'
-      fullPath: '/articles/$id/fulltext'
-      preLoaderRoute: typeof ArticlesIdFulltextRouteImport
+    '/providers/': {
+      id: '/providers/'
+      path: '/providers'
+      fullPath: '/providers/'
+      preLoaderRoute: typeof ProvidersIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/prompts/deduplicate': {
-      id: '/admin/prompts/deduplicate'
-      path: '/admin/prompts/deduplicate'
-      fullPath: '/admin/prompts/deduplicate'
-      preLoaderRoute: typeof AdminPromptsDeduplicateRouteImport
+    '/providers/add-provider': {
+      id: '/providers/add-provider'
+      path: '/providers/add-provider'
+      fullPath: '/providers/add-provider'
+      preLoaderRoute: typeof ProvidersAddProviderRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/jobs/health': {
-      id: '/admin/jobs/health'
-      path: '/admin/jobs/health'
-      fullPath: '/admin/jobs/health'
-      preLoaderRoute: typeof AdminJobsHealthRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/datasources/structured-file-import': {
-      id: '/admin/datasources/structured-file-import'
-      path: '/admin/datasources/structured-file-import'
-      fullPath: '/admin/datasources/structured-file-import'
-      preLoaderRoute: typeof AdminDatasourcesStructuredFileImportRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/datasources/create': {
-      id: '/admin/datasources/create'
-      path: '/admin/datasources/create'
-      fullPath: '/admin/datasources/create'
-      preLoaderRoute: typeof AdminDatasourcesCreateRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/datasources/covidence-import': {
-      id: '/admin/datasources/covidence-import'
-      path: '/admin/datasources/covidence-import'
-      fullPath: '/admin/datasources/covidence-import'
-      preLoaderRoute: typeof AdminDatasourcesCovidenceImportRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/providers/$id/': {
-      id: '/providers/$id/'
-      path: '/providers/$id'
-      fullPath: '/providers/$id/'
-      preLoaderRoute: typeof ProvidersIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/prompts/archived/': {
-      id: '/prompts/archived/'
-      path: '/prompts/archived'
-      fullPath: '/prompts/archived/'
-      preLoaderRoute: typeof PromptsArchivedIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/archived/': {
-      id: '/projects/archived/'
-      path: '/projects/archived'
-      fullPath: '/projects/archived/'
-      preLoaderRoute: typeof ProjectsArchivedIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/$id/': {
-      id: '/projects/$id/'
-      path: '/projects/$id'
-      fullPath: '/projects/$id/'
-      preLoaderRoute: typeof ProjectsIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/compare-judgments/archived/': {
-      id: '/compare-judgments/archived/'
-      path: '/compare-judgments/archived'
-      fullPath: '/compare-judgments/archived/'
-      preLoaderRoute: typeof CompareJudgmentsArchivedIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/compare-judgments/$id/': {
-      id: '/compare-judgments/$id/'
-      path: '/compare-judgments/$id'
-      fullPath: '/compare-judgments/$id/'
-      preLoaderRoute: typeof CompareJudgmentsIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/articles/$id/': {
-      id: '/articles/$id/'
-      path: '/articles/$id'
-      fullPath: '/articles/$id/'
-      preLoaderRoute: typeof ArticlesIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/unexpected-answers/': {
-      id: '/admin/unexpected-answers/'
-      path: '/admin/unexpected-answers'
-      fullPath: '/admin/unexpected-answers/'
-      preLoaderRoute: typeof AdminUnexpectedAnswersIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/setup_stats/': {
-      id: '/admin/setup_stats/'
-      path: '/admin/setup_stats'
-      fullPath: '/admin/setup_stats/'
-      preLoaderRoute: typeof AdminSetup_statsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/process-activity/': {
-      id: '/admin/process-activity/'
-      path: '/admin/process-activity'
-      fullPath: '/admin/process-activity/'
-      preLoaderRoute: typeof AdminProcessActivityIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/pdf-reset/': {
-      id: '/admin/pdf-reset/'
-      path: '/admin/pdf-reset'
-      fullPath: '/admin/pdf-reset/'
-      preLoaderRoute: typeof AdminPdfResetIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/pdf-conversions/': {
-      id: '/admin/pdf-conversions/'
-      path: '/admin/pdf-conversions'
-      fullPath: '/admin/pdf-conversions/'
-      preLoaderRoute: typeof AdminPdfConversionsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/llm/': {
-      id: '/admin/llm/'
-      path: '/admin/llm'
-      fullPath: '/admin/llm/'
-      preLoaderRoute: typeof AdminLlmIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/jobs/': {
-      id: '/admin/jobs/'
-      path: '/admin/jobs'
-      fullPath: '/admin/jobs/'
-      preLoaderRoute: typeof AdminJobsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/gpu/': {
-      id: '/admin/gpu/'
-      path: '/admin/gpu'
-      fullPath: '/admin/gpu/'
-      preLoaderRoute: typeof AdminGpuIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/failed_requests/': {
-      id: '/admin/failed_requests/'
-      path: '/admin/failed_requests'
-      fullPath: '/admin/failed_requests/'
-      preLoaderRoute: typeof AdminFailed_requestsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/duckdb-owner-connections/': {
-      id: '/admin/duckdb-owner-connections/'
-      path: '/admin/duckdb-owner-connections'
-      fullPath: '/admin/duckdb-owner-connections/'
-      preLoaderRoute: typeof AdminDuckdbOwnerConnectionsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/duckdb-append/': {
-      id: '/admin/duckdb-append/'
-      path: '/admin/duckdb-append'
-      fullPath: '/admin/duckdb-append/'
-      preLoaderRoute: typeof AdminDuckdbAppendIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/datasources/': {
-      id: '/admin/datasources/'
-      path: '/admin/datasources'
-      fullPath: '/admin/datasources/'
-      preLoaderRoute: typeof AdminDatasourcesIndexRouteImport
+    '/settings/': {
+      id: '/settings/'
+      path: '/settings'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof SettingsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/assessments/': {
@@ -1234,18 +1010,228 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminAssessmentsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/jobs/$id/unassessed_articles': {
-      id: '/admin/jobs/$id/unassessed_articles'
-      path: '/admin/jobs/$id/unassessed_articles'
-      fullPath: '/admin/jobs/$id/unassessed_articles'
-      preLoaderRoute: typeof AdminJobsIdUnassessed_articlesRouteImport
+    '/admin/datasources/': {
+      id: '/admin/datasources/'
+      path: '/admin/datasources'
+      fullPath: '/admin/datasources/'
+      preLoaderRoute: typeof AdminDatasourcesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/datasources/$id/edit': {
-      id: '/admin/datasources/$id/edit'
-      path: '/admin/datasources/$id/edit'
-      fullPath: '/admin/datasources/$id/edit'
-      preLoaderRoute: typeof AdminDatasourcesIdEditRouteImport
+    '/admin/datasources/covidence-import': {
+      id: '/admin/datasources/covidence-import'
+      path: '/admin/datasources/covidence-import'
+      fullPath: '/admin/datasources/covidence-import'
+      preLoaderRoute: typeof AdminDatasourcesCovidenceImportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/datasources/create': {
+      id: '/admin/datasources/create'
+      path: '/admin/datasources/create'
+      fullPath: '/admin/datasources/create'
+      preLoaderRoute: typeof AdminDatasourcesCreateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/datasources/structured-file-import': {
+      id: '/admin/datasources/structured-file-import'
+      path: '/admin/datasources/structured-file-import'
+      fullPath: '/admin/datasources/structured-file-import'
+      preLoaderRoute: typeof AdminDatasourcesStructuredFileImportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/duckdb-append/': {
+      id: '/admin/duckdb-append/'
+      path: '/admin/duckdb-append'
+      fullPath: '/admin/duckdb-append/'
+      preLoaderRoute: typeof AdminDuckdbAppendIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/duckdb-owner-connections/': {
+      id: '/admin/duckdb-owner-connections/'
+      path: '/admin/duckdb-owner-connections'
+      fullPath: '/admin/duckdb-owner-connections/'
+      preLoaderRoute: typeof AdminDuckdbOwnerConnectionsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/failed_requests/': {
+      id: '/admin/failed_requests/'
+      path: '/admin/failed_requests'
+      fullPath: '/admin/failed_requests/'
+      preLoaderRoute: typeof AdminFailed_requestsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/gpu/': {
+      id: '/admin/gpu/'
+      path: '/admin/gpu'
+      fullPath: '/admin/gpu/'
+      preLoaderRoute: typeof AdminGpuIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/jobs/': {
+      id: '/admin/jobs/'
+      path: '/admin/jobs'
+      fullPath: '/admin/jobs/'
+      preLoaderRoute: typeof AdminJobsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/jobs/health': {
+      id: '/admin/jobs/health'
+      path: '/admin/jobs/health'
+      fullPath: '/admin/jobs/health'
+      preLoaderRoute: typeof AdminJobsHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/llm/': {
+      id: '/admin/llm/'
+      path: '/admin/llm'
+      fullPath: '/admin/llm/'
+      preLoaderRoute: typeof AdminLlmIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/pdf-conversions/': {
+      id: '/admin/pdf-conversions/'
+      path: '/admin/pdf-conversions'
+      fullPath: '/admin/pdf-conversions/'
+      preLoaderRoute: typeof AdminPdfConversionsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/pdf-reset/': {
+      id: '/admin/pdf-reset/'
+      path: '/admin/pdf-reset'
+      fullPath: '/admin/pdf-reset/'
+      preLoaderRoute: typeof AdminPdfResetIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/process-activity/': {
+      id: '/admin/process-activity/'
+      path: '/admin/process-activity'
+      fullPath: '/admin/process-activity/'
+      preLoaderRoute: typeof AdminProcessActivityIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/prompts/deduplicate': {
+      id: '/admin/prompts/deduplicate'
+      path: '/admin/prompts/deduplicate'
+      fullPath: '/admin/prompts/deduplicate'
+      preLoaderRoute: typeof AdminPromptsDeduplicateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/setup_stats/': {
+      id: '/admin/setup_stats/'
+      path: '/admin/setup_stats'
+      fullPath: '/admin/setup_stats/'
+      preLoaderRoute: typeof AdminSetup_statsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/unexpected-answers/': {
+      id: '/admin/unexpected-answers/'
+      path: '/admin/unexpected-answers'
+      fullPath: '/admin/unexpected-answers/'
+      preLoaderRoute: typeof AdminUnexpectedAnswersIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/articles/$id/': {
+      id: '/articles/$id/'
+      path: '/articles/$id'
+      fullPath: '/articles/$id/'
+      preLoaderRoute: typeof ArticlesIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/articles/$id/fulltext': {
+      id: '/articles/$id/fulltext'
+      path: '/articles/$id/fulltext'
+      fullPath: '/articles/$id/fulltext'
+      preLoaderRoute: typeof ArticlesIdFulltextRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/$id/': {
+      id: '/compare-judgments/$id/'
+      path: '/compare-judgments/$id'
+      fullPath: '/compare-judgments/$id/'
+      preLoaderRoute: typeof CompareJudgmentsIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/$id/edit': {
+      id: '/compare-judgments/$id/edit'
+      path: '/compare-judgments/$id/edit'
+      fullPath: '/compare-judgments/$id/edit'
+      preLoaderRoute: typeof CompareJudgmentsIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/$id/export': {
+      id: '/compare-judgments/$id/export'
+      path: '/compare-judgments/$id/export'
+      fullPath: '/compare-judgments/$id/export'
+      preLoaderRoute: typeof CompareJudgmentsIdExportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/$id/import-resolutions': {
+      id: '/compare-judgments/$id/import-resolutions'
+      path: '/compare-judgments/$id/import-resolutions'
+      fullPath: '/compare-judgments/$id/import-resolutions'
+      preLoaderRoute: typeof CompareJudgmentsIdImportResolutionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/compare-judgments/archived/': {
+      id: '/compare-judgments/archived/'
+      path: '/compare-judgments/archived'
+      fullPath: '/compare-judgments/archived/'
+      preLoaderRoute: typeof CompareJudgmentsArchivedIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/': {
+      id: '/projects/$id/'
+      path: '/projects/$id'
+      fullPath: '/projects/$id/'
+      preLoaderRoute: typeof ProjectsIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/edit': {
+      id: '/projects/$id/edit'
+      path: '/projects/$id/edit'
+      fullPath: '/projects/$id/edit'
+      preLoaderRoute: typeof ProjectsIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/export': {
+      id: '/projects/$id/export'
+      path: '/projects/$id/export'
+      fullPath: '/projects/$id/export'
+      preLoaderRoute: typeof ProjectsIdExportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/export-project': {
+      id: '/projects/$id/export-project'
+      path: '/projects/$id/export-project'
+      fullPath: '/projects/$id/export-project'
+      preLoaderRoute: typeof ProjectsIdExportProjectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/humanAssessment': {
+      id: '/projects/$id/humanAssessment'
+      path: '/projects/$id/humanAssessment'
+      fullPath: '/projects/$id/humanAssessment'
+      preLoaderRoute: typeof ProjectsIdHumanAssessmentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/archived/': {
+      id: '/projects/archived/'
+      path: '/projects/archived'
+      fullPath: '/projects/archived/'
+      preLoaderRoute: typeof ProjectsArchivedIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/prompts/archived/': {
+      id: '/prompts/archived/'
+      path: '/prompts/archived'
+      fullPath: '/prompts/archived/'
+      preLoaderRoute: typeof PromptsArchivedIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/providers/$id/': {
+      id: '/providers/$id/'
+      path: '/providers/$id'
+      fullPath: '/providers/$id/'
+      preLoaderRoute: typeof ProvidersIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/datasources/$id/changes': {
@@ -1255,60 +1241,18 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminDatasourcesIdChangesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$id/reviews/': {
-      id: '/projects/$id/reviews/'
-      path: '/projects/$id/reviews'
-      fullPath: '/projects/$id/reviews/'
-      preLoaderRoute: typeof ProjectsIdReviewsIndexRouteImport
+    '/admin/datasources/$id/edit': {
+      id: '/admin/datasources/$id/edit'
+      path: '/admin/datasources/$id/edit'
+      fullPath: '/admin/datasources/$id/edit'
+      preLoaderRoute: typeof AdminDatasourcesIdEditRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$id/reviews-unassessed/': {
-      id: '/projects/$id/reviews-unassessed/'
-      path: '/projects/$id/reviews-unassessed'
-      fullPath: '/projects/$id/reviews-unassessed/'
-      preLoaderRoute: typeof ProjectsIdReviewsUnassessedIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/$id/reviews-llm/': {
-      id: '/projects/$id/reviews-llm/'
-      path: '/projects/$id/reviews-llm'
-      fullPath: '/projects/$id/reviews-llm/'
-      preLoaderRoute: typeof ProjectsIdReviewsLlmIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/$id/reviews-human/': {
-      id: '/projects/$id/reviews-human/'
-      path: '/projects/$id/reviews-human'
-      fullPath: '/projects/$id/reviews-human/'
-      preLoaderRoute: typeof ProjectsIdReviewsHumanIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/$id/reviews-both/': {
-      id: '/projects/$id/reviews-both/'
-      path: '/projects/$id/reviews-both'
-      fullPath: '/projects/$id/reviews-both/'
-      preLoaderRoute: typeof ProjectsIdReviewsBothIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/unexpected-answers/all-prompts/': {
-      id: '/admin/unexpected-answers/all-prompts/'
-      path: '/admin/unexpected-answers/all-prompts'
-      fullPath: '/admin/unexpected-answers/all-prompts/'
-      preLoaderRoute: typeof AdminUnexpectedAnswersAllPromptsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/unexpected-answers/$projectId/': {
-      id: '/admin/unexpected-answers/$projectId/'
-      path: '/admin/unexpected-answers/$projectId'
-      fullPath: '/admin/unexpected-answers/$projectId/'
-      preLoaderRoute: typeof AdminUnexpectedAnswersProjectIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/jobs/$id/': {
-      id: '/admin/jobs/$id/'
-      path: '/admin/jobs/$id'
-      fullPath: '/admin/jobs/$id/'
-      preLoaderRoute: typeof AdminJobsIdIndexRouteImport
+    '/admin/datasources/archived/': {
+      id: '/admin/datasources/archived/'
+      path: '/admin/datasources/archived'
+      fullPath: '/admin/datasources/archived/'
+      preLoaderRoute: typeof AdminDatasourcesArchivedIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/failed_requests/$id/': {
@@ -1318,11 +1262,88 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminFailed_requestsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/datasources/archived/': {
-      id: '/admin/datasources/archived/'
-      path: '/admin/datasources/archived'
-      fullPath: '/admin/datasources/archived/'
-      preLoaderRoute: typeof AdminDatasourcesArchivedIndexRouteImport
+    '/admin/jobs/$id/': {
+      id: '/admin/jobs/$id/'
+      path: '/admin/jobs/$id'
+      fullPath: '/admin/jobs/$id/'
+      preLoaderRoute: typeof AdminJobsIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/jobs/$id/unassessed_articles': {
+      id: '/admin/jobs/$id/unassessed_articles'
+      path: '/admin/jobs/$id/unassessed_articles'
+      fullPath: '/admin/jobs/$id/unassessed_articles'
+      preLoaderRoute: typeof AdminJobsIdUnassessed_articlesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/unexpected-answers/$projectId/': {
+      id: '/admin/unexpected-answers/$projectId/'
+      path: '/admin/unexpected-answers/$projectId'
+      fullPath: '/admin/unexpected-answers/$projectId/'
+      preLoaderRoute: typeof AdminUnexpectedAnswersProjectIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/unexpected-answers/all-prompts/': {
+      id: '/admin/unexpected-answers/all-prompts/'
+      path: '/admin/unexpected-answers/all-prompts'
+      fullPath: '/admin/unexpected-answers/all-prompts/'
+      preLoaderRoute: typeof AdminUnexpectedAnswersAllPromptsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/reviews-both/': {
+      id: '/projects/$id/reviews-both/'
+      path: '/projects/$id/reviews-both'
+      fullPath: '/projects/$id/reviews-both/'
+      preLoaderRoute: typeof ProjectsIdReviewsBothIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/reviews-human/': {
+      id: '/projects/$id/reviews-human/'
+      path: '/projects/$id/reviews-human'
+      fullPath: '/projects/$id/reviews-human/'
+      preLoaderRoute: typeof ProjectsIdReviewsHumanIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/reviews-llm/': {
+      id: '/projects/$id/reviews-llm/'
+      path: '/projects/$id/reviews-llm'
+      fullPath: '/projects/$id/reviews-llm/'
+      preLoaderRoute: typeof ProjectsIdReviewsLlmIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/reviews-unassessed/': {
+      id: '/projects/$id/reviews-unassessed/'
+      path: '/projects/$id/reviews-unassessed'
+      fullPath: '/projects/$id/reviews-unassessed/'
+      preLoaderRoute: typeof ProjectsIdReviewsUnassessedIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/reviews/': {
+      id: '/projects/$id/reviews/'
+      path: '/projects/$id/reviews'
+      fullPath: '/projects/$id/reviews/'
+      preLoaderRoute: typeof ProjectsIdReviewsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/unexpected-answers/$projectId/$promptId/': {
+      id: '/admin/unexpected-answers/$projectId/$promptId/'
+      path: '/admin/unexpected-answers/$projectId/$promptId'
+      fullPath: '/admin/unexpected-answers/$projectId/$promptId/'
+      preLoaderRoute: typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/unexpected-answers/all-prompts/$promptId/': {
+      id: '/admin/unexpected-answers/all-prompts/$promptId/'
+      path: '/admin/unexpected-answers/all-prompts/$promptId'
+      fullPath: '/admin/unexpected-answers/all-prompts/$promptId/'
+      preLoaderRoute: typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$id/reviews-llm/$articleId/': {
+      id: '/projects/$id/reviews-llm/$articleId/'
+      path: '/projects/$id/reviews-llm/$articleId'
+      fullPath: '/projects/$id/reviews-llm/$articleId/'
+      preLoaderRoute: typeof ProjectsIdReviewsLlmArticleIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/reviews-llm/$articleId/fulltext': {
@@ -1337,27 +1358,6 @@ declare module '@tanstack/solid-router' {
       path: '/projects/$id/reviews/$articleId'
       fullPath: '/projects/$id/reviews/$articleId/'
       preLoaderRoute: typeof ProjectsIdReviewsArticleIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/projects/$id/reviews-llm/$articleId/': {
-      id: '/projects/$id/reviews-llm/$articleId/'
-      path: '/projects/$id/reviews-llm/$articleId'
-      fullPath: '/projects/$id/reviews-llm/$articleId/'
-      preLoaderRoute: typeof ProjectsIdReviewsLlmArticleIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/unexpected-answers/all-prompts/$promptId/': {
-      id: '/admin/unexpected-answers/all-prompts/$promptId/'
-      path: '/admin/unexpected-answers/all-prompts/$promptId'
-      fullPath: '/admin/unexpected-answers/all-prompts/$promptId/'
-      preLoaderRoute: typeof AdminUnexpectedAnswersAllPromptsPromptIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/unexpected-answers/$projectId/$promptId/': {
-      id: '/admin/unexpected-answers/$projectId/$promptId/'
-      path: '/admin/unexpected-answers/$projectId/$promptId'
-      fullPath: '/admin/unexpected-answers/$projectId/$promptId/'
-      preLoaderRoute: typeof AdminUnexpectedAnswersProjectIdPromptIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
   }

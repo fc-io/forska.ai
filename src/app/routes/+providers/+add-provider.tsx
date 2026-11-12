@@ -649,4 +649,4 @@ const AddProviderPage = () => {
   )
 }
 
-export const Route = createFileRoute('/providers/add-provider' as never)({component: AddProviderPage})
+export const Route = createFileRoute('/providers/add-provider')({component: AddProviderPage})

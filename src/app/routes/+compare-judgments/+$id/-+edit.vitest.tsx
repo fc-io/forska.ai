@@ -230,7 +230,6 @@ const getStrategyError = (container: HTMLElement) => {
 
 describe('compare judgments edit route full-text strategy check', () => {
   beforeEach(() => {
-    vi.resetModules()
     document.body.innerHTML = ''
     mockState.sources = [sourceA, sourceB, sourceC]
     mockState.updateComparisonProject.mockReset()
