@@ -32,6 +32,22 @@ const DatabaseItem = type({
   'original_data?': 'unknown',
 })
 
+// Extract the arXiv ID from an Atom entry id such as http://arxiv.org/abs/2301.00001v2.
+// Only an arxiv.org URL is unwrapped; any other id is returned unchanged.
+export const getArxivIdFromEntryId = (entryId: string): string => {
+  let url: URL
+  try {
+    url = new URL(entryId)
+  } catch {
+    return entryId
+  }
+
+  const hostname = url.hostname.toLowerCase()
+  if (hostname !== 'arxiv.org' && !hostname.endsWith('.arxiv.org')) return entryId
+
+  return url.pathname.split('/').pop() || entryId
+}
+
 // Transform ArxivEntry to DatabaseItem
 const transformEntry = (entry: typeof arxivEntry.infer, importRoute: string): typeof DatabaseItem.infer => {
   // Safely extract authors
@@ -42,8 +58,7 @@ const transformEntry = (entry: typeof arxivEntry.infer, importRoute: string): ty
       })
     : [entry.author]
 
-  // Extract arXiv ID from the full ID
-  const arxivId = entry.id.includes('arxiv.org') ? (entry.id.split('/').pop() ?? entry.id) : entry.id
+  const arxivId = getArxivIdFromEntryId(entry.id)
 
   // Extract version number, default to '1' if not found
   const versionMatch = arxivId.match(/v(\d+)$/)

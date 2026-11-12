@@ -166,9 +166,9 @@ test('simple PDF continues panel layout across page breaks without resetting to 
 })
 
 const getTextFieldDictionary = (output: string, fieldName: string) => {
-  return new RegExp(`<< /Type /Annot /Subtype /Widget /FT /Tx /T \\(${fieldName.replace(/\./g, '\\.')}\\)[^\\n]*`).exec(
-    output,
-  )?.[0]
+  const escapedFieldName = fieldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+  return new RegExp(`<< /Type /Annot /Subtype /Widget /FT /Tx /T \\(${escapedFieldName}\\)[^\\n]*`).exec(output)?.[0]
 }
 
 const getRectHeight = (dictionary: string | undefined) => {
