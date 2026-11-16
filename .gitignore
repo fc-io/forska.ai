@@ -82,5 +82,7 @@ Desktop.ini
 .ralph-tui/
 .serena/
 .hermes/
+.openclaw/
+.brv/
 drizzle
-./CLAUDE.local.md
+/CLAUDE.local.md

@@ -43,7 +43,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2.2.0
         with:
-          bun-version: 1.3.11
+          bun-version: 1.3.13
       - run: bun install --frozen-lockfile
       - name: Cross-platform topology contracts
         run: bun test scripts/judgmentWorkflowTopology.test.ts scripts/processLockAcquisition.test.ts src/server/utils/backgroundServerStack.test.ts src/server/utils/judgeWorkerJournalIdentity.test.ts src/server/cron/judgmentsJobs/judgmentJobPaths.test.ts

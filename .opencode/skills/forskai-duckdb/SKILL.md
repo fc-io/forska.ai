@@ -18,7 +18,6 @@ description: Use ONLY when touching DuckDB, duckdbMigrations, schema work, db:* 
 - For direct DuckDB CLI or manual work, always set a memory cap.
 - Use `SET memory_limit = '20GB'` unless a smaller limit is needed.
 - Use transactions for multi-table operations.
-- Prefer `db.select()`, `db.insert()`, `db.update()`, and `db.delete()` over `db.execute()`.
 - Use singular table names.
 - Keep using the existing SQL migration files under `src/db/duckdbMigrations/`.
 
@@ -45,27 +44,14 @@ description: Use ONLY when touching DuckDB, duckdbMigrations, schema work, db:* 
 - The unique constraint on `app.judgment` is `(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, use_metadata, system_prompt_variant, full_text_strategy_id, delete_generation)`.
 - `use_fulltext_no_images` is a frozen legacy identity dimension, like `delete_generation`. Keep it in identity matches, but never accept it from API input and never branch on it for behaviour. See `docs/system-prompt-variants.md`.
 - `app.judgment.use_metadata` is `BOOLEAN NOT NULL DEFAULT FALSE`. `app.project.use_metadata` and `app.judgment_execution_snapshot.use_metadata` are `BOOLEAN DEFAULT FALSE` but nullable (DuckDB drops `NOT NULL` on `ADD COLUMN` for a populated table), so read them with `COALESCE(project.use_metadata, FALSE)`.
-- `app.judgment.system_prompt_variant` is `NOT NULL DEFAULT 'legacy'`. `app.project.system_prompt_variant` is nullable, and `NULL` means `legacy`, so match with `judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')`. In SQL, use `getProjectVisibleJudgmentNaturalKeySql` from `src/server/services/projectVisibleJudgmentRule.ts`.
+- `app.judgment.system_prompt_variant` is `NOT NULL DEFAULT 'legacy'`. `app.project.system_prompt_variant` is nullable, and `NULL` means `legacy`, so match with `judgment.system_prompt_variant = COALESCE(project.system_prompt_variant, 'legacy')`.
+- Do not hand-write the project/judgment match. Use the SQL builders in `src/server/services/projectVisibleJudgmentRule.ts`: `getProjectVisibleJudgmentNaturalKeySql`, plus `getProjectVisibleJudgmentPromptSql` or `getProjectVisibleJudgmentScopeSql` when joining enabled prompts or scopes. They already handle the nullable `project.model_id`, `use_metadata`, `system_prompt_variant`, and `full_text_strategy_id` defaults.
 
 ```ts
-const judgmentConfigCondition = and(
-  eq(judgments.modelId, project.modelId),
-  eq(judgments.useTitle, project.useTitle),
-  eq(judgments.useAbstract, project.useAbstract),
-  eq(judgments.useFulltext, project.useFulltext),
-  eq(judgments.useFulltextNoImages, project.useFulltextNoImages),
-  eq(judgments.useMetadata, project.useMetadata ?? false),
-  eq(judgments.systemPromptVariant, project.systemPromptVariant ?? 'legacy'),
-  eq(judgments.fullTextStrategyId, project.fullTextStrategyId ?? 'fts-none'),
-)
-```
-
-```ts
-const judgmentConfigParts = projects.map((proj) => and(...))
-const judgmentConfigCondition = or(...judgmentConfigParts)
+const where = getProjectVisibleJudgmentNaturalKeySql({judgmentAlias: 'j', projectAlias: 'p'})
 ```
 
 ## Commands
 
 - Use `bun run db:mig` for migration work.
-- Use `bun run db:duck:request-review-serving-large-rebuild` when that rebuild is relevant.
+- Use `bun run db:duck:request-review-serving-all-projects-rebuild` (or `db:duck:request-review-serving-project-rebuild` for one project) when that rebuild is relevant.

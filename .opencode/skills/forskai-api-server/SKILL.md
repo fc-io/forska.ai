@@ -14,7 +14,6 @@ description: Use ONLY when touching server routes, Elysia, Eden/RPC, API paths, 
 - Avoid `fetch` unless streaming, upload, or download requires it.
 - Keep fetch logic local to the `useQuery` or mutation file.
 - Do not create services files for ordinary client fetch logic.
-- For `t.File()` routes, Elysia `derive` does not propagate auth context. Read the session from `request.headers` inside the handler.
 
 ## Validation And Errors
 
