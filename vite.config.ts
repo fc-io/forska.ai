@@ -23,7 +23,7 @@ export default defineConfig({
     solid(),
     tailwindcss(),
   ],
-  resolve: {alias: {'~': path.resolve(__dirname, './src')}},
+  resolve: {alias: {'~': path.resolve(import.meta.dirname, './src')}},
   server: {
     host: process.env.VITE_HOST,
     port: env.VITE_PORT,
