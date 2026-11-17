@@ -178,11 +178,6 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return () => {
-        return {}
-      }
-    },
     useNavigate: () => {
       return mockState.navigate
     },
@@ -214,7 +209,7 @@ vi.mock('../../../services/comparisonProjectsService', () => {
 
 const renderCreateFromProjectPage = async () => {
   const {render} = await import('solid-js/web')
-  const {CreateCompareJudgmentsFromProjectPage} = await import('./+create-from-project.tsx')
+  const {CreateCompareJudgmentsFromProjectPage} = await import('./createCompareJudgmentsFromProjectPage.tsx')
 
   const container = document.createElement('div')
   document.body.appendChild(container)

@@ -104,16 +104,13 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return (options: Record<string, unknown>) => {
-        return {
-          ...options,
-          useParams: () => {
-            return () => {
-              return {id: 'comparison-edit-1'}
-            }
-          },
-        }
+    getRouteApi: () => {
+      return {
+        useParams: () => {
+          return () => {
+            return {id: 'comparison-edit-1'}
+          }
+        },
       }
     },
     useNavigate: () => {
@@ -196,7 +193,7 @@ const buildEditFormData = (sourceProjectIds: string[]) => {
 
 const renderEditPage = async () => {
   const {render} = await import('solid-js/web')
-  const {EditComparisonProjectPage: EditPage} = await import('./+edit.tsx')
+  const {EditComparisonProjectPage: EditPage} = await import('./editComparisonProjectPage.tsx')
   const container = document.createElement('div')
   document.body.appendChild(container)
   const dispose = render(() => {

@@ -143,16 +143,13 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return (config: Record<string, unknown>) => {
-        return {
-          ...config,
-          useParams: () => {
-            return () => {
-              return {id: 'comparison-project-1'}
-            }
-          },
-        }
+    getRouteApi: () => {
+      return {
+        useParams: () => {
+          return () => {
+            return {id: 'comparison-project-1'}
+          }
+        },
       }
     },
   }
@@ -226,7 +223,7 @@ const getInputFromLabel = (container: HTMLElement, labelText: string): HTMLInput
 
 const renderImportResolutionsPage = async () => {
   const {render} = await import('solid-js/web')
-  const {CompareProjectImportResolutionsPage} = await import('./+import-resolutions.tsx')
+  const {CompareProjectImportResolutionsPage} = await import('./compareProjectImportResolutionsPage.tsx')
 
   const container = document.createElement('div')
   document.body.appendChild(container)

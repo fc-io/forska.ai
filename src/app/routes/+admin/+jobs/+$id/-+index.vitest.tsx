@@ -30,16 +30,13 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return (options: Record<string, unknown>) => {
-        return {
-          ...options,
-          useParams: () => {
-            return () => {
-              return {id: mockState.jobId}
-            }
-          },
-        }
+    getRouteApi: () => {
+      return {
+        useParams: () => {
+          return () => {
+            return {id: mockState.jobId}
+          }
+        },
       }
     },
     useNavigate: () => {
@@ -164,7 +161,7 @@ const waitForCondition = async (assertion: () => void, remaining = 50): Promise<
 }
 
 const renderJobDetailPage = async () => {
-  const {AdminJudgmentJobDetail} = await import('./+index.tsx')
+  const {AdminJudgmentJobDetail} = await import('./adminJudgmentJobDetail.tsx')
   const queryClient = new QueryClient({defaultOptions: {mutations: {retry: false}, queries: {retry: false}}})
   const container = document.createElement('div')
   document.body.appendChild(container)

@@ -49,11 +49,6 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return () => {
-        return {}
-      }
-    },
   }
 })
 
@@ -81,7 +76,7 @@ vi.mock('../../../components/ui/button', () => {
 
 const renderProjectsPage = async () => {
   const {render} = await import('solid-js/web')
-  const {ProjectsPage} = await import('./+index.tsx')
+  const {ProjectsPage} = await import('./projectsPage.tsx')
 
   const container = document.createElement('div')
   document.body.appendChild(container)

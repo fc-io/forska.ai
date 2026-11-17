@@ -27,11 +27,6 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return (options: Record<string, unknown>) => {
-        return options
-      }
-    },
   }
 })
 
@@ -155,7 +150,7 @@ const getRowButtonLabels = (container: HTMLElement, title: string) => {
 }
 
 const renderListPage = async () => {
-  const {AdminDataSources} = await import('./+index.tsx')
+  const {AdminDataSources} = await import('./adminDataSources.tsx')
   const queryClient = new QueryClient({defaultOptions: {mutations: {retry: false}, queries: {retry: false}}})
   const container = document.createElement('div')
   document.body.appendChild(container)

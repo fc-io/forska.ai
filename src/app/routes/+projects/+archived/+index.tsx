@@ -6,7 +6,7 @@ import {Button} from '../../../../components/ui/button'
 import {fetchArchivedProjects} from '../../../../services/projectsService'
 import {ArchivedProjectsTable} from './archivedProjectsTable'
 
-export const ArchivedProjectsPage = () => {
+const ArchivedProjectsPage = () => {
   const projects = useQuery(() => {
     return {queryKey: ['projects', 'archived'], queryFn: fetchArchivedProjects, refetchOnMount: 'always'}
   })

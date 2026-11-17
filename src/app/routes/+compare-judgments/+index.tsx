@@ -6,7 +6,7 @@ import {ComparisonProjectsGrid} from '../../../components/main/comparisonProject
 import {Button} from '../../../components/ui/button'
 import {fetchComparisonProjects} from '../../../services/comparisonProjectsService'
 
-export const CompareJudgmentsPage = () => {
+const CompareJudgmentsPage = () => {
   const comparisonProjects = useQuery(() => {
     return {queryKey: ['comparison-projects'], queryFn: fetchComparisonProjects, suspense: false}
   })

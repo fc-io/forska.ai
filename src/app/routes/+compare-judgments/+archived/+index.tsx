@@ -6,7 +6,7 @@ import {ComparisonProjectsGrid} from '../../../../components/main/comparisonProj
 import {Button} from '../../../../components/ui/button'
 import {fetchArchivedComparisonProjects} from '../../../../services/comparisonProjectsService'
 
-export const ArchivedCompareJudgmentsPage = () => {
+const ArchivedCompareJudgmentsPage = () => {
   const comparisonProjects = useQuery(() => {
     return {queryKey: ['comparison-projects', 'archived'], queryFn: fetchArchivedComparisonProjects, suspense: false}
   })

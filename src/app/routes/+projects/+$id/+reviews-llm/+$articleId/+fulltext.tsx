@@ -21,7 +21,7 @@ import {
   ReviewDetailUnavailableState,
 } from './reviewDetailReadiness'
 
-export const ReviewDetailFulltext = () => {
+const ReviewDetailFulltext = () => {
   const params = Route.useParams()
   const projectId = params().id
   const articleId = params().articleId

@@ -27,7 +27,7 @@ type HumanAssessmentData = {
   judgmentsHuman: HumanAssessmentJudgment[]
 }
 
-export const HumanAssessment = () => {
+const HumanAssessment = () => {
   const params = Route.useParams()
   const queryClient = useQueryClient()
   const projectAccessQuery = useProjectAccessQuery(() => {

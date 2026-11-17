@@ -5,7 +5,7 @@ import {For, Show} from 'solid-js'
 import {apiClient} from '../../../../services/apiClient'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
-export const AdminAssessments = () => {
+const AdminAssessments = () => {
   type OverviewData = {
     projects: Array<{projectId: string; projectName: string; count: number}>
     users: Array<{userId: string; userName: string; email: string; count: number}>

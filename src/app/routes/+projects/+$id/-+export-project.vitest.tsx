@@ -33,16 +33,13 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return (options: Record<string, unknown>) => {
-        return {
-          ...options,
-          useParams: () => {
-            return () => {
-              return {id: mockState.routeProjectId}
-            }
-          },
-        }
+    getRouteApi: () => {
+      return {
+        useParams: () => {
+          return () => {
+            return {id: mockState.routeProjectId}
+          }
+        },
       }
     },
   }
@@ -133,7 +130,7 @@ const waitForCondition = async (assertion: () => void, remaining = 30): Promise<
 
 const renderExportProject = async () => {
   const {render} = await import('solid-js/web')
-  const {ExportProject} = await import('./+export-project.tsx')
+  const {ExportProject} = await import('./exportProject.tsx')
   const queryClient = getQueryClient()
   const container = document.createElement('div')
   document.body.appendChild(container)

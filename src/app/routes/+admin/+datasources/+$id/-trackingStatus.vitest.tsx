@@ -80,16 +80,13 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return (options: Record<string, unknown>) => {
-        return {
-          ...options,
-          useParams: () => {
-            return () => {
-              return {id: mockState.dataSourceId}
-            }
-          },
-        }
+    getRouteApi: () => {
+      return {
+        useParams: () => {
+          return () => {
+            return {id: mockState.dataSourceId}
+          }
+        },
       }
     },
     useNavigate: () => {
@@ -176,7 +173,7 @@ const getTextInputByValue = (container: HTMLElement, value: string) => {
 }
 
 const renderEditPage = async () => {
-  const {AdminEditDataSource} = await import('./+edit.tsx')
+  const {AdminEditDataSource} = await import('./adminEditDataSource.tsx')
   const queryClient = new QueryClient({defaultOptions: {mutations: {retry: false}, queries: {retry: false}}})
   const container = document.createElement('div')
   document.body.appendChild(container)

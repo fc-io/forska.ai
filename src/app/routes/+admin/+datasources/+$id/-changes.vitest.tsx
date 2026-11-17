@@ -48,16 +48,13 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return (options: Record<string, unknown>) => {
-        return {
-          ...options,
-          useParams: () => {
-            return () => {
-              return {id: mockState.dataSourceId}
-            }
-          },
-        }
+    getRouteApi: () => {
+      return {
+        useParams: () => {
+          return () => {
+            return {id: mockState.dataSourceId}
+          }
+        },
       }
     },
   }
@@ -126,7 +123,7 @@ const setSelectValue = (select: HTMLSelectElement | undefined, value: string) =>
 }
 
 const renderChangesPage = async () => {
-  const {AdminDataSourceTrackingChanges} = await import('./+changes.tsx')
+  const {AdminDataSourceTrackingChanges} = await import('./adminDataSourceTrackingChanges.tsx')
   const queryClient = new QueryClient({defaultOptions: {mutations: {retry: false}, queries: {retry: false}}})
   const container = document.createElement('div')
   document.body.appendChild(container)

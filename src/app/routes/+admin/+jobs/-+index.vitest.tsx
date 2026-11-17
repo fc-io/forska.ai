@@ -22,11 +22,6 @@ vi.mock('@tanstack/solid-router', () => {
         </a>
       )
     },
-    createFileRoute: () => {
-      return (options: Record<string, unknown>) => {
-        return options
-      }
-    },
   }
 })
 
@@ -146,7 +141,7 @@ const getProviderBanner = (container: HTMLElement) => {
 }
 
 const renderJobsPage = async () => {
-  const {AdminJobs} = await import('./+index.tsx')
+  const {AdminJobs} = await import('./adminJobs.tsx')
   const queryClient = new QueryClient({defaultOptions: {mutations: {retry: false}, queries: {retry: false}}})
   const container = document.createElement('div')
   document.body.appendChild(container)

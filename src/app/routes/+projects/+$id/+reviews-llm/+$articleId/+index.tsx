@@ -35,7 +35,7 @@ const getCovidenceStageLabels = (stageMembership: Record<string, boolean>) => {
   })
 }
 
-export const ReviewDetail = () => {
+const ReviewDetail = () => {
   const params = Route.useParams()
   const projectId = params().id
   const articleId = params().articleId

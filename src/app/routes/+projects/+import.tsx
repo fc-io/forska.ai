@@ -2,7 +2,7 @@ import {createFileRoute} from '@tanstack/solid-router'
 
 import {ImportProjectWizard} from './importWizard/importProjectWizard.tsx'
 
-export const ImportProjectRoute = () => {
+const ImportProjectRoute = () => {
   return <ImportProjectWizard />
 }
 

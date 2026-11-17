@@ -43,7 +43,7 @@ const updatePromptArchivedState = (
   )
 }
 
-export const ArchivedPromptsPage = () => {
+const ArchivedPromptsPage = () => {
   const queryClient = useQueryClient()
   const promptsQuery = useQuery(() => {
     return {queryKey: ['prompts', 'archived'], queryFn: fetchArchivedPrompts, staleTime: 5 * 60 * 1000}
