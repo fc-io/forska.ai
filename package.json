@@ -150,8 +150,8 @@
     "happy-dom": "^21.0.4",
     "jiti": "^2.7.0",
     "prettier": "^3.10.1",
-    "typescript": "^5.9.3",
     "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
     "vite": "^8.3.8",
     "vite-plugin-solid": "^2.11.17",
     "vitest": "^4.1.12"
