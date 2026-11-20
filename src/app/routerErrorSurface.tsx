@@ -1,6 +1,6 @@
 import type {JSX} from 'solid-js'
 
-export const routeErrorSurfaceTestId = 'route-error-surface'
+import {routeErrorSurfaceTestId} from './routeErrorSurfaceTestId'
 
 const getRouteErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {

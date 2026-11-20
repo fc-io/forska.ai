@@ -1,6 +1,6 @@
 import {expect, test} from '@playwright/test'
 
-import {routeErrorSurfaceTestId} from '../../src/app/routerErrorSurface'
+import {routeErrorSurfaceTestId} from '../../src/app/routeErrorSurfaceTestId'
 import {createBrowserFailureAssertions} from '../../src/app/utils/browserFailureAssertions'
 
 import {

@@ -4,7 +4,7 @@ import {createMemoryHistory} from '@tanstack/history'
 import {QueryClient} from '@tanstack/solid-query'
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 
-import {routeErrorSurfaceTestId} from '../../../routerErrorSurface'
+import {routeErrorSurfaceTestId} from '../../../routeErrorSurfaceTestId'
 import {createBrowserFailureAssertions} from '../../../utils/browserFailureAssertions'
 
 type MockProjectAccess = {archived: boolean; id: string; name: string}

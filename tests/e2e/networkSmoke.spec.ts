@@ -3,7 +3,7 @@ import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import path from 'node:path'
 
 import type {ReviewsWarningsData} from '../../src/components/main/reviews/reviewsWarningsQuery.ts'
-import {routeErrorSurfaceTestId} from '../../src/app/routerErrorSurface'
+import {routeErrorSurfaceTestId} from '../../src/app/routeErrorSurfaceTestId'
 
 const apiBaseUrl = 'http://127.0.0.1:43101'
 const appBaseUrl = 'http://127.0.0.1:43100'
