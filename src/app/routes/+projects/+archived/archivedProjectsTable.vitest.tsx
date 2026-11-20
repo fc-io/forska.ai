@@ -94,3 +94,37 @@ describe('ArchivedProjectsTable export project action', () => {
     }
   })
 })
+
+describe('ArchivedProjectsTable row selection', () => {
+  test('row checkboxes select and deselect archived projects', async () => {
+    const {container, dispose, queryClient} = await renderArchivedProjectsTable([
+      getArchivedProject({id: 'archived-project-1', name: 'First archived project'}),
+      getArchivedProject({id: 'archived-project-2', name: 'Second archived project'}),
+    ])
+
+    try {
+      const checkboxes = [...container.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]')]
+
+      checkboxes[0]?.click()
+      checkboxes[1]?.click()
+      expect(container.textContent).toContain('2 selected on this page')
+      expect(
+        checkboxes.map((checkbox) => {
+          return checkbox.checked
+        }),
+      ).toEqual([true, true])
+
+      checkboxes[0]?.click()
+      expect(container.textContent).toContain('1 selected on this page')
+      expect(
+        checkboxes.map((checkbox) => {
+          return checkbox.checked
+        }),
+      ).toEqual([false, true])
+    } finally {
+      dispose()
+      queryClient.clear()
+      container.remove()
+    }
+  })
+})

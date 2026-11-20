@@ -1,6 +1,14 @@
 import {type QueryClient, useQueryClient} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
-import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
+import {
+  type ColumnDef,
+  columnSizingFeature,
+  columnVisibilityFeature,
+  createTable,
+  flexRender,
+  rowSelectionFeature,
+  tableFeatures,
+} from '@tanstack/solid-table'
 import {format} from 'date-fns'
 import {type Accessor, createEffect, createMemo, createSignal, For, type Setter, Show} from 'solid-js'
 
@@ -12,10 +20,13 @@ import {
   unarchiveProject,
 } from '../../../../services/projectsService'
 import {getProjectFullTextContentLabel} from '../../../../utils/fullTextStrategyOptions.ts'
+import {getTableRowSelectionState} from '../../../../utils/tableRowSelectionState.ts'
 
 type ArchivedProject = Awaited<ReturnType<typeof fetchArchivedProjects>>[number]
 
 type ArchivedProjectsTableProps = {projects: ArchivedProject[]}
+
+const archivedProjectsTableFeatures = tableFeatures({columnSizingFeature, columnVisibilityFeature, rowSelectionFeature})
 
 type ArchivedProjectsTableColumnsParams = {
   queryClient: QueryClient
@@ -159,7 +170,7 @@ const handleUnarchiveProject = (
 
 const getArchivedProjectsColumns = (
   params: ArchivedProjectsTableColumnsParams,
-): ColumnDef<ArchivedProject, unknown>[] => {
+): ColumnDef<typeof archivedProjectsTableFeatures, ArchivedProject, unknown>[] => {
   return [
     {
       id: 'select',
@@ -340,19 +351,21 @@ export const ArchivedProjectsTable = (props: ArchivedProjectsTableProps) => {
     unarchivingProjectIds,
     setUnarchivingProjectIds,
   })
-  const table = createSolidTable({
+  const table = createTable({
+    features: archivedProjectsTableFeatures,
     get data() {
       return sortedProjects()
     },
     columns,
-    getCoreRowModel: getCoreRowModel(),
     enableRowSelection: true,
     enableMultiRowSelection: true,
     getRowId: (row) => {
       return row.id
     },
-    get state() {
-      return {rowSelection: rowSelection()}
+    state: {
+      get rowSelection() {
+        return getTableRowSelectionState(rowSelection())
+      },
     },
     onRowSelectionChange: (updater) => {
       const current = rowSelection()

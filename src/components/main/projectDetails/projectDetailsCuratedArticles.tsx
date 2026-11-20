@@ -1,12 +1,21 @@
 import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
-import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
+import {
+  type ColumnDef,
+  columnSizingFeature,
+  columnVisibilityFeature,
+  createTable,
+  flexRender,
+  tableFeatures,
+} from '@tanstack/solid-table'
 import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 
 type CuratedArticle = {id: string; articleTitle: string}
+
+const curatedArticlesTableFeatures = tableFeatures({columnSizingFeature, columnVisibilityFeature})
 
 export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
   const [cursorStack, setCursorStack] = createSignal<Array<string | null>>([])
@@ -30,7 +39,7 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
     }
   })
 
-  const columns: ColumnDef<CuratedArticle, unknown>[] = [
+  const columns: ColumnDef<typeof curatedArticlesTableFeatures, CuratedArticle, unknown>[] = [
     {
       accessorKey: 'id',
       header: 'ID',
@@ -59,12 +68,12 @@ export const ProjectDetailsCuratedArticles = (props: {projectId: string}) => {
     },
   ]
 
-  const table = createSolidTable({
+  const table = createTable({
+    features: curatedArticlesTableFeatures,
     get data() {
       return (query.data?.articles as CuratedArticle[]) || []
     },
     columns,
-    getCoreRowModel: getCoreRowModel(),
     getRowId: (row) => {
       return row.id
     },

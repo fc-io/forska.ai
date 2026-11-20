@@ -1,7 +1,6 @@
 {
   "include": ["src", "scripts", "eslint.config.ts", "vite.config.ts"],
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {"~/*": ["./src/*"]},
     "typeRoots": ["./src/types", "./node_modules/@types"],
     // Environment setup & latest features
