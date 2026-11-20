@@ -1,5 +1,14 @@
 import {Link} from '@tanstack/solid-router'
-import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
+import {
+  type ColumnDef,
+  columnSizingFeature,
+  columnVisibilityFeature,
+  createTable,
+  flexRender,
+  metaHelper,
+  rowSelectionFeature,
+  tableFeatures,
+} from '@tanstack/solid-table'
 import {format} from 'date-fns'
 import type {Accessor, Setter} from 'solid-js'
 import {For, Show} from 'solid-js'
@@ -7,18 +16,18 @@ import {For, Show} from 'solid-js'
 import {type ArticleUrlInput, getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import type {ArticleRecord, JudgmentHumanRecord} from '../../../../db/schemaTypes.ts'
 import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
+import {getTableRowSelectionState} from '../../../../utils/tableRowSelectionState.ts'
 import {ReviewsCovidenceBadges} from '../reviewsCovidenceBadges.tsx'
 import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
 import {ReviewsProviderFailureBadge} from './reviewsProviderFailureBadge.tsx'
 import {ReviewsProviderRefusalBadge} from './reviewsProviderRefusalBadge.tsx'
 
-declare module '@tanstack/solid-table' {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  interface TableMeta<TData> {
-    projectId?: () => string
-    rowSelection?: Accessor<Record<string, boolean>>
-  }
-}
+const reviewsTableFeatures = tableFeatures({
+  columnSizingFeature,
+  columnVisibilityFeature,
+  rowSelectionFeature,
+  tableMeta: metaHelper<{projectId?: () => string; rowSelection?: Accessor<Record<string, boolean>>}>(),
+})
 
 type HumanJudgmentType = JudgmentHumanRecord
 
@@ -41,14 +50,13 @@ interface ReviewsArticlesHumanTableProps {
   humanJudgmentMode?: 'prompt' | 'summary'
 }
 
-const selectionColumn: ColumnDef<ArticleWithHumanJudgments, unknown> = {
+const selectionColumn: ColumnDef<typeof reviewsTableFeatures, ArticleWithHumanJudgments, unknown> = {
   id: 'select',
   header: () => {
     return <span class="sr-only">Select</span>
   },
   size: 44,
   minSize: 44,
-  enableSorting: false,
   cell: (info) => {
     const selected = () => {
       const rs = info.table.options.meta?.rowSelection?.()
@@ -73,7 +81,7 @@ const getSourceArticleId = (article: ArticleWithHumanJudgments) => {
   return trimmed ? trimmed : null
 }
 
-const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
+const columns: ColumnDef<typeof reviewsTableFeatures, ArticleWithHumanJudgments, unknown>[] = [
   selectionColumn,
   {
     id: 'status',
@@ -268,7 +276,8 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
   const rowSelection = () => {
     return props.rowSelection()
   }
-  const table = createSolidTable({
+  const table = createTable({
+    features: reviewsTableFeatures,
     get data() {
       return props.articles
     },
@@ -282,15 +291,16 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
           }
         : column
     }),
-    getCoreRowModel: getCoreRowModel(),
     meta: {projectId, rowSelection},
     enableRowSelection: true,
     enableMultiRowSelection: true,
     getRowId: (row) => {
       return (row as {id: string}).id
     },
-    get state() {
-      return {rowSelection: props.rowSelection()}
+    state: {
+      get rowSelection() {
+        return getTableRowSelectionState(props.rowSelection())
+      },
     },
     onRowSelectionChange: (updater) => {
       const current = props.rowSelection()

@@ -50,8 +50,8 @@ const getArticle = (overrides: Partial<ArticleWithJudgments> = {}): ArticleWithJ
   }
 }
 
-const renderTable = (articles: ArticleWithJudgments[]) => {
-  const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
+const renderTable = (articles: ArticleWithJudgments[], initialRowSelection: Record<string, boolean> = {}) => {
+  const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>(initialRowSelection)
   const container = document.createElement('div')
   document.body.appendChild(container)
   const dispose = render(() => {
@@ -65,12 +65,34 @@ const renderTable = (articles: ArticleWithJudgments[]) => {
     )
   }, container)
 
-  return {container, dispose}
+  return {container, dispose, rowSelection}
 }
 
 describe('ReviewsArticlesTable', () => {
   afterEach(() => {
     document.body.innerHTML = ''
+  })
+
+  test('row checkbox adds its article to the existing selection and removes it again', () => {
+    const {container, dispose, rowSelection} = renderTable(
+      [getArticle({id: 'article-1'}), getArticle({id: 'article-2'})],
+      {'article-2': true},
+    )
+
+    try {
+      const checkbox = container.querySelector<HTMLInputElement>('tbody input[type="checkbox"]')
+
+      checkbox?.click()
+      expect(rowSelection()).toEqual({'article-1': true, 'article-2': true})
+      expect(checkbox?.checked).toBe(true)
+
+      checkbox?.click()
+      expect(rowSelection()).toEqual({'article-2': true})
+      expect(checkbox?.checked).toBe(false)
+    } finally {
+      dispose()
+      container.remove()
+    }
   })
 
   test('renders article rows while marking payload-backed judgment details as indexing', () => {
@@ -276,8 +298,8 @@ const getHumanArticle = (overrides: {
   } as unknown as ArticleWithHumanJudgments
 }
 
-const renderHumanTable = (articles: ArticleWithHumanJudgments[]) => {
-  const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
+const renderHumanTable = (articles: ArticleWithHumanJudgments[], initialRowSelection: Record<string, boolean> = {}) => {
+  const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>(initialRowSelection)
   const container = document.createElement('div')
   document.body.appendChild(container)
   const dispose = render(() => {
@@ -291,12 +313,37 @@ const renderHumanTable = (articles: ArticleWithHumanJudgments[]) => {
     )
   }, container)
 
-  return {container, dispose}
+  return {container, dispose, rowSelection}
 }
 
 describe('ReviewsArticlesHumanTable', () => {
   afterEach(() => {
     document.body.innerHTML = ''
+  })
+
+  test('row checkbox adds its article to the existing selection and removes it again', () => {
+    const {container, dispose, rowSelection} = renderHumanTable(
+      [
+        getHumanArticle({id: 'article-1', llmRefusedPromptCount: 0}),
+        getHumanArticle({id: 'article-2', llmRefusedPromptCount: 0}),
+      ],
+      {'article-2': true},
+    )
+
+    try {
+      const checkbox = container.querySelector<HTMLInputElement>('tbody input[type="checkbox"]')
+
+      checkbox?.click()
+      expect(rowSelection()).toEqual({'article-1': true, 'article-2': true})
+      expect(checkbox?.checked).toBe(true)
+
+      checkbox?.click()
+      expect(rowSelection()).toEqual({'article-2': true})
+      expect(checkbox?.checked).toBe(false)
+    } finally {
+      dispose()
+      container.remove()
+    }
   })
 
   test('shows the refused count in the status column', () => {

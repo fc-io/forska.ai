@@ -106,7 +106,7 @@
     "@tanstack/solid-query": "^5.108.1",
     "@tanstack/solid-router": "^1.170.43",
     "@tanstack/solid-router-devtools": "^1.167.4",
-    "@tanstack/solid-table": "^8.21.3",
+    "@tanstack/solid-table": "^9.3.1",
     "ai": "^7.0.177",
     "arktype": "^2.2.10",
     "chart.js": "^4.6.1",
