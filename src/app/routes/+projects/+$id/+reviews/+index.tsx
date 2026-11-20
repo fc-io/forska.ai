@@ -1,13 +1,7 @@
-import {createFileRoute, useNavigate} from '@tanstack/solid-router'
-import {createEffect} from 'solid-js'
+import {createFileRoute, redirect} from '@tanstack/solid-router'
 
-const RedirectReviews = () => {
-  const params = Route.useParams()
-  const navigate = useNavigate()
-  createEffect(() => {
-    void navigate({to: '/projects/$id/reviews-llm', params: {id: params().id}})
-  })
-  return null
-}
-
-export const Route = createFileRoute('/projects/$id/reviews/')({component: RedirectReviews})
+export const Route = createFileRoute('/projects/$id/reviews/')({
+  beforeLoad: ({params}) => {
+    throw redirect({to: '/projects/$id/reviews-llm', params: {id: params.id}})
+  },
+})
